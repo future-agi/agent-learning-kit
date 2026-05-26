@@ -244,7 +244,9 @@ enum Comparator {
   /** Jaccard index (set-based similarity) */
   JACCARD = "JaccardSimilarity",
   /** Sørensen-Dice coefficient (set overlap) */
-  SORENSEN_DICE = "SorensenDiceSimilarity"
+  SORENSEN_DICE = "SorensenDiceSimilarity",
+  /** Soundex-based phonetic similarity (matches words that sound alike) */
+  PHONETIC = "PhoneticSimilarity"
 }
 
 /**

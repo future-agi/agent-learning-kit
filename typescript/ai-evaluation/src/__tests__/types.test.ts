@@ -75,11 +75,12 @@ describe('Types', () => {
             expect(Comparator.JARO_WINKLER).toBe('JaroWincklerSimilarity');
             expect(Comparator.JACCARD).toBe('JaccardSimilarity');
             expect(Comparator.SORENSEN_DICE).toBe('SorensenDiceSimilarity');
+            expect(Comparator.PHONETIC).toBe('PhoneticSimilarity');
         });
 
-        it('should have exactly 5 comparators', () => {
+        it('should have exactly 6 comparators', () => {
             const comparatorValues = Object.values(Comparator);
-            expect(comparatorValues.length).toBe(5);
+            expect(comparatorValues.length).toBe(6);
         });
     });
 
