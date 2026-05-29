@@ -101,10 +101,12 @@ class TestComparator:
         assert Comparator.JARO_WINKLER.value == "JaroWincklerSimilarity"
         assert Comparator.JACCARD.value == "JaccardSimilarity"
         assert Comparator.SORENSEN_DICE.value == "SorensenDiceSimilarity"
+        assert Comparator.PHONETIC.value == "PhoneticSimilarity"
+
 
     def test_comparator_count(self):
-        """Test that we have exactly 5 comparators."""
-        assert len(Comparator) == 5
+        """Test that we have exactly 6 comparators."""
+        assert len(Comparator) == 6
 
 
 class TestEvalResult:

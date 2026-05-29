@@ -154,3 +154,4 @@ class Comparator(Enum):
     JARO_WINKLER = "JaroWincklerSimilarity"
     JACCARD = "JaccardSimilarity"
     SORENSEN_DICE = "SorensenDiceSimilarity"
+    PHONETIC = "PhoneticSimilarity"
