@@ -84,6 +84,7 @@ class AgentReportEvalConfig(BaseModel):
     max_voice_latency_ms: Optional[int] = 1500
     required_artifact_types: List[str] = Field(default_factory=list)
     required_browser_trace: List[str] = Field(default_factory=list)
+    required_voice_trace: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -234,6 +235,7 @@ class AgentReportEvaluator:
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
+                _voice_trace_coverage_metric(report_context, config),
                 _artifact_coverage_metric(report_context, config),
                 _state_goal_metric(report_context, config),
             ]
@@ -659,6 +661,44 @@ def _voice_turn_taking_metric(
     )
 
 
+def _voice_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_voice_trace_key(key) for key in config.required_voice_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="voice_trace_coverage",
+            score=1.0,
+            reason="No required voice trace keys provided.",
+        )
+
+    observed = _voice_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_voice_trace_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="voice_trace_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required voice trace evidence observed."
+            if not missing
+            else f"Missing voice trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
 def _state_goal_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -940,6 +980,118 @@ def _normalize_browser_trace_key(key: str) -> str:
         "prompt_injection": "prompt_injection_surface",
         "prompt_injections": "prompt_injection_surface",
         "injection_surface": "prompt_injection_surface",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _voice_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type == "audio":
+            observed.add("audio")
+        if artifact_type == "trace":
+            data = _as_dict(_get(artifact, "data", {}))
+            metadata = _as_dict(_get(artifact, "metadata", {}))
+            if _looks_like_voice_trace(data, metadata):
+                observed.add("trace")
+                _merge_voice_trace_payload(observed, data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        event_text = _stringify(event).lower()
+        if any(token in event_type or token in name or token in event_text for token in ("voice", "vad", "stt", "tts", "speech", "audio")):
+            observed.add("event")
+        if "vad" in event_type or "vad" in name:
+            observed.add("vad")
+        if "stt" in event_type or "stt" in name or "transcript" in payload:
+            observed.add("stt")
+        if "tts" in event_type or "tts" in name or "speech" in name:
+            observed.add("tts")
+        if "barge" in event_text or "interrupt" in event_text:
+            observed.add("interruption")
+        if "route" in event_type or "route" in name:
+            observed.add("route")
+        if _extract_latency_ms(event) is not None:
+            observed.add("latency")
+        _merge_voice_trace_payload(observed, payload)
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {"speak", "stop_speaking", "transcribe_audio", "route_call", "voice_status"}:
+            observed.add("event")
+        if name == "transcribe_audio":
+            observed.add("stt")
+        if name == "speak":
+            observed.add("tts")
+        if name == "stop_speaking":
+            observed.add("interruption")
+        if name == "route_call":
+            observed.add("route")
+    return observed
+
+
+def _looks_like_voice_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "voice_trace" or any(
+        key in data for key in ("utterances", "event_replay", "latency_profile", "route_history", "tts_history")
+    )
+
+
+def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if _as_list(payload.get("utterances", [])):
+        observed.update({"stt", "vad"})
+    if _as_list(payload.get("event_replay", [])):
+        observed.add("event")
+        for event in _as_list(payload.get("event_replay", [])):
+            _merge_voice_trace_payload(observed, _as_dict(event))
+            name = str(_get(event, "name", _get(event, "event", "")) or "").lower()
+            if "vad" in name:
+                observed.add("vad")
+            if "stt" in name or "transcript" in _stringify(event).lower():
+                observed.add("stt")
+            if "tts" in name:
+                observed.add("tts")
+            if "route" in name:
+                observed.add("route")
+            if "barge" in name or "interrupt" in name:
+                observed.add("interruption")
+    if _as_list(payload.get("transcript_history", [])) or payload.get("transcript"):
+        observed.add("stt")
+    if _as_list(payload.get("tts_history", [])):
+        observed.add("tts")
+    if _as_list(payload.get("route_history", [])) or payload.get("route"):
+        observed.add("route")
+    if payload.get("interruption_policy") or "interruption_handled" in payload:
+        observed.add("interruption")
+    if payload.get("latency_profile") or any(key in payload for key in ("latency_ms", "stt_latency_ms", "tts_latency_ms")):
+        observed.add("latency")
+    if payload.get("audio_uri") or payload.get("audio_path"):
+        observed.add("audio")
+
+
+def _normalize_voice_trace_key(key: str) -> str:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "events": "event",
+        "voice_events": "event",
+        "vad_events": "vad",
+        "stt_events": "stt",
+        "transcript": "stt",
+        "transcription": "stt",
+        "tts_events": "tts",
+        "speech": "tts",
+        "barge_in": "interruption",
+        "interrupt": "interruption",
+        "interruptions": "interruption",
+        "call_route": "route",
+        "call_routing": "route",
+        "routes": "route",
+        "latencies": "latency",
+        "latency_profile": "latency",
+        "audio_artifact": "audio",
     }
     return aliases.get(normalized, normalized)
 

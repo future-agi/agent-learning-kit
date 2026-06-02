@@ -419,6 +419,93 @@ def test_evaluate_agent_report_scores_browser_trace_coverage():
     assert complete_scores["browser_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_voice_trace_coverage():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Handle a voice support call.",
+                    "outcome": "Voice call handled with replay evidence.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Please help me by voice."},
+                    {
+                        "role": "assistant",
+                        "content": "I will transcribe and respond.",
+                        "tool_calls": [
+                            {"id": "call_stt", "name": "transcribe_audio", "arguments": {"id": "caller_1"}},
+                            {"id": "call_tts", "name": "speak", "arguments": {"text": "I can help."}},
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {"type": "audio", "uri": "file:///fixtures/caller.wav"},
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "voice_trace"},
+                        "data": {
+                            "kind": "voice_trace",
+                            "utterances": [{"id": "caller_1", "transcript": "Please help."}],
+                            "event_replay": [{"name": "vad_start"}],
+                            "transcript_history": [{"transcript": "Please help."}],
+                            "tts_history": [{"text": "I can help."}],
+                        },
+                    },
+                ],
+                "events": [
+                    {"type": "voice", "name": "vad_start", "payload": {}},
+                    {"type": "voice", "name": "stt_result", "payload": {"transcript": "Please help."}},
+                    {"type": "voice", "name": "tts_output", "payload": {"text": "I can help."}},
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={"required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route", "latency"]},
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["voice_trace_coverage"] < 1.0
+    assert any(
+        finding["metric"] == "voice_trace_coverage"
+        and finding["key"] == "interruption"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][1]["data"]["latency_profile"] = {"stt": [120], "tts": [360]}
+    report["results"][0]["artifacts"][1]["data"]["interruption_policy"] = {"allow_interruptions": True}
+    report["results"][0]["artifacts"][1]["data"]["route_history"] = [
+        {"route": "billing", "reason": "billing question"}
+    ]
+    report["results"][0]["events"].extend(
+        [
+            {
+                "type": "voice",
+                "name": "barge_in_handled",
+                "payload": {"interruption_handled": True},
+            },
+            {
+                "type": "voice_route",
+                "name": "call_routed",
+                "payload": {"route": "billing"},
+            },
+        ]
+    )
+
+    complete_result = evaluate_agent_report(
+        report,
+        config={"required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route", "latency"]},
+    )
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["voice_trace_coverage"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(
