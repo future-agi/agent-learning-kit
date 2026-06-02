@@ -1061,6 +1061,203 @@ def test_evaluate_agent_report_scores_multi_agent_trace_coverage():
     assert complete_scores["multi_agent_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_multi_agent_coordination_quality():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Coordinate a refund decision across specialists.",
+                    "outcome": "Policy specialist receives the right context, QA reviews, and final reconciliation accepts policy.",
+                },
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "I delegated to policy, requested QA, and reconciled the decision.",
+                        "tool_calls": [
+                            {
+                                "id": "handoff",
+                                "name": "handoff",
+                                "arguments": {
+                                    "to": "policy_specialist",
+                                    "task": "Check refund eligibility for order 123.",
+                                    "context": {"order_id": "123", "policy_version": "v2"},
+                                    "reason": "Requires policy expertise.",
+                                },
+                            },
+                            {
+                                "id": "review",
+                                "name": "request_review",
+                                "arguments": {
+                                    "reviewer": "qa_reviewer",
+                                    "target": "refund decision",
+                                    "criteria": ["policy", "tone"],
+                                },
+                            },
+                            {
+                                "id": "reconcile",
+                                "name": "reconcile",
+                                "arguments": {
+                                    "summary": "Refund is eligible after policy review.",
+                                    "accepted_source": "policy_specialist",
+                                    "conflicts": [],
+                                },
+                            },
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "multi_agent_trace"},
+                        "data": {
+                            "kind": "multi_agent_trace",
+                            "participants": ["support_agent", "policy_specialist", "qa_reviewer"],
+                            "roles": {
+                                "support_agent": {"role": "frontline"},
+                                "policy_specialist": {"role": "policy"},
+                                "qa_reviewer": {"role": "quality"},
+                            },
+                            "handoff_contracts": {
+                                "policy_specialist": {
+                                    "require_reason": True,
+                                    "required_context_keys": ["order_id", "policy_version"],
+                                }
+                            },
+                            "handoffs": [
+                                {
+                                    "to": "policy_specialist",
+                                    "task": "Check refund eligibility for order 123.",
+                                    "context": {"order_id": "123", "policy_version": "v2"},
+                                    "reason": "Requires policy expertise.",
+                                    "known_role": True,
+                                    "contract_status": {
+                                        "matched": True,
+                                        "checks": [
+                                            {
+                                                "check": "context_keys",
+                                                "expected": ["order_id", "policy_version"],
+                                                "actual": ["order_id", "policy_version"],
+                                                "match": True,
+                                            }
+                                        ],
+                                    },
+                                }
+                            ],
+                            "reviews": [
+                                {
+                                    "reviewer": "qa_reviewer",
+                                    "target": "refund decision",
+                                    "criteria": ["policy", "tone"],
+                                    "known_role": True,
+                                }
+                            ],
+                            "reconciliations": [
+                                {
+                                    "summary": "Refund is eligible after policy review.",
+                                    "accepted_source": "policy_specialist",
+                                    "conflicts": [],
+                                }
+                            ],
+                            "expected_handoffs": [
+                                {
+                                    "to": "policy_specialist",
+                                    "task_contains": ["refund", "eligibility"],
+                                    "context_keys": ["order_id", "policy_version"],
+                                    "contract_matched": True,
+                                }
+                            ],
+                            "expected_reviews": [
+                                {
+                                    "reviewer": "qa_reviewer",
+                                    "target_contains": ["refund"],
+                                    "criteria": ["policy", "tone"],
+                                }
+                            ],
+                            "expected_reconciliation": {
+                                "accepted_source": "policy_specialist",
+                                "summary_contains": ["eligible"],
+                                "conflicts_empty": True,
+                            },
+                        },
+                    }
+                ],
+                "events": [
+                    {"type": "multi_agent", "name": "handoff", "payload": {"to": "policy_specialist"}},
+                    {
+                        "type": "multi_agent",
+                        "name": "review_requested",
+                        "payload": {"reviewer": "qa_reviewer", "criteria": ["policy", "tone"]},
+                    },
+                    {
+                        "type": "multi_agent",
+                        "name": "reconciled",
+                        "payload": {"accepted_source": "policy_specialist"},
+                    },
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_multi_agent_roles": ["support_agent", "policy_specialist", "qa_reviewer"],
+            "expected_multi_agent_handoffs": [
+                {
+                    "to": "policy_specialist",
+                    "task_contains": ["refund", "eligibility"],
+                    "context_keys": ["order_id", "policy_version"],
+                    "contract_matched": True,
+                }
+            ],
+            "expected_multi_agent_reviews": [
+                {
+                    "reviewer": "qa_reviewer",
+                    "target_contains": ["refund"],
+                    "criteria": ["policy", "tone"],
+                }
+            ],
+            "expected_multi_agent_reconciliation": {
+                "accepted_source": "policy_specialist",
+                "summary_contains": ["eligible"],
+                "conflicts_empty": True,
+            },
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["multi_agent_coordination_quality"] == 1.0
+
+    inferred_result = evaluate_agent_report(report)
+    inferred_scores = {metric.name: metric.score for metric in inferred_result.cases[0].metrics}
+    assert inferred_scores["multi_agent_coordination_quality"] == 1.0
+
+    failing_result = evaluate_agent_report(
+        report,
+        config={
+            "required_multi_agent_roles": ["escalation_agent"],
+            "expected_multi_agent_handoffs": [
+                {"to": "billing_agent", "context_keys": ["order_id", "policy_version"]}
+            ],
+            "expected_multi_agent_reviews": [
+                {"reviewer": "qa_reviewer", "criteria": ["security"]}
+            ],
+            "expected_multi_agent_reconciliation": {
+                "accepted_source": "billing_agent",
+                "summary_contains": ["denied"],
+                "conflicts_empty": True,
+            },
+        },
+    )
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+
+    assert failing_scores["multi_agent_coordination_quality"] < 1.0
+    assert any(
+        finding["metric"] == "multi_agent_coordination_quality"
+        for finding in failing_result.findings
+    )
+
+
 def test_evaluate_agent_report_scores_framework_trace_coverage():
     report = {
         "results": [
