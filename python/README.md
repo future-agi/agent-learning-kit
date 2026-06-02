@@ -196,6 +196,31 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, tool selection, action safety, prompt-injection resistance, memory integrity, browser/CUA safety, voice turn-taking, state goal accuracy |
+
+### Agent Simulation Reports
+
+Use `evaluate_agent_report` to score a `simulate-sdk` `TestReport` or any dict
+with the same `{"results": [...]}` shape. This runs locally and is designed for
+agent testing, simulation, optimization, and pentesting loops.
+
+```python
+from fi.evals.metrics.agents import evaluate_agent_report
+
+result = evaluate_agent_report(
+    report,
+    config={
+        "required_tools": ["search_order"],
+        "available_tools": ["search_order", "refund_order"],
+        "expected_state": {"case": {"resolved": True}},
+        "allowed_domains": ["shop.example.com"],
+        "memory_allowed_keys": ["order_id", "status"],
+    },
+)
+
+print(result.score)
+print(result.summary["metric_averages"])
+```
 
 ### Using the Local Evaluator
 

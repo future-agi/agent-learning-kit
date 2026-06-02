@@ -28,6 +28,15 @@ from .heuristics.string_metrics import (
     ContainsValidLink,
 )
 from .llm_as_judges import CustomLLMJudge
+from .agents import (
+    AgentReportEvalConfig,
+    AgentReportMetricResult,
+    AgentReportCaseResult,
+    AgentReportEvaluation,
+    AgentReportEvaluator,
+    evaluate_agent_report,
+    normalize_agent_report,
+)
 
 # RAG Metrics (optional import - may fail if dependencies missing)
 try:
@@ -125,6 +134,14 @@ __all__ = [
     "ContainsValidLink",
     # LLM as Judges
     "CustomLLMJudge",
+    # Agent reports
+    "AgentReportEvalConfig",
+    "AgentReportMetricResult",
+    "AgentReportCaseResult",
+    "AgentReportEvaluation",
+    "AgentReportEvaluator",
+    "evaluate_agent_report",
+    "normalize_agent_report",
     # RAG Metrics
     "RAGInput",
     "RAGRetrievalInput",

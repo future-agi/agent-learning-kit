@@ -13,6 +13,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 07 | [See Every LLM Call in Your Observability Stack](07_otel_tracing.py) | Trace calls with quality scores in Jaeger/Datadog/Grafana | No |
 | 08 | [Teach Your Judge from Past Mistakes](feedback_loop_demo.py) | LLM judge keeps getting the same cases wrong — fix it with feedback | Yes (`GOOGLE_API_KEY`) |
 | 09 | [Judge Images and Audio with Your LLM](09_multimodal_judge.py) | Verify AI image descriptions match the actual photo | Yes (`GOOGLE_API_KEY`) |
+| 10 | [Evaluate Agent Simulation Reports](10_agent_report_evaluation.py) | Score simulate-sdk-style traces, tools, memory, browser/CUA, voice, and pentest failures | No |
 
 ## Quick Start
 
@@ -38,3 +39,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 07**: Wire quality scores into your OTEL traces so you can search for bad responses in Jaeger/Datadog
 - **Cookbook 08**: Store developer corrections in ChromaDB, retrieve them as few-shot examples, and teach your LLM judge to not repeat mistakes
 - **Cookbook 09**: Pass images and audio URLs to the LLM judge — evaluate image descriptions, UI screenshots, transcriptions with Gemini vision
+- **Cookbook 10**: Evaluate full agent simulation reports locally: trajectory score, tool use, prompt-injection resistance, memory integrity, browser/CUA action safety, voice turn-taking, and expected state

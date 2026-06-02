@@ -25,6 +25,15 @@ from .metrics import (
     ActionSafety,
     ReasoningQuality,
 )
+from .report import (
+    AgentReportEvalConfig,
+    AgentReportMetricResult,
+    AgentReportCaseResult,
+    AgentReportEvaluation,
+    AgentReportEvaluator,
+    evaluate_agent_report,
+    normalize_agent_report,
+)
 
 __all__ = [
     # Types
@@ -33,6 +42,10 @@ __all__ = [
     "ToolCall",
     "TaskDefinition",
     "TrajectoryAnalysis",
+    "AgentReportEvalConfig",
+    "AgentReportMetricResult",
+    "AgentReportCaseResult",
+    "AgentReportEvaluation",
     # Metrics
     "TaskCompletion",
     "StepEfficiency",
@@ -41,4 +54,7 @@ __all__ = [
     "GoalProgress",
     "ActionSafety",
     "ReasoningQuality",
+    "AgentReportEvaluator",
+    "evaluate_agent_report",
+    "normalize_agent_report",
 ]
