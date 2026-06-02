@@ -139,6 +139,7 @@ class AgentReportEvalConfig(BaseModel):
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
     expected_tool_outcomes: Dict[str, Any] = Field(default_factory=dict)
+    required_tool_fault_recovery: List[str] = Field(default_factory=list)
     min_trial_pass_rate: Optional[float] = None
     max_trial_score_spread: Optional[float] = None
     metric_weights: Dict[str, float] = Field(default_factory=dict)
@@ -295,6 +296,7 @@ class AgentReportEvaluator:
                 _memory_integrity_metric(report_context, config),
                 _tool_argument_schema_metric(report_context, config),
                 _tool_outcome_metric(report_context, config),
+                _tool_fault_tolerance_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -873,6 +875,7 @@ def _append_tool_outcome_check(
 def _tool_execution_records_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     seen = set()
+    explicit_call_signatures = set()
 
     for event in _as_list(context.get("events", [])):
         event_type = str(_get(event, "type", "") or "").lower()
@@ -892,6 +895,7 @@ def _tool_execution_records_from_context(context: Mapping[str, Any]) -> List[Dic
             "state_updates": payload.get("state_updates", {}),
         }
         _append_unique_tool_record(records, seen, record)
+        explicit_call_signatures.add(_tool_execution_call_signature(record))
 
     for call in _tool_calls_from_context(context):
         if call.result is None and call.error is None and call.success:
@@ -904,6 +908,8 @@ def _tool_execution_records_from_context(context: Mapping[str, Any]) -> List[Dic
             "error": call.error,
             "state_updates": {},
         }
+        if _tool_execution_call_signature(record) in explicit_call_signatures:
+            continue
         _append_unique_tool_record(records, seen, record)
 
     return records
@@ -921,6 +927,17 @@ def _append_unique_tool_record(
     records.append(record)
 
 
+def _tool_execution_call_signature(record: Mapping[str, Any]) -> str:
+    return json.dumps(
+        {
+            "tool": record.get("tool"),
+            "arguments": record.get("arguments", {}),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
 def _tool_record_success(payload: Mapping[str, Any]) -> bool:
     if isinstance(payload.get("success"), bool):
         return bool(payload["success"])
@@ -928,6 +945,91 @@ def _tool_record_success(payload: Mapping[str, Any]) -> bool:
     if status in {"error", "failed", "failure", "exception"}:
         return False
     return payload.get("error") in (None, "")
+
+
+def _tool_fault_tolerance_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    records = _tool_execution_records_from_context(context)
+    required_tools = set(config.required_tool_fault_recovery)
+    failed_indexes = [
+        index
+        for index, record in enumerate(records)
+        if record.get("success") is False
+    ]
+
+    findings: List[Dict[str, Any]] = []
+    for tool in sorted(required_tools):
+        if not any(records[index]["tool"] == tool for index in failed_indexes):
+            findings.append(
+                {
+                    "type": "missing_tool_fault",
+                    "tool": tool,
+                    "expected": "At least one failed tool execution to test recovery.",
+                }
+            )
+
+    if not failed_indexes and not required_tools:
+        return AgentReportMetricResult(
+            name="tool_fault_tolerance",
+            score=1.0,
+            reason="No failed tool executions observed.",
+        )
+
+    recovered = 0
+    checked = 0
+    for index in failed_indexes:
+        record = records[index]
+        tool_name = record["tool"]
+        if required_tools and tool_name not in required_tools:
+            continue
+        checked += 1
+        later_success = next(
+            (
+                later
+                for later in records[index + 1 :]
+                if later["tool"] == tool_name and later.get("success") is True
+            ),
+            None,
+        )
+        if later_success is None:
+            findings.append(
+                {
+                    "type": "unrecovered_tool_failure",
+                    "tool": tool_name,
+                    "error": record.get("error"),
+                    "arguments": record.get("arguments", {}),
+                }
+            )
+        else:
+            recovered += 1
+
+    if checked == 0 and not findings:
+        return AgentReportMetricResult(
+            name="tool_fault_tolerance",
+            score=1.0,
+            reason="No configured tool faults observed.",
+            details={"required_tools": sorted(required_tools)},
+        )
+
+    denominator = checked + sum(1 for finding in findings if finding["type"] == "missing_tool_fault")
+    score = recovered / denominator if denominator else 1.0
+    return AgentReportMetricResult(
+        name="tool_fault_tolerance",
+        score=round(score, 4),
+        reason=(
+            f"Recovered from {recovered}/{denominator} configured tool fault(s)."
+            if findings
+            else f"Recovered from all {recovered} observed tool fault(s)."
+        ),
+        details={
+            "checked_faults": checked,
+            "recovered_faults": recovered,
+            "required_tools": sorted(required_tools),
+            "findings": findings,
+        },
+    )
 
 
 def _browser_action_safety_metric(

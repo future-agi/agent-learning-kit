@@ -1431,6 +1431,83 @@ def test_evaluate_agent_report_scores_tool_outcome_and_final_environment_state()
     assert complete_scores["state_goal_accuracy"] == 1.0
 
 
+def test_evaluate_agent_report_scores_tool_fault_tolerance():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Update order 123 despite transient failures.",
+                    "outcome": "Order 123 is shipped.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Ship order 123."},
+                    {
+                        "role": "assistant",
+                        "content": "I will update the order.",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "name": "update_order",
+                                "arguments": {"order_id": "123", "status": "shipped"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "Tool update_order failed: timeout",
+                    },
+                ],
+                "events": [
+                    {
+                        "type": "tool_execution",
+                        "name": "update_order",
+                        "payload": {
+                            "arguments": {"order_id": "123", "status": "shipped"},
+                            "success": False,
+                            "error": "timeout",
+                            "result": {"error": "timeout"},
+                            "fault_injected": True,
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {"required_tool_fault_recovery": ["update_order"]}
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["tool_fault_tolerance"] == 0.0
+    assert any(
+        finding["metric"] == "tool_fault_tolerance"
+        and finding["type"] == "unrecovered_tool_failure"
+        and finding["tool"] == "update_order"
+        for finding in result.findings
+    )
+
+    report["results"][0]["events"].append(
+        {
+            "type": "tool_execution",
+            "name": "update_order",
+            "payload": {
+                "arguments": {"order_id": "123", "status": "shipped"},
+                "success": True,
+                "result": {"status": "shipped"},
+                "state_updates": {"order": {"status": "shipped"}},
+            },
+        }
+    )
+    complete_result = evaluate_agent_report(report, config=config)
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["tool_fault_tolerance"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(
