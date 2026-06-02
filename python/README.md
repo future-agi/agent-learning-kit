@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, tool selection, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, multi-agent trace coverage, browser/CUA safety, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, tool selection, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -220,6 +220,7 @@ result = evaluate_agent_report(
         "expected_retrieval_doc_ids": ["refund_policy_current"],
         "forbidden_retrieval_doc_ids": ["refund_policy_old"],
         "require_current_retrieval": True,
+        "require_source_grounding": True,
         "required_multi_agent_trace": ["role", "contract", "handoff", "message", "review", "reconciliation"],
         "required_browser_trace": ["dom", "screenshot", "action", "console", "network"],
         "required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route"],

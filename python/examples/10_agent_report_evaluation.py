@@ -95,7 +95,7 @@ report = {
                         "documents": [
                             {
                                 "id": "order_policy",
-                                "content": "Order 123 checkout can be resolved.",
+                                "content": "Order 123 checkout support case resolved.",
                                 "version": "v2",
                                 "current": True,
                             }
@@ -123,6 +123,7 @@ result = evaluate_agent_report(
         "required_retrieval_memory_trace": ["query", "document", "memory_read", "memory_write", "citation"],
         "expected_retrieval_doc_ids": ["order_policy"],
         "require_current_retrieval": True,
+        "require_source_grounding": True,
         "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
         "success_criteria": ["checkout support case resolved"],

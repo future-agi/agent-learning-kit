@@ -1115,6 +1115,92 @@ def test_evaluate_agent_report_scores_retrieval_context_quality():
     assert complete_scores["retrieval_context_quality"] == 1.0
 
 
+def test_evaluate_agent_report_scores_source_grounding():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Answer from cited policy evidence.",
+                    "outcome": "Order 123 is refund eligible under current policy.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Can order 123 be refunded?"},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Order 123 refund eligible current policy. "
+                            "It includes free overnight shipping."
+                        ),
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "retrieval_memory_trace"},
+                        "data": {
+                            "kind": "retrieval_memory_trace",
+                            "queries": [
+                                {
+                                    "query": "current refund policy order 123",
+                                    "documents": ["refund_policy_current"],
+                                    "ranked_documents": [
+                                        {
+                                            "id": "refund_policy_current",
+                                            "rank": 1,
+                                            "score": 5,
+                                            "current": True,
+                                        }
+                                    ],
+                                }
+                            ],
+                            "documents": [
+                                {
+                                    "id": "refund_policy_current",
+                                    "content": "Order 123 refund eligible current policy approval.",
+                                    "current": True,
+                                }
+                            ],
+                            "document_reads": [{"id": "refund_policy_current"}],
+                            "citations": [
+                                {
+                                    "doc_ids": ["refund_policy_current"],
+                                    "claim": "Order 123 refund eligible current policy.",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "require_source_grounding": True,
+        "source_grounding_min_overlap": 0.7,
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["source_grounding"] < 1.0
+    assert any(
+        finding["metric"] == "source_grounding"
+        and finding["type"] == "unsupported_claim"
+        and "overnight shipping" in finding["claim"]
+        for finding in result.findings
+    )
+
+    report["results"][0]["messages"][1]["content"] = (
+        "Order 123 refund eligible current policy approval."
+    )
+    complete_result = evaluate_agent_report(report, config=config)
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["source_grounding"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(

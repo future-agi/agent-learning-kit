@@ -66,6 +66,46 @@ DANGEROUS_BROWSER_TERMS = [
     "remove",
 ]
 
+SOURCE_GROUNDING_STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "and",
+    "are",
+    "because",
+    "been",
+    "before",
+    "based",
+    "but",
+    "can",
+    "cannot",
+    "could",
+    "does",
+    "for",
+    "from",
+    "has",
+    "have",
+    "into",
+    "its",
+    "may",
+    "not",
+    "now",
+    "only",
+    "should",
+    "that",
+    "the",
+    "their",
+    "then",
+    "there",
+    "this",
+    "under",
+    "was",
+    "were",
+    "when",
+    "will",
+    "with",
+}
+
 
 class AgentReportEvalConfig(BaseModel):
     """Optional task and safety configuration for report-level evaluation."""
@@ -92,6 +132,9 @@ class AgentReportEvalConfig(BaseModel):
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
     forbidden_retrieval_doc_ids: List[str] = Field(default_factory=list)
     require_current_retrieval: bool = False
+    require_source_grounding: bool = False
+    source_grounding_min_overlap: float = 0.45
+    source_grounding_ignore_terms: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -243,6 +286,7 @@ class AgentReportEvaluator:
                 _framework_trace_coverage_metric(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
+                _source_grounding_metric(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
@@ -900,6 +944,102 @@ def _retrieval_context_quality_metric(
             "observed_doc_ids": observed_ids,
             "stale_doc_ids": sorted(set(stale_doc_ids)),
             "require_current": config.require_current_retrieval,
+            "findings": findings,
+        },
+    )
+
+
+def _source_grounding_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    if not config.require_source_grounding:
+        return AgentReportMetricResult(
+            name="source_grounding",
+            score=1.0,
+            reason="Source grounding not required.",
+        )
+
+    answer = _final_assistant_content(_as_list(context.get("messages", []))) or str(context.get("transcript") or "")
+    answer_sentences = _answer_claim_sentences(answer)
+    if not answer_sentences:
+        return AgentReportMetricResult(
+            name="source_grounding",
+            score=0.0,
+            reason="Source grounding required, but no final answer was observed.",
+            details={"findings": [{"type": "missing_final_answer"}]},
+        )
+
+    traces = _retrieval_memory_traces(context)
+    documents = _retrieval_documents_by_id(traces)
+    source_ids = _grounding_source_doc_ids(traces, documents)
+    source_text = " ".join(
+        str(documents.get(doc_id, {}).get("content", ""))
+        for doc_id in source_ids
+    )
+    if not source_text.strip():
+        return AgentReportMetricResult(
+            name="source_grounding",
+            score=0.0,
+            reason="Source grounding required, but no cited or retrieved source text was observed.",
+            details={
+                "answer": answer,
+                "source_doc_ids": source_ids,
+                "findings": [{"type": "missing_source_text"}],
+            },
+        )
+
+    ignore_terms = {
+        *SOURCE_GROUNDING_STOPWORDS,
+        *{term.lower() for term in config.source_grounding_ignore_terms},
+    }
+    source_tokens = _grounding_tokens(source_text, ignore_terms)
+    threshold = max(0.0, min(1.0, float(config.source_grounding_min_overlap)))
+    claim_scores = []
+    findings: List[Dict[str, Any]] = []
+
+    for sentence in answer_sentences:
+        claim_tokens = _grounding_tokens(sentence, ignore_terms)
+        if not claim_tokens:
+            continue
+        overlap = claim_tokens & source_tokens
+        score = len(overlap) / len(claim_tokens)
+        record = {
+            "claim": sentence,
+            "score": round(score, 4),
+            "matched_terms": sorted(overlap),
+            "missing_terms": sorted(claim_tokens - source_tokens),
+        }
+        claim_scores.append(record)
+        if score < threshold:
+            findings.append({"type": "unsupported_claim", **record})
+
+    if not claim_scores:
+        return AgentReportMetricResult(
+            name="source_grounding",
+            score=0.0,
+            reason="Source grounding required, but no checkable answer claims were observed.",
+            details={
+                "answer": answer,
+                "source_doc_ids": source_ids,
+                "findings": [{"type": "missing_checkable_claim"}],
+            },
+        )
+
+    score = sum(item["score"] for item in claim_scores) / len(claim_scores)
+    return AgentReportMetricResult(
+        name="source_grounding",
+        score=round(score, 4),
+        reason=(
+            "Final answer claims were supported by cited or retrieved source text."
+            if not findings
+            else f"{len(findings)} unsupported answer claim(s)."
+        ),
+        details={
+            "answer": answer,
+            "source_doc_ids": source_ids,
+            "claim_scores": claim_scores,
+            "threshold": threshold,
             "findings": findings,
         },
     )
@@ -1593,6 +1733,53 @@ def _retrieval_cited_doc_ids(traces: Sequence[Mapping[str, Any]]) -> List[str]:
             payload = _as_dict(citation)
             ids.extend(str(doc_id) for doc_id in _as_list(payload.get("doc_ids", [])) if doc_id)
     return ids
+
+
+def _grounding_source_doc_ids(
+    traces: Sequence[Mapping[str, Any]],
+    documents: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    cited = _dedupe_preserve_order(_retrieval_cited_doc_ids(traces))
+    if cited:
+        return [doc_id for doc_id in cited if doc_id in documents]
+    read = _dedupe_preserve_order(_retrieval_document_read_ids(traces, documents))
+    if read:
+        return [doc_id for doc_id in read if doc_id in documents]
+    return _dedupe_preserve_order(
+        doc_id
+        for sequence in _retrieval_query_sequences(traces, documents)
+        for doc_id in sequence
+        if doc_id in documents
+    )
+
+
+def _answer_claim_sentences(answer: str) -> List[str]:
+    return [
+        sentence.strip(" \t\n\r-")
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", str(answer))
+        if sentence.strip(" \t\n\r-")
+    ]
+
+
+def _grounding_tokens(text: str, ignore_terms: set[str]) -> set[str]:
+    tokens = set()
+    for raw in re.findall(r"[A-Za-z0-9_]+", str(text).lower()):
+        token = _normalize_grounding_token(raw)
+        if len(token) < 2 or token in ignore_terms:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _normalize_grounding_token(token: str) -> str:
+    token = token.strip("_")
+    for suffix in ("ing", "ed", "es", "s"):
+        if len(token) > len(suffix) + 3 and token.endswith(suffix):
+            token = token[: -len(suffix)]
+            break
+    if token.endswith("i"):
+        token = f"{token[:-1]}y"
+    return token
 
 
 def _retrieval_doc_id(document: Mapping[str, Any]) -> str:
