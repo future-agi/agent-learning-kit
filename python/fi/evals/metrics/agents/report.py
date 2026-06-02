@@ -86,6 +86,7 @@ class AgentReportEvalConfig(BaseModel):
     required_browser_trace: List[str] = Field(default_factory=list)
     required_voice_trace: List[str] = Field(default_factory=list)
     required_autonomy_loop: List[str] = Field(default_factory=list)
+    required_multi_agent_trace: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -234,6 +235,7 @@ class AgentReportEvaluator:
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
+                _multi_agent_trace_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
@@ -627,6 +629,44 @@ def _autonomy_loop_coverage_metric(
             "All required autonomy loop evidence observed."
             if not missing
             else f"Missing autonomy loop evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
+def _multi_agent_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_multi_agent_trace_key(key) for key in config.required_multi_agent_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="multi_agent_trace_coverage",
+            score=1.0,
+            reason="No required multi-agent trace keys provided.",
+        )
+
+    observed = _multi_agent_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_multi_agent_trace_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="multi_agent_trace_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required multi-agent trace evidence observed."
+            if not missing
+            else f"Missing multi-agent trace evidence: {', '.join(missing)}."
         ),
         details={
             "required": sorted(set(required)),
@@ -1044,6 +1084,108 @@ def _normalize_autonomy_loop_key(key: str) -> str:
         "policy_gate": "policy",
         "constraint": "policy",
         "constraints": "policy",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _multi_agent_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_multi_agent_trace(data, metadata):
+            observed.add("trace")
+            _merge_multi_agent_trace_payload(observed, data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "multi_agent" in event_type or "handoff" in event_type:
+            _add_multi_agent_trace_key(observed, name)
+            _merge_multi_agent_trace_payload(observed, payload)
+        if "review" in name or "critic" in name:
+            observed.add("review")
+        if "reconcile" in name or "consensus" in name:
+            observed.add("reconciliation")
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        _add_multi_agent_trace_key(observed, name)
+    return observed
+
+
+def _looks_like_multi_agent_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "multi_agent_trace" or any(
+        key in data for key in ("participants", "roles", "handoffs", "reviews", "reconciliations")
+    )
+
+
+def _merge_multi_agent_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if _as_list(payload.get("participants", [])) or _as_dict(payload.get("roles", {})):
+        observed.add("role")
+    if _as_dict(payload.get("handoff_contracts", {})) or _as_list(payload.get("contracts", [])):
+        observed.add("contract")
+    if _as_list(payload.get("handoffs", [])) or payload.get("handoff") or payload.get("to"):
+        observed.add("handoff")
+    if _as_list(payload.get("messages", [])) or payload.get("message"):
+        observed.add("message")
+    if _as_list(payload.get("reviews", [])) or payload.get("reviewer") or payload.get("criteria"):
+        observed.add("review")
+    if _as_list(payload.get("reconciliations", [])) or payload.get("decision") or payload.get("accepted_source"):
+        observed.add("reconciliation")
+    if payload.get("state"):
+        observed.add("state")
+    for key in payload:
+        _add_multi_agent_trace_key(observed, str(key))
+
+
+def _add_multi_agent_trace_key(observed: set[str], value: str) -> None:
+    key = _normalize_multi_agent_trace_key(value)
+    if key:
+        observed.add(key)
+
+
+def _normalize_multi_agent_trace_key(key: str) -> str:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "participants": "role",
+        "roles": "role",
+        "agents": "role",
+        "team": "role",
+        "handoffs": "handoff",
+        "handoff_tool": "handoff",
+        "transfer": "handoff",
+        "transfer_to_agent": "handoff",
+        "delegate": "handoff",
+        "delegate_work": "handoff",
+        "delegation": "handoff",
+        "send_room_message": "message",
+        "room_message": "message",
+        "ask_question": "message",
+        "ask_question_to_coworker": "message",
+        "messages": "message",
+        "request_review": "review",
+        "review_requested": "review",
+        "critic": "review",
+        "critique": "review",
+        "qa": "review",
+        "reviews": "review",
+        "reconcile": "reconciliation",
+        "reconciled": "reconciliation",
+        "consensus": "reconciliation",
+        "conflict_resolution": "reconciliation",
+        "reconciliations": "reconciliation",
+        "handoff_contract": "contract",
+        "handoff_contracts": "contract",
+        "contracts": "contract",
+        "contract": "contract",
+        "room_state": "state",
+        "shared_state": "state",
     }
     return aliases.get(normalized, normalized)
 

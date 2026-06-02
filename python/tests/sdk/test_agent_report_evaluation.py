@@ -603,6 +603,106 @@ def test_evaluate_agent_report_scores_autonomy_loop_coverage():
     assert complete_scores["autonomy_loop_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_multi_agent_trace_coverage():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Coordinate a multi-agent refund decision.",
+                    "outcome": "Refund decision coordinated by specialists.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Coordinate this refund decision."},
+                    {
+                        "role": "assistant",
+                        "content": "I will hand off policy review and request QA.",
+                        "tool_calls": [
+                            {
+                                "id": "handoff",
+                                "name": "handoff",
+                                "arguments": {"to": "policy_specialist", "task": "review policy"},
+                            },
+                            {
+                                "id": "message",
+                                "name": "send_room_message",
+                                "arguments": {"to": "room", "message": "Policy review started."},
+                            },
+                            {
+                                "id": "review",
+                                "name": "request_review",
+                                "arguments": {"reviewer": "qa_reviewer", "criteria": ["policy"]},
+                            },
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "multi_agent_trace"},
+                        "data": {
+                            "kind": "multi_agent_trace",
+                            "participants": ["support_agent", "policy_specialist", "qa_reviewer"],
+                            "handoff_contracts": {
+                                "policy_specialist": {"required_output": "policy decision"}
+                            },
+                            "handoffs": [{"to": "policy_specialist", "task": "review policy"}],
+                            "messages": [{"to": "room", "message": "Policy review started."}],
+                            "reviews": [{"reviewer": "qa_reviewer", "criteria": ["policy"]}],
+                        },
+                    }
+                ],
+                "events": [
+                    {"type": "multi_agent", "name": "handoff", "payload": {"to": "policy_specialist"}},
+                    {"type": "multi_agent", "name": "review_requested", "payload": {"reviewer": "qa_reviewer"}},
+                ],
+            }
+        ]
+    }
+    required = ["role", "contract", "handoff", "message", "review", "reconciliation"]
+
+    result = evaluate_agent_report(report, config={"required_multi_agent_trace": required})
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["multi_agent_trace_coverage"] < 1.0
+    assert any(
+        finding["metric"] == "multi_agent_trace_coverage"
+        and finding["key"] == "reconciliation"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][0]["data"]["reconciliations"] = [
+        {
+            "summary": "Refund approved after policy and QA review.",
+            "accepted_source": "policy_specialist",
+        }
+    ]
+    report["results"][0]["messages"][1]["tool_calls"].append(
+        {
+            "id": "reconcile",
+            "name": "reconcile",
+            "arguments": {"summary": "Refund approved.", "accepted_source": "policy_specialist"},
+        }
+    )
+    report["results"][0]["events"].append(
+        {
+            "type": "multi_agent",
+            "name": "reconciled",
+            "payload": {"accepted_source": "policy_specialist"},
+        }
+    )
+
+    complete_result = evaluate_agent_report(
+        report,
+        config={"required_multi_agent_trace": required},
+    )
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["multi_agent_trace_coverage"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(
