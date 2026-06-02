@@ -703,6 +703,114 @@ def test_evaluate_agent_report_scores_multi_agent_trace_coverage():
     assert complete_scores["multi_agent_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_framework_trace_coverage():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Inspect a native framework trace.",
+                    "outcome": "Framework trace inspected.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Inspect this framework trace."},
+                    {
+                        "role": "assistant",
+                        "content": "I will inspect the framework spans.",
+                        "tool_calls": [
+                            {"id": "status", "name": "framework_trace_status", "arguments": {}},
+                            {
+                                "id": "tools",
+                                "name": "list_framework_spans",
+                                "arguments": {"signal": "tool"},
+                            },
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "openai_agents"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "openai_agents",
+                            "signals": ["agent", "model", "tool", "handoff", "guardrail", "latency", "cost"],
+                            "spans": [
+                                {"id": "agent_1", "name": "agent_span", "signals": ["agent"]},
+                                {
+                                    "id": "model_1",
+                                    "name": "generation_span",
+                                    "signals": ["model", "latency", "cost"],
+                                    "latency_ms": 140,
+                                    "cost": {"tokens": 40},
+                                },
+                                {"id": "tool_1", "name": "function_span", "signals": ["tool"]},
+                                {"id": "handoff_1", "name": "handoff_span", "signals": ["handoff"]},
+                                {"id": "guard_1", "name": "guardrail_span", "signals": ["guardrail"]},
+                            ],
+                        },
+                    }
+                ],
+                "events": [
+                    {
+                        "type": "framework_span",
+                        "name": "generation_span",
+                        "payload": {"signals": ["model", "latency", "cost"]},
+                        "metadata": {"framework": "openai_agents", "signals": ["model"]},
+                    }
+                ],
+            }
+        ]
+    }
+    required = [
+        "agent",
+        "model",
+        "tool",
+        "handoff",
+        "guardrail",
+        "retrieval",
+        "memory",
+        "latency",
+        "cost",
+    ]
+
+    result = evaluate_agent_report(report, config={"required_framework_trace": required})
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_trace_coverage"] < 1.0
+    assert any(
+        finding["metric"] == "framework_trace_coverage"
+        and finding["key"] == "memory"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][0]["data"]["signals"].extend(["retrieval", "memory"])
+    report["results"][0]["artifacts"][0]["data"]["spans"].extend(
+        [
+            {"id": "retrieval_1", "name": "retriever policy_docs", "signals": ["retrieval"]},
+            {"id": "memory_1", "name": "memory_update", "signals": ["memory"]},
+        ]
+    )
+    report["results"][0]["events"].append(
+        {
+            "type": "framework_span",
+            "name": "memory_update",
+            "payload": {"signals": ["memory"]},
+            "metadata": {"framework": "openai_agents", "signals": ["memory"]},
+        }
+    )
+
+    complete_result = evaluate_agent_report(
+        report,
+        config={"required_framework_trace": required},
+    )
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["framework_trace_coverage"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(

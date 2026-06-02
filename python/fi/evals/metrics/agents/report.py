@@ -87,6 +87,7 @@ class AgentReportEvalConfig(BaseModel):
     required_voice_trace: List[str] = Field(default_factory=list)
     required_autonomy_loop: List[str] = Field(default_factory=list)
     required_multi_agent_trace: List[str] = Field(default_factory=list)
+    required_framework_trace: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -235,6 +236,7 @@ class AgentReportEvaluator:
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
+                _framework_trace_coverage_metric(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
@@ -677,6 +679,44 @@ def _multi_agent_trace_coverage_metric(
     )
 
 
+def _framework_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_trace_key(key) for key in config.required_framework_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_trace_coverage",
+            score=1.0,
+            reason="No required framework trace keys provided.",
+        )
+
+    observed = _framework_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_framework_trace_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="framework_trace_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required framework trace evidence observed."
+            if not missing
+            else f"Missing framework trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
 def _browser_trace_coverage_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -1084,6 +1124,159 @@ def _normalize_autonomy_loop_key(key: str) -> str:
         "policy_gate": "policy",
         "constraint": "policy",
         "constraints": "policy",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _framework_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_trace(data, metadata):
+            observed.add("trace")
+            _merge_framework_trace_payload(observed, data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if "framework" in event_type or "span" in event_type:
+            observed.add("span")
+            _add_framework_trace_key(observed, name)
+            _merge_framework_trace_payload(observed, payload)
+            for signal in _as_list(metadata.get("signals", [])):
+                _add_framework_trace_key(observed, str(signal))
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {"framework_trace_status", "list_framework_spans", "inspect_framework_span"}:
+            observed.update({"trace", "span"})
+        _add_framework_trace_key(observed, name)
+    return observed
+
+
+def _looks_like_framework_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_trace" or any(
+        key in data for key in ("framework", "spans", "signals")
+    )
+
+
+def _merge_framework_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if payload.get("framework"):
+        observed.add("framework")
+    for signal in _as_list(payload.get("signals", [])):
+        _add_framework_trace_key(observed, str(signal))
+    spans = [*_as_list(payload.get("spans", [])), *_as_list(payload.get("events", []))]
+    if spans:
+        observed.add("span")
+    for span in spans:
+        span_dict = _as_dict(span)
+        for signal in _as_list(span_dict.get("signals", [])):
+            _add_framework_trace_key(observed, str(signal))
+        _add_framework_trace_key(observed, str(span_dict.get("name", "")))
+        _add_framework_trace_key(observed, str(span_dict.get("type", "")))
+        if span_dict.get("error"):
+            observed.add("error")
+        if span_dict.get("latency_ms") is not None:
+            observed.add("latency")
+        if span_dict.get("cost") is not None:
+            observed.add("cost")
+        attributes = _as_dict(span_dict.get("attributes", {}))
+        for key in attributes:
+            _add_framework_trace_key(observed, str(key))
+    if payload.get("state"):
+        observed.add("state")
+
+
+def _add_framework_trace_key(observed: set[str], value: str) -> None:
+    text = str(value).lower()
+    aliases = {
+        "agent": "agent",
+        "chain": "agent",
+        "graph": "agent",
+        "node": "agent",
+        "llm": "model",
+        "model": "model",
+        "generation": "model",
+        "tool": "tool",
+        "function": "tool",
+        "handoff": "handoff",
+        "transfer": "handoff",
+        "guardrail": "guardrail",
+        "retriev": "retrieval",
+        "rag": "retrieval",
+        "vector": "retrieval",
+        "memory": "memory",
+        "browser": "browser",
+        "computer": "browser",
+        "cua": "browser",
+        "voice": "voice",
+        "audio": "voice",
+        "speech": "voice",
+        "transcri": "voice",
+        "image": "image",
+        "vision": "image",
+        "state": "state",
+        "checkpoint": "state",
+        "error": "error",
+        "exception": "error",
+        "latency": "latency",
+        "duration": "latency",
+        "token": "cost",
+        "cost": "cost",
+        "usage": "cost",
+    }
+    normalized = _normalize_framework_trace_key(value)
+    if normalized:
+        observed.add(normalized)
+    for token, signal in aliases.items():
+        if token in text:
+            observed.add(signal)
+
+
+def _normalize_framework_trace_key(key: str) -> str:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "llm": "model",
+        "generation": "model",
+        "chat_model": "model",
+        "model_call": "model",
+        "function": "tool",
+        "function_call": "tool",
+        "function_tool": "tool",
+        "tool_call": "tool",
+        "handoffs": "handoff",
+        "delegation": "handoff",
+        "transfer": "handoff",
+        "guardrails": "guardrail",
+        "safety": "guardrail",
+        "retriever": "retrieval",
+        "rag": "retrieval",
+        "vector_search": "retrieval",
+        "memory_update": "memory",
+        "memory_retrieval": "memory",
+        "computer": "browser",
+        "cua": "browser",
+        "computer_use": "browser",
+        "transcription": "voice",
+        "speech": "voice",
+        "audio": "voice",
+        "tts": "voice",
+        "stt": "voice",
+        "vision": "image",
+        "multimodal": "image",
+        "exception": "error",
+        "failure": "error",
+        "duration": "latency",
+        "duration_ms": "latency",
+        "tokens": "cost",
+        "usage": "cost",
     }
     return aliases.get(normalized, normalized)
 

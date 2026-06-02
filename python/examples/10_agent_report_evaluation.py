@@ -59,6 +59,20 @@ report = {
                         ],
                     },
                 },
+                {
+                    "type": "trace",
+                    "metadata": {"kind": "framework_trace", "framework": "openai_agents"},
+                    "data": {
+                        "kind": "framework_trace",
+                        "framework": "openai_agents",
+                        "signals": ["agent", "model", "tool", "latency"],
+                        "spans": [
+                            {"id": "agent_1", "name": "agent_span", "signals": ["agent"]},
+                            {"id": "model_1", "name": "generation_span", "signals": ["model", "latency"]},
+                            {"id": "tool_1", "name": "function_span search_order", "signals": ["tool"]},
+                        ],
+                    },
+                },
             ],
         }
     ]
@@ -72,6 +86,7 @@ result = evaluate_agent_report(
         "memory_allowed_keys": ["order_id", "status"],
         "required_artifact_types": ["image", "audio"],
         "required_autonomy_loop": ["observe", "orient", "plan", "act", "verify", "reflect"],
+        "required_framework_trace": ["agent", "model", "tool", "latency"],
         "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
         "success_criteria": ["checkout support case resolved"],
