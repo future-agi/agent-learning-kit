@@ -872,6 +872,15 @@ def test_evaluate_agent_report_scores_retrieval_memory_attribution():
                 "events": [
                     {
                         "type": "retrieval_memory",
+                        "name": "retrieval_memory_ready",
+                        "payload": {
+                            "document_count": 2,
+                            "memory_keys": ["order_id"],
+                            "require_current": True,
+                        },
+                    },
+                    {
+                        "type": "retrieval_memory",
                         "name": "query",
                         "payload": {"query": "refund policy order 123"},
                     }
@@ -900,6 +909,28 @@ def test_evaluate_agent_report_scores_retrieval_memory_attribution():
         finding["metric"] == "retrieval_memory_attribution"
         and finding["key"] == "citation"
         for finding in result.findings
+    )
+    assert any(
+        finding["metric"] == "retrieval_memory_attribution"
+        and finding["key"] == "attribution"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][0]["data"]["memory_writes"] = []
+    report["results"][0]["artifacts"][0]["data"]["citations"] = []
+    empty_trace_result = evaluate_agent_report(
+        report,
+        config={"required_retrieval_memory_trace": required},
+    )
+    empty_trace_scores = {
+        metric.name: metric.score
+        for metric in empty_trace_result.cases[0].metrics
+    }
+    assert empty_trace_scores["retrieval_memory_attribution"] == scores["retrieval_memory_attribution"]
+    assert any(
+        finding["metric"] == "retrieval_memory_attribution"
+        and finding["key"] == "memory_write"
+        for finding in empty_trace_result.findings
     )
 
     report["results"][0]["artifacts"][0]["data"]["memory_writes"] = [

@@ -1370,7 +1370,9 @@ def _merge_retrieval_memory_payload(observed: set[str], payload: Mapping[str, An
         observed.add("memory_write")
     if _as_list(payload.get("citations", [])) or payload.get("citation"):
         observed.update({"citation", "attribution"})
-    if payload.get("doc_ids") or payload.get("memory_keys") or payload.get("claim"):
+    if payload.get("doc_ids") or payload.get("claim") or (
+        payload.get("memory_keys") and (payload.get("doc_ids") or payload.get("claim"))
+    ):
         observed.update({"citation", "attribution"})
     if payload.get("require_current") is not None:
         observed.add("freshness")
@@ -1378,7 +1380,11 @@ def _merge_retrieval_memory_payload(observed: set[str], payload: Mapping[str, An
         doc = _as_dict(document)
         if any(key in doc for key in ("version", "current", "last_modified", "status")):
             observed.add("freshness")
-    for key in payload:
+    for key, value in payload.items():
+        if value is None or value is False:
+            continue
+        if isinstance(value, (list, tuple, set, dict)) and not value:
+            continue
         _add_retrieval_memory_key(observed, str(key))
 
 
