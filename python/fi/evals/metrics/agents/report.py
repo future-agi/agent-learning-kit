@@ -83,6 +83,7 @@ class AgentReportEvalConfig(BaseModel):
     memory_allowed_keys: Optional[List[str]] = None
     max_voice_latency_ms: Optional[int] = 1500
     required_artifact_types: List[str] = Field(default_factory=list)
+    required_browser_trace: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -231,6 +232,7 @@ class AgentReportEvaluator:
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
+                _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
                 _artifact_coverage_metric(report_context, config),
                 _state_goal_metric(report_context, config),
@@ -593,6 +595,44 @@ def _browser_action_safety_metric(
     )
 
 
+def _browser_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_browser_trace_key(key) for key in config.required_browser_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="browser_trace_coverage",
+            score=1.0,
+            reason="No required browser trace keys provided.",
+        )
+
+    observed = _browser_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_browser_trace_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="browser_trace_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required browser trace evidence observed."
+            if not missing
+            else f"Missing browser trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
 def _voice_turn_taking_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -807,6 +847,101 @@ def _regex_findings(patterns: Iterable[str], text: str) -> List[Dict[str, Any]]:
                 }
             )
     return findings
+
+
+def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type == "browser_dom":
+            observed.add("dom")
+        if artifact_type == "screenshot":
+            observed.add("screenshot")
+        if artifact_type == "trace":
+            data = _as_dict(_get(artifact, "data", {}))
+            metadata = _as_dict(_get(artifact, "metadata", {}))
+            if _looks_like_browser_trace(data, metadata):
+                observed.add("trace")
+                _merge_browser_trace_payload(observed, data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        event_text = _stringify(event).lower()
+        if "browser_snapshot" in event_type or "snapshot" in name:
+            observed.add("snapshot")
+            if payload.get("has_dom") or "dom" in event_text:
+                observed.add("dom")
+            if payload.get("has_screenshot") or "screenshot" in event_text:
+                observed.add("screenshot")
+            _merge_browser_trace_payload(observed, payload)
+        if "browser_action" in event_type or any(token in name for token in ("click", "navigate")):
+            observed.update({"action", "action_replay"})
+        if "browser_console" in event_type or "console" in name:
+            observed.add("console")
+        if "browser_network" in event_type or "network" in name:
+            observed.add("network")
+        if "environment_injection" in event_type and "browser" in event_text:
+            observed.add("prompt_injection_surface")
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if any(token in name for token in ("browser", "playwright", "computer")):
+            observed.update({"action", "action_replay"})
+    return observed
+
+
+def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "browser_trace" or any(
+        key in data for key in ("snapshots", "action_replay", "console_logs", "network_log")
+    )
+
+
+def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    snapshots = _as_list(payload.get("snapshots", []))
+    if snapshots:
+        observed.add("snapshot")
+    for snapshot in snapshots:
+        snapshot_dict = _as_dict(snapshot)
+        if snapshot_dict.get("dom"):
+            observed.add("dom")
+        if snapshot_dict.get("screenshot_uri") or snapshot_dict.get("screenshot_path"):
+            observed.add("screenshot")
+    if payload.get("dom"):
+        observed.add("dom")
+    if payload.get("screenshot_uri") or payload.get("screenshot_path"):
+        observed.add("screenshot")
+    if _as_list(payload.get("action_replay", [])) or _as_list(payload.get("actions", [])):
+        observed.update({"action", "action_replay"})
+    if _as_list(payload.get("console_logs", [])):
+        observed.add("console")
+    if _as_list(payload.get("network_log", [])) or _as_list(payload.get("network", [])):
+        observed.add("network")
+    if _as_list(payload.get("prompt_injections", [])):
+        observed.add("prompt_injection_surface")
+
+
+def _normalize_browser_trace_key(key: str) -> str:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "actions": "action",
+        "action_replay": "action_replay",
+        "dom_snapshot": "dom",
+        "dom_snapshots": "dom",
+        "screenshots": "screenshot",
+        "console_log": "console",
+        "console_logs": "console",
+        "network_logs": "network",
+        "network_log": "network",
+        "network_request": "network",
+        "network_requests": "network",
+        "prompt_injection": "prompt_injection_surface",
+        "prompt_injections": "prompt_injection_surface",
+        "injection_surface": "prompt_injection_surface",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _extract_url(text: str) -> Optional[str]:

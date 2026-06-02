@@ -322,6 +322,103 @@ def test_evaluate_agent_report_scores_required_artifact_types():
     assert any(finding["metric"] == "artifact_coverage" for finding in missing_result.findings)
 
 
+def test_evaluate_agent_report_scores_browser_trace_coverage():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Complete a checkout in a browser.",
+                    "outcome": "Browser checkout completed with replay evidence.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Complete checkout."},
+                    {
+                        "role": "assistant",
+                        "content": "I will click confirm.",
+                        "tool_calls": [
+                            {
+                                "id": "call_browser",
+                                "name": "browser_click",
+                                "arguments": {
+                                    "url": "https://shop.example.com/checkout",
+                                    "action": "click confirm",
+                                },
+                            }
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {"type": "browser_dom", "data": "<button>Confirm</button>"},
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "snapshots": [
+                                {
+                                    "url": "https://shop.example.com/checkout",
+                                    "dom": "<button>Confirm</button>",
+                                }
+                            ],
+                            "action_replay": [{"action": "click confirm"}],
+                        },
+                    },
+                ],
+                "events": [
+                    {
+                        "type": "browser_action",
+                        "name": "browser_click",
+                        "payload": {
+                            "url": "https://shop.example.com/checkout",
+                            "action": "click confirm",
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={"required_browser_trace": ["dom", "screenshot", "action", "console", "network"]},
+    )
+    metric_scores = {
+        metric.name: metric.score
+        for metric in result.cases[0].metrics
+    }
+
+    assert metric_scores["browser_trace_coverage"] < 1.0
+    assert any(
+        finding["metric"] == "browser_trace_coverage"
+        and finding["key"] == "screenshot"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"].append(
+        {"type": "screenshot", "uri": "file:///fixtures/checkout.png"}
+    )
+    report["results"][0]["artifacts"][1]["data"]["snapshots"][0][
+        "screenshot_uri"
+    ] = "file:///fixtures/checkout.png"
+    report["results"][0]["artifacts"][1]["data"]["console_logs"] = [
+        {"level": "info", "message": "ready"}
+    ]
+    report["results"][0]["artifacts"][1]["data"]["network_log"] = [
+        {"url": "https://shop.example.com/api/order", "status": 200}
+    ]
+
+    complete_result = evaluate_agent_report(
+        report,
+        config={"required_browser_trace": ["dom", "screenshot", "action", "console", "network"]},
+    )
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["browser_trace_coverage"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(
