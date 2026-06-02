@@ -73,6 +73,26 @@ report = {
                         ],
                     },
                 },
+                {
+                    "type": "trace",
+                    "metadata": {"kind": "retrieval_memory_trace"},
+                    "data": {
+                        "kind": "retrieval_memory_trace",
+                        "queries": [{"query": "checkout order 123", "documents": ["order_policy"]}],
+                        "documents": [
+                            {
+                                "id": "order_policy",
+                                "content": "Order 123 checkout can be resolved.",
+                                "version": "v2",
+                                "current": True,
+                            }
+                        ],
+                        "memory_reads": [{"key": "order_id", "value": "123"}],
+                        "memory_writes": [{"key": "status", "value": "resolved"}],
+                        "citations": [{"doc_ids": ["order_policy"], "claim": "checkout resolved"}],
+                        "require_current": True,
+                    },
+                },
             ],
         }
     ]
@@ -87,6 +107,7 @@ result = evaluate_agent_report(
         "required_artifact_types": ["image", "audio"],
         "required_autonomy_loop": ["observe", "orient", "plan", "act", "verify", "reflect"],
         "required_framework_trace": ["agent", "model", "tool", "latency"],
+        "required_retrieval_memory_trace": ["query", "document", "memory_read", "memory_write", "citation"],
         "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
         "success_criteria": ["checkout support case resolved"],

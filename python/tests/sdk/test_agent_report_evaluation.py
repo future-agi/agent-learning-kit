@@ -811,6 +811,147 @@ def test_evaluate_agent_report_scores_framework_trace_coverage():
     assert complete_scores["framework_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_retrieval_memory_attribution():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Answer a policy question with retrieved context.",
+                    "outcome": "Answer is grounded in current policy and memory.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Can order 123 be refunded?"},
+                    {
+                        "role": "assistant",
+                        "content": "I will search policy and memory before answering.",
+                        "tool_calls": [
+                            {
+                                "id": "search",
+                                "name": "search_knowledge_base",
+                                "arguments": {"query": "refund policy order 123"},
+                            },
+                            {
+                                "id": "memory_read",
+                                "name": "retrieve_memory",
+                                "arguments": {"key": "order_id"},
+                            },
+                            {
+                                "id": "read",
+                                "name": "read_document",
+                                "arguments": {"id": "refund_policy_current"},
+                            },
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "retrieval_memory_trace"},
+                        "data": {
+                            "kind": "retrieval_memory_trace",
+                            "queries": [
+                                {
+                                    "query": "refund policy order 123",
+                                    "documents": ["refund_policy_current"],
+                                }
+                            ],
+                            "documents": [
+                                {
+                                    "id": "refund_policy_current",
+                                    "content": "Order 123 is refund eligible.",
+                                    "version": "v2",
+                                    "current": True,
+                                }
+                            ],
+                            "document_reads": [{"id": "refund_policy_current"}],
+                            "memory_reads": [{"key": "order_id", "value": "123"}],
+                            "require_current": True,
+                        },
+                    }
+                ],
+                "events": [
+                    {
+                        "type": "retrieval_memory",
+                        "name": "query",
+                        "payload": {"query": "refund policy order 123"},
+                    }
+                ],
+            }
+        ]
+    }
+    required = [
+        "query",
+        "document",
+        "memory_read",
+        "memory_write",
+        "citation",
+        "attribution",
+        "freshness",
+    ]
+
+    result = evaluate_agent_report(
+        report,
+        config={"required_retrieval_memory_trace": required},
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["retrieval_memory_attribution"] < 1.0
+    assert any(
+        finding["metric"] == "retrieval_memory_attribution"
+        and finding["key"] == "citation"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][0]["data"]["memory_writes"] = [
+        {"key": "last_resolution", "value": "refund eligible"}
+    ]
+    report["results"][0]["artifacts"][0]["data"]["citations"] = [
+        {
+            "doc_ids": ["refund_policy_current"],
+            "memory_keys": ["order_id"],
+            "claim": "Order 123 is refund eligible.",
+            "freshness_checked": True,
+        }
+    ]
+    report["results"][0]["messages"][1]["tool_calls"].extend(
+        [
+            {
+                "id": "cite",
+                "name": "cite_sources",
+                "arguments": {
+                    "doc_ids": ["refund_policy_current"],
+                    "memory_keys": ["order_id"],
+                    "claim": "Order 123 is refund eligible.",
+                    "freshness_checked": True,
+                },
+            },
+            {
+                "id": "write",
+                "name": "write_memory",
+                "arguments": {"key": "last_resolution", "value": "refund eligible"},
+            },
+        ]
+    )
+    report["results"][0]["events"].append(
+        {
+            "type": "retrieval_memory",
+            "name": "attribution",
+            "payload": {"doc_ids": ["refund_policy_current"], "claim": "Order 123 is refund eligible."},
+        }
+    )
+
+    complete_result = evaluate_agent_report(
+        report,
+        config={"required_retrieval_memory_trace": required},
+    )
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["retrieval_memory_attribution"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(

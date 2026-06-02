@@ -88,6 +88,7 @@ class AgentReportEvalConfig(BaseModel):
     required_autonomy_loop: List[str] = Field(default_factory=list)
     required_multi_agent_trace: List[str] = Field(default_factory=list)
     required_framework_trace: List[str] = Field(default_factory=list)
+    required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -237,6 +238,7 @@ class AgentReportEvaluator:
                 _memory_integrity_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                _retrieval_memory_attribution_metric(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
@@ -707,6 +709,47 @@ def _framework_trace_coverage_metric(
             "All required framework trace evidence observed."
             if not missing
             else f"Missing framework trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
+def _retrieval_memory_attribution_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_retrieval_memory_key(key)
+        for key in config.required_retrieval_memory_trace
+    ]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="retrieval_memory_attribution",
+            score=1.0,
+            reason="No required retrieval/memory trace keys provided.",
+        )
+
+    observed = _retrieval_memory_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_retrieval_memory_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="retrieval_memory_attribution",
+        score=round(score, 4),
+        reason=(
+            "All required retrieval/memory attribution evidence observed."
+            if not missing
+            else f"Missing retrieval/memory attribution evidence: {', '.join(missing)}."
         ),
         details={
             "required": sorted(set(required)),
@@ -1277,6 +1320,109 @@ def _normalize_framework_trace_key(key: str) -> str:
         "duration_ms": "latency",
         "tokens": "cost",
         "usage": "cost",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _retrieval_memory_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_retrieval_memory_trace(data, metadata):
+            observed.add("trace")
+            _merge_retrieval_memory_payload(observed, data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if any(token in event_type for token in ("retrieval", "memory", "citation", "attribution")):
+            _add_retrieval_memory_key(observed, name)
+            _merge_retrieval_memory_payload(observed, payload)
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        _add_retrieval_memory_key(observed, name)
+    return observed
+
+
+def _looks_like_retrieval_memory_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "retrieval_memory_trace" or any(
+        key in data for key in ("queries", "document_reads", "memory_reads", "memory_writes", "citations")
+    )
+
+
+def _merge_retrieval_memory_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if _as_list(payload.get("queries", [])) or payload.get("query"):
+        observed.add("query")
+    if _as_list(payload.get("documents", [])) or payload.get("document"):
+        observed.add("document")
+    if _as_list(payload.get("document_reads", [])):
+        observed.add("document")
+    if _as_list(payload.get("memory_reads", [])):
+        observed.add("memory_read")
+    if _as_list(payload.get("memory_writes", [])):
+        observed.add("memory_write")
+    if _as_list(payload.get("citations", [])) or payload.get("citation"):
+        observed.update({"citation", "attribution"})
+    if payload.get("doc_ids") or payload.get("memory_keys") or payload.get("claim"):
+        observed.update({"citation", "attribution"})
+    if payload.get("require_current") is not None:
+        observed.add("freshness")
+    for document in _as_list(payload.get("documents", [])):
+        doc = _as_dict(document)
+        if any(key in doc for key in ("version", "current", "last_modified", "status")):
+            observed.add("freshness")
+    for key in payload:
+        _add_retrieval_memory_key(observed, str(key))
+
+
+def _add_retrieval_memory_key(observed: set[str], value: str) -> None:
+    key = _normalize_retrieval_memory_key(value)
+    if key:
+        observed.add(key)
+
+
+def _normalize_retrieval_memory_key(key: str) -> str:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "search_knowledge_base": "query",
+        "query_knowledge": "query",
+        "retrieve_documents": "query",
+        "search": "query",
+        "queries": "query",
+        "retrieval_query": "query",
+        "docs": "document",
+        "documents": "document",
+        "document_reads": "document",
+        "read_document": "document",
+        "context": "document",
+        "contexts": "document",
+        "retrieve_memory": "memory_read",
+        "memory_reads": "memory_read",
+        "memory_retrieval": "memory_read",
+        "write_memory": "memory_write",
+        "memory_writes": "memory_write",
+        "memory_update": "memory_write",
+        "cite_sources": "citation",
+        "source": "citation",
+        "sources": "citation",
+        "source_document": "citation",
+        "source_documents": "citation",
+        "citations": "citation",
+        "record_attribution": "attribution",
+        "grounding": "attribution",
+        "claim": "attribution",
+        "version": "freshness",
+        "current": "freshness",
+        "last_modified": "freshness",
+        "freshness_checked": "freshness",
+        "retrieval_memory_status": "trace",
     }
     return aliases.get(normalized, normalized)
 
