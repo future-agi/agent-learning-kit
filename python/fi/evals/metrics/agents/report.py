@@ -82,6 +82,7 @@ class AgentReportEvalConfig(BaseModel):
     allowed_domains: List[str] = Field(default_factory=list)
     memory_allowed_keys: Optional[List[str]] = None
     max_voice_latency_ms: Optional[int] = 1500
+    required_artifact_types: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -230,6 +231,7 @@ class AgentReportEvaluator:
                 _memory_integrity_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
+                _artifact_coverage_metric(report_context, config),
                 _state_goal_metric(report_context, config),
             ]
         )
@@ -260,6 +262,7 @@ def normalize_agent_report(
 def _normalize_case(case: Any, config: AgentReportEvalConfig) -> AgentTrajectoryInput:
     messages = _as_list(_get(case, "messages", []))
     raw_tool_calls = _as_list(_get(case, "tool_calls", []))
+    artifacts = _as_list(_get(case, "artifacts", []))
     events = _as_list(_get(case, "events", []))
     metadata = _as_dict(_get(case, "metadata", {}))
     persona = _get(case, "persona", None)
@@ -321,6 +324,7 @@ def _normalize_case(case: Any, config: AgentReportEvalConfig) -> AgentTrajectory
     trajectory_input.__dict__["_report_context"] = {
         "messages": messages,
         "tool_calls": raw_tool_calls,
+        "artifacts": artifacts,
         "events": events,
         "metadata": metadata,
         "transcript": transcript,
@@ -583,6 +587,36 @@ def _state_goal_metric(
         score=round(score, 4),
         reason=f"{sum(1 for value in matches.values() if value['match'])}/{len(matches)} expected state fields matched.",
         details={"matches": matches},
+    )
+
+
+def _artifact_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [artifact_type.lower() for artifact_type in config.required_artifact_types]
+    if not required:
+        return AgentReportMetricResult(
+            name="artifact_coverage",
+            score=1.0,
+            reason="No required artifact types provided.",
+        )
+    observed = {
+        str(_get(artifact, "type", "") or "").lower()
+        for artifact in _as_list(context.get("artifacts", []))
+    }
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    return AgentReportMetricResult(
+        name="artifact_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required artifact types observed."
+            if not missing
+            else f"Missing artifact types: {', '.join(missing)}."
+        ),
+        details={"required": required, "observed": sorted(observed), "missing": missing},
     )
 
 

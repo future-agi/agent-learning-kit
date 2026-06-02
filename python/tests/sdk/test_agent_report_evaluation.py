@@ -203,6 +203,49 @@ def test_evaluate_agent_report_finds_pentest_and_autonomy_failures():
     assert any(finding["metric"] == "browser_action_safety" for finding in result.findings)
 
 
+def test_evaluate_agent_report_scores_required_artifact_types():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Inspect a receipt image and handle a voice turn.",
+                    "outcome": "Receipt and voice artifacts are captured.",
+                },
+                "messages": [
+                    {"role": "assistant", "content": "Receipt and voice artifacts are captured."},
+                ],
+                "artifacts": [
+                    {"type": "image", "uri": "file:///tmp/receipt.png"},
+                    {"type": "audio", "uri": "file:///tmp/user.wav"},
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={"required_artifact_types": ["image", "audio"]},
+    )
+    metric_scores = {
+        metric.name: metric.score
+        for metric in result.cases[0].metrics
+    }
+
+    assert metric_scores["artifact_coverage"] == 1.0
+
+    missing_result = evaluate_agent_report(
+        report,
+        config={"required_artifact_types": ["image", "audio", "screenshot"]},
+    )
+    missing_scores = {
+        metric.name: metric.score
+        for metric in missing_result.cases[0].metrics
+    }
+
+    assert missing_scores["artifact_coverage"] < 1.0
+    assert any(finding["metric"] == "artifact_coverage" for finding in missing_result.findings)
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(

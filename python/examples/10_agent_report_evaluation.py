@@ -37,7 +37,12 @@ report = {
                     "type": "memory_update",
                     "payload": {"order_id": "123", "status": "resolved"},
                 },
+                {"type": "voice", "name": "tts_output", "payload": {"latency_ms": 420}},
                 {"type": "state_update", "payload": {"case": {"resolved": True}}},
+            ],
+            "artifacts": [
+                {"type": "image", "uri": "file:///fixtures/receipt.png"},
+                {"type": "audio", "uri": "file:///fixtures/caller.wav"},
             ],
         }
     ]
@@ -49,6 +54,8 @@ result = evaluate_agent_report(
         "required_tools": ["search_order"],
         "available_tools": ["search_order", "refund_order"],
         "memory_allowed_keys": ["order_id", "status"],
+        "required_artifact_types": ["image", "audio"],
+        "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
         "success_criteria": ["checkout support case resolved"],
     },
