@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, tool selection, tool argument schema validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -232,6 +232,14 @@ result = evaluate_agent_report(
                 "properties": {"order_id": {"type": "string"}},
                 "required": ["order_id"],
                 "additionalProperties": False,
+            }
+        },
+        "expected_tool_outcomes": {
+            "search_order": {
+                "success": True,
+                "result": {"resolved": True},
+                "state_updates": {"case": {"resolved": True}},
+                "final_state": {"case": {"resolved": True}},
             }
         },
     },

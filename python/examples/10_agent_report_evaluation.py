@@ -26,7 +26,8 @@ report = {
                             "additionalProperties": False,
                         },
                     }
-                ]
+                ],
+                "environment_state": {"case": {"resolved": True}},
             },
             "transcript": "Agent searched the order and resolved checkout.",
             "messages": [
@@ -51,6 +52,16 @@ report = {
                     "payload": {"order_id": "123", "status": "resolved"},
                 },
                 {"type": "voice", "name": "tts_output", "payload": {"latency_ms": 420}},
+                {
+                    "type": "tool_execution",
+                    "name": "search_order",
+                    "payload": {
+                        "arguments": {"order_id": "123"},
+                        "success": True,
+                        "result": {"resolved": True},
+                        "state_updates": {"case": {"resolved": True}},
+                    },
+                },
                 {"type": "state_update", "payload": {"case": {"resolved": True}}},
             ],
             "artifacts": [
@@ -139,6 +150,14 @@ result = evaluate_agent_report(
         "require_source_grounding": True,
         "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
+        "expected_tool_outcomes": {
+            "search_order": {
+                "success": True,
+                "result": {"resolved": True},
+                "state_updates": {"case": {"resolved": True}},
+                "final_state": {"case": {"resolved": True}},
+            }
+        },
         "success_criteria": ["checkout support case resolved"],
     },
 )

@@ -1275,6 +1275,92 @@ def test_evaluate_agent_report_scores_tool_argument_schema():
     assert complete_scores["tool_argument_schema"] == 1.0
 
 
+def test_evaluate_agent_report_scores_tool_outcome_and_final_environment_state():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Mark order 123 as shipped.",
+                    "outcome": "Order 123 is shipped.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Mark order 123 as shipped."},
+                    {
+                        "role": "assistant",
+                        "content": "I updated the order.",
+                        "tool_calls": [
+                            {
+                                "id": "call_update",
+                                "name": "update_order",
+                                "arguments": {"order_id": "123", "status": "pending"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_update",
+                        "content": "Order is still pending.",
+                    },
+                ],
+                "events": [
+                    {
+                        "type": "tool_execution",
+                        "name": "update_order",
+                        "payload": {
+                            "arguments": {"order_id": "123", "status": "pending"},
+                            "success": True,
+                            "result": {"status": "pending"},
+                            "state_updates": {"order": {"status": "pending"}},
+                        },
+                    }
+                ],
+                "metadata": {
+                    "environment_state": {"order": {"id": "123", "status": "pending"}}
+                },
+            }
+        ]
+    }
+    config = {
+        "expected_state": {"order": {"status": "shipped"}},
+        "expected_tool_outcomes": {
+            "update_order": {
+                "success": True,
+                "result": {"status": "shipped"},
+                "state_updates": {"order": {"status": "shipped"}},
+                "final_state": {"order": {"status": "shipped"}},
+            }
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["tool_outcome"] < 1.0
+    assert scores["state_goal_accuracy"] == 0.0
+    assert any(
+        finding["metric"] == "tool_outcome"
+        and finding["type"] == "tool_outcome_mismatch"
+        and finding["tool"] == "update_order"
+        and finding["check"] == "final_state.order.status"
+        for finding in result.findings
+    )
+
+    execution = report["results"][0]["events"][0]
+    execution["payload"]["arguments"]["status"] = "shipped"
+    execution["payload"]["result"] = {"status": "shipped"}
+    execution["payload"]["state_updates"] = {"order": {"status": "shipped"}}
+    report["results"][0]["metadata"]["environment_state"]["order"]["status"] = "shipped"
+
+    complete_result = evaluate_agent_report(report, config=config)
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["tool_outcome"] == 1.0
+    assert complete_scores["state_goal_accuracy"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(

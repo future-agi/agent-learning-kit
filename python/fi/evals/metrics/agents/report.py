@@ -138,6 +138,7 @@ class AgentReportEvalConfig(BaseModel):
     tool_argument_schemas: Dict[str, Any] = Field(default_factory=dict)
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
+    expected_tool_outcomes: Dict[str, Any] = Field(default_factory=dict)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -286,6 +287,7 @@ class AgentReportEvaluator:
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
                 _tool_argument_schema_metric(report_context, config),
+                _tool_outcome_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -700,6 +702,225 @@ def _tool_argument_schema_metric(
             "findings": findings,
         },
     )
+
+
+def _tool_outcome_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    if not config.expected_tool_outcomes:
+        return AgentReportMetricResult(
+            name="tool_outcome",
+            score=1.0,
+            reason="No expected tool outcomes provided.",
+        )
+
+    records = _tool_execution_records_from_context(context)
+    final_state = _extract_final_state(context)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for tool_name, raw_spec in config.expected_tool_outcomes.items():
+        spec = _normalize_tool_outcome_spec(raw_spec)
+        matching = [record for record in records if record["tool"] == tool_name]
+        min_calls = _as_int(spec.get("min_calls")) or 1
+        call_count_match = len(matching) >= min_calls
+        _append_tool_outcome_check(
+            checks,
+            findings,
+            tool=tool_name,
+            check="min_calls",
+            expected=min_calls,
+            actual=len(matching),
+            match=call_count_match,
+        )
+
+        if "success" in spec:
+            expected_success = bool(spec["success"])
+            matching_success = [record for record in matching if record.get("success") is expected_success]
+            _append_tool_outcome_check(
+                checks,
+                findings,
+                tool=tool_name,
+                check="success",
+                expected=expected_success,
+                actual=[record.get("success") for record in matching],
+                match=len(matching_success) >= min_calls,
+            )
+
+        expected_result = spec.get("result")
+        if expected_result is not None:
+            if isinstance(expected_result, Mapping):
+                for path, expected in _flatten_state(dict(expected_result)).items():
+                    actual_values = [
+                        _get_path(_as_dict(record.get("result")), path)
+                        for record in matching
+                    ]
+                    _append_tool_outcome_check(
+                        checks,
+                        findings,
+                        tool=tool_name,
+                        check=f"result.{path}",
+                        expected=expected,
+                        actual=actual_values,
+                        match=expected in actual_values,
+                    )
+            else:
+                actual_values = [record.get("result") for record in matching]
+                _append_tool_outcome_check(
+                    checks,
+                    findings,
+                    tool=tool_name,
+                    check="result",
+                    expected=expected_result,
+                    actual=actual_values,
+                    match=expected_result in actual_values,
+                )
+
+        expected_state_updates = _as_dict(spec.get("state_updates"))
+        if expected_state_updates:
+            merged_updates: Dict[str, Any] = {}
+            for record in matching:
+                _deep_merge_dict(merged_updates, _as_dict(record.get("state_updates")))
+            for path, expected in _flatten_state(expected_state_updates).items():
+                actual = _get_path(merged_updates, path)
+                _append_tool_outcome_check(
+                    checks,
+                    findings,
+                    tool=tool_name,
+                    check=f"state_updates.{path}",
+                    expected=expected,
+                    actual=actual,
+                    match=actual == expected,
+                )
+
+        expected_final_state = _as_dict(spec.get("final_state") or spec.get("state"))
+        if expected_final_state:
+            for path, expected in _flatten_state(expected_final_state).items():
+                actual = _get_path(final_state, path)
+                _append_tool_outcome_check(
+                    checks,
+                    findings,
+                    tool=tool_name,
+                    check=f"final_state.{path}",
+                    expected=expected,
+                    actual=actual,
+                    match=actual == expected,
+                )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="tool_outcome",
+            score=1.0,
+            reason="No expected tool outcome checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    score = matched / len(checks)
+    return AgentReportMetricResult(
+        name="tool_outcome",
+        score=round(score, 4),
+        reason=f"{matched}/{len(checks)} expected tool outcome check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "tool_execution_records": len(records),
+        },
+    )
+
+
+def _normalize_tool_outcome_spec(raw_spec: Any) -> Dict[str, Any]:
+    if isinstance(raw_spec, bool):
+        return {"success": raw_spec}
+    spec = _as_dict(raw_spec)
+    if not spec:
+        return {}
+    normalized = dict(spec)
+    if "expected_result" in normalized and "result" not in normalized:
+        normalized["result"] = normalized["expected_result"]
+    return normalized
+
+
+def _append_tool_outcome_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    tool: str,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+) -> None:
+    item = {
+        "tool": tool,
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": "tool_outcome_mismatch", **item})
+
+
+def _tool_execution_records_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    seen = set()
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        if "tool_execution" not in event_type and "tool_response" not in event_type:
+            continue
+        payload = _as_dict(_get(event, "payload", {}))
+        tool_name = str(payload.get("tool_name") or payload.get("name") or _get(event, "name", "") or "")
+        if not tool_name:
+            continue
+        success = _tool_record_success(payload)
+        record = {
+            "tool": tool_name,
+            "arguments": payload.get("arguments", payload.get("args", {})),
+            "success": success,
+            "result": payload.get("result", payload.get("output")),
+            "error": payload.get("error"),
+            "state_updates": payload.get("state_updates", {}),
+        }
+        _append_unique_tool_record(records, seen, record)
+
+    for call in _tool_calls_from_context(context):
+        if call.result is None and call.error is None and call.success:
+            continue
+        record = {
+            "tool": call.name,
+            "arguments": call.arguments,
+            "success": call.success,
+            "result": call.result,
+            "error": call.error,
+            "state_updates": {},
+        }
+        _append_unique_tool_record(records, seen, record)
+
+    return records
+
+
+def _append_unique_tool_record(
+    records: List[Dict[str, Any]],
+    seen: set[str],
+    record: Dict[str, Any],
+) -> None:
+    signature = json.dumps(record, sort_keys=True, default=str)
+    if signature in seen:
+        return
+    seen.add(signature)
+    records.append(record)
+
+
+def _tool_record_success(payload: Mapping[str, Any]) -> bool:
+    if isinstance(payload.get("success"), bool):
+        return bool(payload["success"])
+    status = str(payload.get("status", "success") or "").lower()
+    if status in {"error", "failed", "failure", "exception"}:
+        return False
+    return payload.get("error") in (None, "")
 
 
 def _browser_action_safety_metric(
@@ -1549,14 +1770,27 @@ def _extract_final_state(context: Mapping[str, Any]) -> Dict[str, Any]:
     state: Dict[str, Any] = {}
     metadata = _as_dict(context.get("metadata", {}))
     if isinstance(metadata.get("state"), dict):
-        state.update(metadata["state"])
+        _deep_merge_dict(state, metadata["state"])
     if isinstance(metadata.get("final_state"), dict):
-        state.update(metadata["final_state"])
+        _deep_merge_dict(state, metadata["final_state"])
+    if isinstance(metadata.get("environment_state"), dict):
+        _deep_merge_dict(state, metadata["environment_state"])
+    environment = _as_dict(metadata.get("environment"))
+    if isinstance(environment.get("state"), dict):
+        _deep_merge_dict(state, environment["state"])
     for event in _as_list(context.get("events", [])):
         event_type = str(_get(event, "type", "") or "").lower()
         if "state" in event_type:
-            state.update(_as_dict(_get(event, "payload", {})))
+            _deep_merge_dict(state, _as_dict(_get(event, "payload", {})))
     return state
+
+
+def _deep_merge_dict(target: Dict[str, Any], updates: Mapping[str, Any]) -> None:
+    for key, value in updates.items():
+        if isinstance(value, Mapping) and isinstance(target.get(key), dict):
+            _deep_merge_dict(target[key], value)
+        else:
+            target[key] = value
 
 
 def _collect_findings(metrics: Sequence[AgentReportMetricResult]) -> List[Dict[str, Any]]:
