@@ -124,6 +124,9 @@ class AgentReportEvalConfig(BaseModel):
     max_voice_latency_ms: Optional[int] = 1500
     required_artifact_types: List[str] = Field(default_factory=list)
     required_browser_trace: List[str] = Field(default_factory=list)
+    expected_browser_actions: List[Any] = Field(default_factory=list)
+    expected_browser_state: Dict[str, Any] = Field(default_factory=dict)
+    expected_browser_dom_contains: List[str] = Field(default_factory=list)
     required_voice_trace: List[str] = Field(default_factory=list)
     required_autonomy_loop: List[str] = Field(default_factory=list)
     required_multi_agent_trace: List[str] = Field(default_factory=list)
@@ -304,6 +307,7 @@ class AgentReportEvaluator:
                 _source_grounding_metric(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
+                _browser_action_outcome_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
                 _voice_trace_coverage_metric(report_context, config),
@@ -1060,6 +1064,95 @@ def _browser_action_safety_metric(
         score=round(score, 4),
         reason="No unsafe browser/CUA actions." if not findings else f"{len(findings)} browser/CUA issue(s).",
         details={"findings": findings},
+    )
+
+
+def _browser_action_outcome_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    if (
+        not config.expected_browser_actions
+        and not config.expected_browser_state
+        and not config.expected_browser_dom_contains
+    ):
+        return AgentReportMetricResult(
+            name="browser_action_outcome",
+            score=1.0,
+            reason="No expected browser action outcomes provided.",
+        )
+
+    action_records = _browser_action_records_from_context(context)
+    final_state = _extract_final_state(context)
+    browser_state = _as_dict(final_state.get("browser")) or final_state
+    dom_text = "\n".join(_browser_dom_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for raw_spec in config.expected_browser_actions:
+        spec = _normalize_browser_action_outcome_spec(raw_spec)
+        min_calls = _as_int(spec.get("min_calls")) or 1
+        matching = [
+            record
+            for record in action_records
+            if _browser_action_record_matches(record, spec)
+        ]
+        match = len(matching) >= min_calls
+        _append_browser_outcome_check(
+            checks,
+            findings,
+            check="action",
+            expected=spec,
+            actual=matching,
+            match=match,
+            finding_type="browser_action_outcome_mismatch",
+        )
+
+    for path, expected in _flatten_state(config.expected_browser_state).items():
+        if path == "browser" or path.startswith("browser."):
+            actual = _get_path(final_state, path)
+        else:
+            actual = _get_path(browser_state, path)
+        _append_browser_outcome_check(
+            checks,
+            findings,
+            check=f"state.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="browser_state_mismatch",
+        )
+
+    for expected_text in config.expected_browser_dom_contains:
+        expected = str(expected_text)
+        _append_browser_outcome_check(
+            checks,
+            findings,
+            check="dom_contains",
+            expected=expected,
+            actual=expected in dom_text,
+            match=expected in dom_text,
+            finding_type="browser_dom_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="browser_action_outcome",
+            score=1.0,
+            reason="No expected browser outcome checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    score = matched / len(checks)
+    return AgentReportMetricResult(
+        name="browser_action_outcome",
+        score=round(score, 4),
+        reason=f"{matched}/{len(checks)} expected browser outcome check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "browser_action_records": len(action_records),
+        },
     )
 
 
@@ -2821,6 +2914,171 @@ def _normalize_multi_agent_trace_key(key: str) -> str:
     return aliases.get(normalized, normalized)
 
 
+def _normalize_browser_action_outcome_spec(raw_spec: Any) -> Dict[str, Any]:
+    if isinstance(raw_spec, str):
+        return {"selector": raw_spec}
+    spec = _as_dict(raw_spec)
+    if not spec:
+        return {}
+    normalized = dict(spec)
+    if "tool_name" in normalized and "tool" not in normalized:
+        normalized["tool"] = normalized["tool_name"]
+    if "state" in normalized and "state_updates" not in normalized:
+        normalized["state_updates"] = normalized["state"]
+    return normalized
+
+
+def _append_browser_outcome_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
+
+
+def _browser_action_records_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append(record: Mapping[str, Any]) -> None:
+        data = dict(record)
+        if not any(
+            key in data
+            for key in (
+                "tool",
+                "tool_name",
+                "action",
+                "selector",
+                "url",
+                "success",
+                "blocked",
+                "matched",
+                "effect_id",
+            )
+        ):
+            return
+        signature = json.dumps(data, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        records.append(data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "")
+        if "browser_action" not in event_type:
+            continue
+        payload = _as_dict(_get(event, "payload", {}))
+        payload.setdefault("tool", payload.get("tool_name") or name)
+        append(payload)
+
+    for payload in _browser_trace_payloads_from_context(context):
+        for record in _as_list(payload.get("action_replay", payload.get("actions", []))):
+            append(_as_dict(record))
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "")
+        if not any(token in name.lower() for token in ("browser", "playwright", "computer")):
+            continue
+        arguments = _parse_arguments(_get(tool_call, "arguments", _get(tool_call, "args", {})))
+        append(
+            {
+                "tool": name,
+                "arguments": arguments,
+                "action": arguments.get("action"),
+                "selector": arguments.get("selector") or arguments.get("locator"),
+                "url": arguments.get("url"),
+            }
+        )
+
+    return records
+
+
+def _browser_action_record_matches(
+    record: Mapping[str, Any],
+    spec: Mapping[str, Any],
+) -> bool:
+    for key in ("tool", "action", "selector", "url", "effect_id"):
+        if key not in spec:
+            continue
+        actual = record.get(key)
+        if key == "tool":
+            actual = actual or record.get("tool_name") or record.get("name")
+        if key == "selector" and actual is None:
+            actual = _as_dict(record.get("arguments", {})).get("selector")
+        if key == "action" and actual is None:
+            actual = _as_dict(record.get("arguments", {})).get("action")
+        if str(actual) != str(spec[key]):
+            return False
+
+    for key in ("success", "blocked", "matched"):
+        if key in spec:
+            if key not in record:
+                return False
+            if bool(record.get(key)) is not bool(spec[key]):
+                return False
+
+    expected_state_updates = _as_dict(spec.get("state_updates"))
+    if expected_state_updates:
+        actual_updates = _as_dict(record.get("state_updates"))
+        for path, expected in _flatten_state(expected_state_updates).items():
+            if _get_path(actual_updates, path) != expected:
+                return False
+
+    return True
+
+
+def _browser_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_browser_trace(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        if _looks_like_browser_trace(payload, {}):
+            payloads.append(payload)
+    return payloads
+
+
+def _browser_dom_payloads_from_context(context: Mapping[str, Any]) -> List[str]:
+    payloads: List[str] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type == "browser_dom":
+            payloads.append(_stringify(_get(artifact, "data", "")))
+            continue
+        if artifact_type == "trace":
+            data = _as_dict(_get(artifact, "data", {}))
+            metadata = _as_dict(_get(artifact, "metadata", {}))
+            if _looks_like_browser_trace(data, metadata):
+                for snapshot in _as_list(data.get("snapshots", [])):
+                    dom = _as_dict(snapshot).get("dom")
+                    if dom is not None:
+                        payloads.append(_stringify(dom))
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        if payload.get("dom") is not None:
+            payloads.append(_stringify(payload.get("dom")))
+    return payloads
+
+
 def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
     observed: set[str] = set()
     for artifact in _as_list(context.get("artifacts", [])):
@@ -2867,7 +3125,15 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
 def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
     kind = str(data.get("kind") or metadata.get("kind") or "").lower()
     return kind == "browser_trace" or any(
-        key in data for key in ("snapshots", "action_replay", "console_logs", "network_log")
+        key in data
+        for key in (
+            "snapshots",
+            "action_replay",
+            "dom_mutations",
+            "console_logs",
+            "network_log",
+            "final_state",
+        )
     )
 
 
@@ -2887,12 +3153,16 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
         observed.add("screenshot")
     if _as_list(payload.get("action_replay", [])) or _as_list(payload.get("actions", [])):
         observed.update({"action", "action_replay"})
+    if _as_list(payload.get("dom_mutations", [])):
+        observed.add("dom_mutation")
     if _as_list(payload.get("console_logs", [])):
         observed.add("console")
     if _as_list(payload.get("network_log", [])) or _as_list(payload.get("network", [])):
         observed.add("network")
     if _as_list(payload.get("prompt_injections", [])):
         observed.add("prompt_injection_surface")
+    if _as_dict(payload.get("final_state", {})):
+        observed.add("state")
 
 
 def _normalize_browser_trace_key(key: str) -> str:
@@ -2900,6 +3170,12 @@ def _normalize_browser_trace_key(key: str) -> str:
     aliases = {
         "actions": "action",
         "action_replay": "action_replay",
+        "dom_mutations": "dom_mutation",
+        "dom_mutation": "dom_mutation",
+        "mutations": "dom_mutation",
+        "state_updates": "state",
+        "state": "state",
+        "final_state": "state",
         "dom_snapshot": "dom",
         "dom_snapshots": "dom",
         "screenshots": "screenshot",

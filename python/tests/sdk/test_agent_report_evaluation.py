@@ -489,6 +489,147 @@ def test_evaluate_agent_report_scores_browser_trace_coverage():
     assert complete_scores["browser_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_browser_action_outcome():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Confirm checkout in a browser.",
+                    "outcome": "Checkout is confirmed and the browser reaches the done page.",
+                },
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "I clicked the stable confirm control.",
+                        "tool_calls": [
+                            {
+                                "id": "call_browser",
+                                "name": "browser_click",
+                                "arguments": {
+                                    "selector": "#confirm",
+                                    "action": "click confirm",
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {"type": "browser_dom", "data": "<main>Done</main>"},
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "snapshots": [
+                                {
+                                    "id": "done",
+                                    "url": "https://shop.example.com/done",
+                                    "dom": "<main>Done</main>",
+                                }
+                            ],
+                            "action_replay": [
+                                {
+                                    "tool": "browser_click",
+                                    "selector": "#confirm",
+                                    "action": "click confirm",
+                                    "url": "https://shop.example.com/done",
+                                    "success": True,
+                                    "matched": True,
+                                    "effect_id": "confirm_checkout",
+                                    "state_updates": {
+                                        "checkout": {"status": "confirmed"}
+                                    },
+                                }
+                            ],
+                            "dom_mutations": [{"snapshot_id": "done"}],
+                            "final_state": {
+                                "browser": {
+                                    "url": "https://shop.example.com/done",
+                                    "checkout": {"status": "confirmed"},
+                                }
+                            },
+                        },
+                    },
+                ],
+                "events": [
+                    {
+                        "type": "browser_action",
+                        "name": "browser_click",
+                        "payload": {
+                            "selector": "#confirm",
+                            "action": "click confirm",
+                            "url": "https://shop.example.com/done",
+                            "success": True,
+                            "matched": True,
+                            "effect_id": "confirm_checkout",
+                            "state_updates": {
+                                "checkout": {"status": "confirmed"}
+                            },
+                        },
+                    }
+                ],
+                "metadata": {
+                    "environment_state": {
+                        "browser": {
+                            "url": "https://shop.example.com/done",
+                            "checkout": {"status": "confirmed"},
+                        }
+                    }
+                },
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "expected_browser_actions": [
+                {
+                    "selector": "#confirm",
+                    "success": True,
+                    "matched": True,
+                    "effect_id": "confirm_checkout",
+                    "state_updates": {"checkout": {"status": "confirmed"}},
+                }
+            ],
+            "expected_browser_state": {
+                "url": "https://shop.example.com/done",
+                "checkout": {"status": "confirmed"},
+            },
+            "expected_browser_dom_contains": ["Done"],
+            "required_browser_trace": ["action", "dom_mutation", "state"],
+        },
+    )
+    metric_scores = {
+        metric.name: metric.score
+        for metric in result.cases[0].metrics
+    }
+
+    assert metric_scores["browser_action_outcome"] == 1.0
+    assert metric_scores["browser_trace_coverage"] == 1.0
+
+    missing_result = evaluate_agent_report(
+        report,
+        config={
+            "expected_browser_actions": [
+                {
+                    "selector": "#wrong",
+                    "success": True,
+                }
+            ],
+            "expected_browser_state": {"checkout": {"status": "refunded"}},
+            "expected_browser_dom_contains": ["Refunded"],
+        },
+    )
+    missing_scores = {
+        metric.name: metric.score
+        for metric in missing_result.cases[0].metrics
+    }
+
+    assert missing_scores["browser_action_outcome"] < 1.0
+    assert any(finding["metric"] == "browser_action_outcome" for finding in missing_result.findings)
+
+
 def test_evaluate_agent_report_scores_voice_trace_coverage():
     report = {
         "results": [

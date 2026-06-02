@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser action outcome/state validation, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -227,7 +227,12 @@ result = evaluate_agent_report(
         "require_current_retrieval": True,
         "require_source_grounding": True,
         "required_multi_agent_trace": ["role", "contract", "handoff", "message", "review", "reconciliation"],
-        "required_browser_trace": ["dom", "screenshot", "action", "console", "network"],
+        "required_browser_trace": ["dom", "screenshot", "action", "dom_mutation", "state", "console", "network"],
+        "expected_browser_actions": [
+            {"selector": "#confirm", "success": True, "matched": True}
+        ],
+        "expected_browser_state": {"url": "https://shop.example.com/done"},
+        "expected_browser_dom_contains": ["Done"],
         "required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route"],
         "allowed_domains": ["shop.example.com"],
         "memory_allowed_keys": ["order_id", "status"],
