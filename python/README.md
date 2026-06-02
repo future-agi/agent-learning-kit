@@ -209,8 +209,9 @@ exports, so captured framework runs can be scored before or after simulator
 normalization.
 Browser trace and grounding metrics also understand Playwright trace import
 evidence, HAR/resource-body replay, OpenAI Computer Use trace provenance,
-Browser Use history, imported actionability timelines, video artifacts,
-layout-shift perturbations, and stale-screenshot avoidance checks.
+Browser Use history, imported actionability timelines, image-derived pixel
+screenshot diffs, layout-shift distributions, video artifacts, layout-shift
+perturbations, and stale-screenshot avoidance checks.
 Voice trace and interaction metrics understand LiveKit/Pipecat-style export
 replay evidence, waveform fixtures, diarization segments, MOS/SNR/clipping,
 jitter, and packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
@@ -249,14 +250,17 @@ result = evaluate_agent_report(
             {"reviewer": "qa_reviewer", "criteria": ["policy", "tone"]}
         ],
         "expected_multi_agent_reconciliation": {"accepted_source": "policy_specialist"},
-        "required_browser_trace": ["dom", "screenshot", "action", "coordinate_region", "screenshot_diff", "prompt_injection_surface", "dom_mutation", "state", "console", "network", "har", "resource_body", "actionability_timeline", "openai_cua_trace", "browser_use_trace"],
+        "required_browser_trace": ["dom", "screenshot", "action", "coordinate_region", "screenshot_diff", "pixel_screenshot_diff", "layout_shift_distribution", "prompt_injection_surface", "dom_mutation", "state", "console", "network", "har", "resource_body", "actionability_timeline", "openai_cua_trace", "browser_use_trace"],
         "expected_browser_actions": [
             {"selector": "#confirm", "success": True, "matched": True}
         ],
         "expected_browser_regions": [
             {"name": "confirm_button", "bounds": {"x": 160, "y": 380, "width": 180, "height": 54}}
         ],
-        "expected_browser_screenshot_diffs": ["confirm_visual_delta"],
+        "expected_browser_screenshot_diffs": [
+            {"id": "confirm_visual_delta"},
+            {"id": "confirm_pixel_delta", "min_changed_pixels": 4, "min_changed_ratio": 0.2},
+        ],
         "forbidden_browser_prompt_injection_targets": ["coupon_iframe"],
         "expected_browser_state": {"url": "https://shop.example.com/done"},
         "expected_browser_dom_contains": ["Done"],

@@ -4434,6 +4434,16 @@ def _browser_perturbations_from_context(context: Mapping[str, Any]) -> List[Dict
     for payload in _browser_trace_payloads_from_context(context):
         for perturbation in _as_list(payload.get("perturbations", [])):
             append(perturbation)
+        distribution = _as_dict(payload.get("layout_shift_distribution", {}))
+        if distribution:
+            append(
+                {
+                    "id": "layout_shift_distribution",
+                    "type": "layout_shift",
+                    "score": distribution.get("max"),
+                    "distribution": distribution,
+                }
+            )
         for record in _as_list(payload.get("action_replay", payload.get("actions", []))):
             record_dict = _as_dict(record)
             for perturbation in _as_list(record_dict.get("layout_shifts", [])):
@@ -4474,6 +4484,32 @@ def _browser_screenshot_diff_matches(
     contains = spec.get("contains") or spec.get("label_contains")
     if contains and str(contains).lower() not in _stringify(diff).lower():
         return False
+    changed_pixels = _as_float(diff.get("changed_pixels"))
+    if "min_changed_pixels" in spec:
+        if changed_pixels is None or changed_pixels < float(spec["min_changed_pixels"]):
+            return False
+    if "max_changed_pixels" in spec:
+        if changed_pixels is None or changed_pixels > float(spec["max_changed_pixels"]):
+            return False
+    changed_ratio = _as_float(diff.get("changed_ratio"))
+    if changed_ratio is None:
+        changed_percent = _as_float(diff.get("changed_percent"))
+        changed_ratio = changed_percent / 100 if changed_percent is not None else None
+    if "min_changed_ratio" in spec:
+        if changed_ratio is None or changed_ratio < float(spec["min_changed_ratio"]):
+            return False
+    if "max_changed_ratio" in spec:
+        if changed_ratio is None or changed_ratio > float(spec["max_changed_ratio"]):
+            return False
+    changed_percent = _as_float(diff.get("changed_percent"))
+    if changed_percent is None and changed_ratio is not None:
+        changed_percent = changed_ratio * 100
+    if "min_changed_percent" in spec:
+        if changed_percent is None or changed_percent < float(spec["min_changed_percent"]):
+            return False
+    if "max_changed_percent" in spec:
+        if changed_percent is None or changed_percent > float(spec["max_changed_percent"]):
+            return False
     if set(spec.keys()) <= {"id"}:
         expected = str(spec["id"])
         return expected in {str(diff.get("id")), str(diff.get("name")), str(diff.get("label")), str(diff.get("source_action"))} or expected in _stringify(diff)
@@ -4822,6 +4858,7 @@ def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, An
             "actionability_timeline",
             "video_artifacts",
             "perturbations",
+            "layout_shift_distribution",
             "trace_import",
             "final_state",
         )
@@ -4868,6 +4905,9 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
         observed.add("dom_mutation")
     if _as_list(payload.get("screenshot_diffs", [])) or payload.get("screenshot_diff"):
         observed.add("screenshot_diff")
+        for diff in _as_list(payload.get("screenshot_diffs", payload.get("screenshot_diff", []))):
+            if _browser_screenshot_diff_has_pixel_evidence(_as_dict(diff)):
+                observed.add("pixel_screenshot_diff")
     if _as_list(payload.get("video_artifacts", [])):
         observed.add("video")
     trace_import = _as_dict(payload.get("trace_import", {}))
@@ -4882,6 +4922,9 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
             perturbation_type = str(_as_dict(perturbation).get("type") or "").lower().replace("-", "_")
             if perturbation_type:
                 observed.add(_normalize_browser_trace_key(perturbation_type))
+    if _as_dict(payload.get("layout_shift_distribution", {})):
+        observed.add("layout_shift")
+        observed.add("layout_shift_distribution")
     if _as_dict(payload.get("regions", {})):
         observed.add("coordinate_region")
     if _as_list(payload.get("console_logs", [])):
@@ -4932,6 +4975,14 @@ def _browser_trace_source_text(payload: Mapping[str, Any]) -> str:
     return " ".join(parts).lower()
 
 
+def _browser_screenshot_diff_has_pixel_evidence(diff: Mapping[str, Any]) -> bool:
+    if not diff:
+        return False
+    if diff.get("source") == "pixel_diff" or diff.get("algorithm"):
+        return True
+    return any(key in diff for key in ("changed_pixels", "changed_ratio", "changed_percent", "pixel_diff", "bounding_box"))
+
+
 def _normalize_browser_trace_key(key: str) -> str:
     normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
@@ -4950,6 +5001,10 @@ def _normalize_browser_trace_key(key: str) -> str:
         "screenshot_deltas": "screenshot_diff",
         "screenshot_diff": "screenshot_diff",
         "screenshot_diffs": "screenshot_diff",
+        "pixel_diff": "pixel_screenshot_diff",
+        "pixel_screenshot_diff": "pixel_screenshot_diff",
+        "screenshot_pixel_diff": "pixel_screenshot_diff",
+        "real_screenshot_diff": "pixel_screenshot_diff",
         "coordinate": "coordinate_region",
         "coordinates": "coordinate_region",
         "coordinate_region": "coordinate_region",
@@ -4994,6 +5049,9 @@ def _normalize_browser_trace_key(key: str) -> str:
         "videos": "video",
         "layout_shift": "layout_shift",
         "layout_shifts": "layout_shift",
+        "layout_shift_distribution": "layout_shift_distribution",
+        "layout_shift_distributions": "layout_shift_distribution",
+        "cls_distribution": "layout_shift_distribution",
         "cumulative_layout_shift": "layout_shift",
         "cls": "layout_shift",
         "stale": "stale_screenshot",

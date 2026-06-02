@@ -1032,6 +1032,103 @@ def test_evaluate_agent_report_scores_playwright_browser_perturbations():
     )
 
 
+def test_evaluate_agent_report_scores_pixel_diff_and_layout_distribution():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Confirm checkout with image-derived visual evidence.",
+                    "outcome": "Pixel screenshot diff and layout-shift distribution are captured.",
+                },
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "action_replay": [
+                                {
+                                    "tool": "browser_click",
+                                    "selector": "#confirm",
+                                    "success": True,
+                                    "region_matched": True,
+                                    "screenshot_diff": {
+                                        "id": "confirm_pixel_delta",
+                                        "source": "pixel_diff",
+                                        "algorithm": "pixel_absdiff_v1",
+                                        "changed_pixels": 4,
+                                        "changed_ratio": 0.25,
+                                        "changed_regions": ["status_banner"],
+                                    },
+                                }
+                            ],
+                            "screenshot_diffs": [
+                                {
+                                    "id": "confirm_pixel_delta",
+                                    "source": "pixel_diff",
+                                    "algorithm": "pixel_absdiff_v1",
+                                    "changed_pixels": 4,
+                                    "changed_ratio": 0.25,
+                                    "changed_percent": 25.0,
+                                    "changed_regions": ["status_banner"],
+                                    "bounding_box": {"x": 1, "y": 1, "width": 2, "height": 2},
+                                }
+                            ],
+                            "layout_shift_distribution": {
+                                "count": 4,
+                                "min": 0.01,
+                                "mean": 0.0925,
+                                "p95": 0.154,
+                                "max": 0.16,
+                            },
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_browser_trace": ["pixel_screenshot_diff", "layout_shift_distribution"],
+            "expected_browser_screenshot_diffs": [
+                {
+                    "id": "confirm_pixel_delta",
+                    "changed_regions": ["status_banner"],
+                    "min_changed_pixels": 4,
+                    "min_changed_ratio": 0.2,
+                    "max_changed_percent": 30,
+                }
+            ],
+            "max_browser_layout_shift_score": 0.1,
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["browser_trace_coverage"] == 1.0
+    assert scores["browser_grounding_quality"] == 1.0
+
+    report["results"][0]["artifacts"][0]["data"]["action_replay"][0]["region_matched"] = False
+    bad_result = evaluate_agent_report(
+        report,
+        config={
+            "expected_browser_screenshot_diffs": [
+                {"id": "confirm_pixel_delta", "min_changed_pixels": 8}
+            ],
+            "max_browser_layout_shift_score": 0.1,
+        },
+    )
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+
+    assert bad_scores["browser_grounding_quality"] < 1.0
+    assert any(
+        finding.get("type") == "browser_screenshot_diff_missing"
+        or finding.get("finding", {}).get("type") == "browser_screenshot_diff_missing"
+        for finding in bad_result.findings
+    )
+
+
 def test_evaluate_agent_report_scores_voice_trace_coverage():
     report = {
         "results": [
