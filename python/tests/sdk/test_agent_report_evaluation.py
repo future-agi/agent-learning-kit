@@ -1733,6 +1733,119 @@ def test_evaluate_agent_report_scores_raw_traceai_framework_events():
     assert scores["framework_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_raw_otlp_framework_trace_export():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Inspect a TraceAI OTLP export.",
+                    "outcome": "Trace inspected.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Inspect the trace export."},
+                    {"role": "assistant", "content": "Trace export inspected."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"source": "traceai"},
+                        "data": {
+                            "resourceSpans": [
+                                {
+                                    "resource": {
+                                        "attributes": [
+                                            {
+                                                "key": "service.name",
+                                                "value": {"stringValue": "support-agent"},
+                                            }
+                                        ]
+                                    },
+                                    "scopeSpans": [
+                                        {
+                                            "scope": {"name": "traceAI"},
+                                            "spans": [
+                                                {
+                                                    "traceId": "trace_1",
+                                                    "spanId": "agent_span",
+                                                    "name": "AutoGen AssistantAgent plan",
+                                                    "startTimeUnixNano": "1000000000",
+                                                    "endTimeUnixNano": "1100000000",
+                                                    "attributes": [
+                                                        {
+                                                            "key": "fi.span.kind",
+                                                            "value": {"stringValue": "AGENT"},
+                                                        }
+                                                    ],
+                                                },
+                                                {
+                                                    "traceId": "trace_1",
+                                                    "spanId": "model_span",
+                                                    "name": "DSPy Predict answer",
+                                                    "startTimeUnixNano": "1100000000",
+                                                    "endTimeUnixNano": "1250000000",
+                                                    "attributes": [
+                                                        {
+                                                            "key": "gen_ai.operation.name",
+                                                            "value": {"stringValue": "chat"},
+                                                        },
+                                                        {
+                                                            "key": "gen_ai.usage.input_tokens",
+                                                            "value": {"intValue": "80"},
+                                                        },
+                                                    ],
+                                                },
+                                                {
+                                                    "traceId": "trace_1",
+                                                    "spanId": "tool_span",
+                                                    "name": "MCP tool call search_order",
+                                                    "attributes": [
+                                                        {
+                                                            "key": "gen_ai.operation.name",
+                                                            "value": {"stringValue": "execute_tool"},
+                                                        }
+                                                    ],
+                                                },
+                                                {
+                                                    "traceId": "trace_1",
+                                                    "spanId": "retriever_span",
+                                                    "name": "LlamaIndex query_engine policy_vector",
+                                                    "attributes": [
+                                                        {
+                                                            "key": "gen_ai.operation.name",
+                                                            "value": {"stringValue": "retrieve"},
+                                                        }
+                                                    ],
+                                                },
+                                            ],
+                                        }
+                                    ],
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_framework_trace": [
+                "agent",
+                "model",
+                "tool",
+                "retrieval",
+                "latency",
+                "cost",
+            ]
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_trace_coverage"] == 1.0
+
+
 def test_evaluate_agent_report_scores_retrieval_memory_attribution():
     report = {
         "results": [

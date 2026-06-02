@@ -3092,13 +3092,14 @@ def _framework_trace_observed(context: Mapping[str, Any]) -> set[str]:
 def _looks_like_framework_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
     kind = str(data.get("kind") or metadata.get("kind") or "").lower()
     return kind == "framework_trace" or any(
-        key in data for key in ("framework", "spans", "signals")
+        key in data for key in ("framework", "spans", "signals", "resourceSpans", "resource_spans")
     )
 
 
 def _merge_framework_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
     if payload.get("framework"):
         observed.add("framework")
+    _merge_otlp_framework_payload(observed, payload)
     for signal in _as_list(payload.get("signals", [])):
         _add_framework_trace_key(observed, str(signal))
     spans = [*_as_list(payload.get("spans", [])), *_as_list(payload.get("events", []))]
@@ -3205,9 +3206,104 @@ def _merge_raw_framework_mapping(observed: set[str], value: Mapping[str, Any]) -
             _merge_raw_framework_mapping(observed, item)
 
 
+def _merge_otlp_framework_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    resource_spans = payload.get("resourceSpans") or payload.get("resource_spans")
+    for resource_span in _as_list(resource_spans):
+        resource_span_dict = _as_dict(resource_span)
+        scope_spans = (
+            resource_span_dict.get("scopeSpans")
+            or resource_span_dict.get("scope_spans")
+            or resource_span_dict.get("instrumentationLibrarySpans")
+            or resource_span_dict.get("instrumentation_library_spans")
+        )
+        if not scope_spans and resource_span_dict.get("spans"):
+            scope_spans = [{"spans": resource_span_dict.get("spans")}]
+        for scope_span in _as_list(scope_spans):
+            scope_span_dict = _as_dict(scope_span)
+            for span in _as_list(scope_span_dict.get("spans")):
+                span_dict = _as_dict(span)
+                if not span_dict:
+                    continue
+                observed.add("span")
+                _add_framework_trace_key(observed, str(span_dict.get("name", "")))
+                _add_framework_trace_key(observed, str(span_dict.get("kind", "")))
+                attributes = _framework_otlp_attributes(span_dict.get("attributes"))
+                _merge_raw_framework_mapping(observed, attributes)
+                operation = str(attributes.get("gen_ai.operation.name") or "").lower()
+                span_kind = str(
+                    attributes.get("gen_ai.span.kind")
+                    or attributes.get("fi.span.kind")
+                    or attributes.get("openinference.span.kind")
+                    or ""
+                ).lower()
+                if any(token in operation or token in span_kind for token in ("chat", "llm", "model", "generation", "embedding", "predict")):
+                    observed.add("model")
+                if any(token in operation or token in span_kind for token in ("tool", "function", "execute_tool", "mcp")):
+                    observed.add("tool")
+                if any(token in operation or token in span_kind for token in ("agent", "chain", "graph", "workflow", "task")):
+                    observed.add("agent")
+                if any(token in operation or token in span_kind for token in ("retriev", "query", "vector", "rag", "search")):
+                    observed.add("retrieval")
+                if any(str(key).startswith("gen_ai.usage.") for key in attributes):
+                    observed.add("cost")
+                if span_dict.get("startTimeUnixNano") and span_dict.get("endTimeUnixNano"):
+                    observed.add("latency")
+
+
+def _framework_otlp_attributes(attributes: Any) -> Dict[str, Any]:
+    if isinstance(attributes, Mapping):
+        return dict(attributes)
+    result: Dict[str, Any] = {}
+    for item in _as_list(attributes):
+        item_dict = _as_dict(item)
+        key = item_dict.get("key")
+        if key is None:
+            continue
+        result[str(key)] = _framework_otlp_value(item_dict.get("value"))
+    return result
+
+
+def _framework_otlp_value(value: Any) -> Any:
+    value_dict = _as_dict(value)
+    if not value_dict:
+        return value
+    for key in ("stringValue", "intValue", "doubleValue", "boolValue", "bytesValue"):
+        if key in value_dict:
+            return value_dict.get(key)
+    array_value = _as_dict(value_dict.get("arrayValue"))
+    if array_value:
+        return [_framework_otlp_value(item) for item in _as_list(array_value.get("values"))]
+    kvlist_value = _as_dict(value_dict.get("kvlistValue"))
+    if kvlist_value:
+        return _framework_otlp_attributes(kvlist_value.get("values"))
+    return value_dict
+
+
 def _add_framework_trace_key(observed: set[str], value: str) -> None:
     text = str(value).lower()
     aliases = {
+        "traceai": "framework",
+        "otel": "framework",
+        "opentelemetry": "framework",
+        "otlp": "framework",
+        "resourcespans": "span",
+        "resource_spans": "span",
+        "scopespans": "span",
+        "scope_spans": "span",
+        "gen_ai": "model",
+        "chat": "model",
+        "generate_content": "model",
+        "text_completion": "model",
+        "embedding": "model",
+        "execute_tool": "tool",
+        "mcp": "tool",
+        "autogen": "agent",
+        "llamaindex": "retrieval",
+        "llama_index": "retrieval",
+        "query_engine": "retrieval",
+        "dspy": "agent",
+        "predict": "model",
+        "module": "agent",
         "agent": "agent",
         "chain": "agent",
         "graph": "agent",
@@ -3265,10 +3361,17 @@ def _normalize_framework_trace_key(key: str) -> str:
         "generation": "model",
         "chat_model": "model",
         "model_call": "model",
+        "chat": "model",
+        "generate_content": "model",
+        "text_completion": "model",
+        "embedding": "model",
+        "embeddings": "model",
         "function": "tool",
         "function_call": "tool",
         "function_tool": "tool",
         "tool_call": "tool",
+        "execute_tool": "tool",
+        "mcp": "tool",
         "handoffs": "handoff",
         "delegation": "handoff",
         "transfer": "handoff",
@@ -3277,8 +3380,15 @@ def _normalize_framework_trace_key(key: str) -> str:
         "retriever": "retrieval",
         "rag": "retrieval",
         "vector_search": "retrieval",
+        "query_engine": "retrieval",
+        "llamaindex": "retrieval",
+        "llama_index": "retrieval",
         "memory_update": "memory",
         "memory_retrieval": "memory",
+        "autogen": "agent",
+        "dspy": "agent",
+        "predict": "model",
+        "module": "agent",
         "computer": "browser",
         "cua": "browser",
         "computer_use": "browser",
