@@ -881,6 +881,69 @@ def test_evaluate_agent_report_scores_framework_trace_coverage():
     assert complete_scores["framework_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_raw_traceai_framework_events():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Inspect a TraceAI-instrumented framework run.",
+                    "outcome": "Trace inspected.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Inspect the trace."},
+                    {"role": "assistant", "content": "Trace inspected."},
+                ],
+                "events": [
+                    {
+                        "type": "otel_span",
+                        "name": "langgraph node support_agent",
+                        "payload": {
+                            "attributes": {
+                                "gen_ai.span.kind": "CHAIN",
+                                "langgraph.state.updates": {"step": "planned"},
+                            }
+                        },
+                    },
+                    {
+                        "type": "traceai_span",
+                        "name": "openai response gpt-4o-mini",
+                        "payload": {
+                            "attributes": {
+                                "gen_ai.span.kind": "LLM",
+                                "gen_ai.usage": {"tokens": 42},
+                            }
+                        },
+                    },
+                    {
+                        "type": "on_tool_start",
+                        "name": "search_order",
+                        "payload": {
+                            "event": "on_tool_start",
+                            "data": {"input": {"order_id": "123"}},
+                        },
+                    },
+                    {
+                        "type": "livekit_event",
+                        "name": "agent_state_changed",
+                        "payload": {
+                            "framework": "livekit",
+                            "new_state": "speaking",
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={"required_framework_trace": ["agent", "model", "tool", "state", "voice", "cost"]},
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_trace_coverage"] == 1.0
+
+
 def test_evaluate_agent_report_scores_retrieval_memory_attribution():
     report = {
         "results": [

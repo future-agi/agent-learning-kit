@@ -203,6 +203,9 @@ The following metrics can run locally without API access:
 Use `evaluate_agent_report` to score a `simulate-sdk` `TestReport` or any dict
 with the same `{"results": [...]}` shape. This runs locally and is designed for
 agent testing, simulation, optimization, and pentesting loops.
+Framework trace coverage accepts normalized `framework_trace` artifacts/events
+and raw TraceAI/OpenTelemetry-style span events, so captured framework runs can
+be scored before or after simulator normalization.
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report

@@ -2197,8 +2197,12 @@ def _framework_trace_observed(context: Mapping[str, Any]) -> set[str]:
             observed.add("span")
             _add_framework_trace_key(observed, name)
             _merge_framework_trace_payload(observed, payload)
+            _merge_raw_framework_event(observed, event_type, name, payload, metadata)
             for signal in _as_list(metadata.get("signals", [])):
                 _add_framework_trace_key(observed, str(signal))
+        elif _looks_like_raw_framework_event(event_type, name, payload, metadata):
+            observed.add("span")
+            _merge_raw_framework_event(observed, event_type, name, payload, metadata)
 
     for tool_call in _as_list(context.get("tool_calls", [])):
         name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
@@ -2242,6 +2246,88 @@ def _merge_framework_trace_payload(observed: set[str], payload: Mapping[str, Any
         observed.add("state")
 
 
+def _looks_like_raw_framework_event(
+    event_type: str,
+    name: str,
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> bool:
+    text_parts = [
+        event_type,
+        name,
+        str(payload.get("event", "")),
+        str(payload.get("type", "")),
+        str(payload.get("frame_type", "")),
+        str(payload.get("framework", "")),
+        str(metadata.get("framework", "")),
+    ]
+    for key in ("attributes", "data", "payload", "span_data", "resource"):
+        value = payload.get(key)
+        if isinstance(value, Mapping):
+            text_parts.extend(str(item) for item in value.keys())
+            text_parts.extend(
+                str(item)
+                for item in value.values()
+                if isinstance(item, (str, int, float, bool))
+            )
+    text = " ".join(text_parts).lower()
+    tokens = [
+        "traceai",
+        "otel",
+        "opentelemetry",
+        "gen_ai",
+        "langgraph",
+        "langchain",
+        "crewai",
+        "autogen",
+        "openai_agents",
+        "livekit",
+        "pipecat",
+        "on_tool",
+        "on_chat_model",
+        "on_retriever",
+        "agent_state_changed",
+        "user_input_transcribed",
+        "frame",
+    ]
+    return any(token in text for token in tokens)
+
+
+def _merge_raw_framework_event(
+    observed: set[str],
+    event_type: str,
+    name: str,
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> None:
+    for value in (
+        event_type,
+        name,
+        payload.get("event", ""),
+        payload.get("type", ""),
+        payload.get("frame_type", ""),
+        payload.get("framework", ""),
+        metadata.get("framework", ""),
+    ):
+        _add_framework_trace_key(observed, str(value))
+    for key in ("attributes", "data", "payload", "span_data", "resource"):
+        value = payload.get(key)
+        if isinstance(value, Mapping):
+            _merge_raw_framework_mapping(observed, value)
+    if payload.get("ns") is not None:
+        observed.add("state")
+        _add_framework_trace_key(observed, str(payload.get("ns")))
+
+
+def _merge_raw_framework_mapping(observed: set[str], value: Mapping[str, Any]) -> None:
+    for key, item in value.items():
+        _add_framework_trace_key(observed, str(key))
+        if isinstance(item, (str, int, float, bool)):
+            _add_framework_trace_key(observed, str(item))
+        elif isinstance(item, Mapping):
+            _merge_raw_framework_mapping(observed, item)
+
+
 def _add_framework_trace_key(observed: set[str], value: str) -> None:
     text = str(value).lower()
     aliases = {
@@ -2265,13 +2351,20 @@ def _add_framework_trace_key(observed: set[str], value: str) -> None:
         "computer": "browser",
         "cua": "browser",
         "voice": "voice",
+        "livekit": "voice",
+        "pipecat": "voice",
         "audio": "voice",
         "speech": "voice",
         "transcri": "voice",
+        "tts": "voice",
+        "stt": "voice",
         "image": "image",
         "vision": "image",
         "state": "state",
         "checkpoint": "state",
+        "updates": "state",
+        "values": "state",
+        "interrupt": "interrupt",
         "error": "error",
         "exception": "error",
         "latency": "latency",
