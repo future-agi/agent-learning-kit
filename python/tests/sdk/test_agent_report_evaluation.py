@@ -489,6 +489,107 @@ def test_evaluate_agent_report_scores_browser_trace_coverage():
     assert complete_scores["browser_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_browser_cua_trace_provider_evidence():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Complete checkout with imported browser traces.",
+                    "outcome": "Trace evidence covers CUA, Browser Use, and HAR replay.",
+                },
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "trace_import": {"source_type": "browser_use"},
+                            "snapshots": [
+                                {
+                                    "url": "https://shop.example.com/checkout",
+                                    "screenshot_uri": "file:///tmp/browser-use-checkout.png",
+                                    "metadata": {"source": "browser_use"},
+                                }
+                            ],
+                            "action_replay": [
+                                {
+                                    "action": "click",
+                                    "coordinates": {"x": 190, "y": 450},
+                                    "metadata": {"source": "openai_cua", "record_type": "computer_call"},
+                                    "actionability": {"visible": True, "enabled": True},
+                                }
+                            ],
+                            "network_log": [
+                                {
+                                    "url": "https://shop.example.com/api/cart",
+                                    "status": 200,
+                                    "source": "har",
+                                }
+                            ],
+                            "resource_bodies": [
+                                {
+                                    "url": "https://shop.example.com/api/cart",
+                                    "body": "{\"cart\":\"ready\"}",
+                                    "source": "har",
+                                }
+                            ],
+                            "actionability_timeline": [
+                                {
+                                    "action_id": "call_confirm",
+                                    "source": "browser_use",
+                                    "checks": {"tool_result_success": True},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_browser_trace": [
+                "har",
+                "resource_body",
+                "actionability",
+                "actionability_timeline",
+                "openai_cua_trace",
+                "browser_use_trace",
+            ]
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    details = {
+        metric.name: metric.details
+        for metric in result.cases[0].metrics
+        if metric.name == "browser_trace_coverage"
+    }
+
+    assert scores["browser_trace_coverage"] == 1.0
+    assert {
+        "har",
+        "resource_body",
+        "actionability",
+        "actionability_timeline",
+        "openai_cua_trace",
+        "browser_use_trace",
+    } <= set(details["browser_trace_coverage"]["observed"])
+
+    report["results"][0]["artifacts"][0]["data"].pop("resource_bodies")
+    report["results"][0]["artifacts"][0]["data"].pop("actionability_timeline")
+    report["results"][0]["artifacts"][0]["data"]["action_replay"][0].pop("actionability")
+    missing_result = evaluate_agent_report(
+        report,
+        config={"required_browser_trace": ["resource_bodies", "actionability_timeline"]},
+    )
+    missing_scores = {metric.name: metric.score for metric in missing_result.cases[0].metrics}
+
+    assert missing_scores["browser_trace_coverage"] < 1.0
+    assert any(finding.get("key") == "resource_body" for finding in missing_result.findings)
+
+
 def test_evaluate_agent_report_scores_browser_action_outcome():
     report = {
         "results": [

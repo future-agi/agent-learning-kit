@@ -4790,6 +4790,12 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
             observed.add("console")
         if "browser_network" in event_type or "network" in name:
             observed.add("network")
+            _merge_browser_trace_payload(observed, payload)
+        if "browser_actionability" in event_type or "actionability" in name:
+            observed.add("actionability")
+            if "timeline" in name:
+                observed.add("actionability_timeline")
+            _merge_browser_trace_payload(observed, payload)
         if "environment_injection" in event_type and "browser" in event_text:
             observed.add("prompt_injection_surface")
 
@@ -4812,6 +4818,8 @@ def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, An
             "regions",
             "console_logs",
             "network_log",
+            "resource_bodies",
+            "actionability_timeline",
             "video_artifacts",
             "perturbations",
             "trace_import",
@@ -4821,6 +4829,14 @@ def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, An
 
 
 def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    source_text = _browser_trace_source_text(payload)
+    if "openai_cua" in source_text or "computer_call" in source_text or "computer_use" in source_text:
+        observed.add("openai_cua_trace")
+    if "browser_use" in source_text or "agenthistory" in source_text:
+        observed.add("browser_use_trace")
+    if "har" in source_text or "http_archive" in source_text:
+        observed.add("har")
+
     snapshots = _as_list(payload.get("snapshots", []))
     if snapshots:
         observed.add("snapshot")
@@ -4846,6 +4862,8 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
                 observed.add("coordinate_region")
             if record_dict.get("screenshot_diff"):
                 observed.add("screenshot_diff")
+            if _as_dict(record_dict.get("actionability")):
+                observed.add("actionability")
     if _as_list(payload.get("dom_mutations", [])):
         observed.add("dom_mutation")
     if _as_list(payload.get("screenshot_diffs", [])) or payload.get("screenshot_diff"):
@@ -4855,6 +4873,8 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
     trace_import = _as_dict(payload.get("trace_import", {}))
     if "playwright" in _stringify(trace_import).lower():
         observed.add("playwright_trace")
+    if "har" in _stringify(trace_import).lower():
+        observed.add("har")
     perturbations = _as_list(payload.get("perturbations", []))
     if perturbations:
         observed.add("perturbation")
@@ -4868,10 +4888,48 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
         observed.add("console")
     if _as_list(payload.get("network_log", [])) or _as_list(payload.get("network", [])):
         observed.add("network")
+    if _as_list(payload.get("resource_bodies", [])):
+        observed.add("resource_body")
+    if _as_list(payload.get("actionability_timeline", [])):
+        observed.add("actionability")
+        observed.add("actionability_timeline")
+    if _as_list(payload.get("checks", [])):
+        observed.add("actionability")
     if _as_list(payload.get("prompt_injections", [])):
         observed.add("prompt_injection_surface")
     if _as_dict(payload.get("final_state", {})):
         observed.add("state")
+
+
+def _browser_trace_source_text(payload: Mapping[str, Any]) -> str:
+    parts = [
+        _stringify(payload.get("trace_import", {})),
+        _stringify(payload.get("metadata", {})),
+        _stringify(payload.get("source", "")),
+        _stringify(payload.get("source_type", "")),
+        _stringify(payload.get("kind", "")),
+    ]
+    for key in (
+        "snapshots",
+        "action_replay",
+        "actions",
+        "network_log",
+        "resource_bodies",
+        "actionability_timeline",
+        "prompt_injections",
+    ):
+        for item in _as_list(payload.get(key, [])):
+            item_dict = _as_dict(item)
+            metadata = _as_dict(item_dict.get("metadata", {}))
+            parts.extend(
+                [
+                    _stringify(item_dict.get("source", "")),
+                    _stringify(item_dict.get("record_type", "")),
+                    _stringify(metadata.get("source", "")),
+                    _stringify(metadata.get("record_type", "")),
+                ]
+            )
+    return " ".join(parts).lower()
 
 
 def _normalize_browser_trace_key(key: str) -> str:
@@ -4904,6 +4962,28 @@ def _normalize_browser_trace_key(key: str) -> str:
         "network_log": "network",
         "network_request": "network",
         "network_requests": "network",
+        "har": "har",
+        "har_log": "har",
+        "http_archive": "har",
+        "resource_body": "resource_body",
+        "resource_bodies": "resource_body",
+        "response_body": "resource_body",
+        "response_bodies": "resource_body",
+        "actionability": "actionability",
+        "actionability_timeline": "actionability_timeline",
+        "actionability_check": "actionability",
+        "actionability_checks": "actionability",
+        "actionable": "actionability",
+        "openai_cua": "openai_cua_trace",
+        "openai_cua_trace": "openai_cua_trace",
+        "computer_use": "openai_cua_trace",
+        "computer_use_preview": "openai_cua_trace",
+        "computer_call": "openai_cua_trace",
+        "computer_call_output": "openai_cua_trace",
+        "cua_trace": "openai_cua_trace",
+        "browser_use": "browser_use_trace",
+        "browseruse": "browser_use_trace",
+        "browser_use_trace": "browser_use_trace",
         "prompt_injection": "prompt_injection_surface",
         "prompt_injections": "prompt_injection_surface",
         "injection_surface": "prompt_injection_surface",

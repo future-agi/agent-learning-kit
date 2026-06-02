@@ -208,8 +208,9 @@ and raw TraceAI/OpenTelemetry-style span events or OTLP `resourceSpans`
 exports, so captured framework runs can be scored before or after simulator
 normalization.
 Browser trace and grounding metrics also understand Playwright trace import
-evidence, video artifacts, layout-shift perturbations, and stale-screenshot
-avoidance checks.
+evidence, HAR/resource-body replay, OpenAI Computer Use trace provenance,
+Browser Use history, imported actionability timelines, video artifacts,
+layout-shift perturbations, and stale-screenshot avoidance checks.
 Voice trace and interaction metrics understand LiveKit/Pipecat-style export
 replay evidence, waveform fixtures, diarization segments, MOS/SNR/clipping,
 jitter, and packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
@@ -248,7 +249,7 @@ result = evaluate_agent_report(
             {"reviewer": "qa_reviewer", "criteria": ["policy", "tone"]}
         ],
         "expected_multi_agent_reconciliation": {"accepted_source": "policy_specialist"},
-        "required_browser_trace": ["dom", "screenshot", "action", "coordinate_region", "screenshot_diff", "prompt_injection_surface", "dom_mutation", "state", "console", "network"],
+        "required_browser_trace": ["dom", "screenshot", "action", "coordinate_region", "screenshot_diff", "prompt_injection_surface", "dom_mutation", "state", "console", "network", "har", "resource_body", "actionability_timeline", "openai_cua_trace", "browser_use_trace"],
         "expected_browser_actions": [
             {"selector": "#confirm", "success": True, "matched": True}
         ],
