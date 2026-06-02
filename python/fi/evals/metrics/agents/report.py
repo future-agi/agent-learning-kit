@@ -134,6 +134,12 @@ class AgentReportEvalConfig(BaseModel):
     expected_voice_transcript_contains: List[str] = Field(default_factory=list)
     required_voice_frame_types: List[str] = Field(default_factory=list)
     required_autonomy_loop: List[str] = Field(default_factory=list)
+    expected_autonomy_plan: Dict[str, Any] = Field(default_factory=dict)
+    expected_autonomy_verification: Dict[str, Any] = Field(default_factory=dict)
+    expected_autonomy_reflection: Dict[str, Any] = Field(default_factory=dict)
+    expected_autonomy_memory: Dict[str, Any] = Field(default_factory=dict)
+    expected_autonomy_skills: List[Any] = Field(default_factory=list)
+    expected_autonomy_stop: Dict[str, Any] = Field(default_factory=dict)
     required_multi_agent_trace: List[str] = Field(default_factory=list)
     required_multi_agent_roles: List[str] = Field(default_factory=list)
     expected_multi_agent_handoffs: List[Any] = Field(default_factory=list)
@@ -310,6 +316,7 @@ class AgentReportEvaluator:
                 _tool_outcome_metric(report_context, config),
                 _tool_fault_tolerance_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
+                _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
@@ -1202,6 +1209,48 @@ def _autonomy_loop_coverage_metric(
             "missing": missing,
             "findings": findings,
         },
+    )
+
+
+def _autonomy_loop_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    payloads = _autonomy_loop_payloads_from_context(context)
+    configured = _autonomy_has_configured_quality(config)
+    if configured:
+        checks = _autonomy_quality_checks_from_expectations(
+            payloads=payloads,
+            context=context,
+            expected_plan=config.expected_autonomy_plan,
+            expected_verification=config.expected_autonomy_verification,
+            expected_reflection=config.expected_autonomy_reflection,
+            expected_memory=config.expected_autonomy_memory,
+            expected_skills=config.expected_autonomy_skills,
+            expected_stop=config.expected_autonomy_stop,
+        )
+    else:
+        checks = _autonomy_quality_checks_from_payloads(payloads)
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="autonomy_loop_quality",
+            score=1.0,
+            reason="No expected autonomy-loop quality checks provided.",
+        )
+
+    normalized_checks = [_normalize_autonomy_quality_check(check) for check in checks]
+    matched = sum(1 for check in normalized_checks if check["match"])
+    findings = [
+        {"type": "autonomy_quality_mismatch", **check}
+        for check in normalized_checks
+        if not check["match"]
+    ]
+    return AgentReportMetricResult(
+        name="autonomy_loop_quality",
+        score=round(matched / len(normalized_checks), 4),
+        reason=f"{matched}/{len(normalized_checks)} autonomy-loop quality check(s) matched.",
+        details={"checks": normalized_checks, "findings": findings},
     )
 
 
@@ -2427,6 +2476,400 @@ def _autonomy_loop_observed(context: Mapping[str, Any]) -> set[str]:
         name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
         _add_autonomy_stage(observed, name)
     return observed
+
+
+def _autonomy_has_configured_quality(config: AgentReportEvalConfig) -> bool:
+    return bool(
+        config.expected_autonomy_plan
+        or config.expected_autonomy_verification
+        or config.expected_autonomy_reflection
+        or config.expected_autonomy_memory
+        or config.expected_autonomy_skills
+        or config.expected_autonomy_stop
+    )
+
+
+def _autonomy_loop_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    autonomy_state = _as_dict(final_state.get("autonomy_loop"))
+    if autonomy_state:
+        payloads.append(autonomy_state)
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_autonomy_loop(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        event_type = str(_get(event, "type", "") or "").lower()
+        if _looks_like_autonomy_loop(payload, {}) or "autonomy_loop" in event_type:
+            payloads.append(payload)
+    return payloads
+
+
+def _autonomy_quality_checks_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    checks: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for check in _as_list(payload.get("quality_checks", [])):
+            check_dict = _as_dict(check)
+            if check_dict:
+                checks.append(check_dict)
+    return _dedupe_dicts(checks)
+
+
+def _autonomy_quality_checks_from_expectations(
+    *,
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    expected_plan: Mapping[str, Any],
+    expected_verification: Mapping[str, Any],
+    expected_reflection: Mapping[str, Any],
+    expected_memory: Mapping[str, Any],
+    expected_skills: Sequence[Any],
+    expected_stop: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    entries = _autonomy_entries_from_payloads(payloads, context)
+    entries_by_stage = _autonomy_entries_by_stage(entries)
+    memory_updates = _autonomy_memory_updates_from_payloads(payloads)
+    skills = _autonomy_skills_from_payloads(payloads)
+    checks: List[Dict[str, Any]] = []
+
+    plan_steps = _autonomy_plan_steps_from_entries(entries_by_stage.get("plan", []))
+    required_steps = _autonomy_string_list(expected_plan.get("required_steps") or expected_plan.get("steps"))
+    if required_steps:
+        missing = [step for step in required_steps if not _autonomy_terms_present(plan_steps, step)]
+        checks.append(
+            {
+                "check": "plan_steps",
+                "expected": required_steps,
+                "actual": plan_steps,
+                "match": not missing,
+                "missing": missing,
+            }
+        )
+    if expected_plan.get("min_steps") is not None:
+        min_steps = int(expected_plan.get("min_steps"))
+        checks.append(
+            {
+                "check": "plan_min_steps",
+                "expected": min_steps,
+                "actual": len(plan_steps),
+                "match": len(plan_steps) >= min_steps,
+            }
+        )
+    forbidden_steps = _autonomy_string_list(expected_plan.get("forbidden_steps"))
+    if forbidden_steps:
+        present = [step for step in forbidden_steps if _autonomy_terms_present(plan_steps, step)]
+        checks.append(
+            {
+                "check": "plan_forbidden_steps",
+                "expected": [],
+                "actual": present,
+                "match": not present,
+            }
+        )
+
+    verify_entries = entries_by_stage.get("verify", [])
+    verify_text = _autonomy_entries_text(verify_entries)
+    required_checks = _autonomy_string_list(
+        expected_verification.get("required_checks") or expected_verification.get("checks")
+    )
+    if required_checks:
+        missing = [term for term in required_checks if term.lower() not in verify_text]
+        checks.append(
+            {
+                "check": "verification_checks",
+                "expected": required_checks,
+                "actual": _autonomy_verification_checks_from_entries(verify_entries),
+                "match": not missing,
+                "missing": missing,
+            }
+        )
+    if expected_verification.get("passed_required") is not None:
+        expected = bool(expected_verification.get("passed_required"))
+        passed = any(_autonomy_entry_passed(entry) for entry in verify_entries)
+        checks.append(
+            {
+                "check": "verification_passed",
+                "expected": expected,
+                "actual": passed,
+                "match": passed == expected,
+            }
+        )
+    if expected_verification.get("min_score") is not None:
+        min_score = float(expected_verification.get("min_score"))
+        scores = _autonomy_entry_scores(verify_entries)
+        max_score = max(scores) if scores else None
+        checks.append(
+            {
+                "check": "verification_score",
+                "expected": f">= {min_score}",
+                "actual": max_score,
+                "match": max_score is not None and max_score >= min_score,
+            }
+        )
+
+    reflect_entries = entries_by_stage.get("reflect", [])
+    reflect_text = _autonomy_entries_text(reflect_entries)
+    required_terms = _autonomy_string_list(
+        expected_reflection.get("required_terms") or expected_reflection.get("lesson_contains")
+    )
+    if required_terms:
+        missing = [term for term in required_terms if term.lower() not in reflect_text]
+        checks.append(
+            {
+                "check": "reflection_terms",
+                "expected": required_terms,
+                "actual": reflect_text,
+                "match": not missing,
+                "missing": missing,
+            }
+        )
+    if expected_reflection.get("min_length") is not None:
+        min_length = int(expected_reflection.get("min_length"))
+        checks.append(
+            {
+                "check": "reflection_length",
+                "expected": min_length,
+                "actual": len(reflect_text),
+                "match": len(reflect_text) >= min_length,
+            }
+        )
+
+    required_memory_keys = _autonomy_string_list(
+        expected_memory.get("required_keys") or expected_memory.get("keys")
+    )
+    if required_memory_keys:
+        actual_keys = sorted({str(key) for item in memory_updates for key in item.keys()})
+        missing = sorted(set(required_memory_keys) - set(actual_keys))
+        checks.append(
+            {
+                "check": "memory_keys",
+                "expected": required_memory_keys,
+                "actual": actual_keys,
+                "match": not missing,
+                "missing": missing,
+            }
+        )
+    forbidden_memory_keys = _autonomy_string_list(expected_memory.get("forbidden_keys"))
+    if forbidden_memory_keys:
+        actual_keys = sorted({str(key) for item in memory_updates for key in item.keys()})
+        present = sorted(set(forbidden_memory_keys) & set(actual_keys))
+        checks.append(
+            {
+                "check": "memory_forbidden_keys",
+                "expected": [],
+                "actual": present,
+                "match": not present,
+            }
+        )
+
+    for expected_skill in _autonomy_expected_skill_list(expected_skills):
+        name = str(expected_skill.get("name") or expected_skill.get("skill") or "")
+        skill = _as_dict(skills.get(name, {})) if name else {}
+        skill_steps = _autonomy_string_list(skill.get("steps"))
+        required_skill_steps = _autonomy_string_list(
+            expected_skill.get("required_steps") or expected_skill.get("steps")
+        )
+        missing = [step for step in required_skill_steps if not _autonomy_terms_present(skill_steps, step)]
+        checks.append(
+            {
+                "check": "skill_reuse",
+                "expected": expected_skill,
+                "actual": skill,
+                "match": bool(skill) and not missing,
+                "missing": missing,
+            }
+        )
+
+    if expected_stop:
+        should_stop = expected_stop.get("should_stop")
+        if should_stop is not None:
+            actual = _autonomy_last_stop_record(entries_by_stage)
+            actual_stop = _autonomy_stop_value(actual)
+            checks.append(
+                {
+                    "check": "stop_decision",
+                    "expected": bool(should_stop),
+                    "actual": actual,
+                    "match": actual_stop is not None and actual_stop == bool(should_stop),
+                }
+            )
+
+    return checks
+
+
+def _normalize_autonomy_quality_check(check: Mapping[str, Any]) -> Dict[str, Any]:
+    item = dict(check)
+    item.setdefault("check", "quality")
+    item["match"] = bool(item.get("match"))
+    return item
+
+
+def _autonomy_entries_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for entry in _as_list(payload.get("entries", [])):
+            entry_dict = _as_dict(entry)
+            if entry_dict:
+                entries.append(entry_dict)
+        if payload.get("stage"):
+            entries.append(
+                {
+                    "stage": payload.get("stage"),
+                    "tool": payload.get("tool") or payload.get("name"),
+                    "arguments": _as_dict(payload.get("arguments", payload)),
+                    "feedback": _as_dict(payload.get("feedback", {})),
+                }
+            )
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "")
+        stage = _normalize_autonomy_loop_key(name)
+        if stage:
+            entries.append(
+                {
+                    "stage": stage,
+                    "tool": name,
+                    "arguments": _as_dict(_get(tool_call, "arguments", {})),
+                }
+            )
+    return _dedupe_dicts(entries)
+
+
+def _autonomy_entries_by_stage(entries: Iterable[Mapping[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in entries:
+        entry_dict = _as_dict(entry)
+        stage = _normalize_autonomy_loop_key(entry_dict.get("stage") or entry_dict.get("name") or "")
+        if stage:
+            grouped.setdefault(stage, []).append(entry_dict)
+    return grouped
+
+
+def _autonomy_memory_updates_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    updates: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("memory_updates", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                updates.append(item_dict)
+    return _dedupe_dicts(updates)
+
+
+def _autonomy_skills_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    skills: Dict[str, Any] = {}
+    for payload in payloads:
+        for name, value in _as_dict(payload.get("skills", {})).items():
+            skills[str(name)] = value
+    return skills
+
+
+def _autonomy_plan_steps_from_entries(entries: Iterable[Mapping[str, Any]]) -> List[str]:
+    steps: List[str] = []
+    for entry in entries:
+        arguments = _as_dict(entry.get("arguments", {}))
+        steps.extend(_autonomy_string_list(arguments.get("steps") or arguments.get("plan") or arguments.get("tasks")))
+    return steps
+
+
+def _autonomy_verification_checks_from_entries(entries: Iterable[Mapping[str, Any]]) -> List[str]:
+    checks: List[str] = []
+    for entry in entries:
+        arguments = _as_dict(entry.get("arguments", {}))
+        checks.extend(_autonomy_string_list(arguments.get("checks") or arguments.get("evidence")))
+    return checks
+
+
+def _autonomy_entry_passed(entry: Mapping[str, Any]) -> bool:
+    arguments = _as_dict(entry.get("arguments", {}))
+    feedback = _as_dict(entry.get("feedback", {}))
+    if "passed" in arguments:
+        return bool(arguments.get("passed"))
+    if "passed" in feedback:
+        return bool(feedback.get("passed"))
+    score = feedback.get("score", arguments.get("score"))
+    return isinstance(score, (int, float)) and not isinstance(score, bool) and score >= 1.0
+
+
+def _autonomy_entry_scores(entries: Iterable[Mapping[str, Any]]) -> List[float]:
+    scores: List[float] = []
+    for entry in entries:
+        arguments = _as_dict(entry.get("arguments", {}))
+        feedback = _as_dict(entry.get("feedback", {}))
+        for raw in (arguments.get("score"), feedback.get("score")):
+            if isinstance(raw, bool) or raw is None:
+                continue
+            try:
+                scores.append(float(raw))
+            except (TypeError, ValueError):
+                continue
+    return scores
+
+
+def _autonomy_entries_text(entries: Iterable[Mapping[str, Any]]) -> str:
+    return " ".join(_stringify(entry) for entry in entries).lower()
+
+
+def _autonomy_terms_present(values: Iterable[str], expected: str) -> bool:
+    expected_text = str(expected).lower()
+    return any(expected_text in str(value).lower() for value in values)
+
+
+def _autonomy_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        return [str(key) for key in value.keys()]
+    if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
+        return [str(item) for item in value if item not in (None, "")]
+    return [str(value)]
+
+
+def _autonomy_expected_skill_list(values: Sequence[Any]) -> List[Dict[str, Any]]:
+    expected: List[Dict[str, Any]] = []
+    for value in values:
+        if isinstance(value, Mapping):
+            expected.append(dict(value))
+        else:
+            expected.append({"name": str(value)})
+    return expected
+
+
+def _autonomy_last_stop_record(entries_by_stage: Mapping[str, Sequence[Mapping[str, Any]]]) -> Dict[str, Any]:
+    candidates: List[Dict[str, Any]] = []
+    for stage in ("verify", "reflect", "status"):
+        for entry in entries_by_stage.get(stage, []):
+            arguments = _as_dict(entry.get("arguments", {}))
+            if any(key in arguments for key in ("stop", "should_stop", "continue", "should_continue", "decision")):
+                candidates.append(arguments)
+    return candidates[-1] if candidates else {}
+
+
+def _autonomy_stop_value(record: Mapping[str, Any]) -> Optional[bool]:
+    if "should_stop" in record:
+        return bool(record.get("should_stop"))
+    if "stop" in record:
+        return bool(record.get("stop"))
+    if "should_continue" in record:
+        return not bool(record.get("should_continue"))
+    if "continue" in record:
+        return not bool(record.get("continue"))
+    decision = str(record.get("decision") or "").strip().lower()
+    if decision in {"stop", "done", "final", "finish"}:
+        return True
+    if decision in {"continue", "retry", "iterate"}:
+        return False
+    return None
 
 
 def _looks_like_autonomy_loop(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:

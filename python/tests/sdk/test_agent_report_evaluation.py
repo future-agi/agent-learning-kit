@@ -961,6 +961,151 @@ def test_evaluate_agent_report_scores_autonomy_loop_coverage():
     assert complete_scores["autonomy_loop_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_autonomy_loop_quality():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Resolve a refund with autonomous control-loop quality.",
+                    "outcome": "Plan, verifier, reflection, memory, skill, and stop decision are correct.",
+                },
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "I planned, verified, reflected, wrote memory, stored a skill, and stopped.",
+                        "tool_calls": [
+                            {
+                                "id": "plan",
+                                "name": "propose_plan",
+                                "arguments": {"steps": ["lookup order", "check policy", "respond"]},
+                            },
+                            {
+                                "id": "verify",
+                                "name": "verify_outcome",
+                                "arguments": {
+                                    "passed": True,
+                                    "checks": ["order found", "policy allowed"],
+                                    "should_stop": True,
+                                },
+                            },
+                            {
+                                "id": "reflect",
+                                "name": "reflect",
+                                "arguments": {"lesson": "verify policy before final refund guidance"},
+                            },
+                            {
+                                "id": "memory",
+                                "name": "write_memory",
+                                "arguments": {"order_id": "123", "status": "resolved"},
+                            },
+                            {
+                                "id": "skill",
+                                "name": "store_skill",
+                                "arguments": {
+                                    "name": "refund_policy_check",
+                                    "steps": ["lookup", "verify", "respond"],
+                                },
+                            },
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "autonomy_loop_trace"},
+                        "data": {
+                            "kind": "autonomy_loop_trace",
+                            "stages_observed": ["plan", "verify", "reflect", "memory", "skill"],
+                            "entries": [
+                                {
+                                    "stage": "plan",
+                                    "arguments": {"steps": ["lookup order", "check policy", "respond"]},
+                                },
+                                {
+                                    "stage": "verify",
+                                    "arguments": {
+                                        "passed": True,
+                                        "checks": ["order found", "policy allowed"],
+                                        "should_stop": True,
+                                    },
+                                    "feedback": {"score": 1.0},
+                                },
+                                {
+                                    "stage": "reflect",
+                                    "arguments": {"lesson": "verify policy before final refund guidance"},
+                                },
+                                {
+                                    "stage": "memory",
+                                    "arguments": {"order_id": "123", "status": "resolved"},
+                                },
+                                {
+                                    "stage": "skill",
+                                    "arguments": {
+                                        "name": "refund_policy_check",
+                                        "steps": ["lookup", "verify", "respond"],
+                                    },
+                                },
+                            ],
+                            "memory_updates": [{"order_id": "123", "status": "resolved"}],
+                            "skills": {
+                                "refund_policy_check": {
+                                    "name": "refund_policy_check",
+                                    "steps": ["lookup", "verify", "respond"],
+                                }
+                            },
+                            "quality_checks": [
+                                {"check": "plan_steps", "expected": ["lookup", "policy"], "actual": [], "match": True},
+                                {"check": "verification_passed", "expected": True, "actual": True, "match": True},
+                                {"check": "reflection_terms", "expected": ["verify", "policy"], "actual": "", "match": True},
+                                {"check": "memory_keys", "expected": ["order_id", "status"], "actual": [], "match": True},
+                                {"check": "skill_reuse", "expected": {"name": "refund_policy_check"}, "actual": {}, "match": True},
+                                {"check": "stop_decision", "expected": True, "actual": {}, "match": True},
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "expected_autonomy_plan": {"required_steps": ["lookup", "policy", "respond"], "min_steps": 3},
+        "expected_autonomy_verification": {
+            "required_checks": ["order found", "policy allowed"],
+            "passed_required": True,
+            "min_score": 1.0,
+        },
+        "expected_autonomy_reflection": {"required_terms": ["verify", "policy"], "min_length": 20},
+        "expected_autonomy_memory": {"required_keys": ["order_id", "status"]},
+        "expected_autonomy_skills": [
+            {"name": "refund_policy_check", "required_steps": ["lookup", "verify", "respond"]}
+        ],
+        "expected_autonomy_stop": {"should_stop": True},
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    assert scores["autonomy_loop_quality"] == 1.0
+
+    inferred_result = evaluate_agent_report(report)
+    inferred_scores = {metric.name: metric.score for metric in inferred_result.cases[0].metrics}
+    assert inferred_scores["autonomy_loop_quality"] == 1.0
+
+    failing_result = evaluate_agent_report(
+        report,
+        config={
+            "expected_autonomy_plan": {"required_steps": ["charge card"]},
+            "expected_autonomy_verification": {"required_checks": ["payment captured"], "passed_required": False},
+            "expected_autonomy_reflection": {"required_terms": ["retry payment"]},
+            "expected_autonomy_memory": {"required_keys": ["payment_id"]},
+            "expected_autonomy_skills": [{"name": "payment_capture"}],
+            "expected_autonomy_stop": {"should_stop": False},
+        },
+    )
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    assert failing_scores["autonomy_loop_quality"] < 1.0
+    assert any(finding["metric"] == "autonomy_loop_quality" for finding in failing_result.findings)
+
+
 def test_evaluate_agent_report_scores_multi_agent_trace_coverage():
     report = {
         "results": [

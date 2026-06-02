@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -220,6 +220,12 @@ result = evaluate_agent_report(
         "max_trial_score_spread": 0.05,
         "required_artifact_types": ["image", "audio"],
         "required_autonomy_loop": ["observe", "orient", "plan", "act", "verify", "reflect"],
+        "expected_autonomy_plan": {"required_steps": ["lookup", "policy", "respond"], "min_steps": 3},
+        "expected_autonomy_verification": {"required_checks": ["order found"], "passed_required": True},
+        "expected_autonomy_reflection": {"required_terms": ["verify", "policy"]},
+        "expected_autonomy_memory": {"required_keys": ["order_id", "status"]},
+        "expected_autonomy_skills": [{"name": "refund_policy_check", "required_steps": ["lookup", "verify"]}],
+        "expected_autonomy_stop": {"should_stop": True},
         "required_framework_trace": ["agent", "model", "tool", "handoff", "guardrail"],
         "required_retrieval_memory_trace": ["query", "document", "citation", "memory_read"],
         "expected_retrieval_doc_ids": ["refund_policy_current"],
