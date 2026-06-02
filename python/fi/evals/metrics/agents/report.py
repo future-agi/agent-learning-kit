@@ -135,6 +135,9 @@ class AgentReportEvalConfig(BaseModel):
     require_source_grounding: bool = False
     source_grounding_min_overlap: float = 0.45
     source_grounding_ignore_terms: List[str] = Field(default_factory=list)
+    tool_argument_schemas: Dict[str, Any] = Field(default_factory=dict)
+    validate_tool_args_from_metadata: bool = True
+    allow_extra_tool_arguments: bool = False
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -282,6 +285,7 @@ class AgentReportEvaluator:
                 _environment_injection_metric(report_context),
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
+                _tool_argument_schema_metric(report_context, config),
                 _autonomy_loop_coverage_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -619,6 +623,82 @@ def _memory_integrity_metric(
         score=round(score, 4),
         reason="No unsafe memory writes." if not findings else f"{len(findings)} memory issue(s).",
         details={"memory_events": len(memory_events), "findings": findings},
+    )
+
+
+def _tool_argument_schema_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    schemas = _tool_argument_schemas(context, config)
+    if not schemas:
+        return AgentReportMetricResult(
+            name="tool_argument_schema",
+            score=1.0,
+            reason="No tool argument schemas provided.",
+        )
+
+    tool_calls = _tool_calls_from_context(context)
+    if not tool_calls:
+        return AgentReportMetricResult(
+            name="tool_argument_schema",
+            score=1.0,
+            reason="No tool calls to validate.",
+            details={"schemas": sorted(schemas.keys())},
+        )
+
+    checked = 0
+    passed = 0
+    findings: List[Dict[str, Any]] = []
+    for call in tool_calls:
+        schema = schemas.get(call.name)
+        if schema is None:
+            continue
+        checked += 1
+        errors = _validate_json_schema_value(
+            call.arguments,
+            schema,
+            path=call.name,
+            allow_extra=config.allow_extra_tool_arguments,
+        )
+        if errors:
+            findings.append(
+                {
+                    "type": "tool_argument_schema_violation",
+                    "tool": call.name,
+                    "arguments": call.arguments,
+                    "errors": errors,
+                }
+            )
+        else:
+            passed += 1
+
+    if checked == 0:
+        return AgentReportMetricResult(
+            name="tool_argument_schema",
+            score=1.0,
+            reason="No tool calls matched configured argument schemas.",
+            details={
+                "schemas": sorted(schemas.keys()),
+                "tools_called": sorted({call.name for call in tool_calls}),
+            },
+        )
+
+    score = passed / checked
+    return AgentReportMetricResult(
+        name="tool_argument_schema",
+        score=round(score, 4),
+        reason=(
+            f"All {checked} schema-checked tool call(s) matched their argument schemas."
+            if not findings
+            else f"{len(findings)} tool argument schema violation(s)."
+        ),
+        details={
+            "checked_calls": checked,
+            "passed_calls": passed,
+            "schemas": sorted(schemas.keys()),
+            "findings": findings,
+        },
     )
 
 
@@ -1239,6 +1319,205 @@ def _tool_results_by_id(messages: Sequence[Mapping[str, Any]]) -> Dict[str, Any]
     return results
 
 
+def _tool_calls_from_context(context: Mapping[str, Any]) -> List[ToolCall]:
+    messages = _as_list(context.get("messages", []))
+    tool_results = _tool_results_by_id(messages)
+    calls: List[ToolCall] = []
+    seen = set()
+
+    for message in messages:
+        for raw in _as_list(_get(message, "tool_calls", [])):
+            call = _tool_call_from_any(raw, tool_results)
+            if call is not None:
+                _append_unique_tool_call(calls, seen, call)
+
+    for raw in _as_list(context.get("tool_calls", [])):
+        call = _tool_call_from_any(raw, tool_results)
+        if call is not None:
+            _append_unique_tool_call(calls, seen, call)
+
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        for raw in _as_list(payload.get("tool_calls", [])):
+            call = _tool_call_from_any(raw, tool_results)
+            if call is not None:
+                _append_unique_tool_call(calls, seen, call)
+    return calls
+
+
+def _append_unique_tool_call(
+    calls: List[ToolCall],
+    seen: set[str],
+    call: ToolCall,
+) -> None:
+    signature = json.dumps(
+        {"name": call.name, "arguments": call.arguments},
+        sort_keys=True,
+        default=str,
+    )
+    if signature in seen:
+        return
+    seen.add(signature)
+    calls.append(call)
+
+
+def _tool_argument_schemas(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> Dict[str, Dict[str, Any]]:
+    schemas: Dict[str, Dict[str, Any]] = {}
+    for name, raw_schema in config.tool_argument_schemas.items():
+        schema = _normalize_tool_argument_schema(name, raw_schema)
+        if schema:
+            schemas[name] = schema
+
+    if config.validate_tool_args_from_metadata:
+        metadata = _as_dict(context.get("metadata", {}))
+        for raw_tool in _as_list(metadata.get("tools", [])):
+            name, schema = _tool_schema_from_spec(raw_tool)
+            if name and schema:
+                schemas.setdefault(name, schema)
+    return schemas
+
+
+def _tool_schema_from_spec(raw_tool: Any) -> Tuple[str, Dict[str, Any]]:
+    spec = _as_dict(raw_tool)
+    function = _as_dict(spec.get("function", {}))
+    name = str(spec.get("name") or function.get("name") or "")
+    schema = spec.get("parameters") or function.get("parameters") or spec.get("input_schema")
+    return name, _as_dict(schema)
+
+
+def _normalize_tool_argument_schema(
+    name: str,
+    raw_schema: Any,
+) -> Dict[str, Any]:
+    schema = _as_dict(raw_schema)
+    if not schema:
+        return {}
+    if "parameters" in schema or "function" in schema or "input_schema" in schema:
+        tool_name, tool_schema = _tool_schema_from_spec({"name": name, **schema})
+        return tool_schema if tool_name else {}
+    return schema
+
+
+def _validate_json_schema_value(
+    value: Any,
+    schema: Mapping[str, Any],
+    *,
+    path: str,
+    allow_extra: bool,
+) -> List[str]:
+    schema = _as_dict(schema)
+    if not schema:
+        return []
+
+    for keyword in ("anyOf", "oneOf"):
+        variants = _as_list(schema.get(keyword, []))
+        if variants:
+            if any(
+                not _validate_json_schema_value(value, _as_dict(variant), path=path, allow_extra=allow_extra)
+                for variant in variants
+            ):
+                return []
+            return [f"{path} did not match any {keyword} schema"]
+
+    errors: List[str] = []
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path} expected const {schema['const']!r}, got {value!r}")
+    if "enum" in schema and value not in _as_list(schema.get("enum")):
+        errors.append(f"{path} value {value!r} not in enum {schema.get('enum')!r}")
+
+    schema_type = schema.get("type")
+    if schema_type is not None and not _json_type_matches(value, schema_type):
+        errors.append(f"{path} expected type {_stringify(schema_type)}, got {type(value).__name__}")
+        return errors
+
+    properties = _as_dict(schema.get("properties", {}))
+    if properties or schema.get("required"):
+        if not isinstance(value, dict):
+            errors.append(f"{path} expected object arguments, got {type(value).__name__}")
+            return errors
+        for key in _as_list(schema.get("required", [])):
+            if key not in value:
+                errors.append(f"{path}.{key} is required")
+        for key, prop_schema in properties.items():
+            if key in value:
+                errors.extend(
+                    _validate_json_schema_value(
+                        value[key],
+                        _as_dict(prop_schema),
+                        path=f"{path}.{key}",
+                        allow_extra=allow_extra,
+                    )
+                )
+        additional = schema.get("additionalProperties")
+        if additional is False or (properties and not allow_extra):
+            extra = sorted(set(value.keys()) - set(properties.keys()))
+            if extra:
+                errors.append(f"{path} has unexpected argument(s): {', '.join(extra)}")
+
+    if isinstance(value, str):
+        min_length = _as_int(schema.get("minLength"))
+        max_length = _as_int(schema.get("maxLength"))
+        if min_length is not None and len(value) < min_length:
+            errors.append(f"{path} length {len(value)} below minLength {min_length}")
+        if max_length is not None and len(value) > max_length:
+            errors.append(f"{path} length {len(value)} above maxLength {max_length}")
+        pattern = schema.get("pattern")
+        if pattern and re.search(str(pattern), value) is None:
+            errors.append(f"{path} value {value!r} does not match pattern {pattern!r}")
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = _as_float(schema.get("minimum"))
+        maximum = _as_float(schema.get("maximum"))
+        if minimum is not None and value < minimum:
+            errors.append(f"{path} value {value!r} below minimum {minimum}")
+        if maximum is not None and value > maximum:
+            errors.append(f"{path} value {value!r} above maximum {maximum}")
+
+    if isinstance(value, list):
+        min_items = _as_int(schema.get("minItems"))
+        max_items = _as_int(schema.get("maxItems"))
+        if min_items is not None and len(value) < min_items:
+            errors.append(f"{path} item count {len(value)} below minItems {min_items}")
+        if max_items is not None and len(value) > max_items:
+            errors.append(f"{path} item count {len(value)} above maxItems {max_items}")
+        item_schema = _as_dict(schema.get("items", {}))
+        if item_schema:
+            for index, item in enumerate(value):
+                errors.extend(
+                    _validate_json_schema_value(
+                        item,
+                        item_schema,
+                        path=f"{path}.{index}",
+                        allow_extra=allow_extra,
+                    )
+                )
+    return errors
+
+
+def _json_type_matches(value: Any, schema_type: Any) -> bool:
+    if isinstance(schema_type, list):
+        return any(_json_type_matches(value, item) for item in schema_type)
+    expected = str(schema_type)
+    if expected == "object":
+        return isinstance(value, dict)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "null":
+        return value is None
+    return True
+
+
 def _tool_observation(tool_calls: Sequence[ToolCall]) -> Optional[str]:
     observations = [str(call.result) for call in tool_calls if call.result is not None]
     return "\n".join(observations) if observations else None
@@ -1808,6 +2087,19 @@ def _as_int(value: Any) -> Optional[int]:
     if isinstance(value, str):
         try:
             return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _as_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
         except ValueError:
             return None
     return None

@@ -15,6 +15,19 @@ report = {
                 "situation": "Resolve checkout support case.",
                 "outcome": "Checkout support case resolved.",
             },
+            "metadata": {
+                "tools": [
+                    {
+                        "name": "search_order",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"order_id": {"type": "string"}},
+                            "required": ["order_id"],
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            },
             "transcript": "Agent searched the order and resolved checkout.",
             "messages": [
                 {"role": "user", "content": "Resolve checkout for order 123."},

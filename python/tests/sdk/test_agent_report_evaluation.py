@@ -1201,6 +1201,80 @@ def test_evaluate_agent_report_scores_source_grounding():
     assert complete_scores["source_grounding"] == 1.0
 
 
+def test_evaluate_agent_report_scores_tool_argument_schema():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Update order 123.",
+                    "outcome": "Order 123 is updated.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Mark order 123 as shipped."},
+                    {
+                        "role": "assistant",
+                        "content": "I will update the order.",
+                        "tool_calls": [
+                            {
+                                "id": "call_update",
+                                "name": "update_order",
+                                "arguments": {
+                                    "order_id": 123,
+                                    "status": "sent",
+                                    "dry_run": "false",
+                                    "unexpected": True,
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    config = {
+        "tool_argument_schemas": {
+            "update_order": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string", "pattern": "^[0-9]+$"},
+                    "status": {"type": "string", "enum": ["pending", "shipped"]},
+                    "dry_run": {"type": "boolean"},
+                },
+                "required": ["order_id", "status"],
+                "additionalProperties": False,
+            }
+        }
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["tool_argument_schema"] == 0.0
+    assert any(
+        finding["metric"] == "tool_argument_schema"
+        and finding["type"] == "tool_argument_schema_violation"
+        and finding["tool"] == "update_order"
+        and any("order_id expected type" in error for error in finding["errors"])
+        and any("status value" in error for error in finding["errors"])
+        and any("dry_run expected type" in error for error in finding["errors"])
+        and any("unexpected argument" in error for error in finding["errors"])
+        for finding in result.findings
+    )
+
+    report["results"][0]["messages"][1]["tool_calls"][0]["arguments"] = {
+        "order_id": "123",
+        "status": "shipped",
+        "dry_run": False,
+    }
+    complete_result = evaluate_agent_report(report, config=config)
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["tool_argument_schema"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(
