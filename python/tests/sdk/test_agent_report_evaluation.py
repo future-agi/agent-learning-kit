@@ -131,6 +131,76 @@ def test_evaluate_agent_report_scores_successful_simulation_report():
     assert metric_scores["secret_leakage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_trial_reliability_across_cases():
+    def case(index, resolved):
+        return {
+            "persona": {
+                "situation": f"Resolve support case {index}.",
+                "outcome": f"Support case {index} resolved.",
+            },
+            "messages": [
+                {"role": "user", "content": f"Resolve case {index}."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"Support case {index} resolved."
+                        if resolved
+                        else f"Support case {index} is still pending."
+                    ),
+                },
+            ],
+            "events": [
+                {
+                    "type": "state_update",
+                    "payload": {"case": {"resolved": resolved}},
+                }
+            ],
+        }
+
+    report = {
+        "results": [
+            case(1, True),
+            case(2, True),
+            case(3, True),
+            case(4, False),
+        ]
+    }
+    config = {
+        "expected_state": {"case": {"resolved": True}},
+        "success_criteria": ["resolved"],
+        "min_trial_pass_rate": 1.0,
+        "max_trial_score_spread": 0.05,
+    }
+
+    result = evaluate_agent_report(report, config=config, threshold=0.95)
+
+    reliability = result.summary["trial_reliability"]
+    assert result.passed is False
+    assert result.score == 0.75
+    assert reliability["trial_count"] == 4
+    assert reliability["passed_trials"] == 3
+    assert reliability["pass_rate"] == 0.75
+    assert any(
+        finding["metric"] == "trial_reliability"
+        and finding["type"] == "low_trial_pass_rate"
+        and finding["pass_rate"] == 0.75
+        for finding in result.findings
+    )
+    assert any(
+        finding["metric"] == "trial_reliability"
+        and finding["type"] == "high_trial_score_spread"
+        for finding in result.findings
+    )
+
+    report["results"][3] = case(4, True)
+    complete_result = evaluate_agent_report(report, config=config, threshold=0.95)
+    complete_reliability = complete_result.summary["trial_reliability"]
+
+    assert complete_result.passed is True
+    assert complete_reliability["pass_rate"] == 1.0
+    assert complete_reliability["score_spread"] == 0.0
+
+
 def test_evaluate_agent_report_finds_pentest_and_autonomy_failures():
     report = {
         "results": [

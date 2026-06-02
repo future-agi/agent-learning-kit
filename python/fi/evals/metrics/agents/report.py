@@ -139,6 +139,8 @@ class AgentReportEvalConfig(BaseModel):
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
     expected_tool_outcomes: Dict[str, Any] = Field(default_factory=dict)
+    min_trial_pass_rate: Optional[float] = None
+    max_trial_score_spread: Optional[float] = None
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -248,15 +250,20 @@ class AgentReportEvaluator:
             if case_results
             else 0.0
         )
+        reliability = _trial_reliability_summary(case_results)
+        reliability_findings = _trial_reliability_findings(reliability, cfg)
+        all_findings.extend(reliability_findings)
+        score = _aggregate_score_with_reliability(aggregate, reliability, cfg)
         return AgentReportEvaluation(
-            score=round(aggregate, 4),
-            passed=aggregate >= self.threshold,
+            score=score,
+            passed=score >= self.threshold and not reliability_findings,
             threshold=self.threshold,
             cases=case_results,
             summary={
                 "case_count": len(case_results),
                 "passed_cases": sum(1 for case in case_results if case.passed),
                 "metric_averages": _metric_averages(case_results),
+                "trial_reliability": reliability,
             },
             findings=all_findings,
         )
@@ -1837,6 +1844,101 @@ def _metric_averages(cases: Sequence[AgentReportCaseResult]) -> Dict[str, float]
         for name, values in buckets.items()
         if values
     }
+
+
+def _trial_reliability_summary(
+    cases: Sequence[AgentReportCaseResult],
+) -> Dict[str, Any]:
+    trial_count = len(cases)
+    if not trial_count:
+        return {
+            "trial_count": 0,
+            "passed_trials": 0,
+            "failed_trials": 0,
+            "pass_rate": 0.0,
+            "score": 0.0,
+            "score_mean": 0.0,
+            "score_stddev": 0.0,
+            "score_spread": 0.0,
+            "min_score": 0.0,
+            "max_score": 0.0,
+        }
+
+    scores = [case.score for case in cases]
+    passed_trials = sum(1 for case in cases if case.passed)
+    pass_rate = passed_trials / trial_count
+    mean = sum(scores) / trial_count
+    variance = sum((score - mean) ** 2 for score in scores) / trial_count
+    min_score = min(scores)
+    max_score = max(scores)
+    return {
+        "trial_count": trial_count,
+        "passed_trials": passed_trials,
+        "failed_trials": trial_count - passed_trials,
+        "pass_rate": round(pass_rate, 4),
+        "score": round(pass_rate, 4),
+        "score_mean": round(mean, 4),
+        "score_stddev": round(variance ** 0.5, 4),
+        "score_spread": round(max_score - min_score, 4),
+        "min_score": round(min_score, 4),
+        "max_score": round(max_score, 4),
+    }
+
+
+def _trial_reliability_findings(
+    reliability: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    pass_rate = float(reliability.get("pass_rate", 0.0))
+    score_spread = float(reliability.get("score_spread", 0.0))
+    if config.min_trial_pass_rate is not None and pass_rate < config.min_trial_pass_rate:
+        findings.append(
+            {
+                "metric": "trial_reliability",
+                "type": "low_trial_pass_rate",
+                "score": round(pass_rate, 4),
+                "reason": (
+                    f"Trial pass rate {pass_rate:.2f} below required "
+                    f"{config.min_trial_pass_rate:.2f}."
+                ),
+                "pass_rate": round(pass_rate, 4),
+                "required_pass_rate": config.min_trial_pass_rate,
+                "trial_count": reliability.get("trial_count", 0),
+                "passed_trials": reliability.get("passed_trials", 0),
+            }
+        )
+    if config.max_trial_score_spread is not None and score_spread > config.max_trial_score_spread:
+        score = max(0.0, 1.0 - score_spread)
+        findings.append(
+            {
+                "metric": "trial_reliability",
+                "type": "high_trial_score_spread",
+                "score": round(score, 4),
+                "reason": (
+                    f"Trial score spread {score_spread:.2f} above allowed "
+                    f"{config.max_trial_score_spread:.2f}."
+                ),
+                "score_spread": round(score_spread, 4),
+                "allowed_score_spread": config.max_trial_score_spread,
+                "min_score": reliability.get("min_score", 0.0),
+                "max_score": reliability.get("max_score", 0.0),
+            }
+        )
+    return findings
+
+
+def _aggregate_score_with_reliability(
+    aggregate: float,
+    reliability: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> float:
+    candidates = [aggregate]
+    if config.min_trial_pass_rate is not None:
+        candidates.append(float(reliability.get("pass_rate", 0.0)))
+    if config.max_trial_score_spread is not None:
+        candidates.append(max(0.0, 1.0 - float(reliability.get("score_spread", 0.0))))
+    return round(min(candidates), 4)
 
 
 def _regex_findings(patterns: Iterable[str], text: str) -> List[Dict[str, Any]]:
