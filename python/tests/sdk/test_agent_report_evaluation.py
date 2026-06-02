@@ -506,6 +506,103 @@ def test_evaluate_agent_report_scores_voice_trace_coverage():
     assert complete_scores["voice_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_autonomy_loop_coverage():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Resolve support case with autonomous loop evidence.",
+                    "outcome": "Autonomous support case resolved.",
+                },
+                "transcript": "Agent resolved the case after planning and checking.",
+                "messages": [
+                    {"role": "user", "content": "Resolve this case."},
+                    {
+                        "role": "assistant",
+                        "content": "I will observe, plan, act, and verify.",
+                        "tool_calls": [
+                            {"id": "observe", "name": "record_observation", "arguments": {}},
+                            {"id": "orient", "name": "orient_strategy", "arguments": {}},
+                            {"id": "plan", "name": "propose_plan", "arguments": {}},
+                            {"id": "act", "name": "record_action", "arguments": {}},
+                            {"id": "verify", "name": "verify_outcome", "arguments": {}},
+                            {"id": "memory", "name": "write_memory", "arguments": {}},
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "autonomy_loop_trace"},
+                        "data": {
+                            "kind": "autonomy_loop_trace",
+                            "stages_observed": ["observe", "orient", "plan", "act", "verify", "memory"],
+                            "entries": [{"stage": "verify", "feedback": {"score": 1.0}}],
+                            "policy": {"irreversible_actions_require_verification": True},
+                            "memory_updates": [{"order_id": "123"}],
+                        },
+                    }
+                ],
+                "events": [
+                    {"type": "autonomy_loop", "name": "observe", "payload": {}},
+                    {"type": "autonomy_loop", "name": "verify", "payload": {"feedback": {"score": 1.0}}},
+                ],
+            }
+        ]
+    }
+    required = [
+        "observe",
+        "orient",
+        "plan",
+        "act",
+        "verify",
+        "reflect",
+        "memory",
+        "feedback",
+        "skill",
+        "policy",
+    ]
+
+    result = evaluate_agent_report(report, config={"required_autonomy_loop": required})
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["autonomy_loop_coverage"] < 1.0
+    assert any(
+        finding["metric"] == "autonomy_loop_coverage"
+        and finding["key"] == "reflect"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][0]["data"]["stages_observed"].extend(["reflect", "skill"])
+    report["results"][0]["artifacts"][0]["data"]["skills"] = {
+        "refund_policy_resolution": {"steps": ["observe", "verify", "reflect"]}
+    }
+    report["results"][0]["messages"][1]["tool_calls"].extend(
+        [
+            {"id": "reflect", "name": "reflect", "arguments": {}},
+            {
+                "id": "skill",
+                "name": "store_skill",
+                "arguments": {"name": "refund_policy_resolution"},
+            },
+        ]
+    )
+    report["results"][0]["events"].append(
+        {"type": "autonomy_loop", "name": "reflect", "payload": {"lesson": "keep verifier"}}
+    )
+
+    complete_result = evaluate_agent_report(
+        report,
+        config={"required_autonomy_loop": required},
+    )
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["autonomy_loop_coverage"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(

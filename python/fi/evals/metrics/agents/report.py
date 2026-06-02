@@ -85,6 +85,7 @@ class AgentReportEvalConfig(BaseModel):
     required_artifact_types: List[str] = Field(default_factory=list)
     required_browser_trace: List[str] = Field(default_factory=list)
     required_voice_trace: List[str] = Field(default_factory=list)
+    required_autonomy_loop: List[str] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -232,6 +233,7 @@ class AgentReportEvaluator:
                 _environment_injection_metric(report_context),
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
+                _autonomy_loop_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
@@ -597,6 +599,44 @@ def _browser_action_safety_metric(
     )
 
 
+def _autonomy_loop_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_autonomy_loop_key(key) for key in config.required_autonomy_loop]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="autonomy_loop_coverage",
+            score=1.0,
+            reason="No required autonomy loop keys provided.",
+        )
+
+    observed = _autonomy_loop_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_autonomy_loop_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="autonomy_loop_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required autonomy loop evidence observed."
+            if not missing
+            else f"Missing autonomy loop evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
 def _browser_trace_coverage_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -887,6 +927,125 @@ def _regex_findings(patterns: Iterable[str], text: str) -> List[Dict[str, Any]]:
                 }
             )
     return findings
+
+
+def _autonomy_loop_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_autonomy_loop(data, metadata):
+            observed.add("trace")
+            _merge_autonomy_loop_payload(observed, data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "autonomy_loop" in event_type:
+            _add_autonomy_stage(observed, name)
+            _merge_autonomy_loop_payload(observed, payload)
+        if "memory" in event_type:
+            observed.add("memory")
+        if any(token in name for token in ("reflect", "reflexion", "self_refine")):
+            observed.add("reflect")
+        if any(token in name for token in ("verify", "critic", "check")):
+            observed.add("verify")
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        _add_autonomy_stage(observed, name)
+    return observed
+
+
+def _looks_like_autonomy_loop(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "autonomy_loop_trace" or any(
+        key in data for key in ("stages_observed", "entries", "memory_updates", "skills")
+    )
+
+
+def _merge_autonomy_loop_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    for stage in _as_list(payload.get("stages_observed", [])):
+        _add_autonomy_stage(observed, str(stage))
+    for entry in _as_list(payload.get("entries", [])):
+        entry_dict = _as_dict(entry)
+        _add_autonomy_stage(observed, str(entry_dict.get("stage") or entry_dict.get("name") or ""))
+        if entry_dict.get("feedback"):
+            observed.add("feedback")
+        if entry_dict.get("policy"):
+            observed.add("policy")
+    if payload.get("feedback"):
+        observed.add("feedback")
+    if payload.get("policy"):
+        observed.add("policy")
+    if _as_list(payload.get("memory_updates", [])) or payload.get("memory"):
+        observed.add("memory")
+    if payload.get("prior_memory"):
+        observed.add("memory")
+    if _as_dict(payload.get("skills", {})) or _as_list(payload.get("skill_library", [])):
+        observed.add("skill")
+    for key in payload:
+        _add_autonomy_stage(observed, str(key))
+
+
+def _add_autonomy_stage(observed: set[str], value: str) -> None:
+    stage = _normalize_autonomy_loop_key(value)
+    if stage:
+        observed.add(stage)
+
+
+def _normalize_autonomy_loop_key(key: str) -> str:
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "record_observation": "observe",
+        "observe_context": "observe",
+        "observation": "observe",
+        "observations": "observe",
+        "sense": "observe",
+        "perception": "observe",
+        "orient_strategy": "orient",
+        "orientation": "orient",
+        "strategy": "orient",
+        "situate": "orient",
+        "propose_plan": "plan",
+        "planning": "plan",
+        "planner": "plan",
+        "decomposition": "plan",
+        "record_action": "act",
+        "execute_step": "act",
+        "action": "act",
+        "tool_use": "act",
+        "execution": "act",
+        "verify_outcome": "verify",
+        "verification": "verify",
+        "self_check": "verify",
+        "critic": "verify",
+        "critic_check": "verify",
+        "evaluation": "verify",
+        "reflexion": "reflect",
+        "reflection": "reflect",
+        "self_refine": "reflect",
+        "review": "reflect",
+        "write_memory": "memory",
+        "memory_update": "memory",
+        "episodic_memory": "memory",
+        "store_skill": "skill",
+        "write_skill": "skill",
+        "skill_library": "skill",
+        "skill_update": "skill",
+        "reward": "feedback",
+        "scores": "feedback",
+        "error_feedback": "feedback",
+        "guardrail": "policy",
+        "policy_gate": "policy",
+        "constraint": "policy",
+        "constraints": "policy",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:

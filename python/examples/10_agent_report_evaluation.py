@@ -43,6 +43,22 @@ report = {
             "artifacts": [
                 {"type": "image", "uri": "file:///fixtures/receipt.png"},
                 {"type": "audio", "uri": "file:///fixtures/caller.wav"},
+                {
+                    "type": "trace",
+                    "metadata": {"kind": "autonomy_loop_trace"},
+                    "data": {
+                        "kind": "autonomy_loop_trace",
+                        "stages_observed": [
+                            "observe",
+                            "orient",
+                            "plan",
+                            "act",
+                            "verify",
+                            "reflect",
+                            "memory",
+                        ],
+                    },
+                },
             ],
         }
     ]
@@ -55,6 +71,7 @@ result = evaluate_agent_report(
         "available_tools": ["search_order", "refund_order"],
         "memory_allowed_keys": ["order_id", "status"],
         "required_artifact_types": ["image", "audio"],
+        "required_autonomy_loop": ["observe", "orient", "plan", "act", "verify", "reflect"],
         "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
         "success_criteria": ["checkout support case resolved"],
