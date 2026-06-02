@@ -131,6 +131,9 @@ class AgentReportEvalConfig(BaseModel):
     expected_browser_dom_contains: List[str] = Field(default_factory=list)
     expected_browser_regions: List[Any] = Field(default_factory=list)
     expected_browser_screenshot_diffs: List[Any] = Field(default_factory=list)
+    expected_browser_perturbations: List[Any] = Field(default_factory=list)
+    allow_stale_browser_screenshot: bool = True
+    max_browser_layout_shift_score: Optional[float] = None
     forbidden_browser_prompt_injection_targets: List[Any] = Field(default_factory=list)
     required_voice_trace: List[str] = Field(default_factory=list)
     expected_voice_route: Optional[str] = None
@@ -1185,6 +1188,9 @@ def _browser_grounding_quality_metric(
     if (
         not config.expected_browser_regions
         and not config.expected_browser_screenshot_diffs
+        and not config.expected_browser_perturbations
+        and config.allow_stale_browser_screenshot
+        and config.max_browser_layout_shift_score is None
         and not config.forbidden_browser_prompt_injection_targets
     ):
         return AgentReportMetricResult(
@@ -1195,6 +1201,7 @@ def _browser_grounding_quality_metric(
 
     action_records = _browser_action_records_from_context(context)
     screenshot_diffs = _browser_screenshot_diffs_from_context(context)
+    perturbations = _browser_perturbations_from_context(context)
     checks: List[Dict[str, Any]] = []
     findings: List[Dict[str, Any]] = []
 
@@ -1234,6 +1241,54 @@ def _browser_grounding_quality_metric(
             finding_type="browser_screenshot_diff_missing",
         )
 
+    for raw_spec in config.expected_browser_perturbations:
+        spec = _normalize_browser_perturbation_expectation(raw_spec)
+        match = any(_browser_perturbation_matches(perturbation, spec) for perturbation in perturbations)
+        _append_browser_grounding_check(
+            checks,
+            findings,
+            check="browser_perturbation",
+            expected=spec,
+            actual=perturbations,
+            match=match,
+            finding_type="browser_perturbation_missing",
+        )
+
+    if not config.allow_stale_browser_screenshot:
+        stale_records = [
+            record
+            for record in action_records
+            if record.get("stale_screenshot") or record.get("stale_snapshot_id")
+        ]
+        _append_browser_grounding_check(
+            checks,
+            findings,
+            check="fresh_screenshot",
+            expected={"allow_stale_browser_screenshot": False},
+            actual=stale_records,
+            match=not stale_records,
+            finding_type="browser_stale_screenshot_used",
+        )
+
+    if config.max_browser_layout_shift_score is not None:
+        layout_scores = [
+            _as_float(perturbation.get("score", perturbation.get("value")))
+            for perturbation in perturbations
+            if str(perturbation.get("type") or "").lower().replace("-", "_") == "layout_shift"
+        ]
+        layout_scores = [score for score in layout_scores if score is not None]
+        max_score = max(layout_scores) if layout_scores else 0.0
+        handled = any(record.get("region_matched") for record in action_records)
+        _append_browser_grounding_check(
+            checks,
+            findings,
+            check="layout_shift_resilience",
+            expected={"max_browser_layout_shift_score": config.max_browser_layout_shift_score},
+            actual={"max_layout_shift_score": max_score, "handled_by_region_match": handled},
+            match=max_score <= config.max_browser_layout_shift_score or handled,
+            finding_type="browser_layout_shift_unhandled",
+        )
+
     for raw_spec in config.forbidden_browser_prompt_injection_targets:
         spec = _normalize_browser_prompt_injection_target(raw_spec)
         violations = _browser_prompt_injection_target_violations(action_records, spec)
@@ -1264,6 +1319,7 @@ def _browser_grounding_quality_metric(
             "findings": findings,
             "browser_action_records": len(action_records),
             "screenshot_diffs": len(screenshot_diffs),
+            "perturbations": len(perturbations),
         },
     )
 
@@ -4263,6 +4319,43 @@ def _browser_screenshot_diffs_from_context(context: Mapping[str, Any]) -> List[D
     return diffs
 
 
+def _browser_perturbations_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    perturbations: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append(raw: Any) -> None:
+        perturbation = _as_dict(raw)
+        if not perturbation:
+            return
+        signature = json.dumps(perturbation, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        perturbations.append(perturbation)
+
+    for payload in _browser_trace_payloads_from_context(context):
+        for perturbation in _as_list(payload.get("perturbations", [])):
+            append(perturbation)
+        for record in _as_list(payload.get("action_replay", payload.get("actions", []))):
+            record_dict = _as_dict(record)
+            for perturbation in _as_list(record_dict.get("layout_shifts", [])):
+                append(perturbation)
+            if record_dict.get("stale_screenshot"):
+                append(
+                    {
+                        "type": "stale_screenshot",
+                        "snapshot_id": record_dict.get("stale_snapshot_id"),
+                        "source": "action_replay",
+                    }
+                )
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        if "perturbation" in event_type or "layout_shift" in name or "stale_screenshot" in name:
+            append(_get(event, "payload", {}))
+    return perturbations
+
+
 def _browser_screenshot_diff_matches(
     diff: Mapping[str, Any],
     spec: Mapping[str, Any],
@@ -4286,6 +4379,44 @@ def _browser_screenshot_diff_matches(
     if set(spec.keys()) <= {"id"}:
         expected = str(spec["id"])
         return expected in {str(diff.get("id")), str(diff.get("name")), str(diff.get("label")), str(diff.get("source_action"))} or expected in _stringify(diff)
+    return True
+
+
+def _normalize_browser_perturbation_expectation(raw_spec: Any) -> Dict[str, Any]:
+    if isinstance(raw_spec, str):
+        return {"id": raw_spec}
+    spec = dict(_as_dict(raw_spec))
+    if "type" in spec:
+        spec["type"] = str(spec["type"]).lower().replace("-", "_").replace(" ", "_")
+    return spec
+
+
+def _browser_perturbation_matches(
+    perturbation: Mapping[str, Any],
+    spec: Mapping[str, Any],
+) -> bool:
+    if not spec:
+        return bool(perturbation)
+    for key in ("id", "name", "type", "snapshot_id", "screenshot_id"):
+        if key not in spec:
+            continue
+        actual = perturbation.get(key)
+        if key == "type":
+            actual = str(actual or "").lower().replace("-", "_").replace(" ", "_")
+        if str(actual) != str(spec[key]):
+            return False
+    expected_regions = {str(item) for item in _as_list(spec.get("affected_regions", spec.get("regions", [])))}
+    if expected_regions:
+        actual_regions = {str(item) for item in _as_list(perturbation.get("affected_regions", perturbation.get("regions", [])))}
+        if not expected_regions.issubset(actual_regions):
+            return False
+    if "min_score" in spec:
+        actual_score = _as_float(perturbation.get("score", perturbation.get("value")))
+        if actual_score is None or actual_score < float(spec["min_score"]):
+            return False
+    if set(spec.keys()) <= {"id"}:
+        expected = str(spec["id"])
+        return expected in {str(perturbation.get("id")), str(perturbation.get("name"))} or expected in _stringify(perturbation)
     return True
 
 
@@ -4374,6 +4505,10 @@ def _browser_action_records_from_context(context: Mapping[str, Any]) -> List[Dic
                 "screenshot_diff",
                 "prompt_injection_touched",
                 "prompt_injection_surfaces",
+                "stale_screenshot",
+                "stale_snapshot_id",
+                "layout_shifts",
+                "layout_shift_score",
             )
         ):
             return
@@ -4515,6 +4650,8 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
             observed.add("dom")
         if artifact_type == "screenshot":
             observed.add("screenshot")
+        if artifact_type == "video":
+            observed.add("video")
         if artifact_type == "trace":
             data = _as_dict(_get(artifact, "data", {}))
             metadata = _as_dict(_get(artifact, "metadata", {}))
@@ -4545,6 +4682,12 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("screenshot_diff")
         if "browser_screenshot_diff" in event_type or "screenshot_diff" in name:
             observed.add("screenshot_diff")
+        if "browser_perturbation" in event_type or "layout_shift" in name:
+            observed.add("layout_shift")
+            observed.add("perturbation")
+        if "stale_screenshot" in name:
+            observed.add("stale_screenshot")
+            observed.add("perturbation")
         if "browser_console" in event_type or "console" in name:
             observed.add("console")
         if "browser_network" in event_type or "network" in name:
@@ -4571,6 +4714,9 @@ def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, An
             "regions",
             "console_logs",
             "network_log",
+            "video_artifacts",
+            "perturbations",
+            "trace_import",
             "final_state",
         )
     )
@@ -4606,6 +4752,18 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
         observed.add("dom_mutation")
     if _as_list(payload.get("screenshot_diffs", [])) or payload.get("screenshot_diff"):
         observed.add("screenshot_diff")
+    if _as_list(payload.get("video_artifacts", [])):
+        observed.add("video")
+    trace_import = _as_dict(payload.get("trace_import", {}))
+    if "playwright" in _stringify(trace_import).lower():
+        observed.add("playwright_trace")
+    perturbations = _as_list(payload.get("perturbations", []))
+    if perturbations:
+        observed.add("perturbation")
+        for perturbation in perturbations:
+            perturbation_type = str(_as_dict(perturbation).get("type") or "").lower().replace("-", "_")
+            if perturbation_type:
+                observed.add(_normalize_browser_trace_key(perturbation_type))
     if _as_dict(payload.get("regions", {})):
         observed.add("coordinate_region")
     if _as_list(payload.get("console_logs", [])):
@@ -4651,6 +4809,20 @@ def _normalize_browser_trace_key(key: str) -> str:
         "prompt_injection": "prompt_injection_surface",
         "prompt_injections": "prompt_injection_surface",
         "injection_surface": "prompt_injection_surface",
+        "playwright": "playwright_trace",
+        "playwright_trace": "playwright_trace",
+        "trace_import": "playwright_trace",
+        "video_artifacts": "video",
+        "videos": "video",
+        "layout_shift": "layout_shift",
+        "layout_shifts": "layout_shift",
+        "cumulative_layout_shift": "layout_shift",
+        "cls": "layout_shift",
+        "stale": "stale_screenshot",
+        "stale_screenshot": "stale_screenshot",
+        "stale_screenshots": "stale_screenshot",
+        "perturbation": "perturbation",
+        "perturbations": "perturbation",
     }
     return aliases.get(normalized, normalized)
 

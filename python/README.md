@@ -207,6 +207,9 @@ Framework trace coverage accepts normalized `framework_trace` artifacts/events
 and raw TraceAI/OpenTelemetry-style span events or OTLP `resourceSpans`
 exports, so captured framework runs can be scored before or after simulator
 normalization.
+Browser trace and grounding metrics also understand Playwright trace import
+evidence, video artifacts, layout-shift perturbations, and stale-screenshot
+avoidance checks.
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report

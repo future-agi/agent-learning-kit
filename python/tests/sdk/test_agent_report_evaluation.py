@@ -789,6 +789,148 @@ def test_evaluate_agent_report_scores_browser_grounding_quality():
     assert any(finding["metric"] == "browser_grounding_quality" for finding in bad_result.findings)
 
 
+def test_evaluate_agent_report_scores_playwright_browser_perturbations():
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "I refreshed the stale screenshot and clicked the shifted confirm button.",
+                        "tool_calls": [
+                            {"id": "refresh", "name": "browser_refresh_snapshot", "arguments": {}},
+                            {
+                                "id": "click",
+                                "name": "computer_click",
+                                "arguments": {"x": 190, "y": 475, "selector": "#confirm"},
+                            },
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {"type": "video", "uri": "file:///trace/checkout.webm"},
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "trace_import": {"source": "playwright-trace.zip"},
+                            "video_artifacts": [{"uri": "file:///trace/checkout.webm"}],
+                            "perturbations": [
+                                {
+                                    "id": "banner_shift",
+                                    "type": "layout_shift",
+                                    "score": 0.18,
+                                    "affected_regions": ["confirm_button"],
+                                },
+                                {
+                                    "id": "stale_before",
+                                    "type": "stale_screenshot",
+                                    "snapshot_id": "checkout_before",
+                                },
+                            ],
+                            "action_replay": [
+                                {
+                                    "tool": "computer_click",
+                                    "selector": "#confirm",
+                                    "success": True,
+                                    "matched": True,
+                                    "coordinates": {"x": 190.0, "y": 475.0},
+                                    "region": {"name": "confirm_button", "x": 160, "y": 450, "width": 180, "height": 54},
+                                    "region_matched": True,
+                                    "stale_screenshot": False,
+                                    "layout_shift_score": 0.18,
+                                    "layout_shifts": [
+                                        {
+                                            "id": "banner_shift",
+                                            "type": "layout_shift",
+                                            "score": 0.18,
+                                            "affected_regions": ["confirm_button"],
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_browser_trace": [
+                "playwright_trace",
+                "video",
+                "layout_shift",
+                "stale_screenshot",
+                "perturbation",
+            ],
+            "expected_browser_regions": [
+                {"name": "confirm_button", "bounds": [160, 450, 180, 54], "selector": "#confirm"}
+            ],
+            "expected_browser_perturbations": [
+                {"id": "banner_shift", "type": "layout_shift", "affected_regions": ["confirm_button"]},
+                {"id": "stale_before", "type": "stale_screenshot"},
+            ],
+            "allow_stale_browser_screenshot": False,
+            "max_browser_layout_shift_score": 0.1,
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["browser_trace_coverage"] == 1.0
+    assert scores["browser_grounding_quality"] == 1.0
+
+    stale_report = {
+        "results": [
+            {
+                "messages": report["results"][0]["messages"],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            **report["results"][0]["artifacts"][1]["data"],
+                            "action_replay": [
+                                {
+                                    "tool": "computer_click",
+                                    "selector": "#confirm",
+                                    "success": True,
+                                    "matched": True,
+                                    "coordinates": {"x": 190.0, "y": 405.0},
+                                    "region": {"name": "confirm_button", "x": 160, "y": 450, "width": 180, "height": 54},
+                                    "region_matched": False,
+                                    "stale_screenshot": True,
+                                    "stale_snapshot_id": "checkout_before",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    stale_result = evaluate_agent_report(
+        stale_report,
+        config={
+            "expected_browser_regions": [
+                {"name": "confirm_button", "bounds": [160, 450, 180, 54], "selector": "#confirm"}
+            ],
+            "allow_stale_browser_screenshot": False,
+        },
+    )
+    stale_scores = {metric.name: metric.score for metric in stale_result.cases[0].metrics}
+
+    assert stale_scores["browser_grounding_quality"] < 1.0
+    assert any(
+        finding.get("type") == "browser_stale_screenshot_used"
+        or finding.get("finding", {}).get("type") == "browser_stale_screenshot_used"
+        for finding in stale_result.findings
+    )
+
+
 def test_evaluate_agent_report_scores_voice_trace_coverage():
     report = {
         "results": [
