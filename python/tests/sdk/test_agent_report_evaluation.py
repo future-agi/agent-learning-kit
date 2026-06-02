@@ -717,6 +717,153 @@ def test_evaluate_agent_report_scores_voice_trace_coverage():
     assert complete_scores["voice_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_voice_interaction_quality():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Handle a noisy billing voice call.",
+                    "outcome": "Caller routed to billing with low-noise transcription and interruption handling.",
+                },
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "Caller routed to billing and order 123 is handled.",
+                        "tool_calls": [
+                            {
+                                "id": "route",
+                                "name": "route_call",
+                                "arguments": {"route": "billing"},
+                            },
+                            {
+                                "id": "stt",
+                                "name": "transcribe_audio",
+                                "arguments": {"id": "caller_1"},
+                            },
+                            {
+                                "id": "tts",
+                                "name": "speak",
+                                "arguments": {"text": "I can help.", "latency_ms": 420},
+                            },
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {"type": "audio", "uri": "file:///fixtures/caller.wav"},
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "voice_trace"},
+                        "data": {
+                            "kind": "voice_trace",
+                            "utterances": [
+                                {
+                                    "id": "caller_1",
+                                    "transcript": "Billing issue for order 123.",
+                                    "confidence": 0.94,
+                                }
+                            ],
+                            "frame_replay": [
+                                {"frame_type": "InputAudioRawFrame"},
+                                {
+                                    "frame_type": "TranscriptionFrame",
+                                    "payload": {"text": "Billing issue for order 123."},
+                                },
+                                {"frame_type": "TTSStartedFrame"},
+                                {"frame_type": "TTSAudioRawFrame"},
+                                {"frame_type": "InterruptionFrame"},
+                                {
+                                    "frame_type": "OverlappingSpeechFrame",
+                                    "payload": {"overlap_ms": 180},
+                                },
+                            ],
+                            "timeline": [{"kind": "frame", "id": "input_audio_1"}],
+                            "overlap_events": [{"overlap_ms": 180}],
+                            "noise_profile": {
+                                "noise_db": 62,
+                                "processed_noise_db": 24,
+                            },
+                            "route_history": [{"route": "billing"}],
+                            "transcript_history": [
+                                {"transcript": "Billing issue for order 123.", "confidence": 0.94}
+                            ],
+                            "tts_history": [{"text": "I can help.", "latency_ms": 420}],
+                        },
+                    },
+                ],
+                "events": [
+                    {
+                        "type": "voice_route",
+                        "name": "call_routed",
+                        "payload": {"route": "billing"},
+                    },
+                    {
+                        "type": "voice_frame",
+                        "name": "TranscriptionFrame",
+                        "payload": {
+                            "frame_type": "TranscriptionFrame",
+                            "text": "Billing issue for order 123.",
+                        },
+                    },
+                    {
+                        "type": "voice",
+                        "name": "overlapping_speech",
+                        "payload": {"overlap_ms": 180},
+                    },
+                ],
+                "metadata": {
+                    "environment_state": {
+                        "voice": {
+                            "current_route": "billing",
+                            "noise_profile": {
+                                "noise_db": 62,
+                                "processed_noise_db": 24,
+                            },
+                            "overlap_events": [{"overlap_ms": 180}],
+                        }
+                    }
+                },
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "expected_voice_route": "billing",
+            "expected_voice_transcript_contains": ["order 123"],
+            "required_voice_frame_types": [
+                "InputAudioRawFrame",
+                "TranscriptionFrame",
+                "TTSStartedFrame",
+                "TTSAudioRawFrame",
+                "InterruptionFrame",
+            ],
+            "max_voice_overlap_ms": 250,
+            "max_voice_noise_db": 35,
+            "required_voice_trace": ["frame", "noise", "overlap", "timeline"],
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["voice_interaction_quality"] == 1.0
+    assert scores["voice_trace_coverage"] == 1.0
+
+    failing_result = evaluate_agent_report(
+        report,
+        config={
+            "expected_voice_route": "sales",
+            "expected_voice_transcript_contains": ["refund"],
+            "required_voice_frame_types": ["MissingFrame"],
+            "max_voice_overlap_ms": 100,
+            "max_voice_noise_db": 10,
+        },
+    )
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+
+    assert failing_scores["voice_interaction_quality"] < 1.0
+    assert any(finding["metric"] == "voice_interaction_quality" for finding in failing_result.findings)
+
+
 def test_evaluate_agent_report_scores_autonomy_loop_coverage():
     report = {
         "results": [

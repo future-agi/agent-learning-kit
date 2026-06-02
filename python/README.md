@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser action outcome/state validation, browser trace coverage, voice turn-taking, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, browser/CUA safety, browser action outcome/state validation, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -233,7 +233,12 @@ result = evaluate_agent_report(
         ],
         "expected_browser_state": {"url": "https://shop.example.com/done"},
         "expected_browser_dom_contains": ["Done"],
-        "required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route"],
+        "required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route", "frame", "noise", "overlap", "timeline"],
+        "expected_voice_route": "billing",
+        "expected_voice_transcript_contains": ["order 123"],
+        "required_voice_frame_types": ["InputAudioRawFrame", "TranscriptionFrame", "TTSStartedFrame", "TTSAudioRawFrame"],
+        "max_voice_overlap_ms": 250,
+        "max_voice_noise_db": 35,
         "allowed_domains": ["shop.example.com"],
         "memory_allowed_keys": ["order_id", "status"],
         "tool_argument_schemas": {

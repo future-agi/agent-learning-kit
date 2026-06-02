@@ -122,12 +122,17 @@ class AgentReportEvalConfig(BaseModel):
     allowed_domains: List[str] = Field(default_factory=list)
     memory_allowed_keys: Optional[List[str]] = None
     max_voice_latency_ms: Optional[int] = 1500
+    max_voice_overlap_ms: Optional[int] = None
+    max_voice_noise_db: Optional[float] = None
     required_artifact_types: List[str] = Field(default_factory=list)
     required_browser_trace: List[str] = Field(default_factory=list)
     expected_browser_actions: List[Any] = Field(default_factory=list)
     expected_browser_state: Dict[str, Any] = Field(default_factory=dict)
     expected_browser_dom_contains: List[str] = Field(default_factory=list)
     required_voice_trace: List[str] = Field(default_factory=list)
+    expected_voice_route: Optional[str] = None
+    expected_voice_transcript_contains: List[str] = Field(default_factory=list)
+    required_voice_frame_types: List[str] = Field(default_factory=list)
     required_autonomy_loop: List[str] = Field(default_factory=list)
     required_multi_agent_trace: List[str] = Field(default_factory=list)
     required_framework_trace: List[str] = Field(default_factory=list)
@@ -310,6 +315,7 @@ class AgentReportEvaluator:
                 _browser_action_outcome_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
+                _voice_interaction_quality_metric(report_context, config),
                 _voice_trace_coverage_metric(report_context, config),
                 _artifact_coverage_metric(report_context, config),
                 _state_goal_metric(report_context, config),
@@ -1609,6 +1615,115 @@ def _voice_turn_taking_metric(
         score=round(score, 4),
         reason="No voice turn-taking issues." if not findings else f"{len(findings)} voice issue(s).",
         details={"voice_events": len(voice_events), "findings": findings},
+    )
+
+
+def _voice_interaction_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    if (
+        not config.expected_voice_route
+        and not config.expected_voice_transcript_contains
+        and not config.required_voice_frame_types
+        and config.max_voice_overlap_ms is None
+        and config.max_voice_noise_db is None
+    ):
+        return AgentReportMetricResult(
+            name="voice_interaction_quality",
+            score=1.0,
+            reason="No expected voice interaction checks provided.",
+        )
+
+    payloads = _voice_trace_payloads_from_context(context)
+    final_state = _extract_final_state(context)
+    voice_state = _as_dict(final_state.get("voice"))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    if config.expected_voice_route:
+        routes = _voice_routes_from_payloads(payloads, voice_state)
+        match = str(config.expected_voice_route) in routes
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="route",
+            expected=config.expected_voice_route,
+            actual=routes,
+            match=match,
+            finding_type="voice_route_mismatch",
+        )
+
+    transcript_text = "\n".join(_voice_transcripts_from_payloads(payloads, context, voice_state))
+    for expected in config.expected_voice_transcript_contains:
+        phrase = str(expected)
+        match = phrase.lower() in transcript_text.lower()
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="transcript_contains",
+            expected=phrase,
+            actual=match,
+            match=match,
+            finding_type="voice_transcript_missing",
+        )
+
+    observed_frames = _voice_frame_types_from_payloads(payloads, context, voice_state)
+    for frame_type in config.required_voice_frame_types:
+        expected = _normalize_voice_frame_type(frame_type)
+        match = expected in observed_frames
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="frame_type",
+            expected=str(frame_type),
+            actual=sorted(observed_frames),
+            match=match,
+            finding_type="voice_frame_missing",
+        )
+
+    if config.max_voice_overlap_ms is not None:
+        overlaps = _voice_overlap_values_from_payloads(payloads, context, voice_state)
+        max_overlap = max(overlaps) if overlaps else 0
+        match = max_overlap <= config.max_voice_overlap_ms
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="overlap_ms",
+            expected=f"<= {config.max_voice_overlap_ms}",
+            actual=max_overlap,
+            match=match,
+            finding_type="voice_overlap_exceeded",
+        )
+
+    if config.max_voice_noise_db is not None:
+        noise_values = _voice_noise_values_from_payloads(payloads, context, voice_state)
+        max_noise = max(noise_values) if noise_values else None
+        match = max_noise is not None and max_noise <= config.max_voice_noise_db
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="noise_db",
+            expected=f"<= {config.max_voice_noise_db}",
+            actual=max_noise,
+            match=match,
+            finding_type="voice_noise_exceeded" if max_noise is not None else "voice_noise_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="voice_interaction_quality",
+            score=1.0,
+            reason="No voice interaction quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    score = matched / len(checks)
+    return AgentReportMetricResult(
+        name="voice_interaction_quality",
+        score=round(score, 4),
+        reason=f"{matched}/{len(checks)} voice interaction check(s) matched.",
+        details={"checks": checks, "findings": findings},
     )
 
 
@@ -3241,10 +3356,203 @@ def _voice_trace_observed(context: Mapping[str, Any]) -> set[str]:
     return observed
 
 
+def _append_voice_quality_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
+
+
+def _voice_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_voice_trace(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        event_type = str(_get(event, "type", "") or "").lower()
+        if _looks_like_voice_trace(payload, {}) or "voice" in event_type:
+            payloads.append(payload)
+    return payloads
+
+
+def _voice_routes_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    voice_state: Mapping[str, Any],
+) -> set[str]:
+    routes: set[str] = set()
+    if voice_state.get("current_route"):
+        routes.add(str(voice_state["current_route"]))
+    for route in _as_list(voice_state.get("route_history", [])):
+        route_dict = _as_dict(route)
+        if route_dict.get("route"):
+            routes.add(str(route_dict["route"]))
+    for payload in payloads:
+        if payload.get("route"):
+            routes.add(str(payload["route"]))
+        for route in _as_list(payload.get("route_history", [])):
+            route_dict = _as_dict(route)
+            if route_dict.get("route"):
+                routes.add(str(route_dict["route"]))
+    return routes
+
+
+def _voice_transcripts_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    voice_state: Mapping[str, Any],
+) -> List[str]:
+    transcripts: List[str] = []
+
+    def append(value: Any) -> None:
+        if value not in (None, ""):
+            transcripts.append(str(value))
+
+    append(voice_state.get("last_transcript"))
+    for item in _as_list(voice_state.get("transcript_history", [])):
+        append(_as_dict(item).get("transcript"))
+    for payload in payloads:
+        append(payload.get("transcript") or payload.get("text"))
+        for item in _as_list(payload.get("utterances", [])):
+            append(_as_dict(item).get("transcript"))
+        for item in _as_list(payload.get("transcript_history", [])):
+            append(_as_dict(item).get("transcript"))
+        for item in _as_list(payload.get("frame_replay", [])):
+            item_dict = _as_dict(item)
+            item_payload = _as_dict(item_dict.get("payload", {}))
+            append(item_payload.get("transcript") or item_payload.get("text") or item_dict.get("text"))
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        append(payload.get("transcript") or payload.get("text"))
+    return transcripts
+
+
+def _voice_frame_types_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    voice_state: Mapping[str, Any],
+) -> set[str]:
+    frame_types: set[str] = set()
+
+    def add(value: Any) -> None:
+        normalized = _normalize_voice_frame_type(value)
+        if normalized:
+            frame_types.add(normalized)
+
+    for frame in _as_list(voice_state.get("frame_replay", [])):
+        add(_as_dict(frame).get("frame_type") or _as_dict(frame).get("name"))
+    for payload in payloads:
+        add(payload.get("frame_type"))
+        for frame in _as_list(payload.get("frame_replay", [])):
+            frame_dict = _as_dict(frame)
+            add(frame_dict.get("frame_type") or frame_dict.get("name"))
+    for event in _as_list(context.get("events", [])):
+        metadata = _as_dict(_get(event, "metadata", {}))
+        payload = _as_dict(_get(event, "payload", {}))
+        add(metadata.get("frame_type") or payload.get("frame_type"))
+    return frame_types
+
+
+def _voice_overlap_values_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    voice_state: Mapping[str, Any],
+) -> List[int]:
+    values: List[int] = []
+
+    def append(raw: Any) -> None:
+        value = _as_int(raw)
+        if value is not None:
+            values.append(value)
+
+    for item in _as_list(voice_state.get("overlap_events", [])):
+        append(_as_dict(item).get("overlap_ms"))
+    for payload in payloads:
+        append(payload.get("overlap_ms"))
+        for item in _as_list(payload.get("overlap_events", [])):
+            append(_as_dict(item).get("overlap_ms"))
+        for frame in _as_list(payload.get("frame_replay", [])):
+            frame_dict = _as_dict(frame)
+            frame_payload = _as_dict(frame_dict.get("payload", {}))
+            if "overlap" in _stringify(frame_dict).lower():
+                append(frame_payload.get("overlap_ms", frame_dict.get("overlap_ms", frame_dict.get("duration_ms"))))
+    for event in _as_list(context.get("events", [])):
+        event_text = _stringify(event).lower()
+        if "overlap" in event_text or "false_interruption" in event_text:
+            append(_as_dict(_get(event, "payload", {})).get("overlap_ms"))
+    return values
+
+
+def _voice_noise_values_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    voice_state: Mapping[str, Any],
+) -> List[float]:
+    values: List[float] = []
+
+    def append(raw: Any) -> None:
+        if isinstance(raw, bool) or raw is None:
+            return
+        if isinstance(raw, (int, float)):
+            values.append(float(raw))
+            return
+        try:
+            values.append(float(str(raw)))
+        except ValueError:
+            return
+
+    noise_state = _as_dict(voice_state.get("noise_profile", {}))
+    append(noise_state.get("processed_noise_db", noise_state.get("noise_db")))
+    for payload in payloads:
+        append(payload.get("processed_noise_db", payload.get("noise_db")))
+        noise_profile = _as_dict(payload.get("noise_profile", {}))
+        append(noise_profile.get("processed_noise_db", noise_profile.get("noise_db")))
+        for item in _as_list(payload.get("frame_replay", [])):
+            item_payload = _as_dict(_as_dict(item).get("payload", {}))
+            append(item_payload.get("processed_noise_db", item_payload.get("noise_db")))
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        append(payload.get("processed_noise_db", payload.get("noise_db")))
+    return values
+
+
+def _normalize_voice_frame_type(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 def _looks_like_voice_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
     kind = str(data.get("kind") or metadata.get("kind") or "").lower()
     return kind == "voice_trace" or any(
-        key in data for key in ("utterances", "event_replay", "latency_profile", "route_history", "tts_history")
+        key in data
+        for key in (
+            "utterances",
+            "event_replay",
+            "frame_replay",
+            "timeline",
+            "latency_profile",
+            "noise_profile",
+            "route_history",
+            "tts_history",
+            "overlap_events",
+        )
     )
 
 
@@ -3268,6 +3576,23 @@ def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -
                 observed.add("interruption")
     if _as_list(payload.get("transcript_history", [])) or payload.get("transcript"):
         observed.add("stt")
+    if _as_list(payload.get("frame_replay", [])):
+        observed.update({"event", "frame"})
+        for frame in _as_list(payload.get("frame_replay", [])):
+            frame_dict = _as_dict(frame)
+            frame_text = _stringify(frame_dict).lower()
+            if "audio" in frame_text:
+                observed.add("audio")
+            if "vad" in frame_text or "speaking" in frame_text:
+                observed.add("vad")
+            if "transcription" in frame_text or "stt" in frame_text:
+                observed.add("stt")
+            if "tts" in frame_text:
+                observed.add("tts")
+            if "interrupt" in frame_text:
+                observed.add("interruption")
+            if "overlap" in frame_text:
+                observed.add("overlap")
     if _as_list(payload.get("tts_history", [])):
         observed.add("tts")
     if _as_list(payload.get("route_history", [])) or payload.get("route"):
@@ -3276,6 +3601,12 @@ def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -
         observed.add("interruption")
     if payload.get("latency_profile") or any(key in payload for key in ("latency_ms", "stt_latency_ms", "tts_latency_ms")):
         observed.add("latency")
+    if payload.get("noise_profile") or any(key in payload for key in ("noise_db", "processed_noise_db")):
+        observed.add("noise")
+    if _as_list(payload.get("overlap_events", [])):
+        observed.add("overlap")
+    if _as_list(payload.get("timeline", [])):
+        observed.add("timeline")
     if payload.get("audio_uri") or payload.get("audio_path"):
         observed.add("audio")
 
@@ -3299,6 +3630,15 @@ def _normalize_voice_trace_key(key: str) -> str:
         "routes": "route",
         "latencies": "latency",
         "latency_profile": "latency",
+        "frames": "frame",
+        "frame": "frame",
+        "frame_replay": "frame",
+        "voice_frame": "frame",
+        "noise": "noise",
+        "noise_profile": "noise",
+        "overlap": "overlap",
+        "overlapping_speech": "overlap",
+        "timeline": "timeline",
         "audio_artifact": "audio",
     }
     return aliases.get(normalized, normalized)
