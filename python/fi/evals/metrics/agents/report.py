@@ -89,6 +89,9 @@ class AgentReportEvalConfig(BaseModel):
     required_multi_agent_trace: List[str] = Field(default_factory=list)
     required_framework_trace: List[str] = Field(default_factory=list)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
+    expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
+    forbidden_retrieval_doc_ids: List[str] = Field(default_factory=list)
+    require_current_retrieval: bool = False
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -239,6 +242,7 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
+                _retrieval_context_quality_metric(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
@@ -760,6 +764,147 @@ def _retrieval_memory_attribution_metric(
     )
 
 
+def _retrieval_context_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    expected = {str(doc_id) for doc_id in config.expected_retrieval_doc_ids}
+    forbidden = {str(doc_id) for doc_id in config.forbidden_retrieval_doc_ids}
+    if not expected and not forbidden and not config.require_current_retrieval:
+        return AgentReportMetricResult(
+            name="retrieval_context_quality",
+            score=1.0,
+            reason="No retrieval context quality requirements provided.",
+        )
+
+    traces = _retrieval_memory_traces(context)
+    if not traces:
+        return AgentReportMetricResult(
+            name="retrieval_context_quality",
+            score=0.0,
+            reason="Retrieval context requirements provided, but no retrieval trace observed.",
+            details={
+                "expected_doc_ids": sorted(expected),
+                "forbidden_doc_ids": sorted(forbidden),
+                "require_current": config.require_current_retrieval,
+                "findings": [{"type": "missing_retrieval_trace"}],
+            },
+        )
+
+    docs_by_id = _retrieval_documents_by_id(traces)
+    retrieved_sequences = _retrieval_query_sequences(traces, docs_by_id)
+    retrieved_ids = _dedupe_preserve_order(
+        doc_id
+        for sequence in retrieved_sequences
+        for doc_id in sequence
+    )
+    read_ids = _dedupe_preserve_order(_retrieval_document_read_ids(traces, docs_by_id))
+    cited_ids = _dedupe_preserve_order(_retrieval_cited_doc_ids(traces))
+    observed_ids = _dedupe_preserve_order([*retrieved_ids, *read_ids, *cited_ids])
+
+    findings: List[Dict[str, Any]] = []
+    components: Dict[str, float] = {}
+
+    if expected:
+        retrieved_expected = expected & set(retrieved_ids)
+        missing_expected = sorted(expected - set(retrieved_ids))
+        recall = len(retrieved_expected) / len(expected)
+        precision = (
+            len(retrieved_expected) / len(retrieved_ids)
+            if retrieved_ids
+            else 0.0
+        )
+        ranking_scores = []
+        for doc_id in sorted(expected):
+            try:
+                rank = retrieved_ids.index(doc_id) + 1
+                ranking_scores.append(1.0 / rank)
+            except ValueError:
+                ranking_scores.append(0.0)
+        ranking = sum(ranking_scores) / len(ranking_scores)
+        components.update(
+            {
+                "expected_recall": recall,
+                "context_precision": precision,
+                "ranking_mrr": ranking,
+            }
+        )
+        findings.extend(
+            {"type": "missing_expected_retrieval_document", "doc_id": doc_id}
+            for doc_id in missing_expected
+        )
+        if retrieved_ids and precision < 1.0:
+            findings.append(
+                {
+                    "type": "low_retrieval_precision",
+                    "expected_doc_ids": sorted(expected),
+                    "retrieved_doc_ids": retrieved_ids,
+                    "precision": round(precision, 4),
+                }
+            )
+        if ranking < 1.0:
+            findings.append(
+                {
+                    "type": "retrieval_ranking_miss",
+                    "expected_doc_ids": sorted(expected),
+                    "retrieved_doc_ids": retrieved_ids,
+                    "mrr": round(ranking, 4),
+                }
+            )
+
+    if forbidden:
+        forbidden_observed = sorted(forbidden & set(observed_ids))
+        forbidden_score = 1.0 if not forbidden_observed else max(
+            0.0,
+            1.0 - (len(forbidden_observed) / len(forbidden)),
+        )
+        components["forbidden_context_absence"] = forbidden_score
+        findings.extend(
+            {"type": "forbidden_retrieval_document", "doc_id": doc_id}
+            for doc_id in forbidden_observed
+        )
+
+    stale_doc_ids: List[str] = []
+    if config.require_current_retrieval:
+        for doc_id in observed_ids:
+            document = docs_by_id.get(doc_id)
+            if document is not None and document.get("current") is False:
+                stale_doc_ids.append(doc_id)
+        freshness = (
+            1.0
+            if not stale_doc_ids
+            else max(0.0, 1.0 - (len(set(stale_doc_ids)) / max(1, len(set(observed_ids)))))
+        )
+        components["freshness"] = freshness
+        findings.extend(
+            {"type": "stale_retrieval_document", "doc_id": doc_id}
+            for doc_id in sorted(set(stale_doc_ids))
+        )
+
+    score = sum(components.values()) / len(components) if components else 1.0
+    return AgentReportMetricResult(
+        name="retrieval_context_quality",
+        score=round(score, 4),
+        reason=(
+            "Retrieved context matched expected relevance, ranking, and freshness."
+            if not findings
+            else f"{len(findings)} retrieval context issue(s)."
+        ),
+        details={
+            "component_scores": {key: round(value, 4) for key, value in components.items()},
+            "expected_doc_ids": sorted(expected),
+            "forbidden_doc_ids": sorted(forbidden),
+            "retrieved_doc_ids": retrieved_ids,
+            "read_doc_ids": read_ids,
+            "cited_doc_ids": cited_ids,
+            "observed_doc_ids": observed_ids,
+            "stale_doc_ids": sorted(set(stale_doc_ids)),
+            "require_current": config.require_current_retrieval,
+            "findings": findings,
+        },
+    )
+
+
 def _browser_trace_coverage_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -1003,7 +1148,10 @@ def _collect_findings(metrics: Sequence[AgentReportMetricResult]) -> List[Dict[s
         details = metric.details
         raw_findings = details.get("findings") or details.get("dangerous_actions") or details.get("sensitive_leaks")
         if isinstance(raw_findings, list):
-            findings.extend({"metric": metric.name, **_as_dict(finding)} for finding in raw_findings)
+            findings.extend(
+                {"metric": metric.name, **_as_dict(finding), "score": metric.score}
+                for finding in raw_findings
+            )
         else:
             findings.append({"metric": metric.name, "reason": metric.reason, "score": metric.score})
     return findings
@@ -1348,6 +1496,134 @@ def _retrieval_memory_observed(context: Mapping[str, Any]) -> set[str]:
         name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
         _add_retrieval_memory_key(observed, name)
     return observed
+
+
+def _retrieval_memory_traces(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    traces: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_retrieval_memory_trace(data, metadata):
+            traces.append(data)
+    return traces
+
+
+def _retrieval_documents_by_id(
+    traces: Sequence[Mapping[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    documents: Dict[str, Dict[str, Any]] = {}
+    for trace in traces:
+        for raw_doc in _as_list(trace.get("documents", [])):
+            doc = _as_dict(raw_doc)
+            doc_id = _retrieval_doc_id(doc)
+            if doc_id:
+                documents[doc_id] = doc
+        for raw_read in _as_list(trace.get("document_reads", [])):
+            read = _as_dict(raw_read)
+            doc = _as_dict(read.get("document", {}))
+            doc_id = _retrieval_doc_id(doc) or str(read.get("id") or "")
+            if doc_id and doc:
+                documents[doc_id] = doc
+    return documents
+
+
+def _retrieval_query_sequences(
+    traces: Sequence[Mapping[str, Any]],
+    documents: Dict[str, Dict[str, Any]],
+) -> List[List[str]]:
+    sequences: List[List[str]] = []
+    for trace in traces:
+        for raw_query in _as_list(trace.get("queries", [])):
+            query = _as_dict(raw_query)
+            sequence: List[str] = []
+            ranked_documents = _as_list(query.get("ranked_documents", []))
+            if ranked_documents:
+                ranked = []
+                for index, raw_doc in enumerate(ranked_documents):
+                    doc = _as_dict(raw_doc)
+                    doc_id = _retrieval_doc_id(doc)
+                    if not doc_id:
+                        continue
+                    rank = _as_int(doc.get("rank")) or index + 1
+                    ranked.append((rank, doc_id))
+                    if doc_id not in documents:
+                        documents[doc_id] = doc
+                ranked.sort(key=lambda item: item[0])
+                sequence.extend(doc_id for _, doc_id in ranked)
+            else:
+                for raw_doc in _as_list(query.get("documents", [])):
+                    if isinstance(raw_doc, Mapping):
+                        doc = _as_dict(raw_doc)
+                        doc_id = _retrieval_doc_id(doc)
+                        if doc_id and doc_id not in documents:
+                            documents[doc_id] = doc
+                    else:
+                        doc_id = str(raw_doc)
+                    if doc_id:
+                        sequence.append(doc_id)
+            if sequence:
+                sequences.append(sequence)
+    return sequences
+
+
+def _retrieval_document_read_ids(
+    traces: Sequence[Mapping[str, Any]],
+    documents: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    ids: List[str] = []
+    for trace in traces:
+        for raw_read in _as_list(trace.get("document_reads", [])):
+            read = _as_dict(raw_read)
+            doc = _as_dict(read.get("document", {}))
+            doc_id = str(read.get("id") or _retrieval_doc_id(doc) or "")
+            if doc_id:
+                ids.append(doc_id)
+                if doc and doc_id not in documents:
+                    documents[doc_id] = doc
+    return ids
+
+
+def _retrieval_cited_doc_ids(traces: Sequence[Mapping[str, Any]]) -> List[str]:
+    ids: List[str] = []
+    for trace in traces:
+        for citation in _as_list(trace.get("citations", [])):
+            payload = _as_dict(citation)
+            ids.extend(str(doc_id) for doc_id in _as_list(payload.get("doc_ids", [])) if doc_id)
+    return ids
+
+
+def _retrieval_doc_id(document: Mapping[str, Any]) -> str:
+    return str(document.get("id") or document.get("doc_id") or document.get("source") or "")
+
+
+def _dedupe_preserve_order(values: Iterable[Any]) -> List[str]:
+    seen = set()
+    deduped: List[str] = []
+    for value in values:
+        item = str(value)
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _looks_like_retrieval_memory_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:

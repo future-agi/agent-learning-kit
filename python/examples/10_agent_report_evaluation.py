@@ -78,7 +78,20 @@ report = {
                     "metadata": {"kind": "retrieval_memory_trace"},
                     "data": {
                         "kind": "retrieval_memory_trace",
-                        "queries": [{"query": "checkout order 123", "documents": ["order_policy"]}],
+                        "queries": [
+                            {
+                                "query": "checkout order 123",
+                                "documents": ["order_policy"],
+                                "ranked_documents": [
+                                    {
+                                        "id": "order_policy",
+                                        "rank": 1,
+                                        "score": 3,
+                                        "current": True,
+                                    }
+                                ],
+                            }
+                        ],
                         "documents": [
                             {
                                 "id": "order_policy",
@@ -108,6 +121,8 @@ result = evaluate_agent_report(
         "required_autonomy_loop": ["observe", "orient", "plan", "act", "verify", "reflect"],
         "required_framework_trace": ["agent", "model", "tool", "latency"],
         "required_retrieval_memory_trace": ["query", "document", "memory_read", "memory_write", "citation"],
+        "expected_retrieval_doc_ids": ["order_policy"],
+        "require_current_retrieval": True,
         "max_voice_latency_ms": 1000,
         "expected_state": {"case": {"resolved": True}},
         "success_criteria": ["checkout support case resolved"],

@@ -983,6 +983,138 @@ def test_evaluate_agent_report_scores_retrieval_memory_attribution():
     assert complete_scores["retrieval_memory_attribution"] == 1.0
 
 
+def test_evaluate_agent_report_scores_retrieval_context_quality():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Answer a policy question with the right source.",
+                    "outcome": "Answer is grounded in the current refund policy.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Can order 123 be refunded?"},
+                    {
+                        "role": "assistant",
+                        "content": "Order 123 is refundable under the current policy.",
+                        "tool_calls": [
+                            {
+                                "id": "search",
+                                "name": "search_knowledge_base",
+                                "arguments": {"query": "current refund policy order 123"},
+                            }
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "retrieval_memory_trace"},
+                        "data": {
+                            "kind": "retrieval_memory_trace",
+                            "queries": [
+                                {
+                                    "query": "current refund policy order 123",
+                                    "documents": [
+                                        "refund_policy_old",
+                                        "refund_policy_current",
+                                        "shipping_policy_current",
+                                    ],
+                                    "ranked_documents": [
+                                        {
+                                            "id": "refund_policy_old",
+                                            "rank": 1,
+                                            "score": 5,
+                                            "current": False,
+                                        },
+                                        {
+                                            "id": "refund_policy_current",
+                                            "rank": 2,
+                                            "score": 4,
+                                            "current": True,
+                                        },
+                                        {
+                                            "id": "shipping_policy_current",
+                                            "rank": 3,
+                                            "score": 3,
+                                            "current": True,
+                                        },
+                                    ],
+                                }
+                            ],
+                            "documents": [
+                                {
+                                    "id": "refund_policy_current",
+                                    "content": "Order 123 is refund eligible.",
+                                    "current": True,
+                                },
+                                {
+                                    "id": "refund_policy_old",
+                                    "content": "Old refund rules for order 123.",
+                                    "current": False,
+                                },
+                                {
+                                    "id": "shipping_policy_current",
+                                    "content": "Shipping policy for order 123.",
+                                    "current": True,
+                                },
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "expected_retrieval_doc_ids": ["refund_policy_current"],
+        "forbidden_retrieval_doc_ids": [
+            "refund_policy_old",
+            "shipping_policy_current",
+        ],
+        "require_current_retrieval": True,
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["retrieval_context_quality"] < 1.0
+    assert any(
+        finding["metric"] == "retrieval_context_quality"
+        and finding["type"] == "forbidden_retrieval_document"
+        and finding["doc_id"] == "refund_policy_old"
+        for finding in result.findings
+    )
+    assert any(
+        finding["metric"] == "retrieval_context_quality"
+        and finding["type"] == "stale_retrieval_document"
+        and finding["doc_id"] == "refund_policy_old"
+        for finding in result.findings
+    )
+    assert any(
+        finding["metric"] == "retrieval_context_quality"
+        and finding["type"] == "retrieval_ranking_miss"
+        for finding in result.findings
+    )
+
+    report["results"][0]["artifacts"][0]["data"]["queries"][0]["documents"] = [
+        "refund_policy_current"
+    ]
+    report["results"][0]["artifacts"][0]["data"]["queries"][0]["ranked_documents"] = [
+        {
+            "id": "refund_policy_current",
+            "rank": 1,
+            "score": 5,
+            "current": True,
+        }
+    ]
+    complete_result = evaluate_agent_report(report, config=config)
+    complete_scores = {
+        metric.name: metric.score
+        for metric in complete_result.cases[0].metrics
+    }
+
+    assert complete_scores["retrieval_context_quality"] == 1.0
+
+
 def test_agent_report_accepts_object_like_report_without_simulate_sdk_dependency():
     case = SimpleNamespace(
         persona=SimpleNamespace(
