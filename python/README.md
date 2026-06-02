@@ -210,6 +210,9 @@ normalization.
 Browser trace and grounding metrics also understand Playwright trace import
 evidence, video artifacts, layout-shift perturbations, and stale-screenshot
 avoidance checks.
+Voice trace and interaction metrics understand LiveKit/Pipecat-style export
+replay evidence, waveform fixtures, diarization segments, MOS/SNR/clipping,
+jitter, and packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -262,6 +265,12 @@ result = evaluate_agent_report(
         "required_voice_frame_types": ["InputAudioRawFrame", "TranscriptionFrame", "TTSStartedFrame", "TTSAudioRawFrame"],
         "max_voice_overlap_ms": 250,
         "max_voice_noise_db": 35,
+        "required_voice_speakers": ["caller", "agent"],
+        "min_voice_snr_db": 25,
+        "min_voice_mos": 4.0,
+        "max_voice_clipping_ratio": 0.01,
+        "max_voice_jitter_ms": 30,
+        "max_voice_packet_loss_pct": 1.0,
         "allowed_domains": ["shop.example.com"],
         "memory_allowed_keys": ["order_id", "status"],
         "tool_argument_schemas": {

@@ -1078,6 +1078,32 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
                                 },
                             ],
                             "timeline": [{"kind": "frame", "id": "input_audio_1"}],
+                            "waveforms": [
+                                {
+                                    "id": "caller_wave",
+                                    "speaker": "caller",
+                                    "duration_ms": 1700,
+                                    "sample_rate_hz": 24000,
+                                    "snr_db": 31,
+                                    "mos": 4.2,
+                                    "clipping_ratio": 0.002,
+                                    "jitter_ms": 16,
+                                    "packet_loss_pct": 0.3,
+                                }
+                            ],
+                            "diarization": [
+                                {"speaker": "caller", "start_ms": 0, "end_ms": 1700, "confidence": 0.96},
+                                {"speaker": "agent", "start_ms": 2100, "end_ms": 3000, "confidence": 0.94},
+                            ],
+                            "perceptual_metrics": {
+                                "overall": {
+                                    "snr_db": 31,
+                                    "mos": 4.2,
+                                    "clipping_ratio": 0.002,
+                                    "jitter_ms": 16,
+                                    "packet_loss_pct": 0.3,
+                                }
+                            },
                             "overlap_events": [{"overlap_ms": 180}],
                             "noise_profile": {
                                 "noise_db": 62,
@@ -1120,6 +1146,30 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
                                 "processed_noise_db": 24,
                             },
                             "overlap_events": [{"overlap_ms": 180}],
+                            "waveforms": [
+                                {
+                                    "id": "caller_wave",
+                                    "speaker": "caller",
+                                    "snr_db": 31,
+                                    "mos": 4.2,
+                                    "clipping_ratio": 0.002,
+                                    "jitter_ms": 16,
+                                    "packet_loss_pct": 0.3,
+                                }
+                            ],
+                            "diarization": [
+                                {"speaker": "caller", "start_ms": 0, "end_ms": 1700},
+                                {"speaker": "agent", "start_ms": 2100, "end_ms": 3000},
+                            ],
+                            "perceptual_metrics": {
+                                "overall": {
+                                    "snr_db": 31,
+                                    "mos": 4.2,
+                                    "clipping_ratio": 0.002,
+                                    "jitter_ms": 16,
+                                    "packet_loss_pct": 0.3,
+                                }
+                            },
                         }
                     }
                 },
@@ -1141,7 +1191,26 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
             ],
             "max_voice_overlap_ms": 250,
             "max_voice_noise_db": 35,
-            "required_voice_trace": ["frame", "noise", "overlap", "timeline"],
+            "required_voice_speakers": ["caller", "agent"],
+            "min_voice_snr_db": 25,
+            "min_voice_mos": 4.0,
+            "max_voice_clipping_ratio": 0.01,
+            "max_voice_jitter_ms": 30,
+            "max_voice_packet_loss_pct": 1.0,
+            "required_voice_trace": [
+                "frame",
+                "noise",
+                "overlap",
+                "timeline",
+                "waveform",
+                "diarization",
+                "perceptual",
+                "snr",
+                "mos",
+                "clipping",
+                "jitter",
+                "packet_loss",
+            ],
         },
     )
     scores = {metric.name: metric.score for metric in result.cases[0].metrics}
@@ -1157,6 +1226,12 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
             "required_voice_frame_types": ["MissingFrame"],
             "max_voice_overlap_ms": 100,
             "max_voice_noise_db": 10,
+            "required_voice_speakers": ["supervisor"],
+            "min_voice_snr_db": 40,
+            "min_voice_mos": 4.8,
+            "max_voice_clipping_ratio": 0.001,
+            "max_voice_jitter_ms": 5,
+            "max_voice_packet_loss_pct": 0.1,
         },
     )
     failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}

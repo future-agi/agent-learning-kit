@@ -124,6 +124,12 @@ class AgentReportEvalConfig(BaseModel):
     max_voice_latency_ms: Optional[int] = 1500
     max_voice_overlap_ms: Optional[int] = None
     max_voice_noise_db: Optional[float] = None
+    required_voice_speakers: List[str] = Field(default_factory=list)
+    min_voice_snr_db: Optional[float] = None
+    min_voice_mos: Optional[float] = None
+    max_voice_clipping_ratio: Optional[float] = None
+    max_voice_jitter_ms: Optional[int] = None
+    max_voice_packet_loss_pct: Optional[float] = None
     required_artifact_types: List[str] = Field(default_factory=list)
     required_browser_trace: List[str] = Field(default_factory=list)
     expected_browser_actions: List[Any] = Field(default_factory=list)
@@ -1959,6 +1965,12 @@ def _voice_interaction_quality_metric(
         and not config.required_voice_frame_types
         and config.max_voice_overlap_ms is None
         and config.max_voice_noise_db is None
+        and not config.required_voice_speakers
+        and config.min_voice_snr_db is None
+        and config.min_voice_mos is None
+        and config.max_voice_clipping_ratio is None
+        and config.max_voice_jitter_ms is None
+        and config.max_voice_packet_loss_pct is None
     ):
         return AgentReportMetricResult(
             name="voice_interaction_quality",
@@ -2039,6 +2051,92 @@ def _voice_interaction_quality_metric(
             actual=max_noise,
             match=match,
             finding_type="voice_noise_exceeded" if max_noise is not None else "voice_noise_missing",
+        )
+
+    if config.required_voice_speakers:
+        observed_speakers = _voice_speakers_from_payloads(payloads, context, voice_state)
+        normalized_observed = {speaker.lower() for speaker in observed_speakers}
+        for speaker in config.required_voice_speakers:
+            expected = str(speaker)
+            match = expected.lower() in normalized_observed
+            _append_voice_quality_check(
+                checks,
+                findings,
+                check="speaker",
+                expected=expected,
+                actual=sorted(observed_speakers),
+                match=match,
+                finding_type="voice_speaker_missing",
+            )
+
+    if config.min_voice_snr_db is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "snr_db")
+        min_snr = min(values) if values else None
+        match = min_snr is not None and min_snr >= config.min_voice_snr_db
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="snr_db",
+            expected=f">= {config.min_voice_snr_db}",
+            actual=min_snr,
+            match=match,
+            finding_type="voice_snr_too_low" if min_snr is not None else "voice_snr_missing",
+        )
+
+    if config.min_voice_mos is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "mos")
+        min_mos = min(values) if values else None
+        match = min_mos is not None and min_mos >= config.min_voice_mos
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="mos",
+            expected=f">= {config.min_voice_mos}",
+            actual=min_mos,
+            match=match,
+            finding_type="voice_mos_too_low" if min_mos is not None else "voice_mos_missing",
+        )
+
+    if config.max_voice_clipping_ratio is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "clipping_ratio")
+        max_clipping = max(values) if values else None
+        match = max_clipping is not None and max_clipping <= config.max_voice_clipping_ratio
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="clipping_ratio",
+            expected=f"<= {config.max_voice_clipping_ratio}",
+            actual=max_clipping,
+            match=match,
+            finding_type="voice_clipping_exceeded" if max_clipping is not None else "voice_clipping_missing",
+        )
+
+    if config.max_voice_jitter_ms is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "jitter_ms")
+        max_jitter = max(values) if values else None
+        match = max_jitter is not None and max_jitter <= config.max_voice_jitter_ms
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="jitter_ms",
+            expected=f"<= {config.max_voice_jitter_ms}",
+            actual=max_jitter,
+            match=match,
+            finding_type="voice_jitter_exceeded" if max_jitter is not None else "voice_jitter_missing",
+        )
+
+    if config.max_voice_packet_loss_pct is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "packet_loss_pct")
+        max_loss = max(values) if values else None
+        match = max_loss is not None and max_loss <= config.max_voice_packet_loss_pct
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="packet_loss_pct",
+            expected=f"<= {config.max_voice_packet_loss_pct}",
+            actual=max_loss,
+            match=match,
+            finding_type="voice_packet_loss_exceeded" if max_loss is not None else "voice_packet_loss_missing",
         )
 
     if not checks:
@@ -5054,6 +5152,139 @@ def _voice_noise_values_from_payloads(
     return values
 
 
+def _voice_speakers_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    voice_state: Mapping[str, Any],
+) -> set[str]:
+    speakers: set[str] = set()
+
+    def add(raw: Any) -> None:
+        if raw not in (None, ""):
+            speakers.add(str(raw))
+
+    def collect(value: Any, depth: int = 0) -> None:
+        if depth > 5:
+            return
+        item = _as_dict(value)
+        if not item:
+            return
+        add(item.get("speaker") or item.get("speaker_id") or item.get("user_id"))
+        for key in (
+            "utterances",
+            "waveforms",
+            "diarization",
+            "speaker_segments",
+            "timeline",
+            "frame_replay",
+            "event_replay",
+            "transcript_history",
+            "tts_history",
+            "segments",
+        ):
+            for nested in _as_list(item.get(key, [])):
+                collect(nested, depth + 1)
+        for key in ("payload", "data", "metadata", "overall"):
+            collect(item.get(key), depth + 1)
+
+    collect(voice_state)
+    for payload in payloads:
+        collect(payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        collect(_get(artifact, "metadata", {}))
+        collect(_get(artifact, "data", {}))
+    for event in _as_list(context.get("events", [])):
+        collect(_get(event, "payload", {}))
+        collect(_get(event, "metadata", {}))
+    return speakers
+
+
+def _voice_quality_values_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    context: Mapping[str, Any],
+    voice_state: Mapping[str, Any],
+    key: str,
+) -> List[float]:
+    values: List[float] = []
+
+    def append(raw: Any, *, source_key: str = "") -> None:
+        value = _as_float(raw)
+        if value is None:
+            return
+        if source_key == "jitter_seconds" or (source_key == "jitter" and value <= 10):
+            value *= 1000
+        if key == "packet_loss_pct" and source_key == "fraction_lost" and value <= 1:
+            value *= 100
+        if key == "clipping_ratio" and source_key in {"clipping_pct", "clipping_percent"}:
+            value = value / 100 if value > 1 else value
+        values.append(float(value))
+
+    def collect(value: Any, depth: int = 0) -> None:
+        if depth > 6:
+            return
+        item = _as_dict(value)
+        if not item:
+            return
+        for alias in _voice_quality_aliases(key):
+            if alias in item:
+                append(item.get(alias), source_key=alias)
+        if key == "packet_loss_pct":
+            packets_lost = _as_float(item.get("packets_lost", item.get("packetsLost")))
+            packets_received = _as_float(item.get("packets_received", item.get("packetsReceived")))
+            if packets_lost is not None and packets_received is not None and packets_lost + packets_received > 0:
+                values.append(round((packets_lost / (packets_lost + packets_received)) * 100, 4))
+        for nested_key in (
+            "perceptual_metrics",
+            "audio_quality",
+            "quality_profile",
+            "voice_quality",
+            "quality",
+            "metrics",
+            "overall",
+            "payload",
+            "data",
+            "metadata",
+        ):
+            collect(item.get(nested_key), depth + 1)
+        for list_key in (
+            "segments",
+            "items",
+            "turns",
+            "frames",
+            "utterances",
+            "waveforms",
+            "diarization",
+            "speaker_segments",
+            "frame_replay",
+            "event_replay",
+            "timeline",
+        ):
+            for nested in _as_list(item.get(list_key, [])):
+                collect(nested, depth + 1)
+
+    collect(voice_state)
+    for payload in payloads:
+        collect(payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        collect(_get(artifact, "metadata", {}))
+        collect(_get(artifact, "data", {}))
+    for event in _as_list(context.get("events", [])):
+        collect(_get(event, "payload", {}))
+        collect(_get(event, "metadata", {}))
+    return values
+
+
+def _voice_quality_aliases(key: str) -> set[str]:
+    aliases = {
+        "snr_db": {"snr", "snr_db", "signal_to_noise_ratio_db"},
+        "mos": {"mos", "polqa_mos", "p863_mos"},
+        "clipping_ratio": {"clipping_ratio", "clip_ratio", "clipped_ratio", "clipping_pct", "clipping_percent"},
+        "jitter_ms": {"jitter_ms", "jitter", "jitter_seconds"},
+        "packet_loss_pct": {"packet_loss_pct", "packet_loss_percent", "fraction_lost"},
+    }
+    return aliases.get(key, {key})
+
+
 def _normalize_voice_frame_type(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -5072,6 +5303,14 @@ def _looks_like_voice_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]
             "route_history",
             "tts_history",
             "overlap_events",
+            "export_framework",
+            "export_metadata",
+            "waveforms",
+            "diarization",
+            "speaker_segments",
+            "perceptual_metrics",
+            "audio_quality",
+            "quality_profile",
         )
     )
 
@@ -5129,6 +5368,55 @@ def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -
         observed.add("timeline")
     if payload.get("audio_uri") or payload.get("audio_path"):
         observed.add("audio")
+    export_framework = str(payload.get("export_framework") or payload.get("framework") or "").lower()
+    if export_framework:
+        observed.add("export")
+    if "livekit" in export_framework:
+        observed.add("livekit_export")
+    if "pipecat" in export_framework:
+        observed.add("pipecat_export")
+    if payload.get("export_metadata"):
+        observed.add("export")
+    if _as_list(payload.get("waveforms", [])):
+        observed.update({"audio", "waveform"})
+        for waveform in _as_list(payload.get("waveforms", [])):
+            waveform_dict = _as_dict(waveform)
+            if waveform_dict.get("speaker") or waveform_dict.get("speaker_id"):
+                observed.add("speaker")
+            _merge_voice_quality_observed(observed, waveform_dict)
+    if _as_list(payload.get("diarization", [])) or _as_list(payload.get("speaker_segments", [])):
+        observed.update({"diarization", "speaker"})
+    _merge_voice_quality_observed(observed, payload)
+
+
+def _merge_voice_quality_observed(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if not payload:
+        return
+    if payload.get("perceptual_metrics") or payload.get("audio_quality") or payload.get("quality_profile"):
+        observed.add("perceptual")
+    for key, observed_key in (
+        ("snr_db", "snr"),
+        ("snr", "snr"),
+        ("mos", "mos"),
+        ("polqa_mos", "mos"),
+        ("p863_mos", "mos"),
+        ("clipping_ratio", "clipping"),
+        ("clipping_pct", "clipping"),
+        ("jitter_ms", "jitter"),
+        ("jitter", "jitter"),
+        ("packet_loss_pct", "packet_loss"),
+        ("packet_loss_percent", "packet_loss"),
+        ("fraction_lost", "packet_loss"),
+    ):
+        if key in payload:
+            observed.update({"perceptual", observed_key})
+    for key in ("perceptual_metrics", "audio_quality", "quality_profile", "voice_quality", "quality", "metrics", "overall"):
+        nested = _as_dict(payload.get(key))
+        if nested:
+            _merge_voice_quality_observed(observed, nested)
+    for key in ("segments", "items", "turns", "frames"):
+        for item in _as_list(payload.get(key, [])):
+            _merge_voice_quality_observed(observed, _as_dict(item))
 
 
 def _normalize_voice_trace_key(key: str) -> str:
@@ -5160,6 +5448,39 @@ def _normalize_voice_trace_key(key: str) -> str:
         "overlapping_speech": "overlap",
         "timeline": "timeline",
         "audio_artifact": "audio",
+        "exports": "export",
+        "voice_export": "export",
+        "export_metadata": "export",
+        "livekit": "livekit_export",
+        "livekit_events": "livekit_export",
+        "livekit_export": "livekit_export",
+        "pipecat": "pipecat_export",
+        "pipecat_frames": "pipecat_export",
+        "pipecat_export": "pipecat_export",
+        "waveform": "waveform",
+        "waveforms": "waveform",
+        "recording": "waveform",
+        "recordings": "waveform",
+        "diarization": "diarization",
+        "speaker_segment": "diarization",
+        "speaker_segments": "diarization",
+        "speaker": "speaker",
+        "speakers": "speaker",
+        "perceptual": "perceptual",
+        "perceptual_metrics": "perceptual",
+        "audio_quality": "perceptual",
+        "quality_profile": "perceptual",
+        "snr_db": "snr",
+        "signal_to_noise_ratio": "snr",
+        "signal_to_noise_ratio_db": "snr",
+        "mos": "mos",
+        "polqa": "mos",
+        "p863": "mos",
+        "clipping_ratio": "clipping",
+        "clipping": "clipping",
+        "jitter_ms": "jitter",
+        "packet_loss_pct": "packet_loss",
+        "packet_loss": "packet_loss",
     }
     return aliases.get(normalized, normalized)
 
