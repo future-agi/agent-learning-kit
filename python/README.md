@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -215,6 +215,10 @@ perturbations, and stale-screenshot avoidance checks.
 Voice trace and interaction metrics understand LiveKit/Pipecat-style export
 replay evidence, waveform fixtures, diarization segments, MOS/SNR/clipping,
 jitter, and packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
+Trajectory templates let one reusable rubric score framework-neutral reports for
+goal completion, ordered tool calls, tool-call precision/recall/F1, policy
+checks, browser action safety, memory writes, and multimodal artifact support.
+See [`examples/11_trajectory_template_evaluation.py`](examples/11_trajectory_template_evaluation.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -224,6 +228,17 @@ result = evaluate_agent_report(
     config={
         "required_tools": ["search_order"],
         "available_tools": ["search_order", "refund_order"],
+        "trajectory_templates": [
+            {
+                "name": "refund_support",
+                "goal": {"final_contains": ["refund approved"], "state": {"case": {"resolved": True}}},
+                "tools": [{"name": "search_order", "arguments": {"order_id": "123"}}],
+                "ordered": True,
+                "policy": {"required_terms": ["policy"], "forbidden_terms": ["skip approval"]},
+                "memory": {"required_keys": ["order_id", "status"]},
+                "multimodal": {"required_artifacts": [{"type": "image", "id": "receipt"}]},
+            }
+        ],
         "expected_state": {"case": {"resolved": True}},
         "min_trial_pass_rate": 1.0,
         "max_trial_score_spread": 0.05,

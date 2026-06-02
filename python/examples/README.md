@@ -14,6 +14,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 08 | [Teach Your Judge from Past Mistakes](feedback_loop_demo.py) | LLM judge keeps getting the same cases wrong — fix it with feedback | Yes (`GOOGLE_API_KEY`) |
 | 09 | [Judge Images and Audio with Your LLM](09_multimodal_judge.py) | Verify AI image descriptions match the actual photo | Yes (`GOOGLE_API_KEY`) |
 | 10 | [Evaluate Agent Simulation Reports](10_agent_report_evaluation.py) | Score simulate-sdk-style traces, tools, memory, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, multi-agent trace coverage, artifacts, browser/CUA trace coverage, voice trace coverage, environment injection, and pentest failures | No |
+| 11 | [Evaluate Agent Trajectory Templates](11_trajectory_template_evaluation.py) | Score one reusable rubric for goal accuracy, ordered tool calls, Tool Call F1, policy adherence, browser action safety, memory correctness, and multimodal faithfulness | No |
 
 ## Quick Start
 
@@ -40,3 +41,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 08**: Store developer corrections in ChromaDB, retrieve them as few-shot examples, and teach your LLM judge to not repeat mistakes
 - **Cookbook 09**: Pass images and audio URLs to the LLM judge — evaluate image descriptions, UI screenshots, transcriptions with Gemini vision
 - **Cookbook 10**: Evaluate full agent simulation reports locally: trajectory score, tool use, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, multi-agent trace coverage, artifact coverage, browser/CUA action safety, browser trace coverage, voice turn-taking, voice trace coverage, and expected state
+- **Cookbook 11**: Define one trajectory template and score agent goal accuracy, ordered tool calls, Tool Call F1, policy adherence, browser action safety, memory correctness, and multimodal artifact support without API keys
