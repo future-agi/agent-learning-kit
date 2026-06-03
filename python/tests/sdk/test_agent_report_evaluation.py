@@ -3672,6 +3672,179 @@ def test_evaluate_agent_report_scores_orchestration_trace_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_multi_agent_orchestration_control_quality():
+    trace = {
+        "kind": "orchestration_trace",
+        "framework": "autogen",
+        "nodes": [
+            {"id": "coordinator", "name": "coordinator", "signals": ["agent", "node"]},
+            {"id": "policy_agent", "name": "policy_agent", "signals": ["agent", "node"]},
+            {"id": "retrieval_agent", "name": "retrieval_agent", "signals": ["agent", "node"]},
+        ],
+        "edges": [
+            {"from": "coordinator", "to": "policy_agent", "type": "delegate", "signals": ["route", "delegate"]},
+            {"from": "coordinator", "to": "retrieval_agent", "type": "delegate", "signals": ["route", "delegate"]},
+        ],
+        "steps": [
+            {
+                "id": "spawn_policy",
+                "name": "spawn policy_agent",
+                "type": "spawn",
+                "node": "coordinator",
+                "route_from": "coordinator",
+                "route_to": "policy_agent",
+                "status": "success",
+                "signals": ["agent", "spawn", "route"],
+            },
+            {
+                "id": "delegate_policy",
+                "name": "delegate policy review",
+                "type": "delegate",
+                "node": "coordinator",
+                "route_from": "coordinator",
+                "route_to": "policy_agent",
+                "status": "success",
+                "signals": ["agent", "delegate", "route"],
+            },
+            {
+                "id": "delegate_retrieval",
+                "name": "delegate evidence retrieval",
+                "type": "delegate",
+                "node": "coordinator",
+                "route_from": "coordinator",
+                "route_to": "retrieval_agent",
+                "status": "success",
+                "signals": ["agent", "delegate", "route"],
+            },
+            {
+                "id": "message",
+                "name": "retrieval_agent message to policy_agent",
+                "type": "communicate",
+                "node": "retrieval_agent",
+                "status": "success",
+                "signals": ["agent", "communicate"],
+            },
+            {
+                "id": "consensus",
+                "name": "aggregate policy and evidence",
+                "type": "aggregate",
+                "node": "coordinator",
+                "status": "success",
+                "signals": ["agent", "aggregate"],
+                "cost": {"total_tokens": 64},
+            },
+            {
+                "id": "stop",
+                "name": "terminate after consensus",
+                "type": "stop",
+                "node": "coordinator",
+                "status": "success",
+                "signals": ["agent", "stop", "state"],
+                "state": {"decision": {"status": "approved"}},
+            },
+        ],
+        "signals": ["agent", "spawn", "delegate", "communicate", "aggregate", "stop", "state"],
+        "summary": {
+            "agent_count": 3,
+            "spawn_count": 1,
+            "delegation_count": 2,
+            "communication_count": 1,
+            "aggregation_count": 1,
+            "stop_count": 1,
+            "terminal_status": "success",
+        },
+        "state": {"decision": {"status": "approved"}},
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Audit the multi-agent decision."},
+                    {
+                        "role": "assistant",
+                        "content": "The multi-agent orchestration reached consensus and stopped.",
+                        "tool_calls": [{"id": "status", "name": "orchestration_trace_status", "arguments": {}}],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "orchestration_trace", "framework": "autogen"},
+                        "data": trace,
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "required_orchestration_trace": [
+            "agent",
+            "spawn",
+            "delegate",
+            "communicate",
+            "aggregate",
+            "stop",
+            "state",
+        ],
+        "orchestration_trace_quality": {
+            "required_nodes": ["coordinator", "policy_agent", "retrieval_agent"],
+            "required_step_types": ["spawn", "delegate", "communicate", "aggregate", "stop"],
+            "expected_routes": [
+                {"from": "coordinator", "to": "policy_agent", "type": "delegate"},
+                {"from": "coordinator", "to": "retrieval_agent", "type": "delegate"},
+            ],
+            "min_agent_count": 3,
+            "min_spawn_count": 1,
+            "min_delegation_count": 2,
+            "min_communication_count": 1,
+            "require_aggregation": True,
+            "require_stop_decision": True,
+            "required_terminal_status": "success",
+            "expected_state": {"decision": {"status": "approved"}},
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["orchestration_trace_coverage"] == 1.0
+    assert scores["orchestration_flow_quality"] == 1.0
+
+    bad_trace = {**trace}
+    bad_trace["nodes"] = [trace["nodes"][0]]
+    bad_trace["edges"] = []
+    bad_trace["steps"] = [trace["steps"][1]]
+    bad_trace["signals"] = ["agent", "delegate"]
+    bad_trace["summary"] = {
+        "agent_count": 1,
+        "spawn_count": 0,
+        "delegation_count": 1,
+        "communication_count": 0,
+        "aggregation_count": 0,
+        "stop_count": 0,
+        "terminal_status": "running",
+    }
+    bad_trace["state"] = {"decision": {"status": "pending"}}
+    report["results"][0]["artifacts"][0]["data"] = bad_trace
+
+    failing = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing.cases[0].metrics}
+    finding_types = {finding["type"] for finding in failing.findings if "type" in finding}
+
+    assert failing_scores["orchestration_trace_coverage"] < 1.0
+    assert failing_scores["orchestration_flow_quality"] < 1.0
+    assert {
+        "orchestration_agent_count_below_minimum",
+        "orchestration_spawn_missing",
+        "orchestration_delegation_missing",
+        "orchestration_communication_missing",
+        "orchestration_aggregation_missing",
+        "orchestration_stop_missing",
+        "orchestration_terminal_status_mismatch",
+        "orchestration_state_mismatch",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_streaming_trace_quality():
     trace = {
         "kind": "streaming_trace",

@@ -3694,6 +3694,66 @@ def _orchestration_flow_quality_metric(
             finding_type="orchestration_step_type_missing",
         )
 
+    min_agent_count = _as_int(requirements.get("min_agent_count"))
+    if min_agent_count is not None:
+        actual = _as_int(summary.get("agent_count")) or 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="min_agent_count",
+            expected=min_agent_count,
+            actual=actual,
+            match=actual >= min_agent_count,
+            finding_type="orchestration_agent_count_below_minimum",
+        )
+
+    for requirement_key, summary_key, finding_type in (
+        ("min_spawn_count", "spawn_count", "orchestration_spawn_missing"),
+        ("min_delegation_count", "delegation_count", "orchestration_delegation_missing"),
+        ("min_communication_count", "communication_count", "orchestration_communication_missing"),
+        ("min_aggregation_count", "aggregation_count", "orchestration_aggregation_missing"),
+        ("min_stop_count", "stop_count", "orchestration_stop_missing"),
+    ):
+        expected_min = _as_int(requirements.get(requirement_key))
+        if expected_min is None:
+            continue
+        actual = _as_int(summary.get(summary_key)) or 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=expected_min,
+            actual=actual,
+            match=actual >= expected_min,
+            finding_type=finding_type,
+        )
+
+    if requirements.get("require_aggregation") is not None:
+        required = bool(requirements.get("require_aggregation"))
+        actual = (_as_int(summary.get("aggregation_count")) or 0) > 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="require_aggregation",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="orchestration_aggregation_missing",
+        )
+
+    if requirements.get("require_stop_decision") is not None:
+        required = bool(requirements.get("require_stop_decision"))
+        actual = (_as_int(summary.get("stop_count")) or 0) > 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="require_stop_decision",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="orchestration_stop_missing",
+        )
+
     for expected in _as_list(requirements.get("expected_routes") or requirements.get("expected_edges")):
         expected_dict = _as_dict(expected)
         match = any(_orchestration_route_matches(edge, expected_dict) for edge in edges)
@@ -12049,6 +12109,15 @@ def _merge_orchestration_trace_payload(observed: set[str], payload: Mapping[str,
         observed.add("recovered")
     if (_as_int(summary.get("failure_count")) or 0) > 0:
         observed.add("error")
+    for count_key, signal in {
+        "spawn_count": "spawn",
+        "delegation_count": "delegate",
+        "communication_count": "communicate",
+        "aggregation_count": "aggregate",
+        "stop_count": "stop",
+    }.items():
+        if (_as_int(summary.get(count_key)) or 0) > 0:
+            observed.add(signal)
     if summary.get("total_latency_ms") is not None:
         observed.add("latency")
     if summary.get("total_cost") is not None:
@@ -12076,6 +12145,19 @@ def _add_orchestration_trace_key(observed: set[str], value: str) -> None:
         "edge": "route",
         "handoff": "handoff",
         "transfer": "handoff",
+        "delegate": "delegate",
+        "delegation": "delegate",
+        "spawn": "spawn",
+        "create_agent": "spawn",
+        "message": "communicate",
+        "communicate": "communicate",
+        "broadcast": "communicate",
+        "aggregate": "aggregate",
+        "synthesize": "aggregate",
+        "consensus": "aggregate",
+        "vote": "aggregate",
+        "stop": "stop",
+        "terminate": "stop",
         "retry": "retry",
         "recover": "recovered",
         "error": "error",
@@ -12121,7 +12203,24 @@ def _normalize_orchestration_trace_key(key: Any) -> str:
         "routing": "route",
         "edge": "route",
         "transfer": "handoff",
-        "delegation": "handoff",
+        "delegation": "delegate",
+        "delegate": "delegate",
+        "delegated": "delegate",
+        "spawn": "spawn",
+        "create_agent": "spawn",
+        "agent_created": "spawn",
+        "message": "communicate",
+        "communication": "communicate",
+        "communicate": "communicate",
+        "broadcast": "communicate",
+        "aggregate": "aggregate",
+        "aggregation": "aggregate",
+        "synthesize": "aggregate",
+        "consensus": "aggregate",
+        "vote": "aggregate",
+        "stop": "stop",
+        "terminate": "stop",
+        "termination": "stop",
         "recover": "recovered",
         "recovery": "recovered",
         "exception": "error",
@@ -12168,7 +12267,9 @@ def _orchestration_edges_from_payloads(payloads: Sequence[Mapping[str, Any]]) ->
             route_to = step_dict.get("route_to")
             node = step_dict.get("node")
             if route_from and route_to:
-                edges.append({"from": route_from, "to": route_to, "type": "handoff" if "handoff" in _as_list(step_dict.get("signals", [])) else "route"})
+                signals = {_normalize_orchestration_trace_key(signal) for signal in _as_list(step_dict.get("signals", []))}
+                edge_type = "delegate" if "delegate" in signals else "handoff" if "handoff" in signals else "route"
+                edges.append({"from": route_from, "to": route_to, "type": edge_type})
             if previous_node and node and previous_node != node:
                 edges.append({"from": previous_node, "to": node, "type": "sequence"})
             if node:
@@ -12222,6 +12323,33 @@ def _orchestration_summary_from_payloads(
     recovered_failures = _as_int(summary.get("recovered_failures"))
     if recovered_failures is None:
         recovered_failures = len(_orchestration_recovered_steps(steps))
+    agent_count = _as_int(summary.get("agent_count"))
+    if agent_count is None:
+        agent_names: set[str] = set()
+        for step in steps:
+            signals = {_normalize_orchestration_trace_key(signal) for signal in _as_list(step.get("signals", []))}
+            if not ({"agent", "spawn", "delegate", "communicate"} & signals):
+                continue
+            for key in ("node", "route_from", "route_to"):
+                name = _normalize_orchestration_name(step.get(key))
+                if name:
+                    agent_names.add(name)
+        agent_count = len(agent_names)
+    spawn_count = _as_int(summary.get("spawn_count"))
+    if spawn_count is None:
+        spawn_count = _orchestration_signal_count(steps, "spawn")
+    delegation_count = _as_int(summary.get("delegation_count"))
+    if delegation_count is None:
+        delegation_count = _orchestration_signal_count(steps, "delegate") + _orchestration_signal_count(steps, "handoff")
+    communication_count = _as_int(summary.get("communication_count"))
+    if communication_count is None:
+        communication_count = _orchestration_signal_count(steps, "communicate")
+    aggregation_count = _as_int(summary.get("aggregation_count"))
+    if aggregation_count is None:
+        aggregation_count = _orchestration_signal_count(steps, "aggregate")
+    stop_count = _as_int(summary.get("stop_count"))
+    if stop_count is None:
+        stop_count = _orchestration_signal_count(steps, "stop")
     total_latency = _as_float(summary.get("total_latency_ms"))
     if total_latency is None and any(step.get("latency_ms") not in (None, "", [], {}) for step in steps):
         total_latency = sum(_as_float(step.get("latency_ms")) or 0.0 for step in steps)
@@ -12233,6 +12361,12 @@ def _orchestration_summary_from_payloads(
         **summary,
         "edge_count": _as_int(summary.get("edge_count")) or len(edges),
         "step_count": _as_int(summary.get("step_count")) or len(steps),
+        "agent_count": agent_count,
+        "spawn_count": spawn_count,
+        "delegation_count": delegation_count,
+        "communication_count": communication_count,
+        "aggregation_count": aggregation_count,
+        "stop_count": stop_count,
         "retry_count": retry_count,
         "failure_count": failure_count,
         "recovered_failures": recovered_failures,
@@ -12243,6 +12377,19 @@ def _orchestration_summary_from_payloads(
     if total_cost is not None:
         normalized["total_cost"] = total_cost
     return normalized
+
+
+def _orchestration_signal_count(steps: Sequence[Mapping[str, Any]], signal: str) -> int:
+    normalized = _normalize_orchestration_trace_key(signal)
+    return sum(
+        1
+        for step in steps
+        if normalized in {
+            _normalize_orchestration_trace_key(value)
+            for value in _as_list(step.get("signals", []))
+        }
+        or _normalize_orchestration_trace_key(step.get("type")) == normalized
+    )
 
 
 def _orchestration_has_latency_evidence(
@@ -13467,6 +13614,8 @@ def _dedupe_orchestration_dicts(records: Iterable[Mapping[str, Any]]) -> List[Di
             signals.update(_as_list(record_dict.get("signals", [])))
             if signals:
                 existing["signals"] = sorted(str(signal) for signal in signals)
+            if "delegate" in {_normalize_orchestration_trace_key(signal) for signal in signals}:
+                existing["type"] = "delegate"
             for item_key, item_value in record_dict.items():
                 if item_value not in (None, "", [], {}) and existing.get(item_key) in (None, "", [], {}):
                     existing[item_key] = item_value
