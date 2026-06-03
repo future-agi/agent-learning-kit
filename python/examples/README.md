@@ -18,6 +18,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 12 | [Score Framework Transcript Quality](12_framework_transcript_quality.py) | Check LangGraph/LangChain event-stream methods, nodes, subgraphs, tool sequence, final state, output, and errors | No |
 | 13 | [Catch Evidence Contradictions and Artifact Grounding Gaps](13_evidence_contradiction_artifact_grounding.py) | Detect answer claims contradicted by cited source text and verify artifact-backed claims against OCR/transcript/metadata evidence | No |
 | 14 | [Score Multi-Agent Framework Transcripts](14_multi_agent_framework_transcript.py) | Check exported AutoGen/CrewAI/OpenAI Agents-style speakers, handoffs, tool owners, turns, and termination evidence | No |
+| 15 | [Score Structured Artifact Semantics](15_structured_artifact_semantics.py) | Validate receipt/form/table/log fields, rows, event sequences, and answer claims against structured artifacts | No |
 
 ## Quick Start
 
@@ -48,3 +49,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 12**: Score LangGraph/LangChain event-stream transcript quality from plain dictionaries: required methods, nodes, subgraphs, tool sequence, final state, final output, and framework errors
 - **Cookbook 13**: Catch source-supported contradictions and artifact grounding failures from local report dictionaries before reaching for an LLM judge
 - **Cookbook 14**: Score multi-agent framework transcript quality from exported speaker, handoff, tool-owner, and termination records without installing the source framework
+- **Cookbook 15**: Score domain-specific structured artifact semantics such as receipt totals, line-item rows, event sequences, and answer claims without a model judge

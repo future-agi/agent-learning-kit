@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -226,10 +226,14 @@ checks, browser action safety, memory writes, and multimodal artifact support.
 Source contradiction and artifact grounding checks catch answer claims that
 conflict with cited/retrieved source text or fail to match artifact evidence
 such as OCR text, transcripts, screenshots, file metadata, or image metadata.
+Structured artifact semantic checks validate exact fields, table rows, event
+sequences, and answer claims for parsed receipts, forms, tables, logs, or other
+domain JSON before falling back to a judge model.
 See [`examples/11_trajectory_template_evaluation.py`](examples/11_trajectory_template_evaluation.py).
 See [`examples/12_framework_transcript_quality.py`](examples/12_framework_transcript_quality.py).
 See [`examples/13_evidence_contradiction_artifact_grounding.py`](examples/13_evidence_contradiction_artifact_grounding.py).
 See [`examples/14_multi_agent_framework_transcript.py`](examples/14_multi_agent_framework_transcript.py).
+See [`examples/15_structured_artifact_semantics.py`](examples/15_structured_artifact_semantics.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -254,6 +258,15 @@ result = evaluate_agent_report(
         "min_trial_pass_rate": 1.0,
         "max_trial_score_spread": 0.05,
         "required_artifact_types": ["image", "audio"],
+        "artifact_semantic_checks": [
+            {
+                "id": "receipt_semantics",
+                "artifact": {"type": "json", "id": "receipt_123", "metadata": {"domain": "receipt"}},
+                "expected_fields": {"receipt_id": "rcpt_123", "total.amount": 42.0},
+                "answer_fields": {"total.amount": ["$42.00"]},
+                "required_rows": [{"path": "line_items", "where": {"sku": "SKU-1"}, "fields": {"quantity": 2}}],
+            }
+        ],
         "required_autonomy_loop": ["observe", "orient", "plan", "act", "verify", "reflect"],
         "expected_autonomy_plan": {"required_steps": ["lookup", "policy", "respond"], "min_steps": 3},
         "expected_autonomy_verification": {"required_checks": ["order found"], "passed_required": True},

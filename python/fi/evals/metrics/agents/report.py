@@ -167,6 +167,7 @@ class AgentReportEvalConfig(BaseModel):
     source_grounding_ignore_terms: List[str] = Field(default_factory=list)
     source_contradiction_checks: List[Any] = Field(default_factory=list)
     artifact_grounding_checks: List[Any] = Field(default_factory=list)
+    artifact_semantic_checks: List[Any] = Field(default_factory=list)
     tool_argument_schemas: Dict[str, Any] = Field(default_factory=dict)
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
@@ -351,6 +352,7 @@ class AgentReportEvaluator:
                 _voice_trace_coverage_metric(report_context, config),
                 _artifact_coverage_metric(report_context, config),
                 *_artifact_grounding_metrics(report_context, config),
+                *_artifact_semantic_metrics(report_context, config),
                 _state_goal_metric(report_context, config),
             ]
         )
@@ -1671,6 +1673,55 @@ def _normalize_artifact_grounding_check(raw: Mapping[str, Any]) -> Dict[str, Any
     }
 
 
+def _artifact_semantic_checks(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[Dict[str, Any]]:
+    metadata = _as_dict(context.get("metadata", {}))
+    checks: List[Dict[str, Any]] = []
+    for key in ("artifact_semantic_checks", "artifact_semantics", "structured_artifact_checks"):
+        checks.extend(_as_dict(item) for item in _as_list(metadata.get(key, [])) if _as_dict(item))
+    checks.extend(_as_dict(item) for item in _as_list(config.artifact_semantic_checks) if _as_dict(item))
+    return checks
+
+
+def _normalize_artifact_semantic_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    check = _as_dict(raw)
+    if not check:
+        return {}
+    expected_fields = _as_dict(
+        check.get("expected_fields")
+        or check.get("fields")
+        or check.get("artifact_fields")
+    )
+    answer_fields = check.get("answer_fields") or check.get("claim_fields") or check.get("answer_contains_fields")
+    required_rows = _as_list(check.get("required_rows") or check.get("rows") or check.get("table_rows"))
+    event_sequence = _as_dict(check.get("event_sequence") or check.get("expected_event_sequence"))
+    forbidden_terms = _string_list(check.get("forbidden_answer_terms") or check.get("wrong_terms"))
+    if not any([expected_fields, answer_fields, required_rows, event_sequence, forbidden_terms]):
+        return {}
+    artifact = _artifact_selector_from_grounding_check(check)
+    if check.get("domain") is not None and "metadata" not in artifact:
+        artifact["metadata"] = {"domain": check.get("domain")}
+    elif check.get("domain") is not None:
+        artifact_metadata = _as_dict(artifact.get("metadata"))
+        artifact_metadata.setdefault("domain", check.get("domain"))
+        artifact["metadata"] = artifact_metadata
+    if check.get("schema") is not None:
+        artifact_metadata = _as_dict(artifact.get("metadata"))
+        artifact_metadata.setdefault("schema", check.get("schema"))
+        artifact["metadata"] = artifact_metadata
+    return {
+        "id": str(check.get("id") or check.get("name") or "artifact_semantics"),
+        "artifact": artifact,
+        "expected_fields": expected_fields,
+        "answer_fields": answer_fields,
+        "required_rows": [_as_dict(item) for item in required_rows if _as_dict(item)],
+        "event_sequence": event_sequence,
+        "forbidden_answer_terms": forbidden_terms,
+    }
+
+
 def _artifact_selector_from_grounding_check(check: Mapping[str, Any]) -> Dict[str, Any]:
     artifact = _as_dict(check.get("artifact"))
     for source_key, target_key in (
@@ -1687,6 +1738,80 @@ def _artifact_selector_from_grounding_check(check: Mapping[str, Any]) -> Dict[st
     if check.get("artifact_contains") is not None and "contains" not in artifact:
         artifact["contains"] = check.get("artifact_contains")
     return artifact
+
+
+def _artifact_semantic_payload(artifact: Mapping[str, Any]) -> Dict[str, Any]:
+    data = _as_dict(artifact.get("data"))
+    metadata = _as_dict(artifact.get("metadata"))
+    payload: Dict[str, Any] = {}
+    _deep_merge_dict(payload, data)
+    if metadata:
+        payload.setdefault("metadata", metadata)
+    return payload
+
+
+def _semantic_answer_field_terms(answer_fields: Any, artifact_data: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    checks: List[Dict[str, Any]] = []
+    if isinstance(answer_fields, Mapping):
+        for path, expected_terms in answer_fields.items():
+            terms = _string_list(expected_terms)
+            if not terms:
+                value = _get_path(artifact_data, str(path))
+                terms = _semantic_value_terms(value)
+            checks.append({"path": str(path), "terms": terms})
+        return checks
+    for path in _string_list(answer_fields):
+        value = _get_path(artifact_data, path)
+        checks.append({"path": path, "terms": _semantic_value_terms(value)})
+    return checks
+
+
+def _semantic_value_terms(value: Any) -> List[str]:
+    if value in (None, "", [], {}):
+        return []
+    terms = [str(value)]
+    if isinstance(value, float):
+        terms.append(f"{value:.2f}")
+    if isinstance(value, int):
+        terms.append(str(value))
+    return list(dict.fromkeys(terms))
+
+
+def _semantic_values_equal(actual: Any, expected: Any) -> bool:
+    if actual == expected:
+        return True
+    if isinstance(actual, (int, float)) or isinstance(expected, (int, float)):
+        try:
+            return abs(float(actual) - float(expected)) < 1e-9
+        except (TypeError, ValueError):
+            return False
+    return str(actual).strip().lower() == str(expected).strip().lower()
+
+
+def _semantic_rows(data: Mapping[str, Any], path: str) -> List[Dict[str, Any]]:
+    value = _get_path(data, path) if path else data
+    return [_as_dict(item) for item in _as_list(value) if _as_dict(item)]
+
+
+def _semantic_row_matches(row: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    for path, value in _flatten_state(_as_dict(expected)).items():
+        if not _semantic_values_equal(_get_path(row, path), value):
+            return False
+    return True
+
+
+def _semantic_event_values(data: Mapping[str, Any], event_sequence: Mapping[str, Any]) -> List[str]:
+    path = str(event_sequence.get("path") or event_sequence.get("events_path") or "events")
+    field = str(event_sequence.get("field") or event_sequence.get("event_field") or "event")
+    rows = _semantic_rows(data, path)
+    values = []
+    for row in rows:
+        value = _get_path(row, field)
+        if value is None and field == "event":
+            value = row.get("name") or row.get("type")
+        if value is not None:
+            values.append(_normalize_framework_name(value))
+    return values
 
 
 def _terms_match(text: Any, terms: Sequence[str], *, require_all: bool) -> bool:
@@ -3899,6 +4024,231 @@ def _artifact_grounding_metric(
         ),
         details={
             "checks": normalized_checks,
+            "artifact_count": len(artifacts),
+            "findings": findings,
+        },
+    )
+
+
+def _artifact_semantic_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    checks = _artifact_semantic_checks(context, config)
+    if not checks:
+        return []
+    return [_artifact_semantic_metric(context, checks)]
+
+
+def _artifact_semantic_metric(
+    context: Mapping[str, Any],
+    checks: Sequence[Mapping[str, Any]],
+) -> AgentReportMetricResult:
+    answer = _trajectory_final_text(context)
+    artifacts = _artifact_records_from_context(context)
+    normalized_checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    subchecks: List[Dict[str, Any]] = []
+
+    for raw_check in checks:
+        check = _normalize_artifact_semantic_check(raw_check)
+        if not check:
+            continue
+        matching_artifacts = [
+            artifact for artifact in artifacts
+            if _artifact_matches_expected(artifact, check["artifact"])
+        ]
+        check_record = {
+            "id": check["id"],
+            "artifact": check["artifact"],
+            "matching_artifact_count": len(matching_artifacts),
+            "subchecks": [],
+        }
+        normalized_checks.append(check_record)
+        if not matching_artifacts:
+            finding = {
+                "type": "missing_semantic_artifact",
+                "id": check["id"],
+                "artifact": check["artifact"],
+            }
+            findings.append(finding)
+            subcheck = {"check": "artifact", "id": check["id"], "match": False, "finding": finding}
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            continue
+
+        artifact = matching_artifacts[0]
+        data = _artifact_semantic_payload(artifact)
+        for path, expected in _flatten_state(check["expected_fields"]).items():
+            actual = _get_path(data, path)
+            match = _semantic_values_equal(actual, expected)
+            subcheck = {
+                "check": "field",
+                "id": check["id"],
+                "path": path,
+                "expected": expected,
+                "actual": actual,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if not match:
+                findings.append(
+                    {
+                        "type": "artifact_field_mismatch",
+                        "id": check["id"],
+                        "path": path,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+
+        for answer_field in _semantic_answer_field_terms(check["answer_fields"], data):
+            terms = answer_field["terms"]
+            match = bool(terms) and any(_text_contains(answer, term) for term in terms)
+            subcheck = {
+                "check": "answer_field",
+                "id": check["id"],
+                "path": answer_field["path"],
+                "terms": terms,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if not match:
+                findings.append(
+                    {
+                        "type": "artifact_answer_field_missing",
+                        "id": check["id"],
+                        "path": answer_field["path"],
+                        "terms": terms,
+                    }
+                )
+
+        for raw_row in check["required_rows"]:
+            row_path = str(raw_row.get("path") or raw_row.get("table") or raw_row.get("rows_path") or "rows")
+            where = _as_dict(raw_row.get("where") or raw_row.get("match") or raw_row.get("key"))
+            expected_fields = _as_dict(raw_row.get("fields") or raw_row.get("expected"))
+            rows = _semantic_rows(data, row_path)
+            matching_rows = [row for row in rows if _semantic_row_matches(row, where)] if where else rows
+            row_match = bool(matching_rows)
+            subcheck = {
+                "check": "row",
+                "id": check["id"],
+                "path": row_path,
+                "where": where,
+                "match": row_match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if not row_match:
+                findings.append(
+                    {
+                        "type": "artifact_row_missing",
+                        "id": check["id"],
+                        "path": row_path,
+                        "where": where,
+                    }
+                )
+                continue
+            row = matching_rows[0]
+            for field_path, expected in _flatten_state(expected_fields).items():
+                actual = _get_path(row, field_path)
+                match = _semantic_values_equal(actual, expected)
+                field_subcheck = {
+                    "check": "row_field",
+                    "id": check["id"],
+                    "path": f"{row_path}.{field_path}",
+                    "where": where,
+                    "expected": expected,
+                    "actual": actual,
+                    "match": match,
+                }
+                subchecks.append(field_subcheck)
+                check_record["subchecks"].append(field_subcheck)
+                if not match:
+                    findings.append(
+                        {
+                            "type": "artifact_row_field_mismatch",
+                            "id": check["id"],
+                            "path": f"{row_path}.{field_path}",
+                            "where": where,
+                            "expected": expected,
+                            "actual": actual,
+                        }
+                    )
+
+        if check["event_sequence"]:
+            expected_sequence = [
+                _normalize_framework_name(item)
+                for item in _string_list(
+                    check["event_sequence"].get("expected")
+                    or check["event_sequence"].get("sequence")
+                    or check["event_sequence"].get("events")
+                )
+            ]
+            observed_sequence = _semantic_event_values(data, check["event_sequence"])
+            match = _contains_subsequence(observed_sequence, expected_sequence) if expected_sequence else True
+            subcheck = {
+                "check": "event_sequence",
+                "id": check["id"],
+                "expected": expected_sequence,
+                "observed": observed_sequence,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if not match:
+                findings.append(
+                    {
+                        "type": "artifact_event_sequence_mismatch",
+                        "id": check["id"],
+                        "expected": expected_sequence,
+                        "observed": observed_sequence,
+                    }
+                )
+
+        forbidden_matches = [term for term in check["forbidden_answer_terms"] if _text_contains(answer, term)]
+        if check["forbidden_answer_terms"]:
+            match = not forbidden_matches
+            subcheck = {
+                "check": "forbidden_answer_terms",
+                "id": check["id"],
+                "terms": check["forbidden_answer_terms"],
+                "matches": forbidden_matches,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if forbidden_matches:
+                findings.append(
+                    {
+                        "type": "artifact_semantic_forbidden_answer",
+                        "id": check["id"],
+                        "forbidden_answer_terms": forbidden_matches,
+                    }
+                )
+
+    if not normalized_checks or not subchecks:
+        return AgentReportMetricResult(
+            name="artifact_semantics_quality",
+            score=1.0,
+            reason="No checkable artifact semantic rules were configured.",
+        )
+
+    matched = sum(1 for check in subchecks if check["match"])
+    score = matched / len(subchecks)
+    return AgentReportMetricResult(
+        name="artifact_semantics_quality",
+        score=round(score, 4),
+        reason=(
+            "Artifact semantic checks matched structured evidence."
+            if not findings
+            else f"{matched}/{len(subchecks)} artifact semantic subcheck(s) matched."
+        ),
+        details={
+            "checks": normalized_checks,
+            "subchecks": subchecks,
             "artifact_count": len(artifacts),
             "findings": findings,
         },

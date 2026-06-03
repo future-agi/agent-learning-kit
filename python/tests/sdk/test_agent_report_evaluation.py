@@ -3178,6 +3178,106 @@ def test_evaluate_agent_report_scores_source_contradiction_and_artifact_groundin
     assert "artifact_contradicted_claim" in finding_types
 
 
+def test_evaluate_agent_report_scores_structured_artifact_semantics():
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Check receipt semantics for order 123."},
+                    {
+                        "role": "assistant",
+                        "content": "Receipt rcpt_123 from Northwind has total $42.00 and SKU-1 quantity 2.",
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "receipt_123",
+                            "kind": "structured_artifact",
+                            "domain": "receipt",
+                            "schema": "receipt_v1",
+                        },
+                        "data": {
+                            "receipt_id": "rcpt_123",
+                            "merchant": "Northwind",
+                            "order": {"id": "123"},
+                            "total": {"amount": 42.0, "currency": "USD"},
+                            "line_items": [
+                                {"sku": "SKU-1", "description": "Widget", "quantity": 2, "amount": 20.0},
+                                {"sku": "TAX", "description": "Tax", "quantity": 1, "amount": 2.0},
+                            ],
+                            "events": [
+                                {"event": "created"},
+                                {"event": "paid"},
+                                {"event": "captured"},
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "artifact_semantic_checks": [
+            {
+                "id": "receipt_semantics",
+                "artifact": {
+                    "type": "json",
+                    "id": "receipt_123",
+                    "metadata": {"domain": "receipt", "schema": "receipt_v1"},
+                },
+                "expected_fields": {
+                    "receipt_id": "rcpt_123",
+                    "merchant": "Northwind",
+                    "order.id": "123",
+                    "total.amount": 42.0,
+                    "total.currency": "USD",
+                },
+                "answer_fields": {
+                    "receipt_id": ["rcpt_123"],
+                    "merchant": ["Northwind"],
+                    "total.amount": ["$42.00"],
+                },
+                "required_rows": [
+                    {
+                        "path": "line_items",
+                        "where": {"sku": "SKU-1"},
+                        "fields": {"quantity": 2, "amount": 20.0},
+                    }
+                ],
+                "event_sequence": {
+                    "path": "events",
+                    "field": "event",
+                    "expected": ["created", "paid", "captured"],
+                },
+                "forbidden_answer_terms": ["$24.00", "SKU-9"],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["artifact_semantics_quality"] == 1.0
+
+    report["results"][0]["messages"][1]["content"] = "Receipt rcpt_123 from Northwind has total $24.00 and SKU-9 quantity 1."
+    report["results"][0]["artifacts"][0]["data"]["total"]["amount"] = 24.0
+    report["results"][0]["artifacts"][0]["data"]["line_items"][0]["quantity"] = 1
+    report["results"][0]["artifacts"][0]["data"]["events"] = [{"event": "created"}, {"event": "captured"}]
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["artifact_semantics_quality"] < 1.0
+    assert "artifact_field_mismatch" in finding_types
+    assert "artifact_answer_field_missing" in finding_types
+    assert "artifact_row_field_mismatch" in finding_types
+    assert "artifact_event_sequence_mismatch" in finding_types
+    assert "artifact_semantic_forbidden_answer" in finding_types
+
+
 def test_evaluate_agent_report_scores_tool_argument_schema():
     report = {
         "results": [
