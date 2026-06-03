@@ -4550,6 +4550,151 @@ def test_evaluate_agent_report_scores_framework_adapter_conformance():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_framework_runtime_contract():
+    runtime_trace = {
+        "kind": "framework_runtime",
+        "framework": "langchain",
+        "modality": "text",
+        "signals": ["artifact", "event", "framework", "input", "latency", "metadata", "method", "output", "runtime", "tool"],
+        "summary": {
+            "invocation_count": 1,
+            "framework": "langchain",
+            "methods": ["ainvoke"],
+            "input_modes": ["dict"],
+            "output_types": ["AgentResponse"],
+            "tool_call_count": 1,
+            "artifact_count": 1,
+            "event_count": 1,
+            "state_key_count": 1,
+            "metadata_key_count": 1,
+            "streamed": True,
+            "error_count": 0,
+            "duration_ms": 4,
+        },
+        "invocations": [
+            {
+                "id": "framework_runtime_1",
+                "framework": "langchain",
+                "method": "ainvoke",
+                "input_mode": "dict",
+                "input": {"type": "dict", "keys": ["input", "messages", "metadata", "tools"]},
+                "output": {
+                    "type": "AgentResponse",
+                    "content_length": 58,
+                    "tool_call_count": 1,
+                    "tool_names": ["lookup_policy"],
+                    "artifact_count": 1,
+                    "artifact_types": ["json"],
+                    "event_count": 1,
+                    "event_types": ["runtime_checkpoint"],
+                    "state_keys": ["streaming_trace"],
+                    "metadata_keys": ["runtime_contract"],
+                    "streaming": True,
+                },
+                "duration_ms": 4,
+                "signals": ["artifact", "event", "framework", "input", "metadata", "method", "output", "runtime", "streaming", "tool"],
+            }
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Runtime contract repaired."}],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_runtime", "framework": "langchain"},
+                        "data": runtime_trace,
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "required_framework_runtime": [
+            "framework_runtime",
+            "method",
+            "input",
+            "output",
+            "tool",
+            "artifact",
+            "event",
+            "metadata",
+            "streaming",
+        ],
+        "framework_runtime_contract": {
+            "framework": "langchain",
+            "method": "ainvoke",
+            "input_mode": "dict",
+            "min_invocation_count": 1,
+            "required_signals": ["tool", "metadata", "streaming"],
+            "required_tools": ["lookup_policy"],
+            "required_artifact_types": ["json"],
+            "required_event_types": ["runtime_checkpoint"],
+            "required_metadata_keys": ["runtime_contract"],
+            "require_streaming": True,
+            "max_error_count": 0,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_runtime_coverage"] == 1.0
+    assert scores["framework_runtime_contract"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_trace = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_trace["signals"] = ["framework", "input", "method", "output", "runtime"]
+    bad_trace["summary"] = {
+        "invocation_count": 1,
+        "framework": "langchain",
+        "methods": ["invoke"],
+        "input_modes": ["text"],
+        "output_types": ["str"],
+        "tool_call_count": 0,
+        "artifact_count": 0,
+        "event_count": 0,
+        "state_key_count": 0,
+        "metadata_key_count": 0,
+        "streamed": False,
+        "error_count": 0,
+    }
+    bad_trace["invocations"] = [
+        {
+            "id": "framework_runtime_1",
+            "framework": "langchain",
+            "method": "invoke",
+            "input_mode": "text",
+            "input": {"type": "str"},
+            "output": {
+                "type": "str",
+                "content_length": 24,
+                "tool_call_count": 0,
+                "artifact_count": 0,
+                "event_count": 0,
+                "metadata_keys": [],
+                "streaming": False,
+            },
+            "signals": ["framework", "input", "method", "output", "runtime"],
+        }
+    ]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["framework_runtime_coverage"] < 1.0
+    assert bad_scores["framework_runtime_contract"] < 1.0
+    assert {
+        "missing_framework_runtime_key",
+        "framework_runtime_method_missing",
+        "framework_runtime_input_mode_mismatch",
+        "framework_runtime_tool_missing",
+        "framework_runtime_metadata_missing",
+        "framework_runtime_streaming_mismatch",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_observability_replay_pack_quality():
     replay_pack = {
         "kind": "observability_replay_pack",

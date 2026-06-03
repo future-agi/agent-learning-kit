@@ -180,6 +180,8 @@ class AgentReportEvalConfig(BaseModel):
     required_adversarial_attacks: List[str] = Field(default_factory=list)
     adversarial_resilience: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
+    required_framework_runtime: List[str] = Field(default_factory=list)
+    framework_runtime_contract: Dict[str, Any] = Field(default_factory=dict)
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
@@ -376,6 +378,8 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                *_framework_runtime_coverage_metrics(report_context, config),
+                *_framework_runtime_contract_metrics(report_context, config),
                 *_framework_adapter_conformance_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
@@ -4456,6 +4460,228 @@ def _framework_trace_coverage_metric(
             "observed": sorted(observed),
             "missing": missing,
             "findings": findings,
+        },
+    )
+
+
+def _framework_runtime_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_framework_runtime and not _framework_runtime_payloads_from_context(context):
+        return []
+    return [_framework_runtime_coverage_metric(context, config)]
+
+
+def _framework_runtime_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_runtime_key(key) for key in config.required_framework_runtime]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_runtime_coverage",
+            score=1.0,
+            reason="No required framework runtime keys provided.",
+        )
+    observed = _framework_runtime_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="framework_runtime_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required framework runtime evidence observed."
+            if not missing
+            else f"Missing framework runtime evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_framework_runtime_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _framework_runtime_contract_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_runtime_contract:
+        return []
+    return [_framework_runtime_contract_metric(context, config.framework_runtime_contract)]
+
+
+def _framework_runtime_contract_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _framework_runtime_payloads_from_context(context)
+    observed = _framework_runtime_summary(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    min_invocation_count = _as_int(
+        requirements.get("min_invocation_count")
+        or requirements.get("min_invocations")
+        or requirements.get("invocation_count")
+    )
+    if min_invocation_count is not None:
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="min_invocation_count",
+            expected=min_invocation_count,
+            actual=observed["invocation_count"],
+            match=observed["invocation_count"] >= min_invocation_count,
+            finding_type="framework_runtime_invocation_count_low",
+        )
+
+    expected_framework = requirements.get("framework") or requirements.get("required_framework")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_framework_runtime_key(expected_framework)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="framework_runtime_framework_mismatch",
+        )
+
+    expected_method = requirements.get("method") or requirements.get("required_method")
+    if expected_method not in (None, "", [], {}):
+        normalized = _normalize_framework_runtime_key(expected_method)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="method",
+            expected=normalized,
+            actual=observed["methods"],
+            match=normalized in observed["methods"],
+            finding_type="framework_runtime_method_missing",
+        )
+
+    expected_input_mode = requirements.get("input_mode") or requirements.get("required_input_mode")
+    if expected_input_mode not in (None, "", [], {}):
+        normalized = _normalize_framework_runtime_key(expected_input_mode)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="input_mode",
+            expected=normalized,
+            actual=observed["input_modes"],
+            match=normalized in observed["input_modes"],
+            finding_type="framework_runtime_input_mode_mismatch",
+        )
+
+    for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_framework_runtime_key(signal)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="signal",
+            expected=normalized,
+            actual=observed["signals"],
+            match=normalized in observed["signals"],
+            finding_type="framework_runtime_signal_missing",
+        )
+
+    for tool in _string_list(requirements.get("required_tools") or requirements.get("tools")):
+        normalized = _normalize_framework_runtime_key(tool)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="tool",
+            expected=normalized,
+            actual=observed["tool_names"],
+            match=normalized in observed["tool_names"],
+            finding_type="framework_runtime_tool_missing",
+        )
+
+    for artifact_type in _string_list(requirements.get("required_artifact_types") or requirements.get("artifact_types")):
+        normalized = _normalize_framework_runtime_key(artifact_type)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="artifact_type",
+            expected=normalized,
+            actual=observed["artifact_types"],
+            match=normalized in observed["artifact_types"],
+            finding_type="framework_runtime_artifact_missing",
+        )
+
+    for event_type in _string_list(requirements.get("required_event_types") or requirements.get("event_types")):
+        normalized = _normalize_framework_runtime_key(event_type)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="event_type",
+            expected=normalized,
+            actual=observed["event_types"],
+            match=normalized in observed["event_types"],
+            finding_type="framework_runtime_event_missing",
+        )
+
+    for metadata_key in _string_list(requirements.get("required_metadata_keys") or requirements.get("metadata_keys")):
+        normalized = _normalize_framework_runtime_key(metadata_key)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="metadata_key",
+            expected=normalized,
+            actual=observed["metadata_keys"],
+            match=normalized in observed["metadata_keys"],
+            finding_type="framework_runtime_metadata_missing",
+        )
+
+    if requirements.get("require_streaming") is not None:
+        required = bool(requirements.get("require_streaming"))
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="streaming",
+            expected=required,
+            actual=observed["streamed"],
+            match=observed["streamed"] is required,
+            finding_type="framework_runtime_streaming_mismatch",
+        )
+
+    max_error_count = _as_int(requirements.get("max_error_count") or requirements.get("max_errors"))
+    if max_error_count is not None:
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=observed["error_count"],
+            match=observed["error_count"] <= max_error_count,
+            finding_type="framework_runtime_error_count_high",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_runtime_contract",
+            score=1.0,
+            reason="No framework runtime contract checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_runtime_contract",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework runtime contract check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
         },
     )
 
@@ -10767,6 +10993,239 @@ def _framework_transcript_requirements(
     if config.framework_transcript_quality:
         requirements.update(dict(config.framework_transcript_quality))
     return {key: value for key, value in requirements.items() if value not in (None, "", [], {})}
+
+
+def _framework_runtime_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_runtime(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_runtime(payload, metadata):
+            payloads.append(payload)
+        elif "framework_runtime" in event_type:
+            payloads.append({"kind": "framework_runtime", "invocations": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("framework_runtime"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _framework_runtime_payloads_from_context(context):
+        observed.update({"framework_runtime", "runtime"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_runtime_key(signal)
+            if normalized:
+                observed.add(normalized)
+        for invocation in _framework_runtime_invocations([payload]):
+            invocation_dict = _as_dict(invocation)
+            observed.update({"invocation", "method", "input", "output"})
+            for signal in _as_list(invocation_dict.get("signals", [])):
+                normalized = _normalize_framework_runtime_key(signal)
+                if normalized:
+                    observed.add(normalized)
+            output = _as_dict(invocation_dict.get("output"))
+            if (_as_int(output.get("tool_call_count")) or 0) > 0:
+                observed.add("tool")
+            if (_as_int(output.get("artifact_count")) or 0) > 0:
+                observed.add("artifact")
+            if (_as_int(output.get("event_count")) or 0) > 0:
+                observed.add("event")
+            if _as_list(output.get("metadata_keys", [])):
+                observed.add("metadata")
+            if _as_list(output.get("state_keys", [])):
+                observed.add("state")
+            if bool(output.get("streaming")):
+                observed.add("streaming")
+    return observed
+
+
+def _looks_like_framework_runtime(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_runtime" or (
+        "invocations" in data and "framework" in data and "summary" in data
+    )
+
+
+def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    methods: set[str] = set()
+    input_modes: set[str] = set()
+    output_types: set[str] = set()
+    signals: set[str] = set()
+    tool_names: set[str] = set()
+    artifact_types: set[str] = set()
+    event_types: set[str] = set()
+    state_keys: set[str] = set()
+    metadata_keys: set[str] = set()
+    streamed = False
+    error_count = 0
+    invocations: List[Dict[str, Any]] = []
+    seen_invocations: set[tuple[str, str, str, str]] = set()
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_framework = _normalize_framework_runtime_key(payload_dict.get("framework"))
+        if payload_framework:
+            frameworks.add(payload_framework)
+        signals.update(
+            _normalize_framework_runtime_key(signal)
+            for signal in _as_list(payload_dict.get("signals", []))
+            if _normalize_framework_runtime_key(signal)
+        )
+        summary = _as_dict(payload_dict.get("summary"))
+        if bool(summary.get("streamed")):
+            streamed = True
+        error_count += _as_int(summary.get("error_count")) or 0
+        methods.update(
+            _normalize_framework_runtime_key(method)
+            for method in _as_list(summary.get("methods", []))
+            if _normalize_framework_runtime_key(method)
+        )
+        input_modes.update(
+            _normalize_framework_runtime_key(mode)
+            for mode in _as_list(summary.get("input_modes", []))
+            if _normalize_framework_runtime_key(mode)
+        )
+        output_types.update(
+            _normalize_framework_runtime_key(value)
+            for value in _as_list(summary.get("output_types", []))
+            if _normalize_framework_runtime_key(value)
+        )
+
+        for invocation in _framework_runtime_invocations([payload_dict]):
+            invocation_dict = _as_dict(invocation)
+            key = (
+                str(invocation_dict.get("id") or ""),
+                str(invocation_dict.get("framework") or payload_framework or ""),
+                str(invocation_dict.get("method") or ""),
+                str(invocation_dict.get("input_mode") or ""),
+            )
+            if key in seen_invocations:
+                continue
+            seen_invocations.add(key)
+            invocations.append(invocation_dict)
+            framework = _normalize_framework_runtime_key(invocation_dict.get("framework") or payload_framework)
+            method = _normalize_framework_runtime_key(invocation_dict.get("method"))
+            input_mode = _normalize_framework_runtime_key(invocation_dict.get("input_mode"))
+            if framework:
+                frameworks.add(framework)
+            if method:
+                methods.add(method)
+            if input_mode:
+                input_modes.add(input_mode)
+            signals.update(
+                _normalize_framework_runtime_key(signal)
+                for signal in _as_list(invocation_dict.get("signals", []))
+                if _normalize_framework_runtime_key(signal)
+            )
+            output = _as_dict(invocation_dict.get("output"))
+            output_type = _normalize_framework_runtime_key(output.get("type"))
+            if output_type:
+                output_types.add(output_type)
+            if bool(output.get("streaming")):
+                streamed = True
+            tool_names.update(
+                _normalize_framework_runtime_key(tool)
+                for tool in _as_list(output.get("tool_names", []))
+                if _normalize_framework_runtime_key(tool)
+            )
+            artifact_types.update(
+                _normalize_framework_runtime_key(kind)
+                for kind in _as_list(output.get("artifact_types", []))
+                if _normalize_framework_runtime_key(kind)
+            )
+            event_types.update(
+                _normalize_framework_runtime_key(kind)
+                for kind in _as_list(output.get("event_types", []))
+                if _normalize_framework_runtime_key(kind)
+            )
+            state_keys.update(
+                _normalize_framework_runtime_key(key)
+                for key in _as_list(output.get("state_keys", []))
+                if _normalize_framework_runtime_key(key)
+            )
+            metadata_keys.update(
+                _normalize_framework_runtime_key(key)
+                for key in _as_list(output.get("metadata_keys", []))
+                if _normalize_framework_runtime_key(key)
+            )
+
+    return {
+        "invocation_count": len(invocations),
+        "frameworks": sorted(frameworks),
+        "methods": sorted(methods),
+        "input_modes": sorted(input_modes),
+        "output_types": sorted(output_types),
+        "signals": sorted(signals),
+        "tool_names": sorted(tool_names),
+        "artifact_types": sorted(artifact_types),
+        "event_types": sorted(event_types),
+        "state_keys": sorted(state_keys),
+        "metadata_keys": sorted(metadata_keys),
+        "streamed": streamed,
+        "error_count": error_count,
+        "invocations": invocations,
+    }
+
+
+def _framework_runtime_invocations(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    invocations: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_invocations: List[Dict[str, Any]] = []
+        for invocation in _as_list(payload_dict.get("invocations", [])):
+            invocation_dict = _as_dict(invocation)
+            if invocation_dict:
+                payload_invocations.append(invocation_dict)
+        if not payload_invocations and {"method", "input", "output"} <= set(payload_dict):
+            payload_invocations.append(payload_dict)
+        invocations.extend(payload_invocations)
+    return invocations
+
+
+def _append_framework_runtime_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_runtime_contract",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_runtime_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
 def _framework_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
