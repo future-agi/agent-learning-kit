@@ -5127,6 +5127,177 @@ def test_evaluate_agent_report_scores_domain_package_quality():
     assert "domain_package_chronology_invalid" in finding_types
 
 
+def test_evaluate_agent_report_scores_domain_package_presets():
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Review business workflow packages."},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Claim CLM-9, contract CTR-7, account ACME, purchase order PO-8, "
+                            "clinical intake INT-4, and incident INC-5 all satisfy their package rules."
+                        ),
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "claim_9",
+                            "kind": "domain_package",
+                            "package_type": "insurance_claim",
+                        },
+                        "data": {
+                            "claim_id": "CLM-9",
+                            "status": "approved",
+                            "claimant": {"id": "cust_9"},
+                            "loss": {"date": "2026-06-01"},
+                            "coverage": {"limit": 1000.0},
+                            "amount": 875.0,
+                            "documents": [
+                                {"type": "loss_notice"},
+                                {"type": "policy"},
+                            ],
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "contract_7",
+                            "kind": "domain_package",
+                            "package_type": "contract_review",
+                        },
+                        "data": {
+                            "contract_id": "CTR-7",
+                            "effective_date": "2026-06-01",
+                            "expiration_date": "2027-06-01",
+                            "parties": [{"id": "acme"}, {"id": "futureagi"}],
+                            "signatures": [
+                                {"party_id": "acme", "status": "signed"},
+                                {"party_id": "futureagi", "status": "executed"},
+                            ],
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "account_acme",
+                            "kind": "domain_package",
+                            "package_type": "crm_account_plan",
+                        },
+                        "data": {
+                            "account_id": "ACME",
+                            "owner": {"id": "owner_1"},
+                            "last_touch_at": "2026-06-01T09:00:00",
+                            "next_step": {"action": "security review", "due_at": "2026-06-05T09:00:00"},
+                            "contacts": [{"id": "c1", "role": "economic_buyer"}],
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "po_8",
+                            "kind": "domain_package",
+                            "package_type": "purchase_order",
+                        },
+                        "data": {
+                            "po_id": "PO-8",
+                            "status": "approved",
+                            "vendor": {"id": "vendor_1"},
+                            "line_items": [
+                                {"sku": "A", "quantity": 2, "unit_price": 50.0},
+                                {"sku": "B", "quantity": 1, "unit_price": 140.0},
+                            ],
+                            "total": 240.0,
+                            "approvals": [
+                                {"role": "requester", "status": "approved"},
+                                {"role": "finance", "status": "approved"},
+                            ],
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "clinical_4",
+                            "kind": "domain_package",
+                            "package_type": "clinical_intake",
+                        },
+                        "data": {
+                            "patient": {"id": "pat_4"},
+                            "encounter": {"reason": "knee pain"},
+                            "consent": {"signed_at": "2026-06-03T08:00:00"},
+                            "triage": {"level": "urgent"},
+                            "sections": [
+                                {"name": "allergies"},
+                                {"name": "medications"},
+                                {"name": "consent"},
+                            ],
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "incident_5",
+                            "kind": "domain_package",
+                            "package_type": "incident_response",
+                        },
+                        "data": {
+                            "incident_id": "INC-5",
+                            "severity": "high",
+                            "status": "contained",
+                            "detected_at": "2026-06-03T10:00:00",
+                            "contained_at": "2026-06-03T10:45:00",
+                            "owner": {"id": "sec_1"},
+                            "actions": [
+                                {"type": "containment"},
+                                {"type": "customer_update"},
+                            ],
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    config = {
+        "domain_package_checks": [
+            {"id": "claim_preset", "package_id": "claim_9", "package_type": "insurance_claim"},
+            {"id": "contract_preset", "package_id": "contract_7", "package_type": "contract_review"},
+            {"id": "crm_preset", "package_id": "account_acme", "package_type": "crm_account_plan"},
+            {"id": "po_preset", "package_id": "po_8", "package_type": "purchase_order"},
+            {"id": "clinical_preset", "package_id": "clinical_4", "package_type": "clinical_intake"},
+            {"id": "incident_preset", "package_id": "incident_5", "package_type": "incident_response"},
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    assert scores["domain_package_quality"] == 1.0
+
+    artifacts = report["results"][0]["artifacts"]
+    artifacts[0]["data"]["amount"] = 1200.0
+    artifacts[1]["data"]["expiration_date"] = "2026-05-01"
+    artifacts[2]["data"]["contacts"] = []
+    artifacts[3]["data"]["total"] = 200.0
+    artifacts[4]["data"]["triage"]["level"] = "unknown"
+    artifacts[4]["data"]["sections"] = [{"name": "allergies"}]
+    artifacts[5]["data"]["contained_at"] = "2026-06-03T09:30:00"
+    artifacts[5]["data"]["actions"] = [{"type": "containment"}]
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["domain_package_quality"] < 1.0
+    assert "domain_package_numeric_limit_exceeded" in finding_types
+    assert "domain_package_date_order_invalid" in finding_types
+    assert "domain_package_collection_count_low" in finding_types
+    assert "domain_package_total_mismatch" in finding_types
+    assert "domain_package_status_invalid" in finding_types
+    assert "domain_package_collection_item_missing" in finding_types
+
+
 def test_evaluate_agent_report_scores_tool_argument_schema():
     report = {
         "results": [

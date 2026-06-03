@@ -5930,7 +5930,8 @@ def _normalize_domain_package_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
         return {}
     expected_fields = _as_dict(check.get("expected_fields") or check.get("fields"))
     answer_fields = check.get("answer_fields") or check.get("claim_fields")
-    invariants = _as_list(check.get("invariants") or check.get("rules"))
+    preset_invariants = _domain_package_preset_invariants(check)
+    invariants = [*preset_invariants, *_as_list(check.get("invariants") or check.get("rules"))]
     forbidden_terms = _string_list(check.get("forbidden_answer_terms") or check.get("wrong_terms"))
     if not any([expected_fields, answer_fields, invariants, forbidden_terms]):
         return {}
@@ -5962,6 +5963,209 @@ def _normalize_domain_package_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
         ],
         "forbidden_answer_terms": forbidden_terms,
     }
+
+
+def _domain_package_preset_invariants(check: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    invariants: List[Dict[str, Any]] = []
+    for preset in _domain_package_preset_names(check):
+        if preset in {"claim_file", "insurance_claim", "claims"}:
+            invariants.extend(
+                [
+                    {"type": "field_present", "path": "claim_id"},
+                    {"type": "field_present", "path": "claimant.id"},
+                    {"type": "field_present", "path": "loss.date"},
+                    {"type": "field_present", "path": "coverage.limit"},
+                    {"type": "field_present", "path": "amount"},
+                    {
+                        "type": "status_in",
+                        "path": "status",
+                        "allowed": ["open", "approved", "denied", "settled", "paid"],
+                    },
+                    {"type": "numeric_lte", "path": "amount", "limit_path": "coverage.limit"},
+                    {
+                        "type": "collection_contains",
+                        "items_path": "documents",
+                        "field": "type",
+                        "values": _domain_preset_values(
+                            check,
+                            "required_documents",
+                            ["loss_notice", "policy"],
+                        ),
+                    },
+                ]
+            )
+        elif preset in {"contract", "contract_review", "contract_packet"}:
+            invariants.extend(
+                [
+                    {"type": "field_present", "path": "contract_id"},
+                    {"type": "field_present", "path": "parties"},
+                    {"type": "field_present", "path": "effective_date"},
+                    {"type": "field_present", "path": "expiration_date"},
+                    {
+                        "type": "date_order",
+                        "start_path": "effective_date",
+                        "end_path": "expiration_date",
+                        "allow_equal": False,
+                    },
+                    {
+                        "type": "collection_contains",
+                        "items_path": "signatures",
+                        "field": "party_id",
+                        "values_path": "parties",
+                        "value_field": "id",
+                    },
+                    {
+                        "type": "all_rows_field_in",
+                        "rows_path": "signatures",
+                        "field": "status",
+                        "allowed": ["signed", "executed"],
+                    },
+                ]
+            )
+        elif preset in {"crm_account_plan", "account_plan", "crm"}:
+            invariants.extend(
+                [
+                    {"type": "field_present", "path": "account_id"},
+                    {"type": "field_present", "path": "owner.id"},
+                    {"type": "field_present", "path": "next_step.action"},
+                    {"type": "field_present", "path": "next_step.due_at"},
+                    {"type": "collection_min_count", "items_path": "contacts", "min_count": 1},
+                    {
+                        "type": "collection_contains",
+                        "items_path": "contacts",
+                        "field": "role",
+                        "values": _domain_preset_values(check, "required_contact_roles", ["economic_buyer"]),
+                    },
+                    {
+                        "type": "date_order",
+                        "start_path": "last_touch_at",
+                        "end_path": "next_step.due_at",
+                    },
+                ]
+            )
+        elif preset in {"purchase_order", "procurement", "procurement_packet"}:
+            invariants.extend(
+                [
+                    {"type": "field_present", "path": "po_id"},
+                    {"type": "field_present", "path": "vendor.id"},
+                    {
+                        "type": "status_in",
+                        "path": "status",
+                        "allowed": ["approved", "issued", "fulfilled"],
+                    },
+                    {
+                        "type": "sum_equals",
+                        "rows_path": "line_items",
+                        "total_path": "total",
+                        "amount_field": "unit_price",
+                        "quantity_field": "quantity",
+                    },
+                    {
+                        "type": "collection_contains",
+                        "items_path": "approvals",
+                        "field": "role",
+                        "values": _domain_preset_values(check, "required_approval_roles", ["requester", "finance"]),
+                    },
+                    {
+                        "type": "all_rows_field_in",
+                        "rows_path": "approvals",
+                        "field": "status",
+                        "allowed": ["approved"],
+                    },
+                ]
+            )
+        elif preset in {"clinical_intake", "clinical", "patient_intake"}:
+            invariants.extend(
+                [
+                    {"type": "field_present", "path": "patient.id"},
+                    {"type": "field_present", "path": "encounter.reason"},
+                    {"type": "field_present", "path": "consent.signed_at"},
+                    {
+                        "type": "status_in",
+                        "path": "triage.level",
+                        "allowed": ["routine", "urgent", "emergent"],
+                    },
+                    {
+                        "type": "collection_contains",
+                        "items_path": "sections",
+                        "field": "name",
+                        "values": _domain_preset_values(
+                            check,
+                            "required_sections",
+                            ["allergies", "medications", "consent"],
+                        ),
+                    },
+                ]
+            )
+        elif preset in {"incident_response", "incident", "security_incident"}:
+            invariants.extend(
+                [
+                    {"type": "field_present", "path": "incident_id"},
+                    {"type": "field_present", "path": "severity"},
+                    {"type": "field_present", "path": "detected_at"},
+                    {"type": "field_present", "path": "owner.id"},
+                    {
+                        "type": "status_in",
+                        "path": "status",
+                        "allowed": ["triaged", "contained", "mitigated", "resolved"],
+                    },
+                    {
+                        "type": "date_order",
+                        "start_path": "detected_at",
+                        "end_path": "contained_at",
+                    },
+                    {
+                        "type": "collection_contains",
+                        "items_path": "actions",
+                        "field": "type",
+                        "values": _domain_preset_values(
+                            check,
+                            "required_actions",
+                            ["containment", "customer_update"],
+                        ),
+                    },
+                ]
+            )
+    return invariants
+
+
+def _domain_package_preset_names(check: Mapping[str, Any]) -> List[str]:
+    names: List[str] = []
+    for key in ("preset", "presets", "package_family", "package_type", "domain"):
+        for value in _string_list(check.get(key)):
+            normalized = _normalize_domain_package_preset(value)
+            if normalized:
+                names.append(normalized)
+    return list(dict.fromkeys(names))
+
+
+def _normalize_domain_package_preset(value: Any) -> str:
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "claim": "claim_file",
+        "claims": "claim_file",
+        "insurance_claim": "claim_file",
+        "contract": "contract_review",
+        "contract_packet": "contract_review",
+        "account_plan": "crm_account_plan",
+        "crm": "crm_account_plan",
+        "purchase_order": "procurement",
+        "procurement_packet": "procurement",
+        "patient_intake": "clinical_intake",
+        "clinical": "clinical_intake",
+        "incident": "incident_response",
+        "security_incident": "incident_response",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _domain_preset_values(
+    check: Mapping[str, Any],
+    key: str,
+    default: Sequence[str],
+) -> List[str]:
+    values = _string_list(check.get(key))
+    return values or list(default)
 
 
 def _normalize_domain_package_invariant(raw: Any) -> Dict[str, Any]:
@@ -6205,6 +6409,18 @@ def _evaluate_domain_package_invariant(
         return _chronological_invariant(data, invariant, check_id=check_id)
     if invariant_type == "required_participants":
         return _required_participants_invariant(data, invariant, check_id=check_id)
+    if invariant_type in {"numeric_lte", "amount_lte"}:
+        return _numeric_lte_invariant(data, invariant, check_id=check_id)
+    if invariant_type in {"date_order", "before"}:
+        return _date_order_invariant(data, invariant, check_id=check_id)
+    if invariant_type in {"collection_contains", "required_items"}:
+        return _collection_contains_invariant(data, invariant, check_id=check_id)
+    if invariant_type in {"collection_min_count", "min_count"}:
+        return _collection_min_count_invariant(data, invariant, check_id=check_id)
+    if invariant_type in {"all_rows_field_in", "row_status_in"}:
+        return _all_rows_field_in_invariant(data, invariant, check_id=check_id)
+    if invariant_type in {"sum_equals", "line_items_total"}:
+        return _sum_equals_invariant(data, invariant, check_id=check_id)
     subcheck = {
         "check": "invariant",
         "id": check_id,
@@ -6358,6 +6574,184 @@ def _required_participants_invariant(
         expected=sorted(required),
         finding_type="domain_package_participant_missing",
     )
+
+
+def _numeric_lte_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    path = str(invariant.get("path") or invariant.get("amount_path") or "amount")
+    actual = _as_float(_get_path(data, path))
+    limit = _as_float(invariant.get("limit") or invariant.get("max"))
+    limit_path = str(invariant.get("limit_path") or invariant.get("max_path") or "")
+    if limit is None and limit_path:
+        limit = _as_float(_get_path(data, limit_path))
+    tolerance = _as_float(invariant.get("tolerance")) or 0.0
+    match = actual is not None and limit is not None and actual <= limit + tolerance
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={path: actual, limit_path or "limit": limit},
+        expected={"lte": limit, "tolerance": tolerance},
+        finding_type="domain_package_numeric_limit_exceeded",
+    )
+
+
+def _date_order_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    start_path = str(invariant.get("start_path") or invariant.get("before_path") or "start")
+    end_path = str(invariant.get("end_path") or invariant.get("after_path") or "end")
+    start = _sortable_time(_get_path(data, start_path))
+    end = _sortable_time(_get_path(data, end_path))
+    allow_equal = _config_bool(invariant.get("allow_equal"), True)
+    match = (
+        start is not None
+        and end is not None
+        and (start <= end if allow_equal else start < end)
+    )
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={start_path: start, end_path: end},
+        expected="ordered_non_decreasing" if allow_equal else "strictly_before",
+        finding_type="domain_package_date_order_invalid",
+    )
+
+
+def _collection_contains_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    items_path = str(invariant.get("items_path") or invariant.get("rows_path") or "items")
+    field = str(invariant.get("field") or invariant.get("value_field") or "id")
+    rows = _semantic_rows(data, items_path)
+    required = _domain_invariant_required_values(data, invariant)
+    observed = [_get_path(row, field) for row in rows]
+    observed_normalized = {_normalize_domain_value(value) for value in observed}
+    missing = [
+        value
+        for value in required
+        if _normalize_domain_value(value) not in observed_normalized
+    ]
+    match = bool(required) and not missing
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={"observed": observed, "missing": missing},
+        expected=required,
+        finding_type="domain_package_collection_item_missing",
+    )
+
+
+def _collection_min_count_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    items_path = str(invariant.get("items_path") or invariant.get("rows_path") or "items")
+    rows = _semantic_rows(data, items_path)
+    min_count = _as_int(invariant.get("min_count") or invariant.get("min") or 1) or 1
+    match = len(rows) >= min_count
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={"count": len(rows)},
+        expected={"min_count": min_count},
+        finding_type="domain_package_collection_count_low",
+    )
+
+
+def _all_rows_field_in_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    rows_path = str(invariant.get("rows_path") or invariant.get("items_path") or "items")
+    field = str(invariant.get("field") or "status")
+    allowed = {
+        _normalize_domain_value(value)
+        for value in _as_list(invariant.get("allowed") or invariant.get("values"))
+    }
+    rows = _semantic_rows(data, rows_path)
+    invalid = [
+        {"index": index, "value": _get_path(row, field)}
+        for index, row in enumerate(rows)
+        if _normalize_domain_value(_get_path(row, field)) not in allowed
+    ]
+    match = bool(rows) and bool(allowed) and not invalid
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={"invalid": invalid, "row_count": len(rows)},
+        expected={"allowed": sorted(allowed)},
+        finding_type="domain_package_row_field_invalid",
+    )
+
+
+def _sum_equals_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    rows = _semantic_rows(data, str(invariant.get("rows_path") or "line_items"))
+    amount_field = str(invariant.get("amount_field") or "amount")
+    quantity_field = str(invariant.get("quantity_field") or "")
+    total_path = str(invariant.get("total_path") or "total")
+    expected_total = _as_float(_get_path(data, total_path))
+    tolerance = _as_float(invariant.get("tolerance"))
+    if tolerance is None:
+        tolerance = 0.01
+    observed_total = 0.0
+    for row in rows:
+        amount = _as_float(_get_path(row, amount_field)) or 0.0
+        quantity = _as_float(_get_path(row, quantity_field)) if quantity_field else 1.0
+        observed_total += amount * (quantity if quantity is not None else 1.0)
+    delta = observed_total - (expected_total or 0.0)
+    match = bool(rows) and expected_total is not None and abs(delta) <= tolerance
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={"row_sum": observed_total, "expected_total": expected_total, "delta": delta},
+        expected={"abs_delta_lte": tolerance},
+        finding_type="domain_package_total_mismatch",
+    )
+
+
+def _domain_invariant_required_values(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+) -> List[str]:
+    values = _string_list(invariant.get("values") or invariant.get("required"))
+    values_path = str(invariant.get("values_path") or invariant.get("required_path") or "")
+    value_field = str(invariant.get("value_field") or "")
+    if values_path:
+        raw = _get_path(data, values_path)
+        for item in _as_list(raw):
+            if isinstance(item, Mapping) and value_field:
+                item = _get_path(item, value_field)
+            values.extend(_string_list(item))
+    return list(dict.fromkeys(values))
+
+
+def _normalize_domain_value(value: Any) -> str:
+    return str(value).strip().lower()
 
 
 def _sortable_time(value: Any) -> Optional[str]:
