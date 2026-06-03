@@ -168,6 +168,8 @@ class AgentReportEvalConfig(BaseModel):
     expected_multi_agent_reconciliation: Dict[str, Any] = Field(default_factory=dict)
     required_orchestration_trace: List[str] = Field(default_factory=list)
     orchestration_trace_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_streaming_trace: List[str] = Field(default_factory=list)
+    streaming_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
@@ -367,6 +369,8 @@ class AgentReportEvaluator:
                 _multi_agent_coordination_quality_metric(report_context, config),
                 _orchestration_trace_coverage_metric(report_context, config),
                 _orchestration_flow_quality_metric(report_context, config),
+                _streaming_trace_coverage_metric(report_context, config),
+                _streaming_interaction_quality_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_action_outcome_metric(report_context, config),
                 _browser_grounding_quality_metric(report_context, config),
@@ -3224,6 +3228,271 @@ def _orchestration_flow_quality_metric(
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} orchestration flow check(s) matched.",
         details={"checks": checks, "findings": findings},
+    )
+
+
+def _streaming_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_streaming_trace_key(key) for key in config.required_streaming_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="streaming_trace_coverage",
+            score=1.0,
+            reason="No required streaming trace keys provided.",
+        )
+
+    observed = _streaming_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_streaming_trace_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="streaming_trace_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required streaming trace evidence observed."
+            if not missing
+            else f"Missing streaming trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
+def _streaming_interaction_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    requirements = _as_dict(config.streaming_trace_quality)
+    if not requirements:
+        return AgentReportMetricResult(
+            name="streaming_interaction_quality",
+            score=1.0,
+            reason="No expected streaming interaction checks provided.",
+        )
+
+    payloads = _streaming_trace_payloads_from_context(context)
+    events = _streaming_events_from_payloads(payloads)
+    chunks = _streaming_chunks_from_events(payloads, events)
+    tool_deltas = _streaming_tool_deltas_from_events(payloads, events)
+    state = _streaming_state_from_payloads(payloads)
+    summary = _streaming_summary_from_payloads(payloads, events)
+    assembled_text = str(summary.get("assembled_text") or "".join(chunks))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for term in _string_list(
+        requirements.get("expected_output_contains")
+        or requirements.get("final_output_contains")
+        or requirements.get("output_contains")
+    ):
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="output_contains",
+            expected=term,
+            actual=assembled_text,
+            match=_text_contains(assembled_text, term),
+            finding_type="streaming_output_missing",
+        )
+
+    for chunk in _string_list(requirements.get("required_chunks") or requirements.get("chunks")):
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="required_chunk",
+            expected=chunk,
+            actual=chunks,
+            match=any(_text_contains(actual, chunk) for actual in chunks),
+            finding_type="streaming_chunk_missing",
+        )
+
+    expected_sequence = _string_list(
+        requirements.get("expected_chunk_sequence")
+        or requirements.get("required_chunk_sequence")
+        or requirements.get("chunk_sequence")
+    )
+    if expected_sequence:
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="chunk_sequence",
+            expected=expected_sequence,
+            actual=chunks,
+            match=_contains_subsequence(chunks, expected_sequence),
+            finding_type="streaming_chunk_sequence_mismatch",
+        )
+
+    for expected in _as_list(requirements.get("expected_tool_deltas") or requirements.get("tool_deltas")):
+        expected_dict = _as_dict(expected)
+        expected_value = expected_dict or expected
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="tool_delta",
+            expected=expected_value,
+            actual=tool_deltas,
+            match=any(_streaming_tool_delta_matches(delta, expected_value) for delta in tool_deltas),
+            finding_type="streaming_tool_delta_missing",
+        )
+
+    min_chunk_count = _as_int(requirements.get("min_chunk_count"))
+    if min_chunk_count is not None:
+        actual = _as_int(summary.get("chunk_count")) or len(chunks)
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="min_chunk_count",
+            expected=min_chunk_count,
+            actual=actual,
+            match=actual >= min_chunk_count,
+            finding_type="streaming_chunk_count_low",
+        )
+
+    min_tool_delta_count = _as_int(requirements.get("min_tool_delta_count"))
+    if min_tool_delta_count is not None:
+        actual = _as_int(summary.get("tool_delta_count")) or len(tool_deltas)
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="min_tool_delta_count",
+            expected=min_tool_delta_count,
+            actual=actual,
+            match=actual >= min_tool_delta_count,
+            finding_type="streaming_tool_delta_count_low",
+        )
+
+    max_first_token_latency_ms = _as_float(requirements.get("max_first_token_latency_ms"))
+    if max_first_token_latency_ms is not None:
+        actual = _as_float(summary.get("first_token_latency_ms"))
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="max_first_token_latency_ms",
+            expected=max_first_token_latency_ms,
+            actual=actual,
+            match=actual is not None and actual <= max_first_token_latency_ms,
+            finding_type="streaming_first_token_latency_exceeded",
+        )
+
+    max_gap_ms = _as_float(requirements.get("max_gap_ms") or requirements.get("max_inter_chunk_gap_ms"))
+    if max_gap_ms is not None:
+        actual = _as_float(summary.get("max_gap_ms"))
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="max_gap_ms",
+            expected=max_gap_ms,
+            actual=actual,
+            match=actual is not None and actual <= max_gap_ms,
+            finding_type="streaming_gap_threshold_exceeded",
+        )
+
+    max_dropped_events = _as_int(requirements.get("max_dropped_events"))
+    if max_dropped_events is not None:
+        actual = _as_int(summary.get("dropped_event_count")) or 0
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="max_dropped_events",
+            expected=max_dropped_events,
+            actual=actual,
+            match=actual <= max_dropped_events,
+            finding_type="streaming_dropped_events_exceeded",
+        )
+
+    max_error_count = _as_int(requirements.get("max_error_count"))
+    if max_error_count is not None:
+        actual = _as_int(summary.get("error_count")) or 0
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=actual,
+            match=actual <= max_error_count,
+            finding_type="streaming_error_threshold_exceeded",
+        )
+
+    if requirements.get("require_completion") is not None:
+        required = bool(requirements.get("require_completion"))
+        completed = str(summary.get("completion_status") or "").lower() in {
+            "complete",
+            "completed",
+            "success",
+            "succeeded",
+            "done",
+            "closed",
+        }
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="require_completion",
+            expected=required,
+            actual=summary.get("completion_status"),
+            match=(completed is required),
+            finding_type="streaming_completion_missing",
+        )
+
+    if requirements.get("require_interruption_recovery") is not None:
+        required = bool(requirements.get("require_interruption_recovery"))
+        interruption_count = _as_int(summary.get("interruption_count")) or 0
+        recovered_count = _as_int(summary.get("recovered_interruption_count")) or 0
+        recovered = interruption_count == 0 or recovered_count > 0
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check="require_interruption_recovery",
+            expected=required,
+            actual={"interruptions": interruption_count, "recovered": recovered_count},
+            match=(recovered is required),
+            finding_type="streaming_interruption_unrecovered",
+        )
+
+    for path, expected in _flatten_state(_as_dict(requirements.get("expected_state"))).items():
+        actual = _get_path(state, path)
+        _append_streaming_quality_check(
+            checks,
+            findings,
+            check=f"state.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="streaming_state_mismatch",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="streaming_interaction_quality",
+            score=1.0,
+            reason="No expected streaming interaction checks provided.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="streaming_interaction_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} streaming interaction check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": {
+                "chunks": chunks,
+                "tool_deltas": tool_deltas,
+                "summary": summary,
+                "state": state,
+            },
+        },
     )
 
 
@@ -7815,6 +8084,454 @@ def _orchestration_numeric_cost(value: Any) -> float:
     if isinstance(value, (list, tuple, set)):
         return sum(_orchestration_numeric_cost(item) for item in value)
     return 0.0
+
+
+def _streaming_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _streaming_trace_payloads_from_context(context):
+        observed.add("trace")
+        _merge_streaming_trace_payload(observed, payload)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "stream" in event_type or "chunk" in event_type or "session" in event_type:
+            observed.add("trace")
+            _add_streaming_trace_key(observed, event_type)
+            _add_streaming_trace_key(observed, name)
+            _merge_streaming_trace_payload(observed, payload)
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {"streaming_trace_status", "list_stream_events", "inspect_stream_event"}:
+            observed.update({"trace", "event"})
+        _add_streaming_trace_key(observed, name)
+    return observed
+
+
+def _streaming_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("streaming_trace"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_trace = _as_dict(metadata_state.get("streaming_trace"))
+    if metadata_trace:
+        payloads.append(metadata_trace)
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_streaming_trace(data, metadata):
+            payloads.append(data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_streaming_trace(payload, metadata):
+            payloads.append(payload)
+        elif "streaming_trace_event" in event_type:
+            payloads.append({"kind": "streaming_trace", "events": [payload], "signals": [event_type, name]})
+        elif "stream" in event_type or "chunk" in event_type or "session" in event_type:
+            wrapped = {"kind": "streaming_trace", "events": [payload], "signals": [event_type, name]}
+            payloads.append(wrapped)
+    return [payload for payload in payloads if payload]
+
+
+def _looks_like_streaming_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    if kind == "streaming_trace":
+        return True
+    return any(key in data for key in ("events", "chunks", "tool_deltas", "summary")) and any(
+        token in _stringify(data).lower() or token in _stringify(metadata).lower()
+        for token in ("stream", "chunk", "delta", "session", "livekit", "pipecat", "langgraph", "openai")
+    )
+
+
+def _merge_streaming_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if payload.get("events"):
+        observed.add("event")
+    if payload.get("chunks"):
+        observed.add("chunk")
+    if payload.get("tool_deltas"):
+        observed.add("tool_delta")
+    if payload.get("interruptions"):
+        observed.add("interruption")
+    if payload.get("state"):
+        observed.add("state")
+    if payload.get("summary"):
+        observed.add("summary")
+    for signal in _as_list(payload.get("signals", [])):
+        _add_streaming_trace_key(observed, str(signal))
+    for collection_name in ("events", "chunks", "tool_deltas", "interruptions"):
+        for item in _as_list(payload.get(collection_name, [])):
+            item_dict = _as_dict(item)
+            for key in ("type", "name", "source", "role", "status", "event", "method"):
+                _add_streaming_trace_key(observed, str(item_dict.get(key, "")))
+            for signal in _as_list(item_dict.get("signals", [])):
+                _add_streaming_trace_key(observed, str(signal))
+            if item_dict.get("delta") not in (None, "", [], {}):
+                observed.add("chunk")
+            if item_dict.get("tool_call") not in (None, "", [], {}):
+                observed.add("tool_delta")
+            if item_dict.get("latency_ms") is not None:
+                observed.add("latency")
+            if item_dict.get("gap_ms") is not None:
+                observed.add("gap")
+            if item_dict.get("usage") not in (None, "", [], {}):
+                observed.add("usage")
+            if item_dict.get("error") not in (None, "", [], {}):
+                observed.add("error")
+            if item_dict.get("dropped") not in (None, "", [], {}, False, 0):
+                observed.add("drop")
+            if item_dict.get("buffer_size") not in (None, "", [], {}):
+                observed.add("backpressure")
+    summary = _as_dict(payload.get("summary"))
+    if (_as_int(summary.get("chunk_count")) or 0) > 0:
+        observed.add("chunk")
+    if (_as_int(summary.get("tool_delta_count")) or 0) > 0:
+        observed.add("tool_delta")
+    if (_as_int(summary.get("interruption_count")) or 0) > 0:
+        observed.add("interruption")
+    if (_as_int(summary.get("dropped_event_count")) or 0) > 0:
+        observed.add("drop")
+    if (_as_int(summary.get("error_count")) or 0) > 0:
+        observed.add("error")
+    if summary.get("first_token_latency_ms") is not None:
+        observed.add("latency")
+    if summary.get("max_gap_ms") is not None:
+        observed.add("gap")
+    if summary.get("usage") not in (None, "", [], {}):
+        observed.add("usage")
+    if str(summary.get("completion_status") or "").lower() in {"complete", "completed", "success", "done", "closed"}:
+        observed.add("final")
+    if (_as_int(summary.get("recovered_interruption_count")) or 0) > 0:
+        observed.add("recovered")
+
+
+def _add_streaming_trace_key(observed: set[str], value: str) -> None:
+    normalized = _normalize_streaming_trace_key(value)
+    if normalized:
+        observed.add(normalized)
+    lowered = str(value).lower()
+    aliases = {
+        "stream": "stream",
+        "chunk": "chunk",
+        "delta": "chunk",
+        "token": "chunk",
+        "tool": "tool_delta",
+        "function": "tool_delta",
+        "final": "final",
+        "complete": "final",
+        "finish": "final",
+        "usage": "usage",
+        "latency": "latency",
+        "duration": "latency",
+        "first_token": "latency",
+        "time_to_first_chunk": "latency",
+        "gap": "gap",
+        "drop": "drop",
+        "discard": "drop",
+        "interrupt": "interruption",
+        "cancel": "interruption",
+        "recover": "recovered",
+        "resume": "recovered",
+        "error": "error",
+        "buffer": "backpressure",
+        "queue": "backpressure",
+        "backpressure": "backpressure",
+        "state": "state",
+        "session": "session",
+        "message": "message",
+        "livekit": "livekit",
+        "pipecat": "pipecat",
+        "langchain": "langchain",
+        "langgraph": "langgraph",
+        "openai": "openai_agents",
+        "otel": "otel",
+    }
+    for token, alias in aliases.items():
+        if token in lowered:
+            observed.add(alias)
+
+
+def _normalize_streaming_trace_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "streaming_trace": "trace",
+        "streaming_trace_status": "trace",
+        "streaming_trace_event": "event",
+        "stream_event": "event",
+        "list_stream_events": "event",
+        "inspect_stream_event": "event",
+        "raw_response_event": "chunk",
+        "raw_model_stream_event": "chunk",
+        "response_output_text_delta": "chunk",
+        "response_text_delta_event": "chunk",
+        "ai_message_chunk": "chunk",
+        "messages": "chunk",
+        "textframe": "chunk",
+        "transcriptionframe": "chunk",
+        "tool_call_chunk": "tool_delta",
+        "tool_call_chunks": "tool_delta",
+        "function_call_arguments_delta": "tool_delta",
+        "run_item_stream_event": "tool_delta",
+        "conversation_item_added": "message",
+        "llmfullresponsestartframe": "start",
+        "llmfullresponseendframe": "final",
+        "response_completed": "final",
+        "response_done": "final",
+        "close": "final",
+        "completed": "final",
+        "done": "final",
+        "cancel": "interruption",
+        "cancelframe": "interruption",
+        "interruptionframe": "interruption",
+        "user_interruption_detected": "interruption",
+        "overlapping_speech": "interruption",
+        "agent_false_interruption": "recovered",
+        "session_usage_updated": "usage",
+        "metrics_collected": "usage",
+        "dropped": "drop",
+        "discarded": "drop",
+        "queue": "backpressure",
+        "buffer": "backpressure",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _streaming_events_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("events", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                events.append(item_dict)
+        for collection_name in ("chunks", "tool_deltas", "interruptions"):
+            for item in _as_list(payload.get(collection_name, [])):
+                item_dict = _as_dict(item)
+                if item_dict:
+                    events.append(item_dict)
+    return _dedupe_streaming_dicts(events)
+
+
+def _streaming_chunks_from_events(
+    payloads: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    chunks: List[str] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("chunks", [])):
+            item_dict = _as_dict(item)
+            text = _streaming_event_text(item_dict)
+            if text:
+                chunks.append(text)
+    for event in events:
+        signals = {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        event_type = _normalize_streaming_trace_key(event.get("type"))
+        if "chunk" in signals or event_type == "chunk":
+            text = _streaming_event_text(event)
+            if text:
+                chunks.append(text)
+    return [chunk for index, chunk in enumerate(chunks) if chunk and chunk not in chunks[:index]]
+
+
+def _streaming_tool_deltas_from_events(
+    payloads: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    deltas: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("tool_deltas", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                deltas.append(item_dict)
+    for event in events:
+        signals = {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        event_type = _normalize_streaming_trace_key(event.get("type"))
+        if "tool_delta" in signals or event_type == "tool_delta" or event.get("tool_call") not in (None, "", [], {}):
+            event_dict = _as_dict(event)
+            if event_dict:
+                deltas.append(event_dict)
+    return _dedupe_streaming_dicts(deltas)
+
+
+def _streaming_state_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for payload in payloads:
+        state.update(_as_dict(payload.get("state")))
+    return state
+
+
+def _streaming_summary_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    for payload in payloads:
+        summary.update(_as_dict(payload.get("summary")))
+    chunk_events = [
+        event
+        for event in events
+        if "chunk" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        or _normalize_streaming_trace_key(event.get("type")) == "chunk"
+    ]
+    tool_delta_events = [
+        event
+        for event in events
+        if "tool_delta" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        or _normalize_streaming_trace_key(event.get("type")) == "tool_delta"
+        or event.get("tool_call") not in (None, "", [], {})
+    ]
+    interruption_events = [
+        event
+        for event in events
+        if "interruption" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+    ]
+    dropped_events = [
+        event
+        for event in events
+        if "drop" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        or event.get("dropped") not in (None, "", [], {}, False, 0)
+    ]
+    error_events = [
+        event
+        for event in events
+        if "error" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        or event.get("error") not in (None, "", [], {})
+    ]
+    if "chunk_count" not in summary:
+        summary["chunk_count"] = len(chunk_events)
+    if "tool_delta_count" not in summary:
+        summary["tool_delta_count"] = len(tool_delta_events)
+    if "interruption_count" not in summary:
+        summary["interruption_count"] = len(interruption_events)
+    if "dropped_event_count" not in summary:
+        summary["dropped_event_count"] = len(dropped_events)
+    if "error_count" not in summary:
+        summary["error_count"] = len(error_events)
+    if "assembled_text" not in summary:
+        summary["assembled_text"] = "".join(_streaming_event_text(event) for event in chunk_events)
+    if "recovered_interruption_count" not in summary:
+        summary["recovered_interruption_count"] = sum(
+            1
+            for event in events
+            if "recovered" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        )
+    if "completion_status" not in summary:
+        summary["completion_status"] = _streaming_completion_status(events)
+    return summary
+
+
+def _streaming_completion_status(events: Sequence[Mapping[str, Any]]) -> str:
+    for event in reversed(events):
+        status = str(event.get("status") or "").strip()
+        signals = {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        event_type = _normalize_streaming_trace_key(event.get("type"))
+        if "final" in signals or event_type == "final":
+            return status or "completed"
+        if status.lower() in {"complete", "completed", "success", "succeeded", "done", "closed"}:
+            return status
+    if any("error" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))} for event in events):
+        return "error"
+    return "unknown"
+
+
+def _streaming_tool_delta_matches(delta: Mapping[str, Any], expected: Any) -> bool:
+    if isinstance(expected, str):
+        return _text_contains(_stringify(delta), expected)
+    expected_dict = _as_dict(expected)
+    if not expected_dict:
+        return False
+    text = _stringify(delta)
+    expected_name = expected_dict.get("name") or expected_dict.get("tool") or expected_dict.get("function")
+    if expected_name and not _text_contains(text, expected_name):
+        return False
+    expected_args = expected_dict.get("arguments") or expected_dict.get("args") or expected_dict.get("contains")
+    if expected_args:
+        if isinstance(expected_args, Mapping):
+            for key, value in expected_args.items():
+                if not _text_contains(text, key) or not _text_contains(text, value):
+                    return False
+        elif not _text_contains(text, expected_args):
+            return False
+    return True
+
+
+def _streaming_event_text(event: Mapping[str, Any]) -> str:
+    for key in ("delta", "text", "content", "transcript", "output_text"):
+        value = event.get(key)
+        if value not in (None, "", [], {}):
+            return _streaming_text_from_value(value)
+    raw = _as_dict(event.get("raw"))
+    for key in ("delta", "text", "content", "transcript", "output_text"):
+        value = raw.get(key)
+        if value not in (None, "", [], {}):
+            return _streaming_text_from_value(value)
+    data = _as_dict(raw.get("data"))
+    for key in ("delta", "text", "content", "transcript", "output_text"):
+        value = data.get(key)
+        if value not in (None, "", [], {}):
+            return _streaming_text_from_value(value)
+    return ""
+
+
+def _streaming_text_from_value(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, Mapping):
+        return "".join(
+            _streaming_text_from_value(value.get(key))
+            for key in ("text", "content", "delta", "transcript", "value")
+            if value.get(key) not in (None, "", [], {})
+        )
+    if isinstance(value, (list, tuple, set)):
+        return "".join(_streaming_text_from_value(item) for item in value)
+    return str(value)
+
+
+def _append_streaming_quality_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
+
+
+def _dedupe_streaming_dicts(records: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for index, record in enumerate(records):
+        record_dict = _as_dict(record)
+        if not record_dict:
+            continue
+        key = str(record_dict.get("id") or record_dict.get("event_id") or record_dict.get("sequence") or index)
+        if key not in deduped:
+            deduped[key] = dict(record_dict)
+    return list(deduped.values())
 
 
 def _dedupe_orchestration_dicts(records: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:

@@ -2641,6 +2641,216 @@ def test_evaluate_agent_report_scores_orchestration_trace_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_streaming_trace_quality():
+    trace = {
+        "kind": "streaming_trace",
+        "framework": "mixed-realtime",
+        "events": [
+            {
+                "id": "start",
+                "type": "start",
+                "timestamp_ms": 1000,
+                "signals": ["start", "stream", "pipecat"],
+            },
+            {
+                "id": "chunk_1",
+                "type": "chunk",
+                "delta": "Refund ",
+                "role": "assistant",
+                "timestamp_ms": 1120,
+                "latency_ms": 120,
+                "signals": ["chunk", "latency", "langgraph"],
+            },
+            {
+                "id": "tool_delta",
+                "type": "tool_delta",
+                "tool_call": {"name": "lookup_order", "arguments": "{\"order_id\":\"ord_123\""},
+                "timestamp_ms": 1148,
+                "signals": ["tool_delta", "openai_agents"],
+            },
+            {
+                "id": "interruption",
+                "type": "interruption",
+                "timestamp_ms": 1175,
+                "signals": ["interruption", "livekit"],
+            },
+            {
+                "id": "drop",
+                "type": "drop",
+                "dropped": 1,
+                "timestamp_ms": 1180,
+                "signals": ["drop", "backpressure"],
+            },
+            {
+                "id": "recovered",
+                "type": "event",
+                "status": "resumed",
+                "timestamp_ms": 1210,
+                "signals": ["recovered"],
+            },
+            {
+                "id": "chunk_2",
+                "type": "chunk",
+                "delta": "approved.",
+                "gap_ms": 18,
+                "timestamp_ms": 1228,
+                "signals": ["chunk", "gap"],
+            },
+            {
+                "id": "usage",
+                "type": "usage",
+                "usage": {"output_tokens": 9},
+                "timestamp_ms": 1240,
+                "signals": ["usage"],
+            },
+            {
+                "id": "final",
+                "type": "final",
+                "status": "completed",
+                "timestamp_ms": 1250,
+                "signals": ["final"],
+            },
+        ],
+        "chunks": [
+            {"id": "chunk_1", "type": "chunk", "delta": "Refund ", "signals": ["chunk"]},
+            {"id": "chunk_2", "type": "chunk", "delta": "approved.", "signals": ["chunk", "gap"]},
+        ],
+        "tool_deltas": [
+            {
+                "id": "tool_delta",
+                "type": "tool_delta",
+                "tool_call": {"name": "lookup_order", "arguments": "{\"order_id\":\"ord_123\""},
+                "signals": ["tool_delta"],
+            }
+        ],
+        "signals": [
+            "stream",
+            "chunk",
+            "tool_delta",
+            "interruption",
+            "recovered",
+            "drop",
+            "backpressure",
+            "latency",
+            "gap",
+            "usage",
+            "final",
+            "state",
+        ],
+        "summary": {
+            "chunk_count": 2,
+            "tool_delta_count": 1,
+            "interruption_count": 1,
+            "recovered_interruption_count": 1,
+            "dropped_event_count": 1,
+            "error_count": 0,
+            "first_token_latency_ms": 120,
+            "max_gap_ms": 28,
+            "assembled_text": "Refund approved.",
+            "completion_status": "completed",
+        },
+        "state": {"response": {"status": "completed"}},
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Stream refund approval."},
+                    {
+                        "role": "assistant",
+                        "content": "Streaming trace inspected.",
+                        "tool_calls": [
+                            {"id": "status", "name": "streaming_trace_status", "arguments": {}},
+                            {"id": "chunks", "name": "list_stream_events", "arguments": {"signal": "chunk"}},
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "streaming_trace", "framework": "mixed-realtime"},
+                        "data": trace,
+                    }
+                ],
+                "metadata": {"environment_state": {"streaming_trace": trace}},
+            }
+        ]
+    }
+    config = {
+        "required_streaming_trace": [
+            "stream",
+            "chunk",
+            "tool_delta",
+            "interruption",
+            "recovered",
+            "drop",
+            "backpressure",
+            "latency",
+            "gap",
+            "usage",
+            "final",
+            "state",
+        ],
+        "streaming_trace_quality": {
+            "expected_output_contains": ["Refund approved"],
+            "required_chunks": ["Refund ", "approved."],
+            "expected_chunk_sequence": ["Refund ", "approved."],
+            "expected_tool_deltas": [{"name": "lookup_order", "arguments": {"order_id": "ord_123"}}],
+            "min_chunk_count": 2,
+            "min_tool_delta_count": 1,
+            "max_first_token_latency_ms": 200,
+            "max_gap_ms": 50,
+            "max_dropped_events": 1,
+            "max_error_count": 0,
+            "require_completion": True,
+            "require_interruption_recovery": True,
+            "expected_state": {"response": {"status": "completed"}},
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["streaming_trace_coverage"] == 1.0
+    assert scores["streaming_interaction_quality"] == 1.0
+
+    bad_trace = {**trace}
+    bad_trace["events"] = [
+        event for event in trace["events"] if event.get("id") != "tool_delta"
+    ]
+    bad_trace["chunks"] = [{"id": "chunk_1", "type": "chunk", "delta": "Refund ", "signals": ["chunk"]}]
+    bad_trace["tool_deltas"] = []
+    bad_trace["summary"] = {
+        **trace["summary"],
+        "chunk_count": 1,
+        "tool_delta_count": 0,
+        "dropped_event_count": 3,
+        "first_token_latency_ms": 650,
+        "max_gap_ms": 180,
+        "assembled_text": "Refund ",
+        "completion_status": "unknown",
+        "recovered_interruption_count": 0,
+    }
+    bad_trace["state"] = {"response": {"status": "pending"}}
+    report["results"][0]["artifacts"][0]["data"] = bad_trace
+    report["results"][0]["metadata"]["environment_state"]["streaming_trace"] = bad_trace
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["streaming_interaction_quality"] < 1.0
+    assert {
+        "streaming_output_missing",
+        "streaming_tool_delta_missing",
+        "streaming_first_token_latency_exceeded",
+        "streaming_gap_threshold_exceeded",
+        "streaming_completion_missing",
+        "streaming_interruption_unrecovered",
+        "streaming_state_mismatch",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_framework_trace_coverage():
     report = {
         "results": [

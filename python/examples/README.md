@@ -24,6 +24,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 18 | [Score Semantic Browser Visual Diffs](18_browser_semantic_visual_diff.py) | Verify semantic changed regions while masking dynamic browser screenshot noise | No |
 | 19 | [Score Browser Runtime State](19_browser_runtime_state.py) | Check cookies, localStorage/sessionStorage, page errors, and performance timing in browser traces | No |
 | 20 | [Score Orchestration Graph Traces](20_orchestration_trace_quality.py) | Check workflow nodes, routes, retries, recovery, latency/cost budgets, terminal status, and graph state | No |
+| 21 | [Score Streaming Trace Quality](21_streaming_trace_quality.py) | Check stream chunks, tool deltas, interruption recovery, drops, latency, gaps, usage, finalization, and state | No |
 
 ## Quick Start
 
@@ -60,3 +61,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 18**: Score semantic browser visual diffs, masked dynamic regions, allowed changed regions, and forbidden changed regions from local trace dictionaries
 - **Cookbook 19**: Score browser storage-state capture, runtime/page-error events, and performance timing thresholds from local trace dictionaries
 - **Cookbook 20**: Score framework-neutral orchestration graph traces for required nodes/routes, retry and recovery behavior, latency/cost budgets, terminal status, and expected state
+- **Cookbook 21**: Score framework-neutral streaming/session traces for chunks, tool deltas, interruption recovery, drops, first-token latency, inter-chunk gaps, finalization, and expected state
