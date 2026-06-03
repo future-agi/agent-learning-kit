@@ -4957,6 +4957,176 @@ def test_evaluate_agent_report_scores_structured_artifact_semantics():
     assert "artifact_semantic_forbidden_answer" in finding_types
 
 
+def test_evaluate_agent_report_scores_domain_package_quality():
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Close the refund support package."},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Ticket TCK-123 is resolved by Priya. Ledger LED-9 is balanced, "
+                            "QA calendar has no conflict, and the email thread includes Avery and Priya."
+                        ),
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "ticket_123",
+                            "kind": "domain_package",
+                            "domain": "support",
+                            "package_type": "support_ticket",
+                        },
+                        "data": {
+                            "ticket_id": "TCK-123",
+                            "status": "resolved",
+                            "assignee": {"id": "agent_priya", "name": "Priya"},
+                            "sla": {"met": True},
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "ledger_9",
+                            "kind": "domain_package",
+                            "domain": "finance",
+                            "package_type": "ledger",
+                        },
+                        "data": {
+                            "ledger_id": "LED-9",
+                            "entries": [
+                                {"account": "refunds", "debit": 42.0, "credit": 0.0},
+                                {"account": "cash", "debit": 0.0, "credit": 42.0},
+                            ],
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "qa_calendar",
+                            "kind": "domain_package",
+                            "domain": "calendar",
+                            "package_type": "calendar",
+                        },
+                        "data": {
+                            "events": [
+                                {
+                                    "id": "handoff",
+                                    "start": "2026-06-03T10:00:00",
+                                    "end": "2026-06-03T10:30:00",
+                                    "participants": ["agent_priya"],
+                                },
+                                {
+                                    "id": "qa",
+                                    "start": "2026-06-03T10:30:00",
+                                    "end": "2026-06-03T11:00:00",
+                                    "participants": ["agent_priya"],
+                                },
+                            ]
+                        },
+                    },
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "thread_refund",
+                            "kind": "domain_package",
+                            "domain": "email",
+                            "package_type": "email_thread",
+                        },
+                        "data": {
+                            "messages": [
+                                {
+                                    "sent_at": "2026-06-03T09:00:00",
+                                    "from": "avery@example.com",
+                                    "to": ["priya@example.com"],
+                                },
+                                {
+                                    "sent_at": "2026-06-03T09:05:00",
+                                    "from": "priya@example.com",
+                                    "to": ["avery@example.com"],
+                                },
+                            ]
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    config = {
+        "domain_package_checks": [
+            {
+                "id": "support_ticket_package",
+                "package_id": "ticket_123",
+                "domain": "support",
+                "package_type": "support_ticket",
+                "expected_fields": {"ticket_id": "TCK-123", "status": "resolved", "sla.met": True},
+                "answer_fields": {"ticket_id": ["TCK-123"], "assignee.name": ["Priya"]},
+                "invariants": [
+                    {"type": "field_present", "path": "assignee.id"},
+                    {"type": "status_in", "path": "status", "allowed": ["resolved", "closed"]},
+                    {"type": "field_equals", "path": "sla.met", "value": True},
+                ],
+            },
+            {
+                "id": "ledger_package",
+                "package_id": "ledger_9",
+                "domain": "finance",
+                "package_type": "ledger",
+                "invariants": [{"type": "ledger_balanced", "entries_path": "entries"}],
+            },
+            {
+                "id": "calendar_package",
+                "package_id": "qa_calendar",
+                "domain": "calendar",
+                "package_type": "calendar",
+                "invariants": [{"type": "calendar_no_overlap", "events_path": "events"}],
+            },
+            {
+                "id": "thread_package",
+                "package_id": "thread_refund",
+                "domain": "email",
+                "package_type": "email_thread",
+                "invariants": [
+                    {"type": "chronological", "items_path": "messages", "time_field": "sent_at"},
+                    {
+                        "type": "required_participants",
+                        "items_path": "messages",
+                        "participants": ["avery@example.com", "priya@example.com"],
+                        "item_participant_paths": ["from", "to"],
+                    },
+                ],
+            },
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    assert scores["domain_package_quality"] == 1.0
+
+    report["results"][0]["messages"][1]["content"] = "Ticket TCK-123 is pending with no owner. Ledger LED-9 is off."
+    report["results"][0]["artifacts"][0]["data"]["status"] = "pending"
+    report["results"][0]["artifacts"][0]["data"]["assignee"] = {}
+    report["results"][0]["artifacts"][0]["data"]["sla"]["met"] = False
+    report["results"][0]["artifacts"][1]["data"]["entries"][1]["credit"] = 40.0
+    report["results"][0]["artifacts"][2]["data"]["events"][1]["start"] = "2026-06-03T10:15:00"
+    report["results"][0]["artifacts"][3]["data"]["messages"].reverse()
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["domain_package_quality"] < 1.0
+    assert "domain_package_answer_field_missing" in finding_types
+    assert "domain_package_status_invalid" in finding_types
+    assert "domain_package_required_field_missing" in finding_types
+    assert "domain_package_ledger_unbalanced" in finding_types
+    assert "domain_package_calendar_overlap" in finding_types
+    assert "domain_package_chronology_invalid" in finding_types
+
+
 def test_evaluate_agent_report_scores_tool_argument_schema():
     report = {
         "results": [

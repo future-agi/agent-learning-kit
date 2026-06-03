@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import copy
 import re
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
@@ -189,6 +190,7 @@ class AgentReportEvalConfig(BaseModel):
     source_contradiction_checks: List[Any] = Field(default_factory=list)
     artifact_grounding_checks: List[Any] = Field(default_factory=list)
     artifact_semantic_checks: List[Any] = Field(default_factory=list)
+    domain_package_checks: List[Any] = Field(default_factory=list)
     tool_argument_schemas: Dict[str, Any] = Field(default_factory=dict)
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
@@ -394,6 +396,7 @@ class AgentReportEvaluator:
                 _artifact_coverage_metric(report_context, config),
                 *_artifact_grounding_metrics(report_context, config),
                 *_artifact_semantic_metrics(report_context, config),
+                *_domain_package_metrics(report_context, config),
                 _state_goal_metric(report_context, config),
             ]
         )
@@ -5907,6 +5910,474 @@ def _artifact_semantic_metric(
             "findings": findings,
         },
     )
+
+
+def _domain_package_checks(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[Dict[str, Any]]:
+    metadata = _as_dict(context.get("metadata", {}))
+    checks: List[Dict[str, Any]] = []
+    for key in ("domain_package_checks", "domain_packages", "package_checks"):
+        checks.extend(_as_dict(item) for item in _as_list(metadata.get(key, [])) if _as_dict(item))
+    checks.extend(_as_dict(item) for item in _as_list(config.domain_package_checks) if _as_dict(item))
+    return checks
+
+
+def _normalize_domain_package_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    check = _as_dict(raw)
+    if not check:
+        return {}
+    expected_fields = _as_dict(check.get("expected_fields") or check.get("fields"))
+    answer_fields = check.get("answer_fields") or check.get("claim_fields")
+    invariants = _as_list(check.get("invariants") or check.get("rules"))
+    forbidden_terms = _string_list(check.get("forbidden_answer_terms") or check.get("wrong_terms"))
+    if not any([expected_fields, answer_fields, invariants, forbidden_terms]):
+        return {}
+    package = _as_dict(check.get("package") or check.get("artifact"))
+    for source_key, target_key in (
+        ("package_id", "id"),
+        ("package_type", "package_type"),
+        ("domain", "domain"),
+    ):
+        if check.get(source_key) is not None:
+            package[target_key] = check.get(source_key)
+    metadata = _as_dict(package.get("metadata"))
+    if check.get("domain") is not None:
+        metadata.setdefault("domain", check.get("domain"))
+    if check.get("package_type") is not None:
+        metadata.setdefault("package_type", check.get("package_type"))
+    metadata.setdefault("kind", "domain_package")
+    package["metadata"] = metadata
+    package.setdefault("type", "json")
+    return {
+        "id": str(check.get("id") or check.get("name") or "domain_package"),
+        "package": package,
+        "expected_fields": expected_fields,
+        "answer_fields": answer_fields,
+        "invariants": [
+            normalized
+            for item in invariants
+            if (normalized := _normalize_domain_package_invariant(item))
+        ],
+        "forbidden_answer_terms": forbidden_terms,
+    }
+
+
+def _normalize_domain_package_invariant(raw: Any) -> Dict[str, Any]:
+    item = _as_dict(raw)
+    if not item:
+        return {}
+    invariant_type = str(item.get("type") or item.get("check") or item.get("kind") or "").strip().lower()
+    if not invariant_type and item.get("path") is not None and "value" in item:
+        invariant_type = "field_equals"
+    if not invariant_type:
+        return {}
+    normalized = dict(item)
+    normalized["type"] = invariant_type
+    return normalized
+
+
+def _domain_package_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not _domain_package_checks(context, config):
+        return []
+    return [_domain_package_quality_metric(context, config)]
+
+
+def _domain_package_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    checks = [
+        normalized
+        for raw in _domain_package_checks(context, config)
+        if (normalized := _normalize_domain_package_check(raw))
+    ]
+    artifacts = _artifact_records_from_context(context)
+    answer = _messages_text(_as_list(context.get("messages", [])), roles={"assistant"})
+    subchecks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    normalized_checks: List[Dict[str, Any]] = []
+
+    for check in checks:
+        matching_packages = [
+            artifact
+            for artifact in artifacts
+            if _artifact_matches_expected(artifact, check["package"])
+            and _artifact_looks_like_domain_package(artifact)
+        ]
+        check_record = {
+            "id": check["id"],
+            "package": check["package"],
+            "subchecks": [],
+        }
+        normalized_checks.append(check_record)
+        if not matching_packages:
+            finding = {
+                "type": "missing_domain_package",
+                "id": check["id"],
+                "package": check["package"],
+            }
+            findings.append(finding)
+            subcheck = {"check": "package", "id": check["id"], "match": False, "finding": finding}
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            continue
+
+        package = matching_packages[0]
+        data = _domain_package_payload(package)
+        for path, expected in _flatten_state(check["expected_fields"]).items():
+            actual = _get_path(data, path)
+            match = _semantic_values_equal(actual, expected)
+            subcheck = {
+                "check": "field",
+                "id": check["id"],
+                "path": path,
+                "expected": expected,
+                "actual": actual,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if not match:
+                findings.append(
+                    {
+                        "type": "domain_package_field_mismatch",
+                        "id": check["id"],
+                        "path": path,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+
+        for answer_field in _semantic_answer_field_terms(check["answer_fields"], data):
+            terms = answer_field["terms"]
+            match = bool(terms) and any(_text_contains(answer, term) for term in terms)
+            subcheck = {
+                "check": "answer_field",
+                "id": check["id"],
+                "path": answer_field["path"],
+                "terms": terms,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if not match:
+                findings.append(
+                    {
+                        "type": "domain_package_answer_field_missing",
+                        "id": check["id"],
+                        "path": answer_field["path"],
+                        "terms": terms,
+                    }
+                )
+
+        for invariant in check["invariants"]:
+            subcheck, finding = _evaluate_domain_package_invariant(
+                data,
+                invariant,
+                check_id=check["id"],
+            )
+            if subcheck:
+                subchecks.append(subcheck)
+                check_record["subchecks"].append(subcheck)
+            if finding:
+                findings.append(finding)
+
+        forbidden_matches = [term for term in check["forbidden_answer_terms"] if _text_contains(answer, term)]
+        if check["forbidden_answer_terms"]:
+            match = not forbidden_matches
+            subcheck = {
+                "check": "forbidden_answer_terms",
+                "id": check["id"],
+                "terms": check["forbidden_answer_terms"],
+                "matches": forbidden_matches,
+                "match": match,
+            }
+            subchecks.append(subcheck)
+            check_record["subchecks"].append(subcheck)
+            if forbidden_matches:
+                findings.append(
+                    {
+                        "type": "domain_package_forbidden_answer",
+                        "id": check["id"],
+                        "forbidden_answer_terms": forbidden_matches,
+                    }
+                )
+
+    if not checks or not subchecks:
+        return AgentReportMetricResult(
+            name="domain_package_quality",
+            score=1.0,
+            reason="No checkable domain package rules were configured.",
+        )
+
+    matched = sum(1 for check in subchecks if check["match"])
+    score = matched / len(subchecks)
+    return AgentReportMetricResult(
+        name="domain_package_quality",
+        score=round(score, 4),
+        reason=(
+            "Domain package checks matched workflow evidence."
+            if not findings
+            else f"{matched}/{len(subchecks)} domain package subcheck(s) matched."
+        ),
+        details={
+            "checks": normalized_checks,
+            "subchecks": subchecks,
+            "package_count": len([artifact for artifact in artifacts if _artifact_looks_like_domain_package(artifact)]),
+            "findings": findings,
+        },
+    )
+
+
+def _artifact_looks_like_domain_package(artifact: Mapping[str, Any]) -> bool:
+    metadata = _as_dict(artifact.get("metadata"))
+    if str(metadata.get("kind") or "").lower() == "domain_package":
+        return True
+    if metadata.get("package_type") or metadata.get("domain_package_type"):
+        return True
+    data = _as_dict(artifact.get("data"))
+    return bool(data.get("package_type") or data.get("domain_package_type"))
+
+
+def _domain_package_payload(artifact: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = _artifact_semantic_payload(artifact)
+    metadata = _as_dict(payload.get("metadata"))
+    for key in ("domain", "package_type", "domain_package_type", "schema", "id"):
+        if metadata.get(key) is not None:
+            payload.setdefault(key, metadata.get(key))
+    return payload
+
+
+def _evaluate_domain_package_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    invariant_type = str(invariant.get("type") or "").lower()
+    if invariant_type in {"field_present", "required_field", "present"}:
+        path = str(invariant.get("path") or "")
+        actual = _get_path(data, path) if path else None
+        match = actual not in (None, "", [], {})
+        return _domain_invariant_result(
+            check_id,
+            invariant,
+            match,
+            actual=actual,
+            finding_type="domain_package_required_field_missing",
+        )
+    if invariant_type in {"field_equals", "equals"}:
+        path = str(invariant.get("path") or "")
+        actual = _get_path(data, path) if path else None
+        expected = invariant.get("value", invariant.get("expected"))
+        match = _semantic_values_equal(actual, expected)
+        return _domain_invariant_result(
+            check_id,
+            invariant,
+            match,
+            actual=actual,
+            expected=expected,
+            finding_type="domain_package_invariant_mismatch",
+        )
+    if invariant_type == "status_in":
+        path = str(invariant.get("path") or "status")
+        actual = _get_path(data, path)
+        allowed = [str(value).lower() for value in _as_list(invariant.get("allowed") or invariant.get("values"))]
+        match = str(actual).lower() in allowed if allowed else actual not in (None, "")
+        return _domain_invariant_result(
+            check_id,
+            invariant,
+            match,
+            actual=actual,
+            expected=allowed,
+            finding_type="domain_package_status_invalid",
+        )
+    if invariant_type == "ledger_balanced":
+        return _ledger_balanced_invariant(data, invariant, check_id=check_id)
+    if invariant_type == "calendar_no_overlap":
+        return _calendar_no_overlap_invariant(data, invariant, check_id=check_id)
+    if invariant_type == "chronological":
+        return _chronological_invariant(data, invariant, check_id=check_id)
+    if invariant_type == "required_participants":
+        return _required_participants_invariant(data, invariant, check_id=check_id)
+    subcheck = {
+        "check": "invariant",
+        "id": check_id,
+        "invariant": dict(invariant),
+        "match": False,
+        "unsupported": True,
+    }
+    return subcheck, {
+        "type": "domain_package_invariant_unsupported",
+        "id": check_id,
+        "invariant": dict(invariant),
+    }
+
+
+def _domain_invariant_result(
+    check_id: str,
+    invariant: Mapping[str, Any],
+    match: bool,
+    *,
+    actual: Any = None,
+    expected: Any = None,
+    finding_type: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    subcheck = {
+        "check": "invariant",
+        "id": check_id,
+        "invariant": dict(invariant),
+        "actual": actual,
+        "expected": expected,
+        "match": match,
+    }
+    if match:
+        return subcheck, None
+    return subcheck, {
+        "type": finding_type,
+        "id": check_id,
+        "invariant": dict(invariant),
+        "actual": actual,
+        "expected": expected,
+    }
+
+
+def _ledger_balanced_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    entries = _semantic_rows(data, str(invariant.get("entries_path") or "entries"))
+    debit_field = str(invariant.get("debit_field") or "debit")
+    credit_field = str(invariant.get("credit_field") or "credit")
+    tolerance = _as_float(invariant.get("tolerance"))
+    if tolerance is None:
+        tolerance = 0.01
+    debit_total = sum(_as_float(_get_path(entry, debit_field)) or 0.0 for entry in entries)
+    credit_total = sum(_as_float(_get_path(entry, credit_field)) or 0.0 for entry in entries)
+    delta = debit_total - credit_total
+    match = bool(entries) and abs(delta) <= tolerance
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={"debit": debit_total, "credit": credit_total, "delta": delta},
+        expected={"balanced_delta_abs_lte": tolerance},
+        finding_type="domain_package_ledger_unbalanced",
+    )
+
+
+def _calendar_no_overlap_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    events = _semantic_rows(data, str(invariant.get("events_path") or "events"))
+    start_field = str(invariant.get("start_field") or "start")
+    end_field = str(invariant.get("end_field") or "end")
+    participants_field = str(invariant.get("participants_field") or "participants")
+    overlaps: List[Dict[str, Any]] = []
+    normalized = []
+    for event in events:
+        start = _sortable_time(_get_path(event, start_field))
+        end = _sortable_time(_get_path(event, end_field))
+        participants = set(_string_list(_get_path(event, participants_field)))
+        normalized.append({"event": event, "start": start, "end": end, "participants": participants})
+    for left_index, left in enumerate(normalized):
+        for right in normalized[left_index + 1:]:
+            if left["start"] is None or left["end"] is None or right["start"] is None or right["end"] is None:
+                continue
+            if left["end"] <= right["start"] or right["end"] <= left["start"]:
+                continue
+            shared = sorted(left["participants"] & right["participants"])
+            if shared:
+                overlaps.append(
+                    {
+                        "left": left["event"].get("id") or left["event"].get("title"),
+                        "right": right["event"].get("id") or right["event"].get("title"),
+                        "participants": shared,
+                    }
+                )
+    match = bool(events) and not overlaps
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual={"overlaps": overlaps, "event_count": len(events)},
+        expected={"overlaps": []},
+        finding_type="domain_package_calendar_overlap",
+    )
+
+
+def _chronological_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    items = _semantic_rows(data, str(invariant.get("items_path") or invariant.get("messages_path") or "messages"))
+    time_field = str(invariant.get("time_field") or "timestamp")
+    values = [_sortable_time(_get_path(item, time_field)) for item in items]
+    observed = [value for value in values if value is not None]
+    match = bool(items) and len(observed) == len(items) and observed == sorted(observed)
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual=observed,
+        expected="nondecreasing",
+        finding_type="domain_package_chronology_invalid",
+    )
+
+
+def _required_participants_invariant(
+    data: Mapping[str, Any],
+    invariant: Mapping[str, Any],
+    *,
+    check_id: str,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    required = {str(value) for value in _as_list(invariant.get("participants") or invariant.get("required"))}
+    participants = set(_string_list(_get_path(data, str(invariant.get("participants_path") or "participants"))))
+    for item in _semantic_rows(data, str(invariant.get("items_path") or invariant.get("messages_path") or "messages")):
+        for path in _string_list(invariant.get("item_participant_paths") or ["from", "to", "cc", "participants"]):
+            participants.update(_string_list(_get_path(item, path)))
+    missing = sorted(required - participants)
+    match = bool(required) and not missing
+    return _domain_invariant_result(
+        check_id,
+        invariant,
+        match,
+        actual=sorted(participants),
+        expected=sorted(required),
+        finding_type="domain_package_participant_missing",
+    )
+
+
+def _sortable_time(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        pass
+    time_match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", text)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        second = int(time_match.group(3) or 0)
+        if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59:
+            return f"1970-01-01T{hour:02d}:{minute:02d}:{second:02d}"
+    return text
 
 
 def _report_context_from_trajectory(inputs: AgentTrajectoryInput) -> Mapping[str, Any]:

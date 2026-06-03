@@ -32,6 +32,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 26 | [Score Export Auth and Pagination](26_export_auth_pagination.py) | Check framework and voice traces include authenticated paginated export evidence | No |
 | 27 | [Score WebRTC Voice Stats](27_voice_webrtc_stats.py) | Check RTP, track, codec, audio-level, jitter, packet loss, and speaker evidence from voice traces | No |
 | 28 | [Score MCP Tool Session Traces](28_mcp_tool_session_trace.py) | Check MCP tools/list schemas, tool calls, structured results, and errors from framework traces | No |
+| 29 | [Score Domain-Package Workflow Quality](29_domain_package_quality.py) | Check support tickets, ledgers, calendars, and email threads with deterministic package invariants | No |
 
 ## Quick Start
 
@@ -76,3 +77,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 26**: Score authenticated and paginated framework or voice export evidence from local report dictionaries
 - **Cookbook 27**: Score WebRTC getStats-style voice evidence for RTP, track, codec, audio-level, jitter, and packet-loss thresholds
 - **Cookbook 28**: Score MCP tool-session trace evidence for tools/list schemas, tool calls, structured results, and expected outcomes
+- **Cookbook 29**: Score workflow package invariants for support tickets, ledgers, calendars, and email threads without a model judge

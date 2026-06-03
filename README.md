@@ -364,6 +364,7 @@ Real-world use cases with runnable code in [`python/examples/`](python/examples/
 | 06 | [Auto-Configure Your Test Pipeline](python/examples/06_autoeval.py) | Describe app, get pipeline, export YAML for CI |
 | 07 | [Trace Every LLM Call](python/examples/07_otel_tracing.py) | Quality scores in Jaeger/Datadog traces |
 | 08 | [Teach Your Judge from Mistakes](python/examples/feedback_loop_demo.py) | ChromaDB feedback loop with Gemini judge |
+| 29 | [Score Domain-Package Workflow Quality](python/examples/29_domain_package_quality.py) | Support tickets, ledgers, calendars, and email threads checked with deterministic invariants |
 
 ```bash
 cd python
