@@ -185,6 +185,8 @@ class AgentReportEvalConfig(BaseModel):
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_optimizer_trace: List[str] = Field(default_factory=list)
+    optimizer_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
     forbidden_retrieval_doc_ids: List[str] = Field(default_factory=list)
@@ -384,6 +386,8 @@ class AgentReportEvaluator:
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
+                *_optimizer_trace_coverage_metrics(report_context, config),
+                *_optimizer_trace_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
                 _source_grounding_metric(report_context, config),
@@ -11396,6 +11400,481 @@ def _append_observability_replay_check(
 
 def _normalize_replay_key(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _optimizer_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_optimizer_trace(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_optimizer_trace(payload, metadata):
+            payloads.append(payload)
+        elif "optimizer_trace" in event_type or "optimizer_proposal" in event_type:
+            payloads.append({"kind": "optimizer_society_trace", "proposals": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("optimizer_society_trace"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _optimizer_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _optimizer_trace_payloads_from_context(context):
+        observed.update({"optimizer_trace", "society_trace", "optimizer"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_optimizer_trace_key(signal)
+            if normalized:
+                observed.add(normalized)
+        if _as_list(payload.get("roles", [])):
+            observed.add("role")
+        if _as_list(payload.get("proposals", [])):
+            observed.update({"proposal", "candidate"})
+        if _as_list(payload.get("rounds", [])):
+            observed.add("round")
+        if _as_list(payload.get("diagnostics", [])):
+            observed.add("diagnostic")
+        if _as_list(payload.get("search_paths", [])):
+            observed.add("search_path")
+        if _as_list(payload.get("role_credit", [])):
+            observed.add("credit")
+        if payload.get("best_candidate_id"):
+            observed.add("best_candidate")
+        if payload.get("final_score") is not None:
+            observed.add("score")
+        summary = _as_dict(payload.get("summary"))
+        if summary.get("has_role_graph"):
+            observed.add("role_graph")
+        if summary.get("has_critique"):
+            observed.add("critique")
+        if summary.get("has_synthesis"):
+            observed.add("synthesis")
+        if summary.get("has_steward"):
+            observed.add("steward")
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "optimizer_trace_status",
+            "list_optimizer_proposals",
+            "inspect_optimizer_role",
+            "inspect_optimizer_candidate",
+        }:
+            observed.update({"optimizer_trace", "proposal", "role"})
+    return observed
+
+
+def _looks_like_optimizer_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "optimizer_society_trace" or (
+        "proposals" in data
+        and ("optimizer" in data or "role_credit" in data or "roles" in data)
+    )
+
+
+def _optimizer_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    roles: set[str] = set()
+    archetypes: set[str] = set()
+    signals: set[str] = set()
+    search_paths: set[str] = set()
+    credit_roles: set[str] = set()
+    diagnostics: List[Dict[str, Any]] = []
+    proposals: List[Dict[str, Any]] = []
+    rounds: set[Any] = set()
+    best_score: Optional[float] = None
+    best_role = ""
+    best_candidate_id = ""
+    has_role_graph = False
+    has_critique = False
+    has_synthesis = False
+    has_steward = False
+    seen_proposals: set[tuple[str, str, str]] = set()
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        signals.update(
+            _normalize_optimizer_trace_key(signal)
+            for signal in _as_list(payload_dict.get("signals", []))
+            if _normalize_optimizer_trace_key(signal)
+        )
+        summary = _as_dict(payload_dict.get("summary"))
+        has_role_graph = has_role_graph or bool(summary.get("has_role_graph"))
+        has_critique = has_critique or bool(summary.get("has_critique"))
+        has_synthesis = has_synthesis or bool(summary.get("has_synthesis"))
+        has_steward = has_steward or bool(summary.get("has_steward"))
+        best_candidate_id = best_candidate_id or str(summary.get("best_candidate_id") or payload_dict.get("best_candidate_id") or "")
+        final_score = _as_float(payload_dict.get("final_score"))
+        if final_score is not None and (best_score is None or final_score > best_score):
+            best_score = final_score
+
+        for role in _as_list(payload_dict.get("roles", [])):
+            role_dict = _as_dict(role)
+            role_name = _normalize_optimizer_trace_key(role_dict.get("name") or role_dict.get("role") or role)
+            if role_name:
+                roles.add(role_name)
+            archetype = _normalize_optimizer_trace_key(role_dict.get("archetype"))
+            if archetype:
+                archetypes.add(archetype)
+            if role_dict.get("proposal_kind"):
+                has_role_graph = True
+
+        for credit in _as_list(payload_dict.get("role_credit", [])):
+            credit_dict = _as_dict(credit)
+            role = _normalize_optimizer_trace_key(credit_dict.get("role"))
+            if role:
+                credit_roles.add(role)
+                roles.add(role)
+            search_paths.update(str(path) for path in _as_list(credit_dict.get("search_paths", [])) if str(path))
+
+        diagnostics.extend(
+            dict(item)
+            for item in (_as_dict(item) for item in _as_list(payload_dict.get("diagnostics", [])))
+            if item
+        )
+        search_paths.update(str(path) for path in _as_list(payload_dict.get("search_paths", [])) if str(path))
+        for round_record in _as_list(payload_dict.get("rounds", [])):
+            round_dict = _as_dict(round_record)
+            round_id = round_dict.get("round")
+            if round_id not in (None, ""):
+                rounds.add(round_id)
+
+        for proposal in _as_list(payload_dict.get("proposals", [])):
+            proposal_dict = _as_dict(proposal)
+            if not proposal_dict:
+                continue
+            candidate_id = str(proposal_dict.get("candidate_id") or proposal_dict.get("id") or "")
+            role = _normalize_optimizer_trace_key(proposal_dict.get("role") or proposal_dict.get("proposal_role"))
+            round_id = str(proposal_dict.get("round") or proposal_dict.get("proposal_round") or "")
+            key = (candidate_id, role, round_id)
+            if key in seen_proposals:
+                continue
+            seen_proposals.add(key)
+            proposals.append(proposal_dict)
+            if role:
+                roles.add(role)
+            if candidate_id and best_candidate_id and candidate_id == best_candidate_id and role:
+                best_role = role
+            role_kind = _normalize_optimizer_trace_key(proposal_dict.get("role_kind"))
+            role_archetype = _normalize_optimizer_trace_key(proposal_dict.get("role_archetype"))
+            if role_kind:
+                signals.add(role_kind)
+                has_role_graph = True
+            if role_archetype:
+                archetypes.add(role_archetype)
+            role_tokens = {role, role_kind}
+            if role_tokens & {"critic", "adversary", "vidura", "krishna"}:
+                has_critique = True
+            if role_tokens & {"synthesizer", "coverage_synthesis", "sangha"}:
+                has_synthesis = True
+            if role_tokens & {"steward", "dharma_steward"}:
+                has_steward = True
+            search_paths.update(str(path) for path in _as_list(proposal_dict.get("search_paths", [])) if str(path))
+            search_paths.update(str(path) for path in _as_dict(proposal_dict.get("patch")).keys() if str(path))
+            round_value = proposal_dict.get("round") or proposal_dict.get("proposal_round")
+            if round_value not in (None, ""):
+                rounds.add(round_value)
+            score = _as_float(proposal_dict.get("score") if "score" in proposal_dict else proposal_dict.get("average_score"))
+            if score is not None and (best_score is None or score > best_score or (score == best_score and not best_role)):
+                best_score = score
+                best_role = role
+                best_candidate_id = candidate_id or best_candidate_id
+
+    candidate_ids = [str(item.get("candidate_id") or item.get("id") or "") for item in proposals if item.get("candidate_id") or item.get("id")]
+    return {
+        "roles": sorted(roles),
+        "archetypes": sorted(archetypes),
+        "signals": sorted(signals),
+        "search_paths": sorted(search_paths),
+        "credit_roles": sorted(credit_roles),
+        "proposal_count": len(proposals),
+        "round_count": len(rounds),
+        "diagnostic_count": len(diagnostics),
+        "best_candidate_id": best_candidate_id or None,
+        "best_score": best_score,
+        "best_role": best_role,
+        "duplicate_candidate_count": max(0, len(candidate_ids) - len(set(candidate_ids))),
+        "has_role_graph": has_role_graph,
+        "has_diagnostics": bool(diagnostics),
+        "has_critique": has_critique,
+        "has_synthesis": has_synthesis,
+        "has_steward": has_steward,
+        "proposals": proposals,
+    }
+
+
+def _append_optimizer_trace_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "optimizer_trace_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_optimizer_trace_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _optimizer_trace_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_optimizer_trace and not _optimizer_trace_payloads_from_context(context):
+        return []
+    return [_optimizer_trace_coverage_metric(context, config)]
+
+
+def _optimizer_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_optimizer_trace_key(key) for key in config.required_optimizer_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="optimizer_trace_coverage",
+            score=1.0,
+            reason="No required optimizer trace keys provided.",
+        )
+    observed = _optimizer_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="optimizer_trace_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required optimizer trace evidence observed."
+            if not missing
+            else f"Missing optimizer trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_optimizer_trace_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _optimizer_trace_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.optimizer_trace_quality:
+        return []
+    return [_optimizer_trace_quality_metric(context, config.optimizer_trace_quality)]
+
+
+def _optimizer_trace_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _optimizer_trace_payloads_from_context(context)
+    observed = _optimizer_trace_summary(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    min_role_count = _as_int(requirements.get("min_role_count"))
+    if min_role_count is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_role_count",
+            expected=min_role_count,
+            actual=len(observed["roles"]),
+            match=len(observed["roles"]) >= min_role_count,
+            finding_type="optimizer_trace_role_count_low",
+        )
+
+    min_proposal_count = _as_int(requirements.get("min_proposal_count"))
+    if min_proposal_count is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_proposal_count",
+            expected=min_proposal_count,
+            actual=observed["proposal_count"],
+            match=observed["proposal_count"] >= min_proposal_count,
+            finding_type="optimizer_trace_proposal_count_low",
+        )
+
+    min_round_count = _as_int(requirements.get("min_round_count"))
+    if min_round_count is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_round_count",
+            expected=min_round_count,
+            actual=observed["round_count"],
+            match=observed["round_count"] >= min_round_count,
+            finding_type="optimizer_trace_round_count_low",
+        )
+
+    min_credit_entries = _as_int(requirements.get("min_credit_entries"))
+    if min_credit_entries is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_credit_entries",
+            expected=min_credit_entries,
+            actual=len(observed["credit_roles"]),
+            match=len(observed["credit_roles"]) >= min_credit_entries,
+            finding_type="optimizer_trace_credit_low",
+        )
+
+    for role in _string_list(requirements.get("required_roles") or requirements.get("roles")):
+        normalized = _normalize_optimizer_trace_key(role)
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="role",
+            expected=normalized,
+            actual=observed["roles"],
+            match=normalized in observed["roles"],
+            finding_type="optimizer_trace_role_missing",
+        )
+
+    for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_optimizer_trace_key(signal)
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="signal",
+            expected=normalized,
+            actual=observed["signals"],
+            match=normalized in observed["signals"],
+            finding_type="optimizer_trace_signal_missing",
+        )
+
+    for archetype in _string_list(requirements.get("required_archetypes") or requirements.get("archetypes")):
+        normalized = _normalize_optimizer_trace_key(archetype)
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="archetype",
+            expected=normalized,
+            actual=observed["archetypes"],
+            match=normalized in observed["archetypes"],
+            finding_type="optimizer_trace_archetype_missing",
+        )
+
+    for path in _string_list(requirements.get("required_search_paths") or requirements.get("search_paths")):
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="search_path",
+            expected=path,
+            actual=observed["search_paths"],
+            match=path in observed["search_paths"],
+            finding_type="optimizer_trace_search_path_missing",
+        )
+
+    min_best_score = _as_float(requirements.get("min_best_score") or requirements.get("required_best_score"))
+    if min_best_score is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_best_score",
+            expected=min_best_score,
+            actual=observed["best_score"],
+            match=(observed["best_score"] or 0.0) >= min_best_score,
+            finding_type="optimizer_trace_best_score_low",
+        )
+
+    required_best_role = requirements.get("required_best_role") or requirements.get("best_role")
+    if required_best_role not in (None, "", [], {}):
+        normalized = _normalize_optimizer_trace_key(required_best_role)
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="best_role",
+            expected=normalized,
+            actual=observed["best_role"],
+            match=observed["best_role"] == normalized,
+            finding_type="optimizer_trace_best_role_mismatch",
+        )
+
+    for key, field, finding_type in (
+        ("require_role_graph", "has_role_graph", "optimizer_trace_role_graph_missing"),
+        ("require_diagnostics", "has_diagnostics", "optimizer_trace_diagnostics_missing"),
+        ("require_critique", "has_critique", "optimizer_trace_critique_missing"),
+        ("require_synthesis", "has_synthesis", "optimizer_trace_synthesis_missing"),
+        ("require_steward", "has_steward", "optimizer_trace_steward_missing"),
+    ):
+        if requirements.get(key) is not None:
+            required = bool(requirements.get(key))
+            _append_optimizer_trace_check(
+                checks,
+                findings,
+                check=key,
+                expected=required,
+                actual=observed[field],
+                match=observed[field] is required,
+                finding_type=finding_type,
+            )
+
+    max_duplicate_candidate_count = _as_int(requirements.get("max_duplicate_candidate_count"))
+    if max_duplicate_candidate_count is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="max_duplicate_candidate_count",
+            expected=max_duplicate_candidate_count,
+            actual=observed["duplicate_candidate_count"],
+            match=observed["duplicate_candidate_count"] <= max_duplicate_candidate_count,
+            finding_type="optimizer_trace_duplicate_candidates_high",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="optimizer_trace_quality",
+            score=1.0,
+            reason="No optimizer trace quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="optimizer_trace_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} optimizer trace quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
 
 
 def _framework_adapter_observed_signals(

@@ -3845,6 +3845,210 @@ def test_evaluate_agent_report_scores_multi_agent_orchestration_control_quality(
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_optimizer_society_trace_quality():
+    trace = {
+        "kind": "optimizer_society_trace",
+        "optimizer": "SocietyAgentOptimizer",
+        "roles": [
+            {"name": "sutradhara", "proposal_kind": "specialist", "archetype": "orchestrator"},
+            {"name": "vidura", "proposal_kind": "adversary", "archetype": "prudent_critic"},
+            {"name": "sangha", "proposal_kind": "coverage_synthesis", "archetype": "collective_synthesis"},
+            {"name": "dharma_steward", "proposal_kind": "steward", "archetype": "minimal_process_guardian"},
+        ],
+        "proposals": [
+            {"candidate_id": "seed", "role": "seed", "round": 0, "score": 0.2, "patch": {}},
+            {
+                "candidate_id": "sutradhara_patch",
+                "role": "sutradhara",
+                "round": 1,
+                "score": 0.55,
+                "patch": {"multi_agent.handoff.contract": "explicit_policy"},
+                "role_kind": "specialist",
+                "role_archetype": "orchestrator",
+            },
+            {
+                "candidate_id": "vidura_patch",
+                "role": "vidura",
+                "round": 1,
+                "score": 0.72,
+                "patch": {"security.adversarial_review": "red_team"},
+                "role_kind": "adversary",
+                "role_archetype": "prudent_critic",
+            },
+            {
+                "candidate_id": "sangha_patch",
+                "role": "sangha",
+                "round": 2,
+                "score": 1.0,
+                "patch": {
+                    "multi_agent.handoff.contract": "explicit_policy",
+                    "security.adversarial_review": "red_team",
+                },
+                "role_kind": "coverage_synthesis",
+                "role_archetype": "collective_synthesis",
+            },
+            {
+                "candidate_id": "steward_patch",
+                "role": "dharma_steward",
+                "round": 3,
+                "score": 0.97,
+                "patch": {"multi_agent.handoff.contract": "explicit_policy"},
+                "role_kind": "steward",
+                "role_archetype": "minimal_process_guardian",
+            },
+        ],
+        "rounds": [{"round": 1}, {"round": 2}, {"round": 3}],
+        "diagnostics": [{"component": "multi_agent", "failure_mode": "coordination_failure"}],
+        "search_paths": ["multi_agent.handoff.contract", "security.adversarial_review"],
+        "role_credit": [
+            {"role": "sutradhara", "proposal_count": 1, "evaluated_count": 1, "best_score": 0.55},
+            {"role": "vidura", "proposal_count": 1, "evaluated_count": 1, "best_score": 0.72},
+            {"role": "sangha", "proposal_count": 1, "evaluated_count": 1, "best_score": 1.0},
+            {"role": "dharma_steward", "proposal_count": 1, "evaluated_count": 1, "best_score": 0.97},
+        ],
+        "best_candidate_id": "sangha_patch",
+        "final_score": 1.0,
+        "signals": [
+            "optimizer",
+            "society_trace",
+            "role",
+            "role_graph",
+            "proposal",
+            "evaluation",
+            "score",
+            "credit",
+            "diagnostic",
+            "search_path",
+            "critique",
+            "synthesis",
+            "steward",
+            "best_candidate",
+        ],
+        "summary": {
+            "role_count": 4,
+            "proposal_count": 5,
+            "round_count": 3,
+            "role_credit_count": 4,
+            "best_candidate_id": "sangha_patch",
+            "final_score": 1.0,
+            "has_role_graph": True,
+            "has_critique": True,
+            "has_synthesis": True,
+            "has_steward": True,
+            "duplicate_candidate_count": 0,
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Audit optimizer society trace."},
+                    {
+                        "role": "assistant",
+                        "content": "Optimizer trace includes role credit, critique, synthesis, and steward checks.",
+                        "tool_calls": [{"id": "status", "name": "optimizer_trace_status", "arguments": {}}],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "optimizer_society_trace"},
+                        "data": trace,
+                    }
+                ],
+                "metadata": {"environment_state": {"optimizer_society_trace": trace}},
+            }
+        ]
+    }
+    config = {
+        "required_optimizer_trace": [
+            "optimizer_trace",
+            "role",
+            "role_graph",
+            "proposal",
+            "evaluation",
+            "score",
+            "credit",
+            "diagnostic",
+            "search_path",
+            "critique",
+            "synthesis",
+            "steward",
+            "best_candidate",
+        ],
+        "optimizer_trace_quality": {
+            "required_roles": ["sutradhara", "vidura", "sangha", "dharma_steward"],
+            "min_role_count": 4,
+            "min_proposal_count": 5,
+            "min_round_count": 3,
+            "min_credit_entries": 4,
+            "required_archetypes": ["collective_synthesis", "prudent_critic"],
+            "required_search_paths": ["multi_agent.handoff.contract"],
+            "min_best_score": 0.99,
+            "required_best_role": "sangha",
+            "require_role_graph": True,
+            "require_diagnostics": True,
+            "require_critique": True,
+            "require_synthesis": True,
+            "require_steward": True,
+            "max_duplicate_candidate_count": 0,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["optimizer_trace_coverage"] == 1.0
+    assert scores["optimizer_trace_quality"] == 1.0
+
+    bad_trace = {
+        **trace,
+        "roles": [{"name": "sutradhara"}],
+        "proposals": [trace["proposals"][0], {**trace["proposals"][0], "candidate_id": "seed", "role": "duplicate"}],
+        "rounds": [{"round": 1}],
+        "diagnostics": [],
+        "search_paths": [],
+        "role_credit": [],
+        "best_candidate_id": "seed",
+        "final_score": 0.2,
+        "signals": ["optimizer", "role", "proposal"],
+        "summary": {
+            "role_count": 1,
+            "proposal_count": 2,
+            "round_count": 1,
+            "role_credit_count": 0,
+            "best_candidate_id": "seed",
+            "final_score": 0.2,
+            "has_role_graph": False,
+            "has_critique": False,
+            "has_synthesis": False,
+            "has_steward": False,
+            "duplicate_candidate_count": 1,
+        },
+    }
+    report["results"][0]["artifacts"][0]["data"] = bad_trace
+    report["results"][0]["metadata"]["environment_state"]["optimizer_society_trace"] = bad_trace
+
+    failing = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing.findings}
+
+    assert failing_scores["optimizer_trace_coverage"] < 1.0
+    assert failing_scores["optimizer_trace_quality"] < 1.0
+    assert {
+        "optimizer_trace_role_missing",
+        "optimizer_trace_credit_low",
+        "optimizer_trace_search_path_missing",
+        "optimizer_trace_best_score_low",
+        "optimizer_trace_role_graph_missing",
+        "optimizer_trace_diagnostics_missing",
+        "optimizer_trace_critique_missing",
+        "optimizer_trace_synthesis_missing",
+        "optimizer_trace_steward_missing",
+        "optimizer_trace_duplicate_candidates_high",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_streaming_trace_quality():
     trace = {
         "kind": "streaming_trace",
