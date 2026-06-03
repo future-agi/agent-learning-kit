@@ -32,7 +32,7 @@
 - **LLM-as-Judge** — augment local heuristics with Gemini/GPT/Claude via `augment=True`
 - **Guardrail Scanners** — jailbreak, code injection, PII, secrets detection in <10ms
 - **Streaming Assessment** — monitor token-by-token, early-stop on safety violations
-- **Agent World Replays** — score `world_attack_replay` artifacts with nested world-contract and adversarial attack-pack evidence
+- **Agent World Replays** — score `world_attack_replay` and `world_orchestration_replay` artifacts with nested orchestration, world-contract, and adversarial evidence
 - **AutoEval Pipelines** — describe your app, get an auto-configured test pipeline
 - **Feedback Loop** — store corrections in ChromaDB, retrieve as few-shot examples for the judge
 - **OpenTelemetry** — attach quality scores to traces, export to Jaeger/Datadog/Grafana

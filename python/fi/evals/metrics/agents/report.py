@@ -2188,6 +2188,14 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
     replay_state_payload = _as_dict(_as_dict(final_state.get("world_attack_replay")).get("attack_pack"))
     if replay_state_payload:
         payloads.append(replay_state_payload)
+    orchestration_replay_state = _as_dict(final_state.get("world_orchestration_replay"))
+    orchestration_replay_attack = _as_dict(orchestration_replay_state.get("attack_pack"))
+    if not orchestration_replay_attack:
+        orchestration_replay_attack = _as_dict(
+            _as_dict(orchestration_replay_state.get("world_attack_replay")).get("attack_pack")
+        )
+    if orchestration_replay_attack:
+        payloads.append(orchestration_replay_attack)
     metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
     metadata_payload = _as_dict(_as_dict(metadata_state.get("adversarial")).get("attack_pack"))
     if metadata_payload:
@@ -2197,6 +2205,14 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
     )
     if replay_metadata_payload:
         payloads.append(replay_metadata_payload)
+    orchestration_replay_metadata = _as_dict(metadata_state.get("world_orchestration_replay"))
+    orchestration_replay_metadata_attack = _as_dict(orchestration_replay_metadata.get("attack_pack"))
+    if not orchestration_replay_metadata_attack:
+        orchestration_replay_metadata_attack = _as_dict(
+            _as_dict(orchestration_replay_metadata.get("world_attack_replay")).get("attack_pack")
+        )
+    if orchestration_replay_metadata_attack:
+        payloads.append(orchestration_replay_metadata_attack)
 
     for artifact in _as_list(context.get("artifacts", [])):
         data = _as_dict(_get(artifact, "data", {}))
@@ -2207,6 +2223,12 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
             payloads.append(data)
         elif kind == "world_attack_replay":
             replay_attack_pack = _as_dict(data.get("attack_pack"))
+            if replay_attack_pack:
+                payloads.append(replay_attack_pack)
+        elif kind == "world_orchestration_replay":
+            replay_attack_pack = _as_dict(data.get("attack_pack"))
+            if not replay_attack_pack:
+                replay_attack_pack = _as_dict(_as_dict(data.get("world_attack_replay")).get("attack_pack"))
             if replay_attack_pack:
                 payloads.append(replay_attack_pack)
         elif data.get("attack_cases"):
@@ -2232,6 +2254,12 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
             payloads.append(payload)
         elif kind == "world_attack_replay":
             replay_attack_pack = _as_dict(payload.get("attack_pack"))
+            if replay_attack_pack:
+                payloads.append(replay_attack_pack)
+        elif kind == "world_orchestration_replay":
+            replay_attack_pack = _as_dict(payload.get("attack_pack"))
+            if not replay_attack_pack:
+                replay_attack_pack = _as_dict(_as_dict(payload.get("world_attack_replay")).get("attack_pack"))
             if replay_attack_pack:
                 payloads.append(replay_attack_pack)
         elif "adversarial_attack" in event_type:
@@ -11922,10 +11950,18 @@ def _orchestration_trace_payloads_from_context(context: Mapping[str, Any]) -> Li
     state_payload = _as_dict(final_state.get("orchestration_trace"))
     if state_payload:
         payloads.append(state_payload)
+    replay_state = _as_dict(final_state.get("world_orchestration_replay"))
+    replay_trace = _as_dict(replay_state.get("orchestration_trace"))
+    if replay_trace:
+        payloads.append(replay_trace)
     metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
     metadata_trace = _as_dict(metadata_state.get("orchestration_trace"))
     if metadata_trace:
         payloads.append(metadata_trace)
+    replay_metadata = _as_dict(metadata_state.get("world_orchestration_replay"))
+    replay_metadata_trace = _as_dict(replay_metadata.get("orchestration_trace"))
+    if replay_metadata_trace:
+        payloads.append(replay_metadata_trace)
 
     for artifact in _as_list(context.get("artifacts", [])):
         artifact_type = str(_get(artifact, "type", "") or "").lower()
@@ -11935,6 +11971,10 @@ def _orchestration_trace_payloads_from_context(context: Mapping[str, Any]) -> Li
         metadata = _as_dict(_get(artifact, "metadata", {}))
         if _looks_like_orchestration_trace(data, metadata):
             payloads.append(data)
+        elif str(data.get("kind") or metadata.get("kind") or "").lower() == "world_orchestration_replay":
+            replay_trace = _as_dict(data.get("orchestration_trace"))
+            if replay_trace:
+                payloads.append(replay_trace)
 
     for event in _as_list(context.get("events", [])):
         event_type = str(_get(event, "type", "") or "").lower()
@@ -11943,6 +11983,10 @@ def _orchestration_trace_payloads_from_context(context: Mapping[str, Any]) -> Li
         metadata = _as_dict(_get(event, "metadata", {}))
         if _looks_like_orchestration_trace(payload, metadata):
             payloads.append(payload)
+        elif str(payload.get("kind") or "").lower() == "world_orchestration_replay":
+            replay_trace = _as_dict(payload.get("orchestration_trace"))
+            if replay_trace:
+                payloads.append(replay_trace)
         elif "orchestration_step" in event_type:
             payloads.append({"kind": "orchestration_trace", "steps": [payload]})
         elif "orchestration" in event_type or "workflow" in event_type:
@@ -11957,6 +12001,13 @@ def _looks_like_orchestration_trace(data: Mapping[str, Any], metadata: Mapping[s
     kind = str(data.get("kind") or metadata.get("kind") or "").lower()
     if kind == "orchestration_trace":
         return True
+    if kind in {
+        "world_orchestration_replay",
+        "world_attack_replay",
+        "world_contract",
+        "adversarial_attack_pack",
+    }:
+        return False
     return any(key in data for key in ("nodes", "edges", "steps", "summary")) and any(
         token in _stringify(data).lower() or token in _stringify(metadata).lower()
         for token in ("orchestration", "workflow", "route", "handoff", "retry")
@@ -12996,6 +13047,14 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
     )
     if replay_state_payload:
         payloads.append(replay_state_payload)
+    orchestration_replay_state = _as_dict(final_state.get("world_orchestration_replay"))
+    orchestration_replay_world = _as_dict(orchestration_replay_state.get("world_contract"))
+    if not orchestration_replay_world:
+        orchestration_replay_world = _as_dict(
+            _as_dict(orchestration_replay_state.get("world_attack_replay")).get("world_contract")
+        )
+    if orchestration_replay_world:
+        payloads.append(orchestration_replay_world)
     metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
     metadata_payload = _as_dict(metadata_state.get("world_contract"))
     if metadata_payload:
@@ -13005,6 +13064,14 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
     )
     if replay_metadata_payload:
         payloads.append(replay_metadata_payload)
+    orchestration_replay_metadata = _as_dict(metadata_state.get("world_orchestration_replay"))
+    orchestration_replay_metadata_world = _as_dict(orchestration_replay_metadata.get("world_contract"))
+    if not orchestration_replay_metadata_world:
+        orchestration_replay_metadata_world = _as_dict(
+            _as_dict(orchestration_replay_metadata.get("world_attack_replay")).get("world_contract")
+        )
+    if orchestration_replay_metadata_world:
+        payloads.append(orchestration_replay_metadata_world)
 
     for artifact in _as_list(context.get("artifacts", [])):
         artifact_type = str(_get(artifact, "type", "") or "").lower()
@@ -13018,6 +13085,12 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
             replay_world = _as_dict(data.get("world_contract"))
             if replay_world:
                 payloads.append(replay_world)
+        elif str(data.get("kind") or metadata.get("kind") or "").lower() == "world_orchestration_replay":
+            replay_world = _as_dict(data.get("world_contract"))
+            if not replay_world:
+                replay_world = _as_dict(_as_dict(data.get("world_attack_replay")).get("world_contract"))
+            if replay_world:
+                payloads.append(replay_world)
 
     for event in _as_list(context.get("events", [])):
         event_type = str(_get(event, "type", "") or "").lower()
@@ -13028,6 +13101,12 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
             payloads.append(payload)
         elif str(payload.get("kind") or "").lower() == "world_attack_replay":
             replay_world = _as_dict(payload.get("world_contract"))
+            if replay_world:
+                payloads.append(replay_world)
+        elif str(payload.get("kind") or "").lower() == "world_orchestration_replay":
+            replay_world = _as_dict(payload.get("world_contract"))
+            if not replay_world:
+                replay_world = _as_dict(_as_dict(payload.get("world_attack_replay")).get("world_contract"))
             if replay_world:
                 payloads.append(replay_world)
         elif "world" in event_type or "contract" in event_type:
