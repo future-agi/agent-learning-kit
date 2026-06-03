@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -208,7 +208,10 @@ and raw TraceAI/OpenTelemetry-style span events or OTLP `resourceSpans`
 exports, so captured framework runs can be scored before or after simulator
 normalization. Framework transcript quality checks LangChain/LangGraph-style
 event streams for required projection methods, nodes, subgraphs, tool sequence,
-final state, final output, and framework errors.
+final state, final output, and framework errors. Multi-agent framework
+transcript checks also score exported speakers, speaker order, handoffs,
+tool-owner evidence, turn count, required messages, and termination markers
+from AutoGen, CrewAI, OpenAI Agents, or similar orchestration logs.
 Browser trace and grounding metrics also understand Playwright trace import
 evidence, HAR/resource-body replay, OpenAI Computer Use trace provenance,
 Browser Use history, imported actionability timelines, image-derived pixel
@@ -226,6 +229,7 @@ such as OCR text, transcripts, screenshots, file metadata, or image metadata.
 See [`examples/11_trajectory_template_evaluation.py`](examples/11_trajectory_template_evaluation.py).
 See [`examples/12_framework_transcript_quality.py`](examples/12_framework_transcript_quality.py).
 See [`examples/13_evidence_contradiction_artifact_grounding.py`](examples/13_evidence_contradiction_artifact_grounding.py).
+See [`examples/14_multi_agent_framework_transcript.py`](examples/14_multi_agent_framework_transcript.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -263,6 +267,12 @@ result = evaluate_agent_report(
             "required_nodes": ["support_agent", "policy_node"],
             "required_subgraphs": ["refund_graph"],
             "expected_tool_sequence": ["lookup_order", "issue_refund"],
+            "required_speakers": ["PlanningAgent", "WebSearchAgent", "DataAnalystAgent"],
+            "expected_speaker_sequence": ["PlanningAgent", "WebSearchAgent", "DataAnalystAgent"],
+            "expected_messages": [{"speaker": "DataAnalystAgent", "contains": ["policy-compliant"]}],
+            "expected_handoffs": [{"from_agent": "triage_agent", "to_agent": "refund_agent"}],
+            "required_tools_by_speaker": {"WebSearchAgent": ["search_policy"]},
+            "termination_contains": ["TERMINATE"],
             "expected_state": {"case": {"status": "resolved"}},
             "output_contains": ["refund approved"],
         },

@@ -17,6 +17,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 11 | [Evaluate Agent Trajectory Templates](11_trajectory_template_evaluation.py) | Score one reusable rubric for goal accuracy, ordered tool calls, Tool Call F1, policy adherence, browser action safety, memory correctness, and multimodal faithfulness | No |
 | 12 | [Score Framework Transcript Quality](12_framework_transcript_quality.py) | Check LangGraph/LangChain event-stream methods, nodes, subgraphs, tool sequence, final state, output, and errors | No |
 | 13 | [Catch Evidence Contradictions and Artifact Grounding Gaps](13_evidence_contradiction_artifact_grounding.py) | Detect answer claims contradicted by cited source text and verify artifact-backed claims against OCR/transcript/metadata evidence | No |
+| 14 | [Score Multi-Agent Framework Transcripts](14_multi_agent_framework_transcript.py) | Check exported AutoGen/CrewAI/OpenAI Agents-style speakers, handoffs, tool owners, turns, and termination evidence | No |
 
 ## Quick Start
 
@@ -46,3 +47,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 11**: Define one trajectory template and score agent goal accuracy, ordered tool calls, Tool Call F1, policy adherence, browser action safety, memory correctness, and multimodal artifact support without API keys
 - **Cookbook 12**: Score LangGraph/LangChain event-stream transcript quality from plain dictionaries: required methods, nodes, subgraphs, tool sequence, final state, final output, and framework errors
 - **Cookbook 13**: Catch source-supported contradictions and artifact grounding failures from local report dictionaries before reaching for an LLM judge
+- **Cookbook 14**: Score multi-agent framework transcript quality from exported speaker, handoff, tool-owner, and termination records without installing the source framework

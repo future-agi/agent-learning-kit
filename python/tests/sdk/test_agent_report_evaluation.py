@@ -2485,6 +2485,104 @@ def test_evaluate_agent_report_scores_framework_transcript_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_multi_agent_framework_transcript_quality():
+    quality = {
+        "required_speakers": ["PlanningAgent", "WebSearchAgent", "DataAnalystAgent"],
+        "expected_speaker_sequence": ["PlanningAgent", "WebSearchAgent", "DataAnalystAgent"],
+        "min_turns": 3,
+        "expected_messages": [
+            {"speaker": "PlanningAgent", "contains": ["WebSearchAgent", "DataAnalystAgent"]},
+            {"speaker": "DataAnalystAgent", "contains": ["refund is policy-compliant"]},
+        ],
+        "expected_handoffs": [
+            {
+                "from_agent": "triage_agent",
+                "to_agent": "refund_agent",
+                "task_contains": ["order 123"],
+            }
+        ],
+        "required_tools_by_speaker": {"WebSearchAgent": ["search_policy"]},
+        "termination_contains": ["TERMINATE"],
+    }
+    records = [
+        {
+            "type": "TextMessage",
+            "speaker": "PlanningAgent",
+            "message_text": "1. WebSearchAgent: search order 123. 2. DataAnalystAgent: verify refund.",
+            "signals": ["agent", "model"],
+        },
+        {
+            "type": "ToolCallRequestEvent",
+            "speaker": "WebSearchAgent",
+            "tool_name": "search_policy",
+            "signals": ["tool"],
+        },
+        {
+            "type": "handoff_span",
+            "handoff_from": "triage_agent",
+            "handoff_to": "refund_agent",
+            "task": "order 123 refund policy escalation",
+            "signals": ["handoff"],
+        },
+        {
+            "type": "TextMessage",
+            "speaker": "DataAnalystAgent",
+            "message_text": "The refund is policy-compliant. TERMINATE",
+            "termination": "TERMINATE",
+            "signals": ["agent", "model"],
+        },
+    ]
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Resolve refund for order 123."},
+                    {"role": "assistant", "content": "The refund is policy-compliant."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "autogen"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "autogen",
+                            "events": records,
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config={"framework_transcript_quality": quality})
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_transcript_quality"] == 1.0
+
+    report["results"][0]["artifacts"][0]["data"]["events"] = [
+        {
+            "type": "TextMessage",
+            "speaker": "PlanningAgent",
+            "message_text": "I will answer directly.",
+            "signals": ["agent", "model"],
+        }
+    ]
+    failing_result = evaluate_agent_report(report, config={"framework_transcript_quality": quality})
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["framework_transcript_quality"] < 1.0
+    assert {
+        "missing_framework_speaker",
+        "framework_speaker_sequence_mismatch",
+        "framework_turn_count_low",
+        "framework_message_missing",
+        "framework_handoff_mismatch",
+        "framework_tool_owner_mismatch",
+        "framework_termination_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_raw_otlp_framework_trace_export():
     report = {
         "results": [

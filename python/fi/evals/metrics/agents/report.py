@@ -2815,6 +2815,12 @@ def _framework_transcript_quality_metric(
     observed_nodes = _framework_transcript_nodes(records)
     observed_subgraphs = _framework_transcript_subgraphs(records)
     observed_tools = _framework_transcript_tools(records)
+    speaker_sequence = _framework_transcript_speaker_sequence(records)
+    observed_speakers = set(speaker_sequence)
+    transcript_messages = _framework_transcript_messages(records)
+    transcript_handoffs = _framework_transcript_handoffs(records)
+    tools_by_speaker = _framework_transcript_tools_by_speaker(records)
+    termination_text = _framework_transcript_termination_text(records)
     flattened_state = _framework_transcript_state(records, payloads)
     output_text = _framework_transcript_output_text(context, records, payloads)
     errors = _framework_transcript_errors(records)
@@ -2880,6 +2886,98 @@ def _framework_transcript_quality_metric(
             observed=observed_tools,
         )
 
+    for speaker in _string_list(requirements.get("required_speakers") or requirements.get("required_agents")):
+        normalized = _normalize_framework_name(speaker)
+        matched = _framework_name_observed(normalized, observed_speakers)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="speaker",
+            target=speaker,
+            matched=matched,
+            finding_type="missing_framework_speaker",
+            observed=speaker_sequence,
+        )
+
+    expected_speakers = [
+        _normalize_framework_name(item)
+        for item in _string_list(
+            requirements.get("expected_speaker_sequence")
+            or requirements.get("speaker_sequence")
+            or requirements.get("required_speaker_sequence")
+        )
+    ]
+    expected_speakers = [speaker for speaker in expected_speakers if speaker]
+    if expected_speakers:
+        matched = _contains_subsequence(speaker_sequence, expected_speakers)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="speaker_sequence",
+            target=expected_speakers,
+            matched=matched,
+            finding_type="framework_speaker_sequence_mismatch",
+            observed=speaker_sequence,
+        )
+
+    min_turns = _int_config(requirements.get("min_turns") or requirements.get("required_min_turns"))
+    if min_turns is not None:
+        turn_count = len(speaker_sequence)
+        matched = turn_count >= min_turns
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="min_turns",
+            target=min_turns,
+            matched=matched,
+            finding_type="framework_turn_count_low",
+            observed=turn_count,
+        )
+
+    for raw_message in _as_list(requirements.get("expected_messages") or requirements.get("required_messages")):
+        message = _as_dict(raw_message)
+        if not message and isinstance(raw_message, str):
+            message = {"contains": [raw_message]}
+        if not message:
+            continue
+        matched = any(_framework_message_matches_expected(item, message) for item in transcript_messages)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="message",
+            target=message,
+            matched=matched,
+            finding_type="framework_message_missing",
+            observed=transcript_messages,
+        )
+
+    for raw_handoff in _as_list(requirements.get("expected_handoffs") or requirements.get("handoffs")):
+        handoff = _as_dict(raw_handoff)
+        if not handoff:
+            continue
+        matched = any(_framework_handoff_matches_expected(item, handoff) for item in transcript_handoffs)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="handoff",
+            target=handoff,
+            matched=matched,
+            finding_type="framework_handoff_mismatch",
+            observed=transcript_handoffs,
+        )
+
+    for expected in _framework_required_tools_by_speaker(requirements):
+        matched = any(_framework_tool_owner_matches_expected(item, expected) for item in tools_by_speaker)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="tool_owner",
+            target=expected,
+            matched=matched,
+            finding_type="framework_tool_owner_mismatch",
+            observed=tools_by_speaker,
+        )
+
     for term in _string_list(requirements.get("output_contains") or requirements.get("final_output_contains")):
         matched = _text_contains(output_text, term)
         _append_framework_transcript_check(
@@ -2890,6 +2988,23 @@ def _framework_transcript_quality_metric(
             matched=matched,
             finding_type="framework_output_missing",
             observed=output_text,
+        )
+
+    termination_terms = _string_list(requirements.get("termination_contains"))
+    require_termination = bool(requirements.get("require_termination")) or bool(termination_terms)
+    if require_termination:
+        matched = bool(termination_text) and all(
+            _text_contains(termination_text, term)
+            for term in termination_terms
+        )
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="termination",
+            target=termination_terms or "termination observed",
+            matched=matched,
+            finding_type="framework_termination_missing",
+            observed=termination_text,
         )
 
     expected_state = _as_dict(requirements.get("expected_state") or requirements.get("state"))
@@ -2938,6 +3053,11 @@ def _framework_transcript_quality_metric(
                 "nodes": sorted(observed_nodes),
                 "subgraphs": sorted(observed_subgraphs),
                 "tool_sequence": observed_tools,
+                "speaker_sequence": speaker_sequence,
+                "messages": transcript_messages,
+                "handoffs": transcript_handoffs,
+                "tools_by_speaker": tools_by_speaker,
+                "termination": termination_text,
                 "state": flattened_state,
                 "errors": errors,
             },
@@ -4888,6 +5008,104 @@ def _framework_transcript_tools(records: Sequence[Mapping[str, Any]]) -> List[st
     return tools
 
 
+def _framework_transcript_speaker_sequence(records: Sequence[Mapping[str, Any]]) -> List[str]:
+    speakers: List[str] = []
+    for record in records:
+        speaker = _framework_record_speaker(record)
+        if speaker:
+            normalized = _normalize_framework_name(speaker)
+            if normalized:
+                speakers.append(normalized)
+    return speakers
+
+
+def _framework_transcript_messages(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    for record in records:
+        event = _framework_record_event(record)
+        text = (
+            record.get("message_text")
+            or record.get("text")
+            or (record.get("content") if isinstance(record.get("content"), str) else "")
+            or event.get("message_text")
+            or event.get("text")
+            or ""
+        )
+        if not text:
+            continue
+        messages.append(
+            {
+                "speaker": _normalize_framework_name(_framework_record_speaker(record)),
+                "message_type": _normalize_framework_name(record.get("message_type") or event.get("message_type")),
+                "text": str(text),
+            }
+        )
+    return messages
+
+
+def _framework_transcript_handoffs(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    handoffs: List[Dict[str, Any]] = []
+    for record in records:
+        event = _framework_record_event(record)
+        handoff_from = (
+            record.get("handoff_from")
+            or event.get("handoff_from")
+            or _as_dict(record.get("attributes", {})).get("from_agent")
+        )
+        handoff_to = (
+            record.get("handoff_to")
+            or event.get("handoff_to")
+            or _as_dict(record.get("attributes", {})).get("to_agent")
+        )
+        signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+        text = _stringify(record)[:2000]
+        if not handoff_to and "handoff" not in signals and "handoff" not in text.lower():
+            continue
+        handoffs.append(
+            {
+                "from": _normalize_framework_name(handoff_from or _framework_record_speaker(record)),
+                "to": _normalize_framework_name(handoff_to or event.get("recipient") or record.get("recipient")),
+                "task": _stringify(record.get("task") or event.get("task")),
+                "text": text,
+            }
+        )
+    return handoffs
+
+
+def _framework_transcript_tools_by_speaker(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, str]]:
+    tools: List[Dict[str, str]] = []
+    for record in records:
+        tool = _framework_record_tool_name(record)
+        if not tool:
+            continue
+        tools.append(
+            {
+                "speaker": _normalize_framework_name(_framework_record_speaker(record)),
+                "tool": _normalize_framework_name(tool),
+            }
+        )
+    return tools
+
+
+def _framework_transcript_termination_text(records: Sequence[Mapping[str, Any]]) -> str:
+    parts: List[str] = []
+    for record in records:
+        event = _framework_record_event(record)
+        for value in (
+            record.get("termination"),
+            event.get("termination"),
+            record.get("message_text"),
+            record.get("content") if isinstance(record.get("content"), str) else "",
+            event.get("message_text"),
+            record.get("output"),
+            event.get("final_output"),
+        ):
+            text = _stringify(value)
+            if text and any(term in text.lower() for term in ("terminate", "termination", "completed", "final_answer")):
+                parts.append(text)
+    return "\n".join(parts)
+
+
 def _framework_transcript_state(
     records: Sequence[Mapping[str, Any]],
     payloads: Sequence[Mapping[str, Any]],
@@ -4979,9 +5197,42 @@ def _framework_record_event(record: Mapping[str, Any]) -> Dict[str, Any]:
         "method": record.get("method"),
         "namespace": params.get("namespace") or record.get("namespace"),
         "node": record.get("node") or data.get("node"),
+        "speaker": record.get("speaker") or record.get("source") or data.get("speaker") or data.get("source") or attributes.get("speaker") or attributes.get("agent.name"),
+        "recipient": record.get("recipient") or data.get("recipient") or data.get("target"),
+        "message_type": record.get("message_type") or data.get("type") or record.get("type"),
+        "handoff_from": record.get("handoff_from") or data.get("from_agent") or attributes.get("from_agent"),
+        "handoff_to": record.get("handoff_to") or data.get("to_agent") or attributes.get("to_agent"),
+        "task": record.get("task") or data.get("task") or data.get("description"),
+        "termination": record.get("termination") or data.get("termination"),
         "tool_name": data.get("tool_name") or data.get("name"),
+        "message_text": record.get("message_text") or (record.get("content") if isinstance(record.get("content"), str) else "") or data.get("content") or data.get("text"),
         "data": data,
     }
+
+
+def _framework_record_speaker(record: Mapping[str, Any]) -> str:
+    event = _framework_record_event(record)
+    attributes = _as_dict(record.get("attributes", {}))
+    data = _as_dict(event.get("data"))
+    for value in (
+        record.get("speaker"),
+        record.get("source"),
+        event.get("speaker"),
+        data.get("speaker"),
+        data.get("source"),
+        record.get("node"),
+        event.get("node"),
+        attributes.get("speaker"),
+        attributes.get("source"),
+        attributes.get("agent.name"),
+        attributes.get("autogen.agent.name"),
+        attributes.get("crewai.agent.role"),
+        attributes.get("crewai.agent.name"),
+        attributes.get("openai.agent.name"),
+    ):
+        if value:
+            return str(value)
+    return ""
 
 
 def _framework_record_tool_name(record: Mapping[str, Any]) -> str:
@@ -4999,6 +5250,14 @@ def _framework_record_tool_name(record: Mapping[str, Any]) -> str:
     ):
         if value:
             return str(value)
+    for key in ("content", "tool_calls", "function_calls", "calls"):
+        for item in _as_list(record.get(key)):
+            item_dict = _as_dict(item)
+            if item_dict.get("name") or item_dict.get("tool_name"):
+                return str(item_dict.get("name") or item_dict.get("tool_name"))
+            function = _as_dict(item_dict.get("function"))
+            if function.get("name"):
+                return str(function.get("name"))
     signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
     name = str(record.get("name") or "")
     if "tool" in signals and name:
@@ -5008,6 +5267,71 @@ def _framework_record_tool_name(record: Mapping[str, Any]) -> str:
                 return name[len(prefix):].strip(" :-_")
         return name
     return ""
+
+
+def _framework_message_matches_expected(message: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    speaker = expected.get("speaker") or expected.get("agent")
+    if speaker and _normalize_framework_name(message.get("speaker")) != _normalize_framework_name(speaker):
+        return False
+    terms = _string_list(
+        expected.get("contains")
+        or expected.get("terms")
+        or expected.get("text_contains")
+        or expected.get("content_contains")
+    )
+    text = str(message.get("text") or "")
+    return all(_text_contains(text, term) for term in terms) if terms else bool(text)
+
+
+def _framework_handoff_matches_expected(handoff: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    expected_from = expected.get("from") or expected.get("from_agent") or expected.get("source")
+    expected_to = expected.get("to") or expected.get("to_agent") or expected.get("target")
+    if expected_from and handoff.get("from") != _normalize_framework_name(expected_from):
+        return False
+    if expected_to and handoff.get("to") != _normalize_framework_name(expected_to):
+        return False
+    terms = _string_list(expected.get("task_contains") or expected.get("contains") or expected.get("terms"))
+    text = " ".join([str(handoff.get("task") or ""), str(handoff.get("text") or "")])
+    return all(_text_contains(text, term) for term in terms) if terms else bool(handoff.get("to"))
+
+
+def _framework_required_tools_by_speaker(requirements: Mapping[str, Any]) -> List[Dict[str, str]]:
+    raw = (
+        requirements.get("required_tools_by_speaker")
+        or requirements.get("tools_by_speaker")
+        or requirements.get("expected_tools_by_speaker")
+    )
+    expected: List[Dict[str, str]] = []
+    if isinstance(raw, Mapping):
+        for speaker, tools in raw.items():
+            for tool in _string_list(tools):
+                expected.append({"speaker": _normalize_framework_name(speaker), "tool": _normalize_framework_name(tool)})
+        return expected
+    for item in _as_list(raw):
+        item_dict = _as_dict(item)
+        if not item_dict:
+            continue
+        speaker = item_dict.get("speaker") or item_dict.get("agent")
+        for tool in _string_list(item_dict.get("tools") or item_dict.get("tool") or item_dict.get("name")):
+            expected.append({"speaker": _normalize_framework_name(speaker), "tool": _normalize_framework_name(tool)})
+    return expected
+
+
+def _framework_tool_owner_matches_expected(actual: Mapping[str, str], expected: Mapping[str, str]) -> bool:
+    if expected.get("speaker") and actual.get("speaker") != expected.get("speaker"):
+        return False
+    if expected.get("tool") and actual.get("tool") != expected.get("tool"):
+        return False
+    return bool(actual.get("tool"))
+
+
+def _int_config(value: Any) -> Optional[int]:
+    if value in (None, "", [], {}):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _framework_expected_tool_name(item: Any) -> str:
