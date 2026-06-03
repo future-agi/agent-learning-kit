@@ -5102,6 +5102,184 @@ def test_evaluate_agent_report_scores_framework_lifecycle_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_framework_capability_matrix():
+    capability_matrix = {
+        "kind": "framework_capability_matrix",
+        "name": "langgraph-capabilities",
+        "framework": "langgraph",
+        "version": "1.0",
+        "signals": [
+            "framework_capability",
+            "tool_calling",
+            "long_term_memory",
+            "streaming_deltas",
+            "checkpoint_resume",
+            "workflow_graph",
+            "policy_guardrails",
+            "otel_trace_export",
+            "futureagi_export",
+            "task_surface",
+        ],
+        "summary": {
+            "capability_count": 9,
+            "supported_count": 9,
+            "partial_count": 0,
+            "missing_count": 0,
+            "blocked_count": 0,
+            "support_rate": 1.0,
+            "evidence_count": 9,
+            "categories": ["tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "supported_categories": ["tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "supported_capabilities": [
+                "tool_calling",
+                "long_term_memory",
+                "streaming_deltas",
+                "checkpoint_resume",
+                "workflow_graph",
+                "policy_guardrails",
+                "otel_trace_export",
+                "futureagi_export",
+                "mcp_tool_session",
+            ],
+            "missing_capabilities": [],
+            "blocked_capabilities": [],
+            "task_surfaces": ["support_chat", "refund_workflow", "browser_research"],
+            "integrations": ["futureagi", "mcp", "otel"],
+        },
+        "capabilities": [
+            {"name": "tool_calling", "category": "tools", "status": "supported", "evidence": [{"type": "trace", "id": "tool"}]},
+            {"name": "mcp_tool_session", "category": "tools", "status": "supported", "evidence": [{"type": "trace", "id": "mcp"}]},
+            {"name": "long_term_memory", "category": "memory", "status": "supported", "evidence": [{"type": "trace", "id": "memory"}]},
+            {"name": "streaming_deltas", "category": "streaming", "status": "supported", "evidence": [{"type": "trace", "id": "stream"}]},
+            {"name": "checkpoint_resume", "category": "lifecycle", "status": "supported", "evidence": [{"type": "trace", "id": "checkpoint"}]},
+            {"name": "workflow_graph", "category": "orchestration", "status": "supported", "evidence": [{"type": "trace", "id": "graph"}]},
+            {"name": "policy_guardrails", "category": "security", "status": "supported", "evidence": [{"type": "trace", "id": "policy"}]},
+            {"name": "otel_trace_export", "category": "observability", "status": "supported", "evidence": [{"type": "trace", "id": "otel"}]},
+            {"name": "futureagi_export", "category": "exports", "status": "supported", "evidence": [{"type": "trace", "id": "export"}]},
+        ],
+        "task_surfaces": [{"name": "support_chat"}, {"name": "refund_workflow"}, {"name": "browser_research"}],
+        "integrations": [{"name": "futureagi"}, {"name": "mcp"}, {"name": "otel"}],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Capability matrix captured."}],
+                "tool_calls": [
+                    {"id": "status", "name": "framework_capability_status", "arguments": {}},
+                    {"id": "tools", "name": "list_framework_capabilities", "arguments": {"category": "tools"}},
+                    {"id": "surface", "name": "list_framework_task_surfaces", "arguments": {}},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_capability_matrix", "framework": "langgraph"},
+                        "data": capability_matrix,
+                    }
+                ],
+                "metadata": {"environment_state": {"framework_capability_matrix": capability_matrix}},
+            }
+        ]
+    }
+    config = {
+        "required_framework_capabilities": [
+            "framework_capability",
+            "tool_calling",
+            "long_term_memory",
+            "streaming_deltas",
+            "checkpoint_resume",
+            "workflow_graph",
+            "policy_guardrails",
+            "otel_trace_export",
+            "futureagi_export",
+        ],
+        "framework_capability_quality": {
+            "framework": "langgraph",
+            "required_capabilities": [
+                "tool_calling",
+                "long_term_memory",
+                "streaming_deltas",
+                "checkpoint_resume",
+                "workflow_graph",
+                "policy_guardrails",
+                "otel_trace_export",
+                "futureagi_export",
+            ],
+            "required_categories": ["tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "required_task_surfaces": ["support_chat", "refund_workflow", "browser_research"],
+            "required_integrations": ["futureagi", "mcp"],
+            "min_supported_capabilities": 8,
+            "min_support_rate": 0.95,
+            "require_evidence": True,
+            "max_missing_capabilities": 0,
+            "forbidden_missing_capabilities": ["tool_calling", "policy_guardrails"],
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+            "require_lifecycle": True,
+            "require_orchestration": True,
+            "require_security": True,
+            "require_observability": True,
+            "require_exports": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_capability_coverage"] == 1.0
+    assert scores["framework_capability_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_matrix = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_report["results"][0]["metadata"]["environment_state"]["framework_capability_matrix"] = bad_matrix
+    bad_matrix["signals"] = ["framework_capability", "tool_calling", "checkpoint_resume"]
+    bad_matrix["summary"] = {
+        "capability_count": 5,
+        "supported_count": 2,
+        "partial_count": 0,
+        "missing_count": 3,
+        "blocked_count": 0,
+        "support_rate": 0.4,
+        "evidence_count": 0,
+        "categories": ["tools", "lifecycle"],
+        "supported_categories": ["tools", "lifecycle"],
+        "supported_capabilities": ["tool_calling", "checkpoint_resume"],
+        "missing_capabilities": ["long_term_memory", "streaming_deltas", "policy_guardrails"],
+        "blocked_capabilities": [],
+        "task_surfaces": ["support_chat"],
+        "integrations": ["mcp"],
+    }
+    bad_matrix["capabilities"] = [
+        {"name": "tool_calling", "category": "tools", "status": "supported", "evidence": []},
+        {"name": "checkpoint_resume", "category": "lifecycle", "status": "supported", "evidence": []},
+        {"name": "long_term_memory", "category": "memory", "status": "missing", "evidence": []},
+        {"name": "streaming_deltas", "category": "streaming", "status": "missing", "evidence": []},
+        {"name": "policy_guardrails", "category": "security", "status": "missing", "evidence": []},
+    ]
+    bad_matrix["task_surfaces"] = [{"name": "support_chat"}]
+    bad_matrix["integrations"] = [{"name": "mcp"}]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["framework_capability_coverage"] < 1.0
+    assert bad_scores["framework_capability_quality"] < 1.0
+    assert {
+        "missing_framework_capability_key",
+        "framework_capability_required_capability_missing",
+        "framework_capability_category_missing",
+        "framework_capability_task_surface_missing",
+        "framework_capability_supported_count_low",
+        "framework_capability_support_rate_low",
+        "framework_capability_evidence_missing",
+        "framework_capability_missing_count_high",
+        "framework_capability_forbidden_missing",
+        "framework_capability_streaming_missing",
+        "framework_capability_security_missing",
+        "framework_capability_integration_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_observability_replay_pack_quality():
     replay_pack = {
         "kind": "observability_replay_pack",

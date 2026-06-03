@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, observability replay coverage, observability replay quality, optimizer trace coverage, optimizer trace quality with governance checks, framework trace coverage, framework runtime coverage, framework runtime contract, framework lifecycle coverage, framework lifecycle quality, framework transcript quality with checkpoint/session-state checks, orchestration trace coverage, orchestration flow quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, browser storage/runtime capture, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, observability replay coverage, observability replay quality, optimizer trace coverage, optimizer trace quality with governance checks, framework trace coverage, framework runtime coverage, framework runtime contract, framework lifecycle coverage, framework lifecycle quality, framework capability coverage, framework capability quality, framework transcript quality with checkpoint/session-state checks, orchestration trace coverage, orchestration flow quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, browser storage/runtime capture, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -210,7 +210,7 @@ normalization. MCP tool-session traces can also provide tools/list schemas,
 tool calls, structured results, and errors for `tool_argument_schema` and
 `tool_outcome` scoring. Framework runtime coverage and contract metrics score
 live `framework_runtime` trace artifacts for method, input mode, output
-evidence, tool calls, artifacts, events, metadata keys, and errors. Framework lifecycle metrics score setup, tool registration, session, checkpoint, retry, cancellation/resume, cleanup, state persistence, terminal status, and error/recovery evidence. Framework transcript quality checks LangChain/LangGraph-style
+evidence, tool calls, artifacts, events, metadata keys, and errors. Framework lifecycle metrics score setup, tool registration, session, checkpoint, retry, cancellation/resume, cleanup, state persistence, terminal status, and error/recovery evidence. Framework capability metrics score support for tools, memory, streaming, lifecycle, orchestration, security, observability, exports, task surfaces, integrations, and evidence before a framework is trusted as optimization input. Framework transcript quality checks LangChain/LangGraph-style
 event streams for required projection methods, nodes, subgraphs, tool sequence,
 final state, final output, and framework errors. Multi-agent framework
 transcript checks also score exported speakers, speaker order, handoffs,
@@ -300,6 +300,17 @@ result = evaluate_agent_report(
         "expected_autonomy_skills": [{"name": "refund_policy_check", "required_steps": ["lookup", "verify"]}],
         "expected_autonomy_stop": {"should_stop": True},
         "required_framework_trace": ["agent", "model", "tool", "handoff", "guardrail"],
+        "required_framework_capabilities": ["tool_calling", "long_term_memory", "streaming_deltas", "workflow_graph"],
+        "framework_capability_quality": {
+            "required_categories": ["tools", "memory", "streaming", "orchestration", "security", "observability", "exports"],
+            "required_task_surfaces": ["support_chat", "refund_workflow"],
+            "min_supported_capabilities": 7,
+            "min_support_rate": 0.85,
+            "require_evidence": True,
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+        },
         "required_orchestration_trace": ["workflow", "node", "route", "handoff", "tool", "retry", "recovered", "latency", "cost", "state"],
         "orchestration_trace_quality": {
             "required_nodes": ["triage_agent", "policy_agent", "refund_tool"],

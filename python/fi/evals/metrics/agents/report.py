@@ -185,6 +185,8 @@ class AgentReportEvalConfig(BaseModel):
     required_framework_lifecycle: List[str] = Field(default_factory=list)
     framework_lifecycle_quality: Dict[str, Any] = Field(default_factory=dict)
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
+    required_framework_capabilities: List[str] = Field(default_factory=list)
+    framework_capability_quality: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
@@ -387,6 +389,8 @@ class AgentReportEvaluator:
                 *_framework_lifecycle_coverage_metrics(report_context, config),
                 *_framework_lifecycle_quality_metrics(report_context, config),
                 *_framework_adapter_conformance_metrics(report_context, config),
+                *_framework_capability_coverage_metrics(report_context, config),
+                *_framework_capability_quality_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
@@ -4996,6 +5000,248 @@ def _framework_adapter_conformance_metric(
             "checks": checks,
             "findings": findings,
             "observed": {"signals": sorted(observed_signals)},
+        },
+    )
+
+
+def _framework_capability_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_framework_capabilities and not _framework_capability_payloads_from_context(context):
+        return []
+    return [_framework_capability_coverage_metric(context, config)]
+
+
+def _framework_capability_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_capability_key(key) for key in config.required_framework_capabilities]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_capability_coverage",
+            score=1.0,
+            reason="No required framework capability keys provided.",
+        )
+    observed = _framework_capability_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="framework_capability_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required framework capability evidence observed."
+            if not missing
+            else f"Missing framework capability evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_framework_capability_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _framework_capability_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_capability_quality:
+        return []
+    return [_framework_capability_quality_metric(context, config.framework_capability_quality)]
+
+
+def _framework_capability_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _framework_capability_summary(_framework_capability_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    expected_framework = requirements.get("framework") or requirements.get("required_framework")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_framework_capability_key(expected_framework)
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="framework_capability_framework_mismatch",
+        )
+
+    required_capabilities = _string_list(
+        requirements.get("required_capabilities")
+        or requirements.get("capabilities")
+        or requirements.get("supported_capabilities")
+    )
+    for capability in required_capabilities:
+        normalized = _normalize_framework_capability_key(capability)
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="required_capability",
+            expected=normalized,
+            actual=observed["supported_capabilities"],
+            match=normalized in observed["supported_capabilities"],
+            finding_type="framework_capability_required_capability_missing",
+        )
+
+    for category in _string_list(requirements.get("required_categories") or requirements.get("categories")):
+        normalized = _normalize_framework_capability_category(category)
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="required_category",
+            expected=normalized,
+            actual=observed["supported_categories"],
+            match=normalized in observed["supported_categories"],
+            finding_type="framework_capability_category_missing",
+        )
+
+    for surface in _string_list(requirements.get("required_task_surfaces") or requirements.get("task_surfaces")):
+        normalized = _normalize_framework_capability_key(surface)
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="required_task_surface",
+            expected=normalized,
+            actual=observed["task_surfaces"],
+            match=normalized in observed["task_surfaces"],
+            finding_type="framework_capability_task_surface_missing",
+        )
+
+    min_supported = _as_int(
+        requirements.get("min_supported_capabilities")
+        or requirements.get("min_supported_count")
+    )
+    if min_supported is not None:
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="min_supported_capabilities",
+            expected=min_supported,
+            actual=observed["supported_count"],
+            match=observed["supported_count"] >= min_supported,
+            finding_type="framework_capability_supported_count_low",
+        )
+
+    min_support_rate = _as_float(requirements.get("min_support_rate"))
+    if min_support_rate is not None:
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="min_support_rate",
+            expected=min_support_rate,
+            actual=observed["support_rate"],
+            match=observed["support_rate"] >= min_support_rate,
+            finding_type="framework_capability_support_rate_low",
+        )
+
+    if requirements.get("require_evidence") is not None:
+        required = bool(requirements.get("require_evidence"))
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="require_evidence",
+            expected=required,
+            actual=observed["evidence_count"] > 0,
+            match=(observed["evidence_count"] > 0) is required,
+            finding_type="framework_capability_evidence_missing",
+        )
+
+    max_missing = _as_int(requirements.get("max_missing_capabilities"))
+    if max_missing is None:
+        max_missing = _as_int(requirements.get("max_missing_count"))
+    if max_missing is not None:
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="max_missing_capabilities",
+            expected=max_missing,
+            actual=observed["missing_count"],
+            match=observed["missing_count"] <= max_missing,
+            finding_type="framework_capability_missing_count_high",
+        )
+
+    forbidden_missing = [
+        _normalize_framework_capability_key(capability)
+        for capability in _string_list(requirements.get("forbidden_missing_capabilities"))
+        if _normalize_framework_capability_key(capability)
+    ]
+    for capability in forbidden_missing:
+        actual_missing = sorted(set(observed["missing_capabilities"]) | set(observed["blocked_capabilities"]))
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="forbidden_missing_capability",
+            expected=capability,
+            actual=actual_missing,
+            match=capability not in actual_missing,
+            finding_type="framework_capability_forbidden_missing",
+        )
+
+    bool_checks = (
+        ("require_tools", "has_tools", "framework_capability_tools_missing"),
+        ("require_memory", "has_memory", "framework_capability_memory_missing"),
+        ("require_streaming", "has_streaming", "framework_capability_streaming_missing"),
+        ("require_lifecycle", "has_lifecycle", "framework_capability_lifecycle_missing"),
+        ("require_orchestration", "has_orchestration", "framework_capability_orchestration_missing"),
+        ("require_security", "has_security", "framework_capability_security_missing"),
+        ("require_observability", "has_observability", "framework_capability_observability_missing"),
+        ("require_exports", "has_exports", "framework_capability_exports_missing"),
+    )
+    for key, observed_key, finding_type in bool_checks:
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[observed_key],
+            match=observed[observed_key] is required,
+            finding_type=finding_type,
+        )
+
+    for integration in _string_list(requirements.get("required_integrations") or requirements.get("integrations")):
+        normalized = _normalize_framework_capability_key(integration)
+        _append_framework_capability_check(
+            checks,
+            findings,
+            check="required_integration",
+            expected=normalized,
+            actual=observed["integrations"],
+            match=normalized in observed["integrations"],
+            finding_type="framework_capability_integration_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_capability_quality",
+            score=1.0,
+            reason="No framework capability quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_capability_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework capability quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
         },
     )
 
@@ -11740,6 +11986,362 @@ def _normalize_framework_lifecycle_stage(value: Any) -> str:
 
 def _normalize_framework_lifecycle_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _framework_capability_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type not in {"trace", "json", "config", "capability"}:
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_capability(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_capability(payload, metadata):
+            payloads.append(payload)
+        elif "framework_capability" in event_type:
+            if _as_list(payload.get("capabilities", [])):
+                payloads.append({"kind": "framework_capability_matrix", **payload})
+            elif {"name", "status"} & set(payload):
+                payloads.append({"kind": "framework_capability_matrix", "capabilities": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("framework_capability_matrix"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _framework_capability_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _framework_capability_payloads_from_context(context):
+        observed.update({"framework_capability", "capability_matrix", "capability"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_capability_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for collection_key in (
+            "categories",
+            "supported_categories",
+            "supported_capabilities",
+            "partial_capabilities",
+            "missing_capabilities",
+            "blocked_capabilities",
+            "task_surfaces",
+            "integrations",
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = _normalize_framework_capability_key(item)
+                if normalized:
+                    observed.add(normalized)
+        for capability in _framework_capability_records([payload]):
+            capability_dict = _as_dict(capability)
+            for key in ("name", "category", "status"):
+                normalized = _normalize_framework_capability_key(capability_dict.get(key))
+                if normalized:
+                    observed.add(normalized)
+            for signal in _as_list(capability_dict.get("signals", [])):
+                normalized = _normalize_framework_capability_key(signal)
+                if normalized:
+                    observed.add(normalized)
+        for surface in _as_list(payload.get("task_surfaces", [])):
+            surface_dict = _as_dict(surface)
+            normalized = _normalize_framework_capability_key(surface_dict.get("name") or surface)
+            if normalized:
+                observed.add(normalized)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = _normalize_framework_capability_key(_get(tool_call, "name", _get(tool_call, "tool", "")))
+        if name in {
+            "framework_capability_status",
+            "list_framework_capabilities",
+            "inspect_framework_capability",
+            "list_framework_task_surfaces",
+        }:
+            observed.update({"framework_capability", "capability_matrix", "capability"})
+        if name:
+            observed.add(name)
+    return observed
+
+
+def _looks_like_framework_capability(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_capability_matrix" or (
+        "capabilities" in data and ("summary" in data or "framework" in data)
+    )
+
+
+def _framework_capability_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    categories: set[str] = set()
+    supported_categories: set[str] = set()
+    supported_capabilities: set[str] = set()
+    partial_capabilities: set[str] = set()
+    missing_capabilities: set[str] = set()
+    blocked_capabilities: set[str] = set()
+    task_surfaces: set[str] = set()
+    integrations: set[str] = set()
+    signals: set[str] = set()
+    evidence_count = 0
+    capability_records: List[Dict[str, Any]] = []
+    seen_capabilities: set[str] = set()
+    summary_supported_count = 0
+    summary_partial_count = 0
+    summary_missing_count = 0
+    summary_blocked_count = 0
+    summary_capability_count = 0
+    summary_evidence_count = 0
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        framework = _normalize_framework_capability_key(payload_dict.get("framework"))
+        if framework:
+            frameworks.add(framework)
+        for signal in _as_list(payload_dict.get("signals", [])):
+            normalized = _normalize_framework_capability_key(signal)
+            if normalized:
+                signals.add(normalized)
+        summary = _as_dict(payload_dict.get("summary"))
+        summary_capability_count = max(summary_capability_count, _as_int(summary.get("capability_count")) or 0)
+        summary_supported_count = max(summary_supported_count, _as_int(summary.get("supported_count")) or 0)
+        summary_partial_count = max(summary_partial_count, _as_int(summary.get("partial_count")) or 0)
+        summary_missing_count = max(summary_missing_count, _as_int(summary.get("missing_count")) or 0)
+        summary_blocked_count = max(summary_blocked_count, _as_int(summary.get("blocked_count")) or 0)
+        summary_evidence_count = max(summary_evidence_count, _as_int(summary.get("evidence_count")) or 0)
+        for item in _as_list(summary.get("categories", [])):
+            normalized = _normalize_framework_capability_category(item)
+            if normalized:
+                categories.add(normalized)
+        for item in _as_list(summary.get("supported_categories", [])):
+            normalized = _normalize_framework_capability_category(item)
+            if normalized:
+                supported_categories.add(normalized)
+        for item in _as_list(summary.get("supported_capabilities", [])):
+            normalized = _normalize_framework_capability_key(item)
+            if normalized:
+                supported_capabilities.add(normalized)
+        for item in _as_list(summary.get("partial_capabilities", [])):
+            normalized = _normalize_framework_capability_key(item)
+            if normalized:
+                partial_capabilities.add(normalized)
+        for item in _as_list(summary.get("missing_capabilities", [])):
+            normalized = _normalize_framework_capability_key(item)
+            if normalized:
+                missing_capabilities.add(normalized)
+        for item in _as_list(summary.get("blocked_capabilities", [])):
+            normalized = _normalize_framework_capability_key(item)
+            if normalized:
+                blocked_capabilities.add(normalized)
+        for item in _as_list(summary.get("task_surfaces", [])):
+            normalized = _normalize_framework_capability_key(item)
+            if normalized:
+                task_surfaces.add(normalized)
+        for item in _as_list(summary.get("integrations", [])):
+            normalized = _normalize_framework_capability_key(item)
+            if normalized:
+                integrations.add(normalized)
+        for surface in _as_list(payload_dict.get("task_surfaces", [])):
+            surface_dict = _as_dict(surface)
+            normalized = _normalize_framework_capability_key(surface_dict.get("name") or surface)
+            if normalized:
+                task_surfaces.add(normalized)
+        for integration in _as_list(payload_dict.get("integrations", [])):
+            integration_dict = _as_dict(integration)
+            normalized = _normalize_framework_capability_key(integration_dict.get("name") or integration)
+            if normalized:
+                integrations.add(normalized)
+        for capability in _framework_capability_records([payload_dict]):
+            capability_dict = _as_dict(capability)
+            name = _normalize_framework_capability_key(capability_dict.get("name") or capability_dict.get("id"))
+            if not name or name in seen_capabilities:
+                continue
+            seen_capabilities.add(name)
+            capability_records.append(capability_dict)
+            status = _normalize_framework_capability_status(capability_dict.get("status")) or "supported"
+            category = _normalize_framework_capability_category(capability_dict.get("category"))
+            if category:
+                categories.add(category)
+            if status in {"supported", "partial"} and category:
+                supported_categories.add(category)
+            if status == "supported":
+                supported_capabilities.add(name)
+            elif status == "partial":
+                partial_capabilities.add(name)
+            elif status == "blocked":
+                blocked_capabilities.add(name)
+            else:
+                missing_capabilities.add(name)
+            evidence_count += len(_as_list(capability_dict.get("evidence", [])))
+            for signal in _as_list(capability_dict.get("signals", [])):
+                normalized = _normalize_framework_capability_key(signal)
+                if normalized:
+                    signals.add(normalized)
+            for surface in _as_list(capability_dict.get("task_surfaces", [])):
+                normalized = _normalize_framework_capability_key(surface)
+                if normalized:
+                    task_surfaces.add(normalized)
+
+    supported_count = max(len(supported_capabilities), summary_supported_count)
+    partial_count = max(len(partial_capabilities), summary_partial_count)
+    missing_count = max(len(missing_capabilities), summary_missing_count)
+    blocked_count = max(len(blocked_capabilities), summary_blocked_count)
+    capability_count = max(
+        len(supported_capabilities | partial_capabilities | missing_capabilities | blocked_capabilities),
+        len(capability_records),
+        summary_capability_count,
+    )
+    evidence_count = max(evidence_count, summary_evidence_count)
+    support_rate = round(supported_count / capability_count, 4) if capability_count else 1.0
+    supported_category_set = set(supported_categories)
+    return {
+        "capability_count": capability_count,
+        "supported_count": supported_count,
+        "partial_count": partial_count,
+        "missing_count": missing_count,
+        "blocked_count": blocked_count,
+        "support_rate": support_rate,
+        "evidence_count": evidence_count,
+        "frameworks": sorted(frameworks),
+        "categories": sorted(categories),
+        "supported_categories": sorted(supported_categories),
+        "supported_capabilities": sorted(supported_capabilities),
+        "partial_capabilities": sorted(partial_capabilities),
+        "missing_capabilities": sorted(missing_capabilities),
+        "blocked_capabilities": sorted(blocked_capabilities),
+        "task_surfaces": sorted(task_surfaces),
+        "integrations": sorted(integrations),
+        "signals": sorted(signals),
+        "has_tools": "tools" in supported_category_set,
+        "has_memory": "memory" in supported_category_set,
+        "has_streaming": "streaming" in supported_category_set,
+        "has_lifecycle": "lifecycle" in supported_category_set,
+        "has_orchestration": "orchestration" in supported_category_set,
+        "has_security": "security" in supported_category_set,
+        "has_observability": "observability" in supported_category_set,
+        "has_exports": "exports" in supported_category_set,
+        "capabilities": capability_records,
+    }
+
+
+def _framework_capability_records(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_records: List[Dict[str, Any]] = []
+        for capability in _as_list(payload_dict.get("capabilities", [])):
+            capability_dict = _as_dict(capability)
+            if capability_dict:
+                payload_records.append(capability_dict)
+        if not payload_records and {"name", "status"} & set(payload_dict):
+            payload_records.append(payload_dict)
+        records.extend(payload_records)
+    return records
+
+
+def _append_framework_capability_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_capability_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_capability_status(value: Any) -> str:
+    normalized = _normalize_framework_capability_key(value)
+    aliases = {
+        "yes": "supported",
+        "true": "supported",
+        "available": "supported",
+        "enabled": "supported",
+        "pass": "supported",
+        "passed": "supported",
+        "limited": "partial",
+        "degraded": "partial",
+        "beta": "partial",
+        "no": "missing",
+        "false": "missing",
+        "unsupported": "missing",
+        "not_supported": "missing",
+        "fail": "missing",
+        "failed": "missing",
+        "denied": "blocked",
+        "forbidden": "blocked",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"supported", "partial", "missing", "blocked"} else ""
+
+
+def _normalize_framework_capability_category(value: Any) -> str:
+    normalized = _normalize_framework_capability_key(value)
+    aliases = {
+        "tool": "tools",
+        "function": "tools",
+        "function_calling": "tools",
+        "tool_calling": "tools",
+        "mcp": "tools",
+        "state": "memory",
+        "checkpoint": "lifecycle",
+        "session": "lifecycle",
+        "trace": "observability",
+        "telemetry": "observability",
+        "log": "observability",
+        "artifact": "exports",
+        "export": "exports",
+        "workflow": "orchestration",
+        "graph": "orchestration",
+        "policy": "security",
+        "guardrail": "security",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_capability_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_").replace("/", "_")
+    aliases = {
+        "function_call": "tool_calling",
+        "function_calls": "tool_calling",
+        "function_calling": "tool_calling",
+        "tool_calls": "tool_calling",
+        "tool_use": "tool_calling",
+        "checkpointing": "checkpoint",
+        "checkpoints": "checkpoint",
+        "stream": "streaming",
+        "telemetry": "observability",
+        "trace": "observability",
+        "artifact": "exports",
+        "export": "exports",
+        "workflow": "orchestration",
+        "graph": "orchestration",
+        "policy": "security",
+        "guardrails": "security",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _framework_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
