@@ -206,7 +206,9 @@ agent testing, simulation, optimization, and pentesting loops.
 Framework trace coverage accepts normalized `framework_trace` artifacts/events
 and raw TraceAI/OpenTelemetry-style span events or OTLP `resourceSpans`
 exports, so captured framework runs can be scored before or after simulator
-normalization. Framework transcript quality checks LangChain/LangGraph-style
+normalization. MCP tool-session traces can also provide tools/list schemas,
+tool calls, structured results, and errors for `tool_argument_schema` and
+`tool_outcome` scoring. Framework transcript quality checks LangChain/LangGraph-style
 event streams for required projection methods, nodes, subgraphs, tool sequence,
 final state, final output, and framework errors. Multi-agent framework
 transcript checks also score exported speakers, speaker order, handoffs,

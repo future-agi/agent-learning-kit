@@ -31,6 +31,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 25 | [Score Voice Timing Distributions](25_voice_timing_distribution.py) | Check VAD, end-of-utterance, STT, LLM, TTS, and full-turn p95 timing samples | No |
 | 26 | [Score Export Auth and Pagination](26_export_auth_pagination.py) | Check framework and voice traces include authenticated paginated export evidence | No |
 | 27 | [Score WebRTC Voice Stats](27_voice_webrtc_stats.py) | Check RTP, track, codec, audio-level, jitter, packet loss, and speaker evidence from voice traces | No |
+| 28 | [Score MCP Tool Session Traces](28_mcp_tool_session_trace.py) | Check MCP tools/list schemas, tool calls, structured results, and errors from framework traces | No |
 
 ## Quick Start
 
@@ -74,3 +75,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 25**: Score voice timing distributions for VAD, end-of-utterance, STT, LLM, TTS, and full-turn p95 samples
 - **Cookbook 26**: Score authenticated and paginated framework or voice export evidence from local report dictionaries
 - **Cookbook 27**: Score WebRTC getStats-style voice evidence for RTP, track, codec, audio-level, jitter, and packet-loss thresholds
+- **Cookbook 28**: Score MCP tool-session trace evidence for tools/list schemas, tool calls, structured results, and expected outcomes

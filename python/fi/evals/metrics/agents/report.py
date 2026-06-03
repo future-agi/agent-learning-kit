@@ -5963,6 +5963,10 @@ def _tool_calls_from_context(context: Mapping[str, Any]) -> List[ToolCall]:
             call = _tool_call_from_any(raw, tool_results)
             if call is not None:
                 _append_unique_tool_call(calls, seen, call)
+    for record in _framework_trace_records_from_context(context):
+        call = _tool_call_from_framework_record(record)
+        if call is not None:
+            _append_unique_tool_call(calls, seen, call)
     return calls
 
 
@@ -5977,6 +5981,18 @@ def _append_unique_tool_call(
         default=str,
     )
     if signature in seen:
+        if call.result is not None or call.error is not None or not call.success:
+            for index, existing in enumerate(calls):
+                existing_signature = json.dumps(
+                    {"name": existing.name, "arguments": existing.arguments},
+                    sort_keys=True,
+                    default=str,
+                )
+                if existing_signature != signature:
+                    continue
+                if existing.result is None and existing.error is None and existing.success:
+                    calls[index] = call
+                break
         return
     seen.add(signature)
     calls.append(call)
@@ -5998,6 +6014,8 @@ def _tool_argument_schemas(
             name, schema = _tool_schema_from_spec(raw_tool)
             if name and schema:
                 schemas.setdefault(name, schema)
+        for name, schema in _framework_trace_tool_schemas(context).items():
+            schemas.setdefault(name, schema)
     return schemas
 
 
@@ -6020,6 +6038,151 @@ def _normalize_tool_argument_schema(
         tool_name, tool_schema = _tool_schema_from_spec({"name": name, **schema})
         return tool_schema if tool_name else {}
     return schema
+
+
+def _tool_call_from_framework_record(raw_record: Any) -> Optional[ToolCall]:
+    record = _as_dict(raw_record)
+    if not record:
+        return None
+    attributes = _as_dict(record.get("attributes", {}))
+    record_type = str(record.get("type") or "")
+    record_name = str(record.get("name") or "")
+    signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+    text = " ".join([record_type, record_name, " ".join(signals)]).lower()
+    if not (
+        "tool" in signals
+        or "mcp_tool_call" in signals
+        or "mcp_tool_result" in signals
+        or "mcp_tool_error" in signals
+        or attributes.get("mcp.tool.name")
+        or attributes.get("gen_ai.tool.name")
+    ):
+        return None
+    if ("schema" in text or "tools/list" in text) and not any(token in text for token in ("call", "result", "error")):
+        return None
+    name = _framework_trace_record_tool_name(record, attributes)
+    if not name:
+        return None
+    arguments = (
+        record.get("arguments")
+        if "arguments" in record
+        else record.get("input", attributes.get("arguments", attributes.get("mcp.tool.arguments", {})))
+    )
+    result = (
+        record.get("result")
+        if "result" in record
+        else record.get("output", attributes.get("result", attributes.get("mcp.tool.result")))
+    )
+    error = record.get("error") or attributes.get("error") or attributes.get("exception")
+    success = bool(attributes.get("success", True))
+    if (
+        error
+        or "mcp_tool_error" in signals
+        or "tool_error" in signals
+        or "mcp_tool_error" in text
+        or "tool_error" in text
+    ):
+        success = False
+    return ToolCall(
+        name=name,
+        arguments=_parse_arguments(arguments),
+        result=result,
+        success=success,
+        error=str(error) if error else None,
+    )
+
+
+def _framework_trace_tool_schemas(context: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    schemas: Dict[str, Dict[str, Any]] = {}
+    for payload in _framework_trace_payloads_from_context(context):
+        metadata = _as_dict(payload.get("metadata", {}))
+        session = _as_dict(metadata.get("mcp_tool_session"))
+        for raw_tool in _as_list(session.get("tools", [])):
+            name, schema = _tool_schema_from_spec(raw_tool)
+            if name and schema:
+                schemas.setdefault(name, schema)
+    for record in _framework_trace_records_from_context(context):
+        record_dict = _as_dict(record)
+        attributes = _as_dict(record_dict.get("attributes", {}))
+        schema = _framework_record_tool_schema(record_dict, attributes)
+        if not schema:
+            continue
+        name = _framework_trace_record_tool_name(record_dict, attributes)
+        if name:
+            schemas.setdefault(name, schema)
+    return schemas
+
+
+def _framework_trace_record_tool_name(
+    record: Mapping[str, Any],
+    attributes: Mapping[str, Any],
+) -> str:
+    event = _as_dict(record.get("framework_event", {}))
+    for source in (record, event, attributes):
+        for key in ("tool_name", "tool", "name", "mcp.tool.name", "gen_ai.tool.name", "tool.name"):
+            value = source.get(key)
+            if value not in (None, "", [], {}):
+                if key == "name" and source is record:
+                    parsed = _framework_tool_name_from_span_name(str(value))
+                    if parsed:
+                        return parsed
+                    continue
+                return str(value)
+    return _framework_tool_name_from_span_name(str(record.get("name") or ""))
+
+
+def _framework_tool_name_from_span_name(name: str) -> str:
+    lowered = name.lower()
+    prefixes = (
+        "mcp tool result ",
+        "mcp tool error ",
+        "mcp tool call ",
+        "mcp tool schema ",
+        "tool result ",
+        "tool error ",
+        "tool call ",
+        "function call ",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            return name[len(prefix):].strip()
+    return ""
+
+
+def _framework_record_tool_schema(
+    record: Mapping[str, Any],
+    attributes: Mapping[str, Any],
+) -> Dict[str, Any]:
+    record_type = str(record.get("type") or "")
+    record_name = str(record.get("name") or "")
+    signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+    text = " ".join([record_type, record_name, " ".join(signals)]).lower()
+    if "schema" not in text and "tool_schema" not in signals and "mcp_tool_schema" not in signals:
+        return {}
+    for value in (
+        record.get("input_schema"),
+        record.get("parameters"),
+        record.get("schema"),
+        record.get("input"),
+        attributes.get("mcp.tool.input_schema"),
+        attributes.get("input_schema"),
+        attributes.get("parameters"),
+        attributes.get("schema"),
+    ):
+        schema = _schema_dict(value)
+        if schema:
+            return schema
+    return {}
+
+
+def _schema_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return _as_dict(parsed)
+    return _as_dict(value)
 
 
 def _validate_json_schema_value(
@@ -8270,6 +8433,20 @@ def _add_framework_trace_key(observed: set[str], value: str) -> None:
         "embedding": "model",
         "execute_tool": "tool",
         "mcp": "tool",
+        "mcp tool schema": "mcp_tool_schema",
+        "mcp_tool_schema": "mcp_tool_schema",
+        "mcp tool call": "mcp_tool_call",
+        "mcp_tool_call": "mcp_tool_call",
+        "mcp tool result": "mcp_tool_result",
+        "mcp_tool_result": "mcp_tool_result",
+        "mcp tool error": "mcp_tool_error",
+        "mcp_tool_error": "mcp_tool_error",
+        "tool schema": "tool_schema",
+        "tool_schema": "tool_schema",
+        "tool result": "tool_result",
+        "tool_result": "tool_result",
+        "tool error": "tool_error",
+        "tool_error": "tool_error",
         "autogen": "agent",
         "llamaindex": "retrieval",
         "llama_index": "retrieval",
@@ -8352,6 +8529,14 @@ def _normalize_framework_trace_key(key: str) -> str:
         "tool_call": "tool",
         "execute_tool": "tool",
         "mcp": "tool",
+        "tool_schema": "tool_schema",
+        "tool_result": "tool_result",
+        "tool_output": "tool_result",
+        "tool_error": "tool_error",
+        "mcp_tool_schema": "mcp_tool_schema",
+        "mcp_tool_call": "mcp_tool_call",
+        "mcp_tool_result": "mcp_tool_result",
+        "mcp_tool_error": "mcp_tool_error",
         "handoffs": "handoff",
         "delegation": "handoff",
         "transfer": "handoff",

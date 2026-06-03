@@ -4284,6 +4284,97 @@ def test_evaluate_agent_report_scores_raw_otlp_framework_trace_export():
     assert scores["framework_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_mcp_tool_session_trace_schemas_and_outcomes():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Inspect an MCP tool session export.",
+                    "outcome": "MCP tool session inspected.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Inspect the MCP session."},
+                    {"role": "assistant", "content": "MCP session inspected."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "mcp"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "mcp",
+                            "signals": ["tool", "mcp_tool_schema", "mcp_tool_call", "mcp_tool_result"],
+                            "spans": [
+                                {
+                                    "name": "MCP tool schema search_order",
+                                    "type": "mcp_tool_schema",
+                                    "tool_name": "search_order",
+                                    "signals": ["tool", "mcp_tool_schema", "tool_schema"],
+                                    "attributes": {
+                                        "mcp.tool.name": "search_order",
+                                        "mcp.tool.input_schema": {
+                                            "type": "object",
+                                            "properties": {"order_id": {"type": "string"}},
+                                            "required": ["order_id"],
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                },
+                                {
+                                    "name": "MCP tool call search_order",
+                                    "type": "mcp_tool_call",
+                                    "tool_name": "search_order",
+                                    "input": {"order_id": "ord_123"},
+                                    "signals": ["tool", "mcp_tool_call"],
+                                    "attributes": {
+                                        "mcp.tool.name": "search_order",
+                                        "success": True,
+                                    },
+                                },
+                                {
+                                    "name": "MCP tool result search_order",
+                                    "type": "mcp_tool_result",
+                                    "tool_name": "search_order",
+                                    "input": {"order_id": "ord_123"},
+                                    "output": {"resolved": True, "status": "found"},
+                                    "signals": ["tool", "mcp_tool_call", "mcp_tool_result", "tool_result"],
+                                    "attributes": {
+                                        "mcp.tool.name": "search_order",
+                                        "success": True,
+                                    },
+                                },
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_framework_trace": [
+                "tool",
+                "mcp_tool_schema",
+                "mcp_tool_call",
+                "mcp_tool_result",
+            ],
+            "expected_tool_outcomes": {
+                "search_order": {
+                    "success": True,
+                    "result": {"resolved": True, "status": "found"},
+                }
+            },
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_trace_coverage"] == 1.0
+    assert scores["tool_argument_schema"] == 1.0
+    assert scores["tool_outcome"] == 1.0
+
+
 def test_evaluate_agent_report_scores_retrieval_memory_attribution():
     report = {
         "results": [
