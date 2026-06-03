@@ -2338,6 +2338,80 @@ def test_evaluate_agent_report_scores_voice_timing_distribution_quality():
     )
 
 
+def test_evaluate_agent_report_scores_export_auth_and_pagination_coverage():
+    export_metadata = {
+        "trace_export": {
+            "export_source": "inline_paginated_export",
+            "page_count": 2,
+            "pagination_enabled": True,
+            "auth_enabled": True,
+            "auth_header_names": ["Authorization"],
+        }
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Paginated exports inspected."}],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "traceai"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "traceai",
+                            "spans": [{"name": "OpenAI chat", "signals": ["model"]}],
+                            "metadata": export_metadata,
+                        },
+                    },
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "voice_trace"},
+                        "data": {
+                            "kind": "voice_trace",
+                            "export_framework": "livekit",
+                            "utterances": [{"id": "caller_1", "transcript": "Billing issue."}],
+                            "export_metadata": export_metadata,
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_framework_trace": ["export", "export_auth", "export_pagination"],
+            "required_voice_trace": ["export", "export_auth", "export_pagination"],
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_trace_coverage"] == 1.0
+    assert scores["voice_trace_coverage"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_report["results"][0]["artifacts"][0]["data"]["metadata"]["trace_export"] = {
+        "export_source": "single_page_export"
+    }
+    bad_report["results"][0]["artifacts"][1]["data"]["export_metadata"]["trace_export"] = {
+        "export_source": "single_page_export"
+    }
+    bad_result = evaluate_agent_report(
+        bad_report,
+        config={
+            "required_framework_trace": ["export", "export_auth", "export_pagination"],
+            "required_voice_trace": ["export", "export_auth", "export_pagination"],
+        },
+    )
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+
+    assert bad_scores["framework_trace_coverage"] < 1.0
+    assert bad_scores["voice_trace_coverage"] < 1.0
+    assert any(finding.get("key") == "export_auth" for finding in bad_result.findings)
+    assert any(finding.get("key") == "export_pagination" for finding in bad_result.findings)
+
+
 def test_evaluate_agent_report_scores_autonomy_loop_coverage():
     report = {
         "results": [

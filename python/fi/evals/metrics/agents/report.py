@@ -8050,6 +8050,7 @@ def _looks_like_framework_trace(data: Mapping[str, Any], metadata: Mapping[str, 
 def _merge_framework_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
     if payload.get("framework"):
         observed.add("framework")
+    _merge_export_metadata_observed(observed, payload)
     _merge_otlp_framework_payload(observed, payload)
     for signal in _as_list(payload.get("signals", [])):
         _add_framework_trace_key(observed, str(signal))
@@ -8073,6 +8074,27 @@ def _merge_framework_trace_payload(observed: set[str], payload: Mapping[str, Any
             _add_framework_trace_key(observed, str(key))
     if payload.get("state"):
         observed.add("state")
+
+
+def _merge_export_metadata_observed(observed: set[str], payload: Mapping[str, Any]) -> None:
+    candidates = [
+        payload,
+        _as_dict(payload.get("metadata", {})),
+        _as_dict(payload.get("export_metadata", {})),
+        _as_dict(payload.get("trace_export", {})),
+        _as_dict(_as_dict(payload.get("metadata", {})).get("trace_export", {})),
+        _as_dict(_as_dict(payload.get("export_metadata", {})).get("trace_export", {})),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate.get("export_source") or candidate.get("source"):
+            observed.add("export")
+        page_count = _as_int(candidate.get("page_count"))
+        if candidate.get("pagination_enabled") or (page_count is not None and page_count > 1):
+            observed.update({"export", "export_pagination"})
+        if candidate.get("auth_enabled") or _as_list(candidate.get("auth_header_names", [])):
+            observed.update({"export", "export_auth"})
 
 
 def _looks_like_raw_framework_event(
@@ -8299,6 +8321,10 @@ def _add_framework_trace_key(observed: set[str], value: str) -> None:
         "token": "cost",
         "cost": "cost",
         "usage": "cost",
+        "export": "export",
+        "auth": "export_auth",
+        "pagination": "export_pagination",
+        "paginated": "export_pagination",
     }
     normalized = _normalize_framework_trace_key(value)
     if normalized:
@@ -8361,6 +8387,15 @@ def _normalize_framework_trace_key(key: str) -> str:
         "duration_ms": "latency",
         "tokens": "cost",
         "usage": "cost",
+        "export_source": "export",
+        "trace_export": "export",
+        "authenticated_export": "export_auth",
+        "auth_export": "export_auth",
+        "export_auth": "export_auth",
+        "authorization": "export_auth",
+        "paginated_export": "export_pagination",
+        "export_pagination": "export_pagination",
+        "pagination": "export_pagination",
     }
     return aliases.get(normalized, normalized)
 
@@ -12642,6 +12677,7 @@ def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -
         observed.add("pipecat_export")
     if payload.get("export_metadata"):
         observed.add("export")
+    _merge_export_metadata_observed(observed, payload)
     if _as_list(payload.get("waveforms", [])):
         observed.update({"audio", "waveform"})
         for waveform in _as_list(payload.get("waveforms", [])):
@@ -12744,6 +12780,13 @@ def _normalize_voice_trace_key(key: str) -> str:
         "exports": "export",
         "voice_export": "export",
         "export_metadata": "export",
+        "authenticated_export": "export_auth",
+        "auth_export": "export_auth",
+        "export_auth": "export_auth",
+        "export_authentication": "export_auth",
+        "paginated_export": "export_pagination",
+        "export_pagination": "export_pagination",
+        "pagination": "export_pagination",
         "livekit": "livekit_export",
         "livekit_events": "livekit_export",
         "livekit_export": "livekit_export",
