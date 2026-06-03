@@ -4550,6 +4550,130 @@ def test_evaluate_agent_report_scores_framework_adapter_conformance():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_observability_replay_pack_quality():
+    replay_pack = {
+        "kind": "observability_replay_pack",
+        "name": "refund-observability-regressions",
+        "source": "futureagi",
+        "framework": "langgraph",
+        "signals": ["case", "failure", "metric", "observability", "raw", "replay_pack", "trace_signal"],
+        "summary": {
+            "case_count": 2,
+            "failed_case_count": 1,
+            "passed_case_count": 1,
+            "observed_metrics": ["framework_trace_coverage", "memory_correctness", "policy_adherence"],
+            "failed_metrics": ["policy_adherence"],
+            "trace_signals": ["agent", "memory", "model", "tool"],
+            "missing_trace_signals": ["tool"],
+            "tags": ["memory", "metric:policy_adherence", "missing_signal:tool", "policy"],
+        },
+        "cases": [
+            {
+                "id": "policy_regression",
+                "run_id": "run_policy_failed",
+                "source": "futureagi",
+                "framework": "langgraph",
+                "score": 0.2,
+                "passed": False,
+                "metrics": {"policy_adherence": 0.2, "framework_trace_coverage": 0.67},
+                "failed_metrics": ["policy_adherence"],
+                "trace_signals": ["agent", "model"],
+                "missing_trace_signals": ["tool"],
+                "tags": ["metric:policy_adherence", "missing_signal:tool", "policy"],
+                "raw": {"agent_report_evaluation": {"summary": {"metric_averages": {"policy_adherence": 0.2}}}},
+            },
+            {
+                "id": "memory_passed",
+                "run_id": "run_memory_passed",
+                "source": "futureagi",
+                "framework": "langgraph",
+                "score": 0.95,
+                "passed": True,
+                "metrics": {
+                    "policy_adherence": 0.95,
+                    "framework_trace_coverage": 1.0,
+                    "memory_correctness": 0.95,
+                },
+                "failed_metrics": [],
+                "trace_signals": ["agent", "memory", "model", "tool"],
+                "missing_trace_signals": [],
+                "tags": ["memory"],
+                "raw": {"trace_id": "trace_memory_passed"},
+            },
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Replay pack inspected."}],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "observability_replay_pack", "framework": "langgraph"},
+                        "data": replay_pack,
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "required_observability_replay": ["replay_pack", "case", "failure", "metric", "trace_signal", "raw"],
+        "observability_replay_quality": {
+            "min_case_count": 2,
+            "min_failed_case_count": 1,
+            "required_metrics": ["policy_adherence", "framework_trace_coverage"],
+            "required_failed_metrics": ["policy_adherence"],
+            "required_trace_signals": ["agent", "model"],
+            "required_tags": ["policy", "missing_signal:tool"],
+            "expected_case_ids": ["policy_regression"],
+            "require_raw_evidence": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["observability_replay_coverage"] == 1.0
+    assert scores["observability_replay_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_pack = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_pack["signals"] = ["case", "failure", "observability", "replay_pack"]
+    bad_pack["summary"] = {
+        "case_count": 1,
+        "failed_case_count": 0,
+        "passed_case_count": 1,
+        "observed_metrics": ["memory_correctness"],
+        "failed_metrics": [],
+        "trace_signals": ["agent"],
+        "missing_trace_signals": [],
+        "tags": ["memory"],
+    }
+    bad_pack["cases"] = [
+        {
+            "id": "memory_passed",
+            "passed": True,
+            "metrics": {"memory_correctness": 0.95},
+            "trace_signals": ["agent"],
+            "tags": ["memory"],
+            "raw": {},
+        }
+    ]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["observability_replay_coverage"] < 1.0
+    assert bad_scores["observability_replay_quality"] < 1.0
+    assert {
+        "missing_observability_replay_key",
+        "observability_replay_metric_missing",
+        "observability_replay_failed_metric_missing",
+        "observability_replay_case_missing",
+        "observability_replay_raw_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_raw_traceai_framework_events():
     report = {
         "results": [

@@ -181,6 +181,8 @@ class AgentReportEvalConfig(BaseModel):
     adversarial_resilience: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
+    required_observability_replay: List[str] = Field(default_factory=list)
+    observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
     forbidden_retrieval_doc_ids: List[str] = Field(default_factory=list)
@@ -376,6 +378,8 @@ class AgentReportEvaluator:
                 _framework_trace_coverage_metric(report_context, config),
                 *_framework_adapter_conformance_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
+                *_observability_replay_coverage_metrics(report_context, config),
+                *_observability_replay_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
                 _source_grounding_metric(report_context, config),
@@ -4952,6 +4956,203 @@ def _framework_transcript_quality_metric(
                 "session_records": sessions,
                 "errors": errors,
             },
+        },
+    )
+
+
+def _observability_replay_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_observability_replay and not _observability_replay_payloads_from_context(context):
+        return []
+    return [_observability_replay_coverage_metric(context, config)]
+
+
+def _observability_replay_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_replay_key(key) for key in config.required_observability_replay]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="observability_replay_coverage",
+            score=1.0,
+            reason="No required observability replay keys provided.",
+        )
+    observed = _observability_replay_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="observability_replay_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required observability replay evidence observed."
+            if not missing
+            else f"Missing observability replay evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_observability_replay_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _observability_replay_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.observability_replay_quality:
+        return []
+    return [_observability_replay_quality_metric(context, config.observability_replay_quality)]
+
+
+def _observability_replay_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _observability_replay_payloads_from_context(context)
+    cases = [case for payload in payloads for case in _as_list(payload.get("cases", []))]
+    summaries = [_as_dict(payload.get("summary")) for payload in payloads]
+    summary = _merge_observability_replay_summaries(summaries, cases)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    min_case_count = _as_int(requirements.get("min_case_count"))
+    if min_case_count is not None:
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="min_case_count",
+            expected=min_case_count,
+            actual=summary["case_count"],
+            match=summary["case_count"] >= min_case_count,
+            finding_type="observability_replay_case_count_low",
+        )
+
+    min_failed_case_count = _as_int(requirements.get("min_failed_case_count"))
+    if min_failed_case_count is not None:
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="min_failed_case_count",
+            expected=min_failed_case_count,
+            actual=summary["failed_case_count"],
+            match=summary["failed_case_count"] >= min_failed_case_count,
+            finding_type="observability_replay_failed_case_count_low",
+        )
+
+    observed_metrics = set(summary["observed_metrics"])
+    for metric in _string_list(requirements.get("required_metrics") or requirements.get("metrics")):
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="required_metric",
+            expected=metric,
+            actual=sorted(observed_metrics),
+            match=str(metric) in observed_metrics,
+            finding_type="observability_replay_metric_missing",
+        )
+
+    failed_metrics = set(summary["failed_metrics"])
+    for metric in _string_list(requirements.get("required_failed_metrics") or requirements.get("failed_metrics")):
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="required_failed_metric",
+            expected=metric,
+            actual=sorted(failed_metrics),
+            match=str(metric) in failed_metrics,
+            finding_type="observability_replay_failed_metric_missing",
+        )
+
+    trace_signals = set(summary["trace_signals"])
+    for signal in _string_list(requirements.get("required_trace_signals") or requirements.get("trace_signals")):
+        normalized = _normalize_replay_key(signal)
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="required_trace_signal",
+            expected=normalized,
+            actual=sorted(trace_signals),
+            match=normalized in trace_signals,
+            finding_type="observability_replay_trace_signal_missing",
+        )
+
+    required_tags = _string_list(requirements.get("required_tags") or requirements.get("tags"))
+    tags = set(summary["tags"])
+    for tag in required_tags:
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="required_tag",
+            expected=tag,
+            actual=sorted(tags),
+            match=str(tag) in tags,
+            finding_type="observability_replay_tag_missing",
+        )
+
+    for case_id in _string_list(requirements.get("expected_case_ids") or requirements.get("case_ids")):
+        case_ids = {str(_as_dict(case).get("id")) for case in cases}
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="case_id",
+            expected=case_id,
+            actual=sorted(case_ids),
+            match=str(case_id) in case_ids,
+            finding_type="observability_replay_case_missing",
+        )
+
+    if requirements.get("require_raw_evidence") is not None:
+        required = bool(requirements.get("require_raw_evidence"))
+        actual = any(_as_dict(case).get("raw") for case in cases)
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="raw_evidence",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="observability_replay_raw_missing",
+        )
+
+    if requirements.get("require_no_missing_trace_signals") is not None:
+        required = bool(requirements.get("require_no_missing_trace_signals"))
+        actual_missing = summary["missing_trace_signals"]
+        _append_observability_replay_check(
+            checks,
+            findings,
+            check="no_missing_trace_signals",
+            expected=required,
+            actual=actual_missing,
+            match=(not actual_missing) is required,
+            finding_type="observability_replay_missing_trace_signal",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="observability_replay_quality",
+            score=1.0,
+            reason="No observability replay quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="observability_replay_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} observability replay quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": summary,
         },
     )
 
@@ -10598,6 +10799,144 @@ def _framework_trace_records_from_context(context: Mapping[str, Any]) -> List[Di
             if record_dict:
                 records.append(record_dict)
     return records
+
+
+def _observability_replay_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_observability_replay(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_observability_replay(payload, metadata):
+            payloads.append(payload)
+        elif "observability_replay" in event_type:
+            payloads.append({"kind": "observability_replay_pack", "events": [_as_dict(event)]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("observability_replay_pack"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _observability_replay_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _observability_replay_payloads_from_context(context):
+        observed.add("replay_pack")
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_replay_key(signal)
+            if normalized:
+                observed.add(normalized)
+        cases = _as_list(payload.get("cases", []))
+        if cases:
+            observed.add("case")
+        summary = _as_dict(payload.get("summary"))
+        if (_as_int(summary.get("failed_case_count")) or 0) > 0:
+            observed.add("failure")
+        if _as_list(summary.get("observed_metrics", [])):
+            observed.add("metric")
+        if _as_list(summary.get("trace_signals", [])):
+            observed.add("trace_signal")
+        if any(_as_dict(case).get("raw") for case in cases):
+            observed.add("raw")
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "observability_replay_status",
+            "list_observability_replay_cases",
+            "inspect_observability_replay_case",
+        }:
+            observed.update({"replay_pack", "case"})
+    return observed
+
+
+def _looks_like_observability_replay(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "observability_replay_pack" or (
+        "observability" in data and ("cases" in data or "summary" in data)
+    )
+
+
+def _merge_observability_replay_summaries(
+    summaries: Sequence[Mapping[str, Any]],
+    cases: Sequence[Any],
+) -> Dict[str, Any]:
+    observed_metrics: set[str] = set()
+    failed_metrics: set[str] = set()
+    trace_signals: set[str] = set()
+    missing_trace_signals: set[str] = set()
+    tags: set[str] = set()
+    case_count = 0
+    failed_case_count = 0
+    for summary in summaries:
+        summary_dict = _as_dict(summary)
+        case_count += _as_int(summary_dict.get("case_count")) or 0
+        failed_case_count += _as_int(summary_dict.get("failed_case_count")) or 0
+        observed_metrics.update(str(item) for item in _as_list(summary_dict.get("observed_metrics", [])))
+        failed_metrics.update(str(item) for item in _as_list(summary_dict.get("failed_metrics", [])))
+        trace_signals.update(_normalize_replay_key(item) for item in _as_list(summary_dict.get("trace_signals", [])))
+        missing_trace_signals.update(_normalize_replay_key(item) for item in _as_list(summary_dict.get("missing_trace_signals", [])))
+        tags.update(str(item) for item in _as_list(summary_dict.get("tags", [])))
+    if not case_count:
+        case_count = len(cases)
+        failed_case_count = sum(1 for case in cases if not _as_dict(case).get("passed", True))
+    for case in cases:
+        case_dict = _as_dict(case)
+        observed_metrics.update(str(metric) for metric in _as_dict(case_dict.get("metrics")).keys())
+        failed_metrics.update(str(item) for item in _as_list(case_dict.get("failed_metrics", [])))
+        trace_signals.update(_normalize_replay_key(item) for item in _as_list(case_dict.get("trace_signals", [])))
+        missing_trace_signals.update(_normalize_replay_key(item) for item in _as_list(case_dict.get("missing_trace_signals", [])))
+        tags.update(str(item) for item in _as_list(case_dict.get("tags", [])))
+    return {
+        "case_count": case_count,
+        "failed_case_count": failed_case_count,
+        "passed_case_count": max(0, case_count - failed_case_count),
+        "observed_metrics": sorted(item for item in observed_metrics if item),
+        "failed_metrics": sorted(item for item in failed_metrics if item),
+        "trace_signals": sorted(item for item in trace_signals if item),
+        "missing_trace_signals": sorted(item for item in missing_trace_signals if item),
+        "tags": sorted(item for item in tags if item),
+    }
+
+
+def _append_observability_replay_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "observability_replay_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_replay_key(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _framework_adapter_observed_signals(
