@@ -199,6 +199,8 @@ class AgentReportEvalConfig(BaseModel):
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_agent_integrations: List[str] = Field(default_factory=list)
     agent_integration_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_workspace_run: List[str] = Field(default_factory=list)
+    workspace_run_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
     optimizer_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
@@ -414,6 +416,8 @@ class AgentReportEvaluator:
                 *_observability_replay_quality_metrics(report_context, config),
                 *_agent_integration_coverage_metrics(report_context, config),
                 *_agent_integration_quality_metrics(report_context, config),
+                *_workspace_run_coverage_metrics(report_context, config),
+                *_workspace_run_quality_metrics(report_context, config),
                 *_optimizer_trace_coverage_metrics(report_context, config),
                 *_optimizer_trace_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -7210,6 +7214,200 @@ def _agent_integration_quality_metric(
         name="agent_integration_quality",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} agent integration quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": summary,
+        },
+    )
+
+
+def _workspace_run_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_workspace_run and not _workspace_run_payloads_from_context(context):
+        return []
+    return [_workspace_run_coverage_metric(context, config)]
+
+
+def _workspace_run_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_workspace_run_key(key) for key in config.required_workspace_run]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="workspace_run_coverage",
+            score=1.0,
+            reason="No required workspace run keys provided.",
+        )
+    observed = _workspace_run_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="workspace_run_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required workspace run evidence observed."
+            if not missing
+            else f"Missing workspace run evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_workspace_run_key", "metric": "workspace_run_coverage", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _workspace_run_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.workspace_run_quality:
+        return []
+    return [_workspace_run_quality_metric(context, config.workspace_run_quality)]
+
+
+def _workspace_run_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _workspace_run_payloads_from_context(context)
+    summary = _merge_workspace_run_summaries(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for field, summary_key, finding_type in [
+        ("min_command_count", "command_count", "workspace_run_command_count_low"),
+        ("min_passed_commands", "passed_command_count", "workspace_run_passed_command_count_low"),
+        ("min_log_count", "log_count", "workspace_run_log_count_low"),
+        ("min_artifact_count", "artifact_count", "workspace_run_artifact_count_low"),
+        ("min_simulation_count", "simulation_count", "workspace_run_simulation_count_low"),
+        ("min_eval_count", "eval_count", "workspace_run_eval_count_low"),
+        ("min_optimization_count", "optimization_count", "workspace_run_optimization_count_low"),
+        ("min_red_team_runs", "red_team_count", "workspace_run_red_team_count_low"),
+        ("min_observability_hooks", "observability_hook_count", "workspace_run_observability_low"),
+    ]:
+        minimum = _as_int(requirements.get(field))
+        if minimum is not None:
+            _append_workspace_run_check(
+                checks,
+                findings,
+                check=field,
+                expected=minimum,
+                actual=summary.get(summary_key, 0),
+                match=(summary.get(summary_key, 0) or 0) >= minimum,
+                finding_type=finding_type,
+            )
+
+    for field, summary_key, finding_type in [
+        ("max_failed_commands", "failed_command_count", "workspace_run_failed_command_count_high"),
+        ("max_open_red_team_findings", "open_red_team_finding_count", "workspace_run_open_red_team_findings_high"),
+        ("max_secret_leaks", "secret_leak_count", "workspace_run_secret_leaks_high"),
+        ("max_unverified_credentials", "unverified_credential_count", "workspace_run_unverified_credentials_high"),
+    ]:
+        maximum = _as_int(requirements.get(field))
+        if maximum is not None:
+            _append_workspace_run_check(
+                checks,
+                findings,
+                check=field,
+                expected=maximum,
+                actual=summary.get(summary_key, 0),
+                match=(summary.get(summary_key, 0) or 0) <= maximum,
+                finding_type=finding_type,
+            )
+
+    for field, summary_key, finding_type in [
+        ("require_repository", "has_repository", "workspace_run_repository_missing"),
+        ("require_checkout", "has_checkout", "workspace_run_checkout_missing"),
+        ("require_commit_sha", "has_commit_sha", "workspace_run_commit_sha_missing"),
+        ("require_clean_exit", "has_clean_exit", "workspace_run_clean_exit_missing"),
+        ("require_logs", "has_logs", "workspace_run_logs_missing"),
+        ("require_artifacts", "has_artifacts", "workspace_run_artifacts_missing"),
+        ("require_simulation", "has_simulation", "workspace_run_simulation_missing"),
+        ("require_evals", "has_evals", "workspace_run_evals_missing"),
+        ("require_optimization", "has_optimization", "workspace_run_optimization_missing"),
+        ("require_red_team", "has_red_team", "workspace_run_red_team_missing"),
+        ("require_security_gate", "has_security_gate", "workspace_run_security_gate_missing"),
+        ("require_secret_redaction", "has_secret_redaction", "workspace_run_secret_redaction_missing"),
+        ("require_no_secret_leakage", "has_no_secret_leakage", "workspace_run_secret_leakage_detected"),
+        ("require_ui_verification", "has_ui_verification", "workspace_run_ui_verification_missing"),
+        ("require_observability", "has_observability", "workspace_run_observability_missing"),
+        ("require_futureagi_platform", "has_futureagi_platform", "workspace_run_futureagi_platform_missing"),
+    ]:
+        if requirements.get(field) is not None:
+            required = bool(requirements.get(field))
+            actual = bool(summary.get(summary_key))
+            _append_workspace_run_check(
+                checks,
+                findings,
+                check=field,
+                expected=required,
+                actual=actual,
+                match=actual is required,
+                finding_type=finding_type,
+            )
+
+    artifact_types = set(summary["artifact_types"])
+    for artifact_type in _string_list(requirements.get("required_artifact_types") or requirements.get("artifact_types")):
+        normalized = _normalize_workspace_run_key(artifact_type)
+        _append_workspace_run_check(
+            checks,
+            findings,
+            check="required_artifact_type",
+            expected=normalized,
+            actual=sorted(artifact_types),
+            match=normalized in artifact_types,
+            finding_type="workspace_run_artifact_type_missing",
+        )
+
+    taxonomies = set(summary["red_team_taxonomies"])
+    for taxonomy in _string_list(requirements.get("required_red_team_taxonomies") or requirements.get("red_team_taxonomies")):
+        normalized = _normalize_workspace_run_key(taxonomy)
+        _append_workspace_run_check(
+            checks,
+            findings,
+            check="required_red_team_taxonomy",
+            expected=normalized,
+            actual=sorted(taxonomies),
+            match=normalized in taxonomies,
+            finding_type="workspace_run_red_team_taxonomy_missing",
+        )
+
+    command_ids = set(summary["command_ids"])
+    for command_id in _string_list(requirements.get("required_command_ids") or requirements.get("commands")):
+        normalized = _normalize_workspace_run_key(command_id)
+        _append_workspace_run_check(
+            checks,
+            findings,
+            check="required_command_id",
+            expected=normalized,
+            actual=sorted(command_ids),
+            match=normalized in command_ids,
+            finding_type="workspace_run_command_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="workspace_run_quality",
+            score=1.0,
+            reason="No workspace run quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="workspace_run_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} workspace run quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -16243,6 +16441,384 @@ def _normalize_agent_integration_provider(value: Any) -> str:
 
 
 def _normalize_agent_integration_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _workspace_run_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_workspace_run(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_workspace_run(payload, metadata):
+            payloads.append(payload)
+        elif "workspace_run" in event_type:
+            payloads.append({"kind": "workspace_run_manifest", "events": [_as_dict(event)]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("workspace_run_manifest"))
+    if state_payload:
+        payloads.append(state_payload)
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        key = json.dumps(payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload)
+    return deduped
+
+
+def _workspace_run_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _workspace_run_payloads_from_context(context):
+        observed.add("workspace_run")
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_workspace_run_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        if summary.get("has_repository"):
+            observed.add("repository")
+        if summary.get("has_checkout"):
+            observed.add("checkout")
+        if summary.get("has_commit_sha"):
+            observed.add("commit_sha")
+        if summary.get("command_count"):
+            observed.add("command")
+        if summary.get("log_count"):
+            observed.add("log")
+        if summary.get("artifact_count"):
+            observed.add("artifact")
+        if summary.get("simulation_count"):
+            observed.add("simulation")
+        if summary.get("eval_count"):
+            observed.add("eval")
+        if summary.get("optimization_count"):
+            observed.add("optimization")
+        if summary.get("red_team_count"):
+            observed.add("red_team")
+        if summary.get("observability_hook_count"):
+            observed.add("observability")
+        if summary.get("ui_verification_count"):
+            observed.add("ui_verification")
+        if summary.get("verified_credential_count"):
+            observed.add("credential")
+        if summary.get("has_futureagi_platform"):
+            observed.add("futureagi_platform")
+        if summary.get("has_secret_redaction"):
+            observed.add("secret_redaction")
+        if summary.get("has_sandbox"):
+            observed.add("sandbox")
+        if summary.get("has_policy_gate"):
+            observed.add("policy_gate")
+        repository = _as_dict(payload.get("repository"))
+        provider = _normalize_workspace_run_key(repository.get("provider"))
+        if provider:
+            observed.add(provider)
+        for item in [
+            *_as_list(payload.get("commands", [])),
+            *_as_list(payload.get("artifacts", [])),
+            *_as_list(payload.get("red_team_runs", [])),
+        ]:
+            item_dict = _as_dict(item)
+            observed.update(
+                _normalize_workspace_run_key(signal)
+                for signal in _as_list(item_dict.get("signals", []))
+                if _normalize_workspace_run_key(signal)
+            )
+            observed.update(_workspace_text_signals(json.dumps(item_dict, sort_keys=True, default=str)))
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "workspace_run_status",
+            "list_workspace_run_commands",
+            "inspect_workspace_run_command",
+            "list_workspace_run_artifacts",
+            "list_workspace_red_team_runs",
+            "list_workspace_run_gaps",
+        }:
+            observed.update({"workspace_run", "command", "artifact"})
+            if "red_team" in name:
+                observed.add("red_team")
+    return {item for item in observed if item}
+
+
+def _looks_like_workspace_run(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "workspace_run_manifest" or (
+        "repository" in data and ("commands" in data or "checkout" in data or "red_team_runs" in data)
+    )
+
+
+def _merge_workspace_run_summaries(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    command_ids: set[str] = set()
+    artifact_types: set[str] = set()
+    red_team_taxonomies: set[str] = set()
+    failed_commands: set[str] = set()
+    open_red_team_findings: set[str] = set()
+    logs_with_secrets: set[str] = set()
+    unverified_credentials: set[str] = set()
+    summary: Dict[str, Any] = {
+        "has_repository": False,
+        "has_checkout": False,
+        "has_commit_sha": False,
+        "has_clean_exit": False,
+        "has_logs": False,
+        "has_artifacts": False,
+        "has_simulation": False,
+        "has_evals": False,
+        "has_optimization": False,
+        "has_red_team": False,
+        "has_security_gate": False,
+        "has_secret_redaction": False,
+        "has_no_secret_leakage": True,
+        "has_ui_verification": False,
+        "has_observability": False,
+        "has_futureagi_platform": False,
+        "command_count": 0,
+        "passed_command_count": 0,
+        "failed_command_count": 0,
+        "log_count": 0,
+        "artifact_count": 0,
+        "simulation_count": 0,
+        "eval_count": 0,
+        "optimization_count": 0,
+        "red_team_count": 0,
+        "open_red_team_finding_count": 0,
+        "observability_hook_count": 0,
+        "ui_verification_count": 0,
+        "verified_credential_count": 0,
+        "unverified_credential_count": 0,
+        "secret_leak_count": 0,
+    }
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_summary = _as_dict(payload_dict.get("summary"))
+        for key in [
+            "has_repository",
+            "has_checkout",
+            "has_commit_sha",
+            "has_futureagi_platform",
+            "has_sandbox",
+            "has_secret_redaction",
+            "has_policy_gate",
+        ]:
+            if payload_summary.get(key):
+                summary[key] = True
+        summary["has_security_gate"] = summary["has_security_gate"] or bool(
+            payload_summary.get("has_sandbox")
+            or payload_summary.get("has_policy_gate")
+            or _as_dict(payload_dict.get("security"))
+        )
+        for key in [
+            "command_count",
+            "passed_command_count",
+            "failed_command_count",
+            "log_count",
+            "artifact_count",
+            "simulation_count",
+            "eval_count",
+            "optimization_count",
+            "red_team_count",
+            "open_red_team_finding_count",
+            "observability_hook_count",
+            "ui_verification_count",
+            "verified_credential_count",
+            "secret_leak_count",
+        ]:
+            summary[key] += _as_int(payload_summary.get(key)) or 0
+        failed_commands.update(str(item) for item in _as_list(payload_summary.get("failed_commands", [])) if item)
+        open_red_team_findings.update(str(item) for item in _as_list(payload_summary.get("open_red_team_findings", [])) if item)
+        logs_with_secrets.update(str(item) for item in _as_list(payload_summary.get("logs_with_secrets", [])) if item)
+        unverified_credentials.update(str(item) for item in _as_list(payload_summary.get("unverified_credentials", [])) if item)
+
+        commands = [_as_dict(item) for item in _as_list(payload_dict.get("commands", []))]
+        logs = [_as_dict(item) for item in _as_list(payload_dict.get("logs", []))]
+        artifacts = [_as_dict(item) for item in _as_list(payload_dict.get("artifacts", []))]
+        simulations = [_as_dict(item) for item in _as_list(payload_dict.get("simulations", []))]
+        evals = [_as_dict(item) for item in _as_list(payload_dict.get("evals", []))]
+        optimizations = [_as_dict(item) for item in _as_list(payload_dict.get("optimization_runs", []))]
+        red_team_runs = [_as_dict(item) for item in _as_list(payload_dict.get("red_team_runs", []))]
+        credentials = [_as_dict(item) for item in _as_list(payload_dict.get("credentials", []))]
+        security = _as_dict(payload_dict.get("security"))
+
+        if commands and not payload_summary:
+            summary["command_count"] += len(commands)
+            summary["passed_command_count"] += sum(1 for item in commands if _normalize_workspace_run_key(item.get("status")) == "passed")
+            failed = [str(item.get("id")) for item in commands if _normalize_workspace_run_key(item.get("status")) == "failed"]
+            failed_commands.update(item for item in failed if item)
+            summary["failed_command_count"] += len(failed)
+        for command in commands:
+            command_id = _normalize_workspace_run_key(command.get("id") or command.get("name"))
+            if command_id:
+                command_ids.add(command_id)
+            artifact_types.update(
+                _normalize_workspace_run_key(_as_dict(item).get("type"))
+                for item in _as_list(command.get("artifacts"))
+                if _normalize_workspace_run_key(_as_dict(item).get("type"))
+            )
+        if logs and not payload_summary:
+            summary["log_count"] += len(logs)
+        for log in logs:
+            if log.get("contains_secret"):
+                logs_with_secrets.add(str(log.get("id") or log.get("path") or "log"))
+        if artifacts and not payload_summary:
+            summary["artifact_count"] += len(artifacts)
+        artifact_types.update(
+            _normalize_workspace_run_key(item.get("type"))
+            for item in artifacts
+            if _normalize_workspace_run_key(item.get("type"))
+        )
+        if simulations and not payload_summary:
+            summary["simulation_count"] += len(simulations)
+        if evals and not payload_summary:
+            summary["eval_count"] += len(evals)
+        if optimizations and not payload_summary:
+            summary["optimization_count"] += len(optimizations)
+        if red_team_runs and not payload_summary:
+            summary["red_team_count"] += len(red_team_runs)
+        for run in red_team_runs:
+            red_team_taxonomies.update(
+                _normalize_workspace_run_key(item)
+                for item in [*_as_list(run.get("taxonomies", [])), *_as_list(run.get("taxonomy", []))]
+                if _normalize_workspace_run_key(item)
+            )
+            red_team_taxonomies.update(
+                _normalize_workspace_run_key(signal)
+                for signal in _as_list(run.get("signals", []))
+                if _normalize_workspace_run_key(signal)
+            )
+            for finding in _as_list(run.get("findings", [])):
+                finding_dict = _as_dict(finding)
+                if (
+                    _normalize_workspace_run_key(finding_dict.get("status")) not in {"closed", "fixed", "accepted"}
+                    and _normalize_workspace_run_key(finding_dict.get("severity")) in {"critical", "high"}
+                ):
+                    open_red_team_findings.add(str(finding_dict.get("id") or finding_dict.get("description") or "red_team_finding"))
+        if credentials and not payload_summary:
+            summary["verified_credential_count"] += sum(
+                1 for item in credentials if _normalize_workspace_run_key(item.get("status")) in {"verified", "live_verified", "passed"}
+            )
+        unverified_credentials.update(
+            str(item.get("id") or item.get("ref"))
+            for item in credentials
+            if _normalize_workspace_run_key(item.get("status")) not in {"verified", "live_verified", "passed"}
+        )
+        if security:
+            summary["has_security_gate"] = True
+            summary["has_secret_redaction"] = summary["has_secret_redaction"] or bool(security.get("secrets_redacted"))
+            summary["secret_leak_count"] += _as_int(security.get("secret_leak_count")) or 0
+        if _as_dict(payload_dict.get("repository")):
+            summary["has_repository"] = True
+        checkout = _as_dict(payload_dict.get("checkout"))
+        if checkout:
+            summary["has_checkout"] = summary["has_checkout"] or _normalize_workspace_run_key(checkout.get("status")) in {"passed", "completed", "success", "verified"}
+            summary["has_commit_sha"] = summary["has_commit_sha"] or bool(checkout.get("commit_sha") or checkout.get("sha"))
+        summary["has_futureagi_platform"] = summary["has_futureagi_platform"] or _normalize_workspace_run_key(payload_dict.get("platform")) == "futureagi"
+        summary["has_ui_verification"] = summary["has_ui_verification"] or bool(_as_dict(payload_dict.get("ui_verification")))
+        summary["has_observability"] = summary["has_observability"] or bool(_as_dict(payload_dict.get("observability")))
+
+    summary["failed_commands"] = sorted(item for item in failed_commands if item)
+    summary["open_red_team_findings"] = sorted(item for item in open_red_team_findings if item)
+    summary["logs_with_secrets"] = sorted(item for item in logs_with_secrets if item)
+    summary["unverified_credentials"] = sorted(item for item in unverified_credentials if item)
+    summary["unverified_credential_count"] = len(summary["unverified_credentials"])
+    summary["open_red_team_finding_count"] = max(summary["open_red_team_finding_count"], len(summary["open_red_team_findings"]))
+    summary["secret_leak_count"] = max(summary["secret_leak_count"], len(summary["logs_with_secrets"]))
+    summary["has_clean_exit"] = summary["command_count"] > 0 and summary["failed_command_count"] == 0
+    summary["has_logs"] = summary["log_count"] > 0
+    summary["has_artifacts"] = summary["artifact_count"] > 0
+    summary["has_simulation"] = summary["simulation_count"] > 0
+    summary["has_evals"] = summary["eval_count"] > 0
+    summary["has_optimization"] = summary["optimization_count"] > 0
+    summary["has_red_team"] = summary["red_team_count"] > 0
+    summary["has_no_secret_leakage"] = summary["secret_leak_count"] == 0
+    summary["artifact_types"] = sorted(item for item in artifact_types if item)
+    summary["red_team_taxonomies"] = sorted(item for item in red_team_taxonomies if item)
+    summary["command_ids"] = sorted(item for item in command_ids if item)
+    return summary
+
+
+def _append_workspace_run_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "workspace_run_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _workspace_text_signals(text: str) -> set[str]:
+    normalized = _normalize_workspace_run_key(text)
+    signals: set[str] = set()
+    keyword_map = {
+        "pytest": "test",
+        "test": "test",
+        "simulation": "simulation",
+        "simulate": "simulation",
+        "eval": "eval",
+        "evaluation": "eval",
+        "optimize": "optimization",
+        "optimization": "optimization",
+        "agentoptimizer": "optimization",
+        "red_team": "red_team",
+        "redteam": "red_team",
+        "adversarial": "red_team",
+        "jailbreak": "red_team",
+        "pentest": "red_team",
+        "garak": "garak",
+        "pyrit": "pyrit",
+        "owasp": "owasp",
+        "inspect": "inspect",
+        "playwright": "ui_verification",
+        "browser": "ui_verification",
+        "screenshot": "ui_verification",
+        "github": "github",
+        "otel": "observability",
+        "opentelemetry": "observability",
+        "trace": "observability",
+        "log": "log",
+        "prompt_injection": "prompt_injection",
+        "secret_exfiltration": "secret_exfiltration",
+        "tool_abuse": "tool_abuse",
+        "owasp_llm_top_10": "owasp_llm_top_10",
+    }
+    for keyword, signal in keyword_map.items():
+        if keyword in normalized:
+            signals.add(signal)
+    return signals
+
+
+def _normalize_workspace_run_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 

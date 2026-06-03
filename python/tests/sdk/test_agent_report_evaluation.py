@@ -6607,6 +6607,263 @@ def test_evaluate_agent_report_scores_agent_integration_manifest_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_workspace_run_red_team_quality():
+    manifest = {
+        "kind": "workspace_run_manifest",
+        "name": "github-autonomous-run",
+        "platform": "futureagi",
+        "repository": {"provider": "github", "url": "https://github.com/futureagi/support-agent", "name": "support-agent"},
+        "checkout": {"ref": "main", "commit_sha": "abc123def456", "status": "passed"},
+        "commands": [
+            {"id": "checkout", "command": "git clone repo", "status": "passed", "signals": ["github", "command", "log"]},
+            {"id": "tests", "command": "pytest -q", "status": "passed", "signals": ["test", "command", "log"]},
+            {"id": "red_team", "command": "garak promptinject", "status": "passed", "signals": ["red_team", "garak", "owasp_llm_top_10"]},
+            {"id": "opt", "command": "AgentOptimizer", "status": "passed", "signals": ["optimization"]},
+        ],
+        "logs": [
+            {"id": "checkout_log", "path": "logs/checkout.log", "redacted": True, "contains_secret": False},
+            {"id": "test_log", "path": "logs/pytest.log", "redacted": True, "contains_secret": False},
+            {"id": "red_team_log", "path": "logs/garak.jsonl", "redacted": True, "contains_secret": False},
+        ],
+        "artifacts": [
+            {"id": "trace", "type": "trace", "path": "artifacts/trace.jsonl"},
+            {"id": "eval", "type": "eval_report", "path": "artifacts/eval.json"},
+            {"id": "screenshot", "type": "screenshot", "path": "artifacts/ui.png"},
+        ],
+        "simulations": [{"id": "sim_voice", "status": "passed"}],
+        "evals": [{"id": "eval_agent", "status": "passed"}],
+        "optimization_runs": [{"id": "opt_agent", "status": "passed"}],
+        "red_team_runs": [
+            {
+                "id": "rt_owasp",
+                "framework": "garak",
+                "taxonomies": ["owasp_llm_top_10", "agentic_ai"],
+                "attack_types": ["prompt_injection", "secret_exfiltration", "tool_abuse"],
+                "status": "passed",
+                "findings": [{"id": "rt_low", "severity": "low", "status": "accepted"}],
+                "signals": ["red_team", "garak", "owasp_llm_top_10"],
+            }
+        ],
+        "observability": {"platform": "futureagi", "traces": ["trace_workspace"], "webhooks": ["workspace_run.completed"]},
+        "ui_verification": {"opened": True, "screenshot": "artifacts/ui.png", "status": "verified"},
+        "credentials": [{"provider": "github", "ref": "GITHUB_APP_INSTALLATION_TOKEN", "status": "verified"}],
+        "security": {"sandbox": "ephemeral", "secrets_redacted": True, "policy_gates": ["network"], "secret_leak_count": 0},
+        "summary": {
+            "has_repository": True,
+            "has_checkout": True,
+            "has_commit_sha": True,
+            "has_futureagi_platform": True,
+            "command_count": 4,
+            "passed_command_count": 4,
+            "failed_command_count": 0,
+            "failed_commands": [],
+            "log_count": 3,
+            "artifact_count": 3,
+            "simulation_count": 1,
+            "eval_count": 1,
+            "optimization_count": 1,
+            "red_team_count": 1,
+            "open_red_team_findings": [],
+            "open_red_team_finding_count": 0,
+            "observability_hook_count": 2,
+            "ui_verification_count": 1,
+            "verified_credential_count": 1,
+            "unverified_credentials": [],
+            "secret_leak_count": 0,
+            "logs_with_secrets": [],
+            "has_sandbox": True,
+            "has_secret_redaction": True,
+            "has_policy_gate": True,
+        },
+        "signals": [
+            "workspace_run",
+            "futureagi_platform",
+            "repository",
+            "github",
+            "checkout",
+            "commit_sha",
+            "command",
+            "test",
+            "log",
+            "artifact",
+            "simulation",
+            "eval",
+            "optimization",
+            "red_team",
+            "garak",
+            "owasp_llm_top_10",
+            "security",
+            "sandbox",
+            "secret_redaction",
+            "policy_gate",
+            "ui_verification",
+            "observability",
+            "credential",
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "transcript": "Workspace run inspected.",
+                "artifacts": [{"type": "trace", "data": manifest, "metadata": {"kind": "workspace_run_manifest"}}],
+                "tool_calls": [
+                    {"id": "status", "name": "workspace_run_status", "arguments": {}},
+                    {"id": "commands", "name": "list_workspace_run_commands", "arguments": {"kind": "red_team"}},
+                    {"id": "redteam", "name": "list_workspace_red_team_runs", "arguments": {"taxonomy": "owasp_llm_top_10"}},
+                    {"id": "gaps", "name": "list_workspace_run_gaps", "arguments": {}},
+                ],
+                "metadata": {"environment_state": {"workspace_run_manifest": manifest}},
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_workspace_run": [
+                "workspace_run",
+                "repository",
+                "checkout",
+                "commit_sha",
+                "command",
+                "test",
+                "log",
+                "artifact",
+                "simulation",
+                "eval",
+                "optimization",
+                "red_team",
+                "garak",
+                "owasp_llm_top_10",
+                "security",
+                "secret_redaction",
+                "ui_verification",
+                "observability",
+                "credential",
+                "futureagi_platform",
+            ],
+            "workspace_run_quality": {
+                "require_repository": True,
+                "require_checkout": True,
+                "require_commit_sha": True,
+                "require_clean_exit": True,
+                "require_logs": True,
+                "require_artifacts": True,
+                "require_simulation": True,
+                "require_evals": True,
+                "require_optimization": True,
+                "require_red_team": True,
+                "require_security_gate": True,
+                "require_secret_redaction": True,
+                "require_no_secret_leakage": True,
+                "require_ui_verification": True,
+                "require_observability": True,
+                "require_futureagi_platform": True,
+                "min_command_count": 4,
+                "min_passed_commands": 4,
+                "min_log_count": 3,
+                "min_artifact_count": 3,
+                "min_red_team_runs": 1,
+                "min_eval_count": 1,
+                "min_optimization_count": 1,
+                "max_failed_commands": 0,
+                "max_open_red_team_findings": 0,
+                "max_secret_leaks": 0,
+                "required_red_team_taxonomies": ["owasp_llm_top_10"],
+                "required_artifact_types": ["trace", "eval_report", "screenshot"],
+            },
+        },
+    )
+    scores = result.summary["metric_averages"]
+    assert scores["workspace_run_coverage"] == 1.0
+    assert scores["workspace_run_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_manifest = copy.deepcopy(manifest)
+    bad_manifest["signals"] = ["workspace_run", "command"]
+    bad_manifest["checkout"] = {"ref": "main", "status": "failed"}
+    bad_manifest["logs"] = [{"id": "leaky", "content": "api_key=sk-1234567890abcdef1234567890", "contains_secret": True, "redacted": False}]
+    bad_manifest["red_team_runs"] = [
+        {
+            "id": "rt_bad",
+            "taxonomies": [],
+            "status": "failed",
+            "findings": [{"id": "critical", "severity": "critical", "status": "open"}],
+        }
+    ]
+    bad_manifest["summary"].update(
+        {
+            "has_checkout": False,
+            "has_commit_sha": False,
+            "command_count": 1,
+            "passed_command_count": 0,
+            "failed_command_count": 1,
+            "failed_commands": ["tests"],
+            "log_count": 1,
+            "artifact_count": 0,
+            "simulation_count": 0,
+            "eval_count": 0,
+            "optimization_count": 0,
+            "red_team_count": 1,
+            "open_red_team_findings": ["critical"],
+            "open_red_team_finding_count": 1,
+            "ui_verification_count": 0,
+            "observability_hook_count": 0,
+            "secret_leak_count": 1,
+            "logs_with_secrets": ["leaky"],
+            "has_secret_redaction": False,
+            "has_policy_gate": False,
+        }
+    )
+    bad_manifest["artifacts"] = []
+    bad_manifest["simulations"] = []
+    bad_manifest["evals"] = []
+    bad_manifest["optimization_runs"] = []
+    bad_manifest["observability"] = {}
+    bad_manifest["ui_verification"] = {}
+    bad_report["results"][0]["artifacts"][0]["data"] = bad_manifest
+    bad_report["results"][0]["metadata"]["environment_state"]["workspace_run_manifest"] = bad_manifest
+
+    bad_result = evaluate_agent_report(
+        bad_report,
+        config={
+            "required_workspace_run": ["checkout", "commit_sha", "red_team", "owasp_llm_top_10", "ui_verification"],
+            "workspace_run_quality": {
+                "require_checkout": True,
+                "require_commit_sha": True,
+                "require_clean_exit": True,
+                "require_artifacts": True,
+                "require_evals": True,
+                "require_optimization": True,
+                "require_secret_redaction": True,
+                "require_no_secret_leakage": True,
+                "require_ui_verification": True,
+                "require_observability": True,
+                "min_passed_commands": 1,
+                "max_failed_commands": 0,
+                "max_open_red_team_findings": 0,
+                "max_secret_leaks": 0,
+                "required_red_team_taxonomies": ["owasp_llm_top_10"],
+                "required_artifact_types": ["trace"],
+            },
+        },
+    )
+    bad_scores = bad_result.summary["metric_averages"]
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+    assert bad_scores["workspace_run_coverage"] < 1.0
+    assert bad_scores["workspace_run_quality"] < 1.0
+    assert {
+        "missing_workspace_run_key",
+        "workspace_run_checkout_missing",
+        "workspace_run_commit_sha_missing",
+        "workspace_run_clean_exit_missing",
+        "workspace_run_secret_leakage_detected",
+        "workspace_run_open_red_team_findings_high",
+        "workspace_run_red_team_taxonomy_missing",
+        "workspace_run_artifact_type_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_raw_traceai_framework_events():
     report = {
         "results": [
