@@ -5469,6 +5469,195 @@ def test_evaluate_agent_report_scores_framework_probe_suite():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_framework_portability_matrix():
+    portability_matrix = {
+        "kind": "framework_portability_matrix",
+        "name": "langgraph-to-openai-agents",
+        "source_framework": "langgraph",
+        "target_framework": "openai_agents",
+        "version": "2026-06",
+        "signals": [
+            "framework_portability",
+            "invoke",
+            "tool_discovery",
+            "tool_call",
+            "short_term_state",
+            "streaming_events",
+            "checkpoint_resume",
+            "handoff",
+            "guardrail",
+            "otel_trace",
+            "futureagi_export",
+        ],
+        "summary": {
+            "mapping_count": 10,
+            "mapped_count": 10,
+            "partial_count": 0,
+            "missing_count": 0,
+            "blocked_count": 0,
+            "required_count": 10,
+            "required_mapped_count": 10,
+            "mapping_rate": 1.0,
+            "required_mapping_rate": 1.0,
+            "evidence_count": 10,
+            "categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "mapped_categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "missing_categories": [],
+            "mapped_mappings": ["invoke", "tool_discovery", "tool_call", "short_term_state", "streaming_events", "checkpoint_resume", "handoff", "guardrail", "otel_trace", "futureagi_export"],
+            "partial_mappings": [],
+            "missing_mappings": [],
+            "blocked_mappings": [],
+            "gaps": [],
+        },
+        "mappings": [
+            {"id": "invoke", "source": "graph.invoke", "target": "Runner.run", "category": "runtime", "status": "mapped", "required": True, "evidence": [{"type": "dry_run"}]},
+            {"id": "tool_discovery", "source": "tools/list", "target": "Agents SDK tools", "category": "tools", "status": "mapped", "required": True, "evidence": [{"type": "schema"}]},
+            {"id": "tool_call", "source": "ToolNode", "target": "function tool", "category": "tools", "status": "mapped", "required": True, "evidence": [{"type": "tool"}]},
+            {"id": "short_term_state", "source": "graph state", "target": "session state", "category": "memory", "status": "mapped", "required": True, "evidence": [{"type": "state"}]},
+            {"id": "streaming_events", "source": "astream_events", "target": "run stream events", "category": "streaming", "status": "mapped", "required": True, "evidence": [{"type": "stream"}]},
+            {"id": "checkpoint_resume", "source": "checkpointer", "target": "session resume", "category": "lifecycle", "status": "mapped", "required": True, "evidence": [{"type": "checkpoint"}]},
+            {"id": "handoff", "source": "graph route", "target": "agent handoff", "category": "orchestration", "status": "mapped", "required": True, "evidence": [{"type": "handoff"}]},
+            {"id": "guardrail", "source": "policy node", "target": "guardrail", "category": "security", "status": "mapped", "required": True, "evidence": [{"type": "policy"}]},
+            {"id": "otel_trace", "source": "otel spans", "target": "tracing processor", "category": "observability", "status": "mapped", "required": True, "evidence": [{"type": "otel"}]},
+            {"id": "futureagi_export", "source": "dataset export", "target": "Future AGI row", "category": "exports", "status": "mapped", "required": True, "evidence": [{"type": "futureagi"}]},
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Framework portability matrix passed."}],
+                "tool_calls": [
+                    {"id": "status", "name": "framework_portability_status", "arguments": {}},
+                    {"id": "tools", "name": "list_framework_portability_mappings", "arguments": {"category": "tools"}},
+                    {"id": "gaps", "name": "list_framework_portability_gaps", "arguments": {}},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {
+                            "kind": "framework_portability_matrix",
+                            "source_framework": "langgraph",
+                            "target_framework": "openai_agents",
+                        },
+                        "data": portability_matrix,
+                    }
+                ],
+                "metadata": {"environment_state": {"framework_portability_matrix": portability_matrix}},
+            }
+        ]
+    }
+    config = {
+        "required_framework_portability": [
+            "framework_portability",
+            "invoke",
+            "tool_discovery",
+            "tool_call",
+            "short_term_state",
+            "streaming_events",
+            "checkpoint_resume",
+            "handoff",
+            "guardrail",
+            "otel_trace",
+            "futureagi_export",
+        ],
+        "framework_portability_quality": {
+            "source_framework": "langgraph",
+            "target_framework": "openai_agents",
+            "required_mappings": [
+                "invoke",
+                "tool_discovery",
+                "tool_call",
+                "short_term_state",
+                "streaming_events",
+                "checkpoint_resume",
+                "handoff",
+                "guardrail",
+                "otel_trace",
+                "futureagi_export",
+            ],
+            "required_categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "min_mapped_mappings": 10,
+            "min_mapping_rate": 1.0,
+            "min_required_mapping_rate": 1.0,
+            "max_missing_mappings": 0,
+            "max_blocked_mappings": 0,
+            "require_evidence": True,
+            "forbidden_missing_mappings": ["tool_discovery", "guardrail", "futureagi_export"],
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+            "require_lifecycle": True,
+            "require_orchestration": True,
+            "require_security": True,
+            "require_observability": True,
+            "require_exports": True,
+            "require_runtime": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_portability_coverage"] == 1.0
+    assert scores["framework_portability_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_matrix = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_report["results"][0]["metadata"]["environment_state"]["framework_portability_matrix"] = bad_matrix
+    bad_matrix["signals"] = ["framework_portability", "invoke", "tool_discovery", "checkpoint_resume"]
+    bad_matrix["summary"] = {
+        "mapping_count": 7,
+        "mapped_count": 3,
+        "partial_count": 1,
+        "missing_count": 2,
+        "blocked_count": 1,
+        "required_count": 7,
+        "required_mapped_count": 3,
+        "mapping_rate": 0.4286,
+        "required_mapping_rate": 0.4286,
+        "evidence_count": 0,
+        "categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "security", "exports"],
+        "mapped_categories": ["runtime", "tools", "lifecycle"],
+        "missing_categories": ["memory", "streaming", "security", "exports"],
+        "mapped_mappings": ["invoke", "tool_discovery", "checkpoint_resume"],
+        "partial_mappings": ["short_term_state"],
+        "missing_mappings": ["streaming_events", "futureagi_export"],
+        "blocked_mappings": ["guardrail"],
+        "gaps": ["short_term_state", "streaming_events", "guardrail", "futureagi_export"],
+    }
+    bad_matrix["mappings"] = [
+        {"id": "invoke", "source": "graph.invoke", "target": "Runner.run", "category": "runtime", "status": "mapped", "required": True, "evidence": []},
+        {"id": "tool_discovery", "source": "tools/list", "target": "Agents SDK tools", "category": "tools", "status": "mapped", "required": True, "evidence": []},
+        {"id": "short_term_state", "source": "graph state", "target": "session state", "category": "memory", "status": "partial", "required": True, "evidence": []},
+        {"id": "streaming_events", "source": "astream_events", "target": "run stream events", "category": "streaming", "status": "missing", "required": True, "evidence": []},
+        {"id": "checkpoint_resume", "source": "checkpointer", "target": "session resume", "category": "lifecycle", "status": "mapped", "required": True, "evidence": []},
+        {"id": "guardrail", "source": "policy node", "target": "guardrail", "category": "security", "status": "blocked", "required": True, "evidence": []},
+        {"id": "futureagi_export", "source": "dataset export", "target": "Future AGI row", "category": "exports", "status": "missing", "required": True, "evidence": []},
+    ]
+
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["framework_portability_coverage"] < 1.0
+    assert bad_scores["framework_portability_quality"] < 1.0
+    assert {
+        "missing_framework_portability_key",
+        "framework_portability_required_mapping_missing",
+        "framework_portability_category_missing",
+        "framework_portability_mapped_count_low",
+        "framework_portability_mapping_rate_low",
+        "framework_portability_required_mapping_rate_low",
+        "framework_portability_missing_count_high",
+        "framework_portability_blocked_count_high",
+        "framework_portability_evidence_missing",
+        "framework_portability_forbidden_missing",
+        "framework_portability_streaming_missing",
+        "framework_portability_security_missing",
+        "framework_portability_exports_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_observability_replay_pack_quality():
     replay_pack = {
         "kind": "observability_replay_pack",

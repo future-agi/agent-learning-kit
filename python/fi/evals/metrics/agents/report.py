@@ -189,6 +189,8 @@ class AgentReportEvalConfig(BaseModel):
     framework_capability_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_probes: List[str] = Field(default_factory=list)
     framework_probe_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_framework_portability: List[str] = Field(default_factory=list)
+    framework_portability_quality: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
@@ -395,6 +397,8 @@ class AgentReportEvaluator:
                 *_framework_capability_quality_metrics(report_context, config),
                 *_framework_probe_coverage_metrics(report_context, config),
                 *_framework_probe_quality_metrics(report_context, config),
+                *_framework_portability_coverage_metrics(report_context, config),
+                *_framework_portability_quality_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
@@ -5477,6 +5481,270 @@ def _framework_probe_quality_metric(
         name="framework_probe_quality",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} framework probe quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _framework_portability_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_framework_portability and not _framework_portability_payloads_from_context(context):
+        return []
+    return [_framework_portability_coverage_metric(context, config)]
+
+
+def _framework_portability_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_portability_key(key) for key in config.required_framework_portability]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_portability_coverage",
+            score=1.0,
+            reason="No required framework portability keys provided.",
+        )
+    observed = _framework_portability_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="framework_portability_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required framework portability evidence observed."
+            if not missing
+            else f"Missing framework portability evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_framework_portability_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _framework_portability_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_portability_quality:
+        return []
+    return [_framework_portability_quality_metric(context, config.framework_portability_quality)]
+
+
+def _framework_portability_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _framework_portability_summary(_framework_portability_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    expected_source = requirements.get("source_framework") or requirements.get("source") or requirements.get("from_framework")
+    if expected_source not in (None, "", [], {}):
+        normalized = _normalize_framework_portability_key(expected_source)
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="source_framework",
+            expected=normalized,
+            actual=observed["source_frameworks"],
+            match=normalized in observed["source_frameworks"],
+            finding_type="framework_portability_source_mismatch",
+        )
+
+    expected_target = requirements.get("target_framework") or requirements.get("target") or requirements.get("to_framework")
+    if expected_target not in (None, "", [], {}):
+        normalized = _normalize_framework_portability_key(expected_target)
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="target_framework",
+            expected=normalized,
+            actual=observed["target_frameworks"],
+            match=normalized in observed["target_frameworks"],
+            finding_type="framework_portability_target_mismatch",
+        )
+
+    for mapping in _string_list(
+        requirements.get("required_mappings")
+        or requirements.get("required_operations")
+        or requirements.get("mappings")
+    ):
+        normalized = _normalize_framework_portability_key(mapping)
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="required_mapping",
+            expected=normalized,
+            actual=observed["mapped_mappings"],
+            match=normalized in observed["mapped_mappings"],
+            finding_type="framework_portability_required_mapping_missing",
+        )
+
+    for category in _string_list(requirements.get("required_categories") or requirements.get("categories")):
+        normalized = _normalize_framework_portability_category(category)
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="required_category",
+            expected=normalized,
+            actual=observed["mapped_categories"],
+            match=normalized in observed["mapped_categories"],
+            finding_type="framework_portability_category_missing",
+        )
+
+    min_mapped = _as_int(
+        requirements.get("min_mapped_mappings")
+        or requirements.get("min_mapped_count")
+        or requirements.get("min_mapped")
+    )
+    if min_mapped is not None:
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="min_mapped_mappings",
+            expected=min_mapped,
+            actual=observed["mapped_count"],
+            match=observed["mapped_count"] >= min_mapped,
+            finding_type="framework_portability_mapped_count_low",
+        )
+
+    min_mapping_rate = _as_float(requirements.get("min_mapping_rate"))
+    if min_mapping_rate is not None:
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="min_mapping_rate",
+            expected=min_mapping_rate,
+            actual=observed["mapping_rate"],
+            match=observed["mapping_rate"] >= min_mapping_rate,
+            finding_type="framework_portability_mapping_rate_low",
+        )
+
+    min_required_mapping_rate = _as_float(
+        requirements.get("min_required_mapping_rate")
+        if requirements.get("min_required_mapping_rate") is not None
+        else requirements.get("min_required_rate")
+    )
+    if min_required_mapping_rate is not None:
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="min_required_mapping_rate",
+            expected=min_required_mapping_rate,
+            actual=observed["required_mapping_rate"],
+            match=observed["required_mapping_rate"] >= min_required_mapping_rate,
+            finding_type="framework_portability_required_mapping_rate_low",
+        )
+
+    max_missing = _as_int(requirements.get("max_missing_mappings"))
+    if max_missing is None:
+        max_missing = _as_int(requirements.get("max_missing_count"))
+    if max_missing is not None:
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="max_missing_mappings",
+            expected=max_missing,
+            actual=observed["missing_count"],
+            match=observed["missing_count"] <= max_missing,
+            finding_type="framework_portability_missing_count_high",
+        )
+
+    max_blocked = _as_int(requirements.get("max_blocked_mappings"))
+    if max_blocked is None:
+        max_blocked = _as_int(requirements.get("max_blocked_count"))
+    if max_blocked is not None:
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="max_blocked_mappings",
+            expected=max_blocked,
+            actual=observed["blocked_count"],
+            match=observed["blocked_count"] <= max_blocked,
+            finding_type="framework_portability_blocked_count_high",
+        )
+
+    if requirements.get("require_evidence") is not None:
+        required = bool(requirements.get("require_evidence"))
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="require_evidence",
+            expected=required,
+            actual=observed["evidence_count"] > 0,
+            match=(observed["evidence_count"] > 0) is required,
+            finding_type="framework_portability_evidence_missing",
+        )
+
+    forbidden_missing = [
+        _normalize_framework_portability_key(mapping)
+        for mapping in _string_list(requirements.get("forbidden_missing_mappings"))
+        if _normalize_framework_portability_key(mapping)
+    ]
+    for mapping in forbidden_missing:
+        actual_missing = sorted(set(observed["missing_mappings"]) | set(observed["blocked_mappings"]))
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check="forbidden_missing_mapping",
+            expected=mapping,
+            actual=actual_missing,
+            match=mapping not in actual_missing,
+            finding_type="framework_portability_forbidden_missing",
+        )
+
+    bool_checks = (
+        ("require_tools", "has_tools", "framework_portability_tools_missing"),
+        ("require_memory", "has_memory", "framework_portability_memory_missing"),
+        ("require_streaming", "has_streaming", "framework_portability_streaming_missing"),
+        ("require_lifecycle", "has_lifecycle", "framework_portability_lifecycle_missing"),
+        ("require_orchestration", "has_orchestration", "framework_portability_orchestration_missing"),
+        ("require_security", "has_security", "framework_portability_security_missing"),
+        ("require_observability", "has_observability", "framework_portability_observability_missing"),
+        ("require_exports", "has_exports", "framework_portability_exports_missing"),
+        ("require_browser", "has_browser", "framework_portability_browser_missing"),
+        ("require_voice", "has_voice", "framework_portability_voice_missing"),
+        ("require_runtime", "has_runtime", "framework_portability_runtime_missing"),
+    )
+    for key, observed_key, finding_type in bool_checks:
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_framework_portability_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[observed_key],
+            match=observed[observed_key] is required,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_portability_quality",
+            score=1.0,
+            reason="No framework portability quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_portability_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework portability quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -12929,6 +13197,385 @@ def _normalize_framework_probe_operation(value: Any) -> str:
 
 def _normalize_framework_probe_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_").replace("/", "_")
+
+
+def _framework_portability_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type not in {"trace", "json", "config", "portability"}:
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_portability(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_portability(payload, metadata):
+            payloads.append(payload)
+        elif "framework_portability" in event_type:
+            if _as_list(payload.get("mappings", [])):
+                payloads.append({"kind": "framework_portability_matrix", **payload})
+            elif {"source", "target", "status"} & set(payload):
+                payloads.append({"kind": "framework_portability_matrix", "mappings": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("framework_portability_matrix"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _framework_portability_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _framework_portability_payloads_from_context(context):
+        observed.update({"framework_portability", "portability_matrix", "portability", "migration", "mapping"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_portability_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for collection_key in (
+            "categories",
+            "mapped_categories",
+            "missing_categories",
+            "mapped_mappings",
+            "partial_mappings",
+            "missing_mappings",
+            "blocked_mappings",
+            "gaps",
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = _normalize_framework_portability_key(item)
+                if normalized:
+                    observed.add(normalized)
+        for mapping in _framework_portability_records([payload]):
+            mapping_dict = _as_dict(mapping)
+            for key in ("id", "name", "source", "target", "category", "status"):
+                normalized = _normalize_framework_portability_key(mapping_dict.get(key))
+                if normalized:
+                    observed.add(normalized)
+            for signal in _as_list(mapping_dict.get("signals", [])):
+                normalized = _normalize_framework_portability_key(signal)
+                if normalized:
+                    observed.add(normalized)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = _normalize_framework_portability_key(_get(tool_call, "name", _get(tool_call, "tool", "")))
+        if name in {
+            "framework_portability_status",
+            "list_framework_portability_mappings",
+            "inspect_framework_portability_mapping",
+            "list_framework_portability_gaps",
+        }:
+            observed.update({"framework_portability", "portability_matrix", "portability", "migration", "mapping"})
+        if name:
+            observed.add(name)
+    return observed
+
+
+def _looks_like_framework_portability(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_portability_matrix" or (
+        "mappings" in data and ("summary" in data or "source_framework" in data or "target_framework" in data)
+    )
+
+
+def _framework_portability_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    source_frameworks: set[str] = set()
+    target_frameworks: set[str] = set()
+    categories: set[str] = set()
+    mapped_categories: set[str] = set()
+    missing_categories: set[str] = set()
+    mapped_mappings: set[str] = set()
+    partial_mappings: set[str] = set()
+    missing_mappings: set[str] = set()
+    blocked_mappings: set[str] = set()
+    signals: set[str] = set()
+    mapping_records: List[Dict[str, Any]] = []
+    seen_mappings: set[str] = set()
+    mapped_count = 0
+    partial_count = 0
+    missing_count = 0
+    blocked_count = 0
+    required_count = 0
+    required_mapped_count = 0
+    evidence_count = 0
+    summary_mapping_count = 0
+    summary_counts = {
+        "mapped_count": 0,
+        "partial_count": 0,
+        "missing_count": 0,
+        "blocked_count": 0,
+        "required_count": 0,
+        "required_mapped_count": 0,
+        "evidence_count": 0,
+    }
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        source_framework = _normalize_framework_portability_key(
+            payload_dict.get("source_framework") or payload_dict.get("source")
+        )
+        target_framework = _normalize_framework_portability_key(
+            payload_dict.get("target_framework") or payload_dict.get("target")
+        )
+        if source_framework:
+            source_frameworks.add(source_framework)
+        if target_framework:
+            target_frameworks.add(target_framework)
+        for signal in _as_list(payload_dict.get("signals", [])):
+            normalized = _normalize_framework_portability_key(signal)
+            if normalized:
+                signals.add(normalized)
+        summary = _as_dict(payload_dict.get("summary"))
+        summary_mapping_count = max(summary_mapping_count, _as_int(summary.get("mapping_count")) or 0)
+        for key in summary_counts:
+            summary_counts[key] = max(summary_counts[key], _as_int(summary.get(key)) or 0)
+        for collection_key, target in (
+            ("categories", categories),
+            ("mapped_categories", mapped_categories),
+            ("missing_categories", missing_categories),
+            ("mapped_mappings", mapped_mappings),
+            ("partial_mappings", partial_mappings),
+            ("missing_mappings", missing_mappings),
+            ("blocked_mappings", blocked_mappings),
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = (
+                    _normalize_framework_portability_category(item)
+                    if "categories" in collection_key
+                    else _normalize_framework_portability_key(item)
+                )
+                if normalized:
+                    target.add(normalized)
+        for mapping in _framework_portability_records([payload_dict]):
+            mapping_dict = _as_dict(mapping)
+            mapping_id = _normalize_framework_portability_key(
+                mapping_dict.get("id") or mapping_dict.get("name") or mapping_dict.get("source") or mapping_dict.get("target")
+            )
+            if not mapping_id or mapping_id in seen_mappings:
+                continue
+            seen_mappings.add(mapping_id)
+            mapping_records.append(mapping_dict)
+            status = _normalize_framework_portability_status(mapping_dict.get("status")) or "mapped"
+            category = _normalize_framework_portability_category(mapping_dict.get("category") or mapping_id)
+            if category:
+                categories.add(category)
+            if bool(mapping_dict.get("required", True)):
+                required_count += 1
+            if status == "mapped":
+                mapped_count += 1
+                mapped_mappings.add(mapping_id)
+                if category:
+                    mapped_categories.add(category)
+                if bool(mapping_dict.get("required", True)):
+                    required_mapped_count += 1
+            elif status == "partial":
+                partial_count += 1
+                partial_mappings.add(mapping_id)
+                if category:
+                    mapped_categories.add(category)
+            elif status == "blocked":
+                blocked_count += 1
+                blocked_mappings.add(mapping_id)
+                if category:
+                    missing_categories.add(category)
+            else:
+                missing_count += 1
+                missing_mappings.add(mapping_id)
+                if category:
+                    missing_categories.add(category)
+            evidence_count += len(_as_list(mapping_dict.get("evidence", [])))
+            for signal in _as_list(mapping_dict.get("signals", [])):
+                normalized = _normalize_framework_portability_key(signal)
+                if normalized:
+                    signals.add(normalized)
+
+    mapped_count = max(mapped_count, summary_counts["mapped_count"])
+    partial_count = max(partial_count, summary_counts["partial_count"])
+    missing_count = max(missing_count, summary_counts["missing_count"])
+    blocked_count = max(blocked_count, summary_counts["blocked_count"])
+    required_count = max(required_count, summary_counts["required_count"])
+    required_mapped_count = max(required_mapped_count, summary_counts["required_mapped_count"])
+    evidence_count = max(evidence_count, summary_counts["evidence_count"])
+    mapping_count = max(
+        len(mapping_records),
+        summary_mapping_count,
+        mapped_count + partial_count + missing_count + blocked_count,
+    )
+    mapping_rate = round(mapped_count / mapping_count, 4) if mapping_count else 1.0
+    required_mapping_rate = round(required_mapped_count / required_count, 4) if required_count else 1.0
+    mapped_category_set = set(mapped_categories)
+    return {
+        "mapping_count": mapping_count,
+        "mapped_count": mapped_count,
+        "partial_count": partial_count,
+        "missing_count": missing_count,
+        "blocked_count": blocked_count,
+        "required_count": required_count,
+        "required_mapped_count": required_mapped_count,
+        "mapping_rate": mapping_rate,
+        "required_mapping_rate": required_mapping_rate,
+        "evidence_count": evidence_count,
+        "source_frameworks": sorted(source_frameworks),
+        "target_frameworks": sorted(target_frameworks),
+        "categories": sorted(categories),
+        "mapped_categories": sorted(mapped_categories),
+        "missing_categories": sorted(missing_categories),
+        "mapped_mappings": sorted(mapped_mappings),
+        "partial_mappings": sorted(partial_mappings),
+        "missing_mappings": sorted(missing_mappings),
+        "blocked_mappings": sorted(blocked_mappings),
+        "gaps": sorted(partial_mappings | missing_mappings | blocked_mappings),
+        "signals": sorted(signals),
+        "has_tools": "tools" in mapped_category_set,
+        "has_memory": "memory" in mapped_category_set,
+        "has_streaming": "streaming" in mapped_category_set,
+        "has_lifecycle": "lifecycle" in mapped_category_set,
+        "has_orchestration": "orchestration" in mapped_category_set,
+        "has_security": "security" in mapped_category_set,
+        "has_observability": "observability" in mapped_category_set,
+        "has_exports": "exports" in mapped_category_set,
+        "has_browser": "browser" in mapped_category_set,
+        "has_voice": "voice" in mapped_category_set,
+        "has_runtime": "runtime" in mapped_category_set,
+        "mappings": mapping_records,
+    }
+
+
+def _framework_portability_records(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_records: List[Dict[str, Any]] = []
+        for mapping in _as_list(payload_dict.get("mappings", [])):
+            mapping_dict = _as_dict(mapping)
+            if mapping_dict:
+                payload_records.append(mapping_dict)
+        if not payload_records and {"source", "target", "status"} & set(payload_dict):
+            payload_records.append(payload_dict)
+        records.extend(payload_records)
+    return records
+
+
+def _append_framework_portability_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_portability_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_portability_status(value: Any) -> str:
+    normalized = _normalize_framework_portability_key(value)
+    aliases = {
+        "yes": "mapped",
+        "true": "mapped",
+        "supported": "mapped",
+        "available": "mapped",
+        "enabled": "mapped",
+        "pass": "mapped",
+        "passed": "mapped",
+        "success": "mapped",
+        "limited": "partial",
+        "degraded": "partial",
+        "shim": "partial",
+        "adapter_shim": "partial",
+        "no": "missing",
+        "false": "missing",
+        "unsupported": "missing",
+        "not_supported": "missing",
+        "fail": "missing",
+        "failed": "missing",
+        "denied": "blocked",
+        "forbidden": "blocked",
+        "policy_blocked": "blocked",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"mapped", "partial", "missing", "blocked"} else ""
+
+
+def _normalize_framework_portability_category(value: Any) -> str:
+    normalized = _normalize_framework_portability_key(value)
+    aliases = {
+        "tool": "tools",
+        "function": "tools",
+        "function_calling": "tools",
+        "tool_calling": "tools",
+        "mcp": "tools",
+        "state": "memory",
+        "checkpoint": "lifecycle",
+        "session": "lifecycle",
+        "trace": "observability",
+        "telemetry": "observability",
+        "log": "observability",
+        "artifact": "exports",
+        "export": "exports",
+        "workflow": "orchestration",
+        "graph": "orchestration",
+        "policy": "security",
+        "guardrail": "security",
+        "computer_use": "browser",
+        "cua": "browser",
+        "audio": "voice",
+        "invoke": "runtime",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_portability_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_").replace("/", "_")
+    aliases = {
+        "function_call": "tool_calling",
+        "function_calls": "tool_calling",
+        "function_calling": "tool_calling",
+        "tool_calls": "tool_calling",
+        "tool_use": "tool_calling",
+        "tools_list": "list_tools",
+        "tools_call": "tool_call",
+        "call_tool": "tool_call",
+        "memory_write": "write_memory",
+        "memory_read": "read_memory",
+        "checkpointing": "checkpoint",
+        "checkpoints": "checkpoint",
+        "resume": "checkpoint_resume",
+        "stream": "streaming",
+        "stream_events": "streaming",
+        "trace": "observability",
+        "telemetry": "observability",
+        "otel": "observability",
+        "artifact": "exports",
+        "export": "exports",
+        "futureagi_export": "exports",
+        "workflow": "orchestration",
+        "graph": "orchestration",
+        "policy": "security",
+        "guardrails": "security",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _framework_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
