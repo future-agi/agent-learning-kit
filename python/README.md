@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -220,8 +220,12 @@ jitter, and packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
 Trajectory templates let one reusable rubric score framework-neutral reports for
 goal completion, ordered tool calls, tool-call precision/recall/F1, policy
 checks, browser action safety, memory writes, and multimodal artifact support.
+Source contradiction and artifact grounding checks catch answer claims that
+conflict with cited/retrieved source text or fail to match artifact evidence
+such as OCR text, transcripts, screenshots, file metadata, or image metadata.
 See [`examples/11_trajectory_template_evaluation.py`](examples/11_trajectory_template_evaluation.py).
 See [`examples/12_framework_transcript_quality.py`](examples/12_framework_transcript_quality.py).
+See [`examples/13_evidence_contradiction_artifact_grounding.py`](examples/13_evidence_contradiction_artifact_grounding.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -267,6 +271,23 @@ result = evaluate_agent_report(
         "forbidden_retrieval_doc_ids": ["refund_policy_old"],
         "require_current_retrieval": True,
         "require_source_grounding": True,
+        "source_contradiction_checks": [
+            {
+                "id": "refund_window",
+                "source_terms": ["30 day refund window"],
+                "answer_terms": ["refund window"],
+                "contradict_terms": ["90 day refund window"],
+            }
+        ],
+        "artifact_grounding_checks": [
+            {
+                "id": "receipt_total",
+                "artifact": {"type": "image", "id": "receipt_123"},
+                "answer_terms": ["receipt total", "$42.00"],
+                "support_terms": ["total $42.00"],
+                "forbidden_answer_terms": ["$24.00"],
+            }
+        ],
         "required_multi_agent_trace": ["role", "contract", "handoff", "message", "review", "reconciliation"],
         "required_multi_agent_roles": ["support_agent", "policy_specialist", "qa_reviewer"],
         "expected_multi_agent_handoffs": [

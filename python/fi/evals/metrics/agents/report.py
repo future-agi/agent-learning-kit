@@ -165,6 +165,8 @@ class AgentReportEvalConfig(BaseModel):
     require_source_grounding: bool = False
     source_grounding_min_overlap: float = 0.45
     source_grounding_ignore_terms: List[str] = Field(default_factory=list)
+    source_contradiction_checks: List[Any] = Field(default_factory=list)
+    artifact_grounding_checks: List[Any] = Field(default_factory=list)
     tool_argument_schemas: Dict[str, Any] = Field(default_factory=dict)
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
@@ -337,6 +339,7 @@ class AgentReportEvaluator:
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
                 _source_grounding_metric(report_context, config),
+                *_source_contradiction_metrics(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _multi_agent_coordination_quality_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
@@ -347,6 +350,7 @@ class AgentReportEvaluator:
                 _voice_interaction_quality_metric(report_context, config),
                 _voice_trace_coverage_metric(report_context, config),
                 _artifact_coverage_metric(report_context, config),
+                *_artifact_grounding_metrics(report_context, config),
                 _state_goal_metric(report_context, config),
             ]
         )
@@ -1526,6 +1530,178 @@ def _artifact_text(artifact: Mapping[str, Any]) -> str:
         )
         if value is not None
     )
+
+
+def _source_contradiction_checks(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[Dict[str, Any]]:
+    metadata = _as_dict(context.get("metadata", {}))
+    checks: List[Dict[str, Any]] = []
+    for key in ("source_contradiction_checks", "source_contradictions"):
+        checks.extend(_as_dict(item) for item in _as_list(metadata.get(key, [])) if _as_dict(item))
+    checks.extend(_as_dict(item) for item in _as_list(config.source_contradiction_checks) if _as_dict(item))
+    return checks
+
+
+def _normalize_source_contradiction_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    check = _as_dict(raw)
+    if not check:
+        return {}
+    source_terms = _string_list(
+        check.get("source_terms")
+        or check.get("evidence_terms")
+        or check.get("supported_terms")
+        or check.get("expected_source_terms")
+    )
+    answer_terms = _string_list(
+        check.get("answer_terms")
+        or check.get("claim_terms")
+        or check.get("topic_terms")
+    )
+    contradict_terms = _string_list(
+        check.get("contradict_terms")
+        or check.get("contradictory_terms")
+        or check.get("forbidden_answer_terms")
+        or check.get("wrong_terms")
+    )
+    if not source_terms and not contradict_terms:
+        return {}
+    return {
+        "id": str(check.get("id") or check.get("name") or "source_contradiction"),
+        "source_terms": source_terms,
+        "answer_terms": answer_terms,
+        "contradict_terms": contradict_terms,
+        "require_all_source_terms": _config_bool(check.get("require_all_source_terms"), True),
+    }
+
+
+def _source_evidence_records_from_context(context: Mapping[str, Any]) -> List[Dict[str, str]]:
+    records: List[Dict[str, str]] = []
+    traces = _retrieval_memory_traces(context)
+    documents = _retrieval_documents_by_id(traces)
+    source_ids = _grounding_source_doc_ids(traces, documents)
+    if not source_ids:
+        source_ids = sorted(documents.keys())
+    for doc_id in source_ids:
+        doc = documents.get(doc_id, {})
+        if not doc:
+            continue
+        records.append(
+            {
+                "id": str(doc_id),
+                "kind": "retrieval_document",
+                "text": _source_document_text(doc),
+            }
+        )
+
+    metadata = _as_dict(context.get("metadata", {}))
+    for key in ("sources", "source_documents", "reference_documents"):
+        for index, raw_source in enumerate(_as_list(metadata.get(key, []))):
+            source = _as_dict(raw_source)
+            if not source:
+                continue
+            records.append(
+                {
+                    "id": str(source.get("id") or source.get("doc_id") or f"{key}_{index}"),
+                    "kind": key,
+                    "text": _source_document_text(source),
+                }
+            )
+    return [record for record in records if record["text"].strip()]
+
+
+def _source_document_text(document: Mapping[str, Any]) -> str:
+    return " ".join(
+        _stringify(value)
+        for value in (
+            document.get("title"),
+            document.get("content"),
+            document.get("text"),
+            document.get("source"),
+            document.get("metadata"),
+        )
+        if value not in (None, "", {}, [])
+    )
+
+
+def _artifact_grounding_checks(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[Dict[str, Any]]:
+    metadata = _as_dict(context.get("metadata", {}))
+    checks: List[Dict[str, Any]] = []
+    for key in ("artifact_grounding_checks", "artifact_grounding", "artifact_claims"):
+        checks.extend(_as_dict(item) for item in _as_list(metadata.get(key, [])) if _as_dict(item))
+    checks.extend(_as_dict(item) for item in _as_list(config.artifact_grounding_checks) if _as_dict(item))
+    return checks
+
+
+def _normalize_artifact_grounding_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    check = _as_dict(raw)
+    if not check:
+        return {}
+    answer_terms = _string_list(
+        check.get("answer_terms")
+        or check.get("claim_terms")
+        or check.get("answer_contains")
+        or check.get("claim_contains")
+    )
+    support_terms = _string_list(
+        check.get("support_terms")
+        or check.get("artifact_terms")
+        or check.get("artifact_contains")
+    )
+    forbidden_terms = _string_list(
+        check.get("forbidden_answer_terms")
+        or check.get("contradict_terms")
+        or check.get("wrong_terms")
+    )
+    if not answer_terms and not support_terms and not forbidden_terms:
+        return {}
+    artifact = _artifact_selector_from_grounding_check(check)
+    return {
+        "id": str(check.get("id") or check.get("name") or "artifact_grounding"),
+        "artifact": artifact,
+        "answer_terms": answer_terms,
+        "support_terms": support_terms,
+        "forbidden_answer_terms": forbidden_terms,
+        "require_all_answer_terms": _config_bool(check.get("require_all_answer_terms"), True),
+        "require_all_support_terms": _config_bool(check.get("require_all_support_terms"), True),
+    }
+
+
+def _artifact_selector_from_grounding_check(check: Mapping[str, Any]) -> Dict[str, Any]:
+    artifact = _as_dict(check.get("artifact"))
+    for source_key, target_key in (
+        ("artifact_id", "id"),
+        ("artifact_name", "name"),
+        ("artifact_type", "type"),
+        ("artifact_role", "role"),
+    ):
+        if check.get(source_key) is not None:
+            artifact[target_key] = check.get(source_key)
+    for key in ("id", "name", "type", "role", "mime_type", "metadata"):
+        if check.get(key) is not None and key not in artifact:
+            artifact[key] = check.get(key)
+    if check.get("artifact_contains") is not None and "contains" not in artifact:
+        artifact["contains"] = check.get("artifact_contains")
+    return artifact
+
+
+def _terms_match(text: Any, terms: Sequence[str], *, require_all: bool) -> bool:
+    if not terms:
+        return True
+    matches = [_text_contains(text, term) for term in terms]
+    return all(matches) if require_all else any(matches)
+
+
+def _config_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _artifacts_for_claim(
@@ -3047,6 +3223,94 @@ def _source_grounding_metric(
     )
 
 
+def _source_contradiction_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    checks = _source_contradiction_checks(context, config)
+    if not checks:
+        return []
+    return [_source_contradiction_metric(context, checks)]
+
+
+def _source_contradiction_metric(
+    context: Mapping[str, Any],
+    checks: Sequence[Mapping[str, Any]],
+) -> AgentReportMetricResult:
+    answer = _trajectory_final_text(context)
+    source_records = _source_evidence_records_from_context(context)
+    source_text = "\n".join(record["text"] for record in source_records)
+    normalized_checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for raw_check in checks:
+        check = _normalize_source_contradiction_check(raw_check)
+        if not check:
+            continue
+        source_terms = check["source_terms"]
+        answer_terms = check["answer_terms"]
+        contradict_terms = check["contradict_terms"]
+        source_match = _terms_match(source_text, source_terms, require_all=check["require_all_source_terms"])
+        answer_scope_match = not answer_terms or _terms_match(answer, answer_terms, require_all=False)
+        matched_contradictions = [
+            term for term in contradict_terms
+            if _text_contains(answer, term) and answer_scope_match
+        ]
+        match = bool(source_match) and not matched_contradictions
+        item = {
+            "id": check["id"],
+            "source_terms": source_terms,
+            "answer_terms": answer_terms,
+            "contradict_terms": contradict_terms,
+            "source_match": bool(source_match),
+            "answer_scope_match": bool(answer_scope_match),
+            "matched_contradictions": matched_contradictions,
+            "match": match,
+        }
+        normalized_checks.append(item)
+        if not source_match:
+            findings.append(
+                {
+                    "type": "missing_source_contradiction_evidence",
+                    "id": check["id"],
+                    "source_terms": source_terms,
+                }
+            )
+        if matched_contradictions:
+            findings.append(
+                {
+                    "type": "source_contradicted_claim",
+                    "id": check["id"],
+                    "answer_terms": answer_terms,
+                    "contradict_terms": matched_contradictions,
+                }
+            )
+
+    if not normalized_checks:
+        return AgentReportMetricResult(
+            name="source_contradiction",
+            score=1.0,
+            reason="No checkable source contradiction rules were configured.",
+        )
+
+    matched = sum(1 for check in normalized_checks if check["match"])
+    score = matched / len(normalized_checks)
+    return AgentReportMetricResult(
+        name="source_contradiction",
+        score=round(score, 4),
+        reason=(
+            "No source-supported answer contradictions observed."
+            if not findings
+            else f"{matched}/{len(normalized_checks)} source contradiction check(s) passed."
+        ),
+        details={
+            "checks": normalized_checks,
+            "source_records": source_records,
+            "findings": findings,
+        },
+    )
+
+
 def _browser_trace_coverage_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -3408,6 +3672,116 @@ def _artifact_coverage_metric(
             else f"Missing artifact types: {', '.join(missing)}."
         ),
         details={"required": required, "observed": sorted(observed), "missing": missing},
+    )
+
+
+def _artifact_grounding_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    checks = _artifact_grounding_checks(context, config)
+    if not checks:
+        return []
+    return [_artifact_grounding_metric(context, checks)]
+
+
+def _artifact_grounding_metric(
+    context: Mapping[str, Any],
+    checks: Sequence[Mapping[str, Any]],
+) -> AgentReportMetricResult:
+    answer = _trajectory_final_text(context)
+    artifacts = _artifact_records_from_context(context)
+    normalized_checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for raw_check in checks:
+        check = _normalize_artifact_grounding_check(raw_check)
+        if not check:
+            continue
+        matching_artifacts = [
+            artifact for artifact in artifacts
+            if _artifact_matches_expected(artifact, check["artifact"])
+        ]
+        artifact_text = "\n".join(_artifact_text(artifact) for artifact in matching_artifacts)
+        answer_terms = check["answer_terms"]
+        support_terms = check["support_terms"] or answer_terms
+        forbidden_terms = check["forbidden_answer_terms"]
+        claim_observed = _terms_match(answer, answer_terms, require_all=check["require_all_answer_terms"])
+        artifact_support = bool(matching_artifacts) and _terms_match(
+            artifact_text,
+            support_terms,
+            require_all=check["require_all_support_terms"],
+        )
+        forbidden_matches = [term for term in forbidden_terms if _text_contains(answer, term)]
+        match = bool(claim_observed) and bool(artifact_support) and not forbidden_matches
+        item = {
+            "id": check["id"],
+            "artifact": check["artifact"],
+            "answer_terms": answer_terms,
+            "support_terms": support_terms,
+            "forbidden_answer_terms": forbidden_terms,
+            "matching_artifact_count": len(matching_artifacts),
+            "claim_observed": bool(claim_observed),
+            "artifact_support": bool(artifact_support),
+            "forbidden_matches": forbidden_matches,
+            "match": match,
+        }
+        normalized_checks.append(item)
+        if not matching_artifacts:
+            findings.append(
+                {
+                    "type": "missing_grounding_artifact",
+                    "id": check["id"],
+                    "artifact": check["artifact"],
+                }
+            )
+        elif not artifact_support:
+            findings.append(
+                {
+                    "type": "artifact_support_missing",
+                    "id": check["id"],
+                    "support_terms": support_terms,
+                }
+            )
+        if not claim_observed:
+            findings.append(
+                {
+                    "type": "artifact_claim_missing",
+                    "id": check["id"],
+                    "answer_terms": answer_terms,
+                }
+            )
+        if forbidden_matches:
+            findings.append(
+                {
+                    "type": "artifact_contradicted_claim",
+                    "id": check["id"],
+                    "forbidden_answer_terms": forbidden_matches,
+                }
+            )
+
+    if not normalized_checks:
+        return AgentReportMetricResult(
+            name="artifact_grounding_quality",
+            score=1.0,
+            reason="No checkable artifact grounding rules were configured.",
+        )
+
+    matched = sum(1 for check in normalized_checks if check["match"])
+    score = matched / len(normalized_checks)
+    return AgentReportMetricResult(
+        name="artifact_grounding_quality",
+        score=round(score, 4),
+        reason=(
+            "Answer claims matched artifact evidence."
+            if not findings
+            else f"{matched}/{len(normalized_checks)} artifact grounding check(s) passed."
+        ),
+        details={
+            "checks": normalized_checks,
+            "artifact_count": len(artifacts),
+            "findings": findings,
+        },
     )
 
 

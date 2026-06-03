@@ -2988,6 +2988,98 @@ def test_evaluate_agent_report_scores_source_grounding():
     assert complete_scores["source_grounding"] == 1.0
 
 
+def test_evaluate_agent_report_scores_source_contradiction_and_artifact_grounding():
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Answer from policy and receipt evidence.",
+                    "outcome": "Order 123 has a 30 day refund window and matching receipt total.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Check refund window and receipt total for order 123."},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Order 123 has a 30 day refund window. "
+                            "The receipt total is $42.00."
+                        ),
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "retrieval_memory_trace"},
+                        "data": {
+                            "kind": "retrieval_memory_trace",
+                            "documents": [
+                                {
+                                    "id": "refund_policy_current",
+                                    "content": "Order 123 has a 30 day refund window and no restocking fee.",
+                                    "current": True,
+                                }
+                            ],
+                            "document_reads": [{"id": "refund_policy_current"}],
+                            "citations": [
+                                {
+                                    "doc_ids": ["refund_policy_current"],
+                                    "claim": "Order 123 has a 30 day refund window.",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "id": "receipt_123",
+                        "type": "image",
+                        "metadata": {"ocr_text": "Receipt order 123 total $42.00 paid by card."},
+                        "data": {"description": "Receipt for order 123."},
+                    },
+                ],
+            }
+        ]
+    }
+    config = {
+        "source_contradiction_checks": [
+            {
+                "id": "refund_window",
+                "source_terms": ["30 day refund window"],
+                "answer_terms": ["refund window"],
+                "contradict_terms": ["90 day refund window", "non refundable"],
+            }
+        ],
+        "artifact_grounding_checks": [
+            {
+                "id": "receipt_total",
+                "artifact": {"type": "image", "id": "receipt_123"},
+                "answer_terms": ["receipt total", "$42.00"],
+                "support_terms": ["total $42.00"],
+                "forbidden_answer_terms": ["$24.00"],
+            }
+        ],
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["source_contradiction"] == 1.0
+    assert scores["artifact_grounding_quality"] == 1.0
+
+    report["results"][0]["messages"][1]["content"] = (
+        "Order 123 has a 90 day refund window. The receipt total is $24.00."
+    )
+    report["results"][0]["artifacts"][1]["metadata"]["ocr_text"] = "Receipt order 123 total $42.00."
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["source_contradiction"] < 1.0
+    assert failing_scores["artifact_grounding_quality"] < 1.0
+    assert "source_contradicted_claim" in finding_types
+    assert "artifact_claim_missing" in finding_types
+    assert "artifact_contradicted_claim" in finding_types
+
+
 def test_evaluate_agent_report_scores_tool_argument_schema():
     report = {
         "results": [

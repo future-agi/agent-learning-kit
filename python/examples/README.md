@@ -16,6 +16,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 10 | [Evaluate Agent Simulation Reports](10_agent_report_evaluation.py) | Score simulate-sdk-style traces, tools, memory, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, multi-agent trace coverage, artifacts, browser/CUA trace coverage, voice trace coverage, environment injection, and pentest failures | No |
 | 11 | [Evaluate Agent Trajectory Templates](11_trajectory_template_evaluation.py) | Score one reusable rubric for goal accuracy, ordered tool calls, Tool Call F1, policy adherence, browser action safety, memory correctness, and multimodal faithfulness | No |
 | 12 | [Score Framework Transcript Quality](12_framework_transcript_quality.py) | Check LangGraph/LangChain event-stream methods, nodes, subgraphs, tool sequence, final state, output, and errors | No |
+| 13 | [Catch Evidence Contradictions and Artifact Grounding Gaps](13_evidence_contradiction_artifact_grounding.py) | Detect answer claims contradicted by cited source text and verify artifact-backed claims against OCR/transcript/metadata evidence | No |
 
 ## Quick Start
 
@@ -44,3 +45,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 10**: Evaluate full agent simulation reports locally: trajectory score, tool use, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, framework trace coverage, retrieval/memory attribution, multi-agent trace coverage, artifact coverage, browser/CUA action safety, browser trace coverage, voice turn-taking, voice trace coverage, and expected state
 - **Cookbook 11**: Define one trajectory template and score agent goal accuracy, ordered tool calls, Tool Call F1, policy adherence, browser action safety, memory correctness, and multimodal artifact support without API keys
 - **Cookbook 12**: Score LangGraph/LangChain event-stream transcript quality from plain dictionaries: required methods, nodes, subgraphs, tool sequence, final state, final output, and framework errors
+- **Cookbook 13**: Catch source-supported contradictions and artifact grounding failures from local report dictionaries before reaching for an LLM judge
