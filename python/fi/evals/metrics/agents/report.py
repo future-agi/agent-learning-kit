@@ -4377,6 +4377,31 @@ def _framework_transcript_quality_metric(
     tools_by_speaker = _framework_transcript_tools_by_speaker(records)
     termination_text = _framework_transcript_termination_text(records)
     flattened_state = _framework_transcript_state(records, payloads)
+    checkpoints = _framework_transcript_checkpoints(records, payloads)
+    sessions = _framework_transcript_sessions(records, payloads)
+    checkpoint_state = _framework_checkpoint_state(checkpoints)
+    checkpoint_ids = {
+        _normalize_framework_name(checkpoint.get("id"))
+        for checkpoint in checkpoints
+        if checkpoint.get("id")
+    }
+    checkpoint_namespaces = {
+        _normalize_framework_name(checkpoint.get("namespace"))
+        for checkpoint in checkpoints
+        if checkpoint.get("namespace")
+    }
+    session_ids = {
+        _normalize_framework_name(value)
+        for checkpoint in checkpoints
+        for value in (checkpoint.get("thread_id"), checkpoint.get("session_id"))
+        if value
+    }
+    session_ids.update(
+        _normalize_framework_name(value)
+        for session in sessions
+        for value in (session.get("thread_id"), session.get("id"), session.get("session_id"))
+        if value
+    )
     output_text = _framework_transcript_output_text(context, records, payloads)
     errors = _framework_transcript_errors(records)
 
@@ -4576,6 +4601,112 @@ def _framework_transcript_quality_metric(
             observed={path: actual},
         )
 
+    min_checkpoints = _int_config(
+        requirements.get("min_checkpoints")
+        or requirements.get("required_min_checkpoints")
+        or requirements.get("checkpoint_count")
+    )
+    if min_checkpoints is not None:
+        matched = len(checkpoints) >= min_checkpoints
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="checkpoint_count",
+            target=min_checkpoints,
+            matched=matched,
+            finding_type="framework_checkpoint_count_low",
+            observed=len(checkpoints),
+        )
+
+    for checkpoint_id in _string_list(
+        requirements.get("required_checkpoint_ids")
+        or requirements.get("checkpoint_ids")
+        or requirements.get("required_checkpoints")
+    ):
+        normalized = _normalize_framework_name(checkpoint_id)
+        matched = normalized in checkpoint_ids
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="checkpoint",
+            target=checkpoint_id,
+            matched=matched,
+            finding_type="missing_framework_checkpoint",
+            observed=sorted(checkpoint_ids),
+        )
+
+    for namespace in _string_list(
+        requirements.get("required_checkpoint_namespaces")
+        or requirements.get("checkpoint_namespaces")
+    ):
+        normalized = _normalize_framework_name(namespace)
+        matched = normalized in checkpoint_namespaces
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="checkpoint_namespace",
+            target=namespace,
+            matched=matched,
+            finding_type="missing_framework_checkpoint_namespace",
+            observed=sorted(checkpoint_namespaces),
+        )
+
+    required_sessions = _string_list(
+        requirements.get("required_sessions")
+        or requirements.get("required_thread_ids")
+        or requirements.get("thread_ids")
+    )
+    expected_thread_id = requirements.get("expected_thread_id") or requirements.get("thread_id")
+    if expected_thread_id not in (None, "", [], {}):
+        required_sessions.append(str(expected_thread_id))
+    for session_id in required_sessions:
+        normalized = _normalize_framework_name(session_id)
+        matched = normalized in session_ids
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="session",
+            target=session_id,
+            matched=matched,
+            finding_type="missing_framework_session",
+            observed=sorted(session_ids),
+        )
+
+    expected_checkpoint_state = _as_dict(
+        requirements.get("expected_checkpoint_state")
+        or requirements.get("checkpoint_state")
+    )
+    for path, expected_value in _flatten_state(expected_checkpoint_state).items():
+        actual = checkpoint_state.get(path)
+        matched = actual == expected_value
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="checkpoint_state",
+            target={path: expected_value},
+            matched=matched,
+            finding_type="framework_checkpoint_state_mismatch",
+            observed={path: actual},
+        )
+
+    if bool(requirements.get("require_checkpoint_parent") or requirements.get("require_checkpoint_lineage")):
+        matched = any(checkpoint.get("parent_checkpoint_id") for checkpoint in checkpoints)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="checkpoint_parent",
+            target="checkpoint parent observed",
+            matched=matched,
+            finding_type="framework_checkpoint_parent_missing",
+            observed=[
+                {
+                    "id": checkpoint.get("id"),
+                    "parent_checkpoint_id": checkpoint.get("parent_checkpoint_id"),
+                }
+                for checkpoint in checkpoints
+            ],
+        )
+
     if not bool(requirements.get("allow_errors", False)):
         _append_framework_transcript_check(
             checks,
@@ -4614,6 +4745,10 @@ def _framework_transcript_quality_metric(
                 "tools_by_speaker": tools_by_speaker,
                 "termination": termination_text,
                 "state": flattened_state,
+                "checkpoints": checkpoints,
+                "checkpoint_state": checkpoint_state,
+                "sessions": sorted(session_ids),
+                "session_records": sessions,
                 "errors": errors,
             },
         },
@@ -10453,7 +10588,325 @@ def _framework_transcript_state(
         ):
             if source:
                 _deep_merge_dict(state, source)
+    for checkpoint in _framework_transcript_checkpoints(records, payloads):
+        for source in (
+            _as_dict(checkpoint.get("values")),
+            _as_dict(checkpoint.get("state")),
+            _as_dict(checkpoint.get("channel_values")),
+        ):
+            if source:
+                _deep_merge_dict(state, source)
     return _flatten_state(state)
+
+
+def _framework_transcript_checkpoints(
+    records: Sequence[Mapping[str, Any]],
+    payloads: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    checkpoints: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for checkpoint in _as_list(payload.get("checkpoints", [])):
+            checkpoint_dict = _framework_normalize_checkpoint(_as_dict(checkpoint))
+            if checkpoint_dict:
+                checkpoints.append(checkpoint_dict)
+    for record in records:
+        checkpoint = _framework_record_checkpoint(record)
+        if checkpoint:
+            checkpoints.append(checkpoint)
+    return _dedupe_framework_checkpoints(checkpoints)
+
+
+def _framework_transcript_sessions(
+    records: Sequence[Mapping[str, Any]],
+    payloads: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    sessions: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for session in _as_list(payload.get("sessions", [])):
+            session_dict = _framework_normalize_session(_as_dict(session))
+            if session_dict:
+                sessions.append(session_dict)
+    for record in records:
+        session = _framework_record_session(record)
+        if session:
+            sessions.append(session)
+    return _dedupe_framework_checkpoints(sessions)
+
+
+def _framework_checkpoint_state(checkpoints: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for checkpoint in checkpoints:
+        for source in (
+            _as_dict(checkpoint.get("values")),
+            _as_dict(checkpoint.get("state")),
+            _as_dict(checkpoint.get("channel_values")),
+        ):
+            if source:
+                _deep_merge_dict(state, source)
+    return _flatten_state(state)
+
+
+def _framework_record_checkpoint(record: Mapping[str, Any]) -> Dict[str, Any]:
+    event = _framework_record_event(record)
+    attributes = _as_dict(record.get("attributes", {}))
+    data = _as_dict(event.get("data"))
+    signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+    method = _normalize_framework_name(record.get("method") or record.get("type") or event.get("method"))
+    text = _stringify(record)[:4000].lower()
+    if "checkpoint" not in signals and "checkpoint" not in method and "checkpoint" not in text:
+        return {}
+
+    checkpoint = _as_dict(record.get("checkpoint")) or _as_dict(event.get("checkpoint")) or _as_dict(data.get("checkpoint"))
+    sources = [
+        checkpoint,
+        record,
+        event,
+        data,
+        _as_dict(record.get("state")),
+        attributes,
+    ]
+    return _framework_normalize_checkpoint(_merge_framework_checkpoint_sources(sources))
+
+
+def _framework_record_session(record: Mapping[str, Any]) -> Dict[str, Any]:
+    event = _framework_record_event(record)
+    attributes = _as_dict(record.get("attributes", {}))
+    data = _as_dict(event.get("data"))
+    session = _as_dict(record.get("session")) or _as_dict(event.get("session")) or _as_dict(data.get("session"))
+    if not session:
+        session = {
+            "id": _first_framework_present(
+                record.get("session_id"),
+                record.get("sessionId"),
+                data.get("session_id"),
+                data.get("sessionId"),
+                attributes.get("session_id"),
+                attributes.get("session.id"),
+            ),
+            "thread_id": _first_framework_present(
+                record.get("thread_id"),
+                record.get("threadId"),
+                data.get("thread_id"),
+                data.get("threadId"),
+                _framework_source_value(record, "config.configurable.thread_id"),
+                _framework_source_value(data, "config.configurable.thread_id"),
+            ),
+            "checkpoint_id": _first_framework_present(
+                record.get("checkpoint_id"),
+                record.get("checkpointId"),
+                data.get("checkpoint_id"),
+                data.get("checkpointId"),
+                _framework_source_value(record, "config.configurable.checkpoint_id"),
+                _framework_source_value(data, "config.configurable.checkpoint_id"),
+            ),
+        }
+    return _framework_normalize_session(session)
+
+
+def _merge_framework_checkpoint_sources(sources: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    config = _first_framework_mapping(sources, ("config", "checkpoint_config"))
+    parent_config = _first_framework_mapping(
+        sources,
+        ("parent_config", "parentConfig", "parent_checkpoint_config", "parentCheckpointConfig"),
+    )
+    metadata = _first_framework_mapping(sources, ("checkpoint_metadata", "metadata"))
+    configurable = _as_dict(config.get("configurable"))
+    parent_configurable = _as_dict(parent_config.get("configurable"))
+    values = _first_framework_present(
+        *[
+            _framework_source_value(source, path)
+            for source in sources
+            for path in (
+                "values",
+                "channel_values",
+                "channelValues",
+                "state",
+                "checkpoint.values",
+                "checkpoint.channel_values",
+            )
+        ]
+    )
+    updates = _first_framework_present(
+        *[
+            _framework_source_value(source, path)
+            for source in sources
+            for path in ("updates", "writes", "updated_channels", "updatedChannels")
+        ]
+    )
+    merged.update(
+        {
+            "id": _first_framework_present(
+                *[
+                    _framework_source_value(source, path)
+                    for source in sources
+                    for path in ("id", "checkpoint_id", "checkpointId", "checkpoint.id", "checkpoint.checkpoint_id")
+                ],
+                configurable.get("checkpoint_id"),
+                configurable.get("checkpointId"),
+                metadata.get("checkpoint_id"),
+            ),
+            "thread_id": _first_framework_present(
+                *[
+                    _framework_source_value(source, path)
+                    for source in sources
+                    for path in ("thread_id", "threadId", "session_id", "sessionId", "config.configurable.thread_id")
+                ],
+                configurable.get("thread_id"),
+                configurable.get("threadId"),
+                metadata.get("thread_id"),
+            ),
+            "session_id": _first_framework_present(
+                *[
+                    _framework_source_value(source, path)
+                    for source in sources
+                    for path in ("session_id", "sessionId", "conversation_id", "conversationId")
+                ]
+            ),
+            "namespace": _first_framework_present(
+                *[
+                    _framework_source_value(source, path)
+                    for source in sources
+                    for path in ("namespace", "checkpoint_ns", "checkpoint_namespace", "ns")
+                ],
+                configurable.get("checkpoint_ns"),
+                configurable.get("checkpointNamespace"),
+            ),
+            "parent_checkpoint_id": _first_framework_present(
+                *[
+                    _framework_source_value(source, path)
+                    for source in sources
+                    for path in ("parent_checkpoint_id", "parentCheckpointId")
+                ],
+                parent_configurable.get("checkpoint_id"),
+                parent_configurable.get("checkpointId"),
+            ),
+            "values": values,
+            "updates": updates,
+            "metadata": metadata,
+            "config": config,
+            "parent_config": parent_config,
+        }
+    )
+    return {key: value for key, value in merged.items() if value not in (None, "", [], {})}
+
+
+def _framework_normalize_checkpoint(value: Mapping[str, Any]) -> Dict[str, Any]:
+    checkpoint = _as_dict(value)
+    if not checkpoint:
+        return {}
+    normalized: Dict[str, Any] = {}
+    for source, target in (
+        ("id", "id"),
+        ("checkpoint_id", "id"),
+        ("checkpointId", "id"),
+        ("thread_id", "thread_id"),
+        ("threadId", "thread_id"),
+        ("session_id", "session_id"),
+        ("sessionId", "session_id"),
+        ("namespace", "namespace"),
+        ("checkpoint_ns", "namespace"),
+        ("checkpoint_namespace", "namespace"),
+        ("parent_checkpoint_id", "parent_checkpoint_id"),
+        ("parentCheckpointId", "parent_checkpoint_id"),
+        ("values", "values"),
+        ("state", "state"),
+        ("channel_values", "channel_values"),
+        ("channelValues", "channel_values"),
+        ("updates", "updates"),
+        ("writes", "updates"),
+        ("updated_channels", "updates"),
+        ("updatedChannels", "updates"),
+        ("metadata", "metadata"),
+        ("config", "config"),
+        ("parent_config", "parent_config"),
+        ("parentConfig", "parent_config"),
+    ):
+        if checkpoint.get(source) not in (None, "", [], {}) and target not in normalized:
+            normalized[target] = copy.deepcopy(checkpoint.get(source))
+    config = _as_dict(normalized.get("config"))
+    configurable = _as_dict(config.get("configurable"))
+    if configurable:
+        normalized.setdefault("id", configurable.get("checkpoint_id") or configurable.get("checkpointId"))
+        normalized.setdefault("thread_id", configurable.get("thread_id") or configurable.get("threadId"))
+        normalized.setdefault("namespace", configurable.get("checkpoint_ns") or configurable.get("checkpointNamespace"))
+    parent_config = _as_dict(normalized.get("parent_config"))
+    parent_configurable = _as_dict(parent_config.get("configurable"))
+    if parent_configurable:
+        normalized.setdefault(
+            "parent_checkpoint_id",
+            parent_configurable.get("checkpoint_id") or parent_configurable.get("checkpointId"),
+        )
+    return {key: value for key, value in normalized.items() if value not in (None, "", [], {})}
+
+
+def _framework_normalize_session(value: Mapping[str, Any]) -> Dict[str, Any]:
+    session = _as_dict(value)
+    if not session:
+        return {}
+    normalized: Dict[str, Any] = {}
+    for source, target in (
+        ("id", "id"),
+        ("session_id", "session_id"),
+        ("sessionId", "session_id"),
+        ("thread_id", "thread_id"),
+        ("threadId", "thread_id"),
+        ("conversation_id", "session_id"),
+        ("conversationId", "session_id"),
+        ("namespace", "namespace"),
+        ("checkpoint_id", "checkpoint_id"),
+        ("checkpointId", "checkpoint_id"),
+    ):
+        if session.get(source) not in (None, "", [], {}) and target not in normalized:
+            normalized[target] = copy.deepcopy(session.get(source))
+    if "id" not in normalized:
+        normalized["id"] = normalized.get("session_id") or normalized.get("thread_id")
+    return {key: value for key, value in normalized.items() if value not in (None, "", [], {})}
+
+
+def _dedupe_framework_checkpoints(checkpoints: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for checkpoint in checkpoints:
+        key = json.dumps(checkpoint, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(checkpoint))
+    return deduped
+
+
+def _first_framework_mapping(
+    sources: Sequence[Mapping[str, Any]],
+    paths: Sequence[str],
+) -> Dict[str, Any]:
+    value = _first_framework_present(
+        *[
+            _framework_source_value(source, path)
+            for source in sources
+            for path in paths
+        ]
+    )
+    return _as_dict(value)
+
+
+def _first_framework_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _framework_source_value(source: Mapping[str, Any], path: str) -> Any:
+    if path in source:
+        return source.get(path)
+    current: Any = source
+    for part in path.split("."):
+        if isinstance(current, Mapping) and part in current:
+            current = current.get(part)
+        else:
+            return None
+    return current
 
 
 def _framework_transcript_output_text(

@@ -3936,6 +3936,97 @@ def test_evaluate_agent_report_scores_framework_transcript_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_langgraph_checkpoint_persistence_quality():
+    quality = {
+        "min_checkpoints": 1,
+        "required_checkpoint_ids": ["ckpt-002"],
+        "required_checkpoint_namespaces": ["refund_graph"],
+        "required_thread_ids": ["refund-thread-1"],
+        "expected_checkpoint_state": {
+            "case": {"status": "resolved", "approval": "captured"}
+        },
+        "require_checkpoint_parent": True,
+    }
+    records = [
+        {
+            "name": "checkpoint policy_node",
+            "method": "checkpoints",
+            "checkpoint": {
+                "id": "ckpt-002",
+                "thread_id": "refund-thread-1",
+                "namespace": "refund_graph",
+                "parent_checkpoint_id": "ckpt-001",
+                "values": {
+                    "case": {"status": "resolved", "approval": "captured"}
+                },
+            },
+            "session": {
+                "id": "refund-thread-1",
+                "thread_id": "refund-thread-1",
+                "checkpoint_id": "ckpt-002",
+            },
+            "signals": ["checkpoint", "session", "state", "memory"],
+        }
+    ]
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Resume refund order ord_123."},
+                    {
+                        "role": "assistant",
+                        "content": "Refund approved from persisted checkpoint state.",
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "langgraph"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "langgraph",
+                            "events": records,
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config={"framework_transcript_quality": quality})
+    metric = next(metric for metric in result.cases[0].metrics if metric.name == "framework_transcript_quality")
+
+    assert metric.score == 1.0
+    assert metric.details["observed"]["checkpoint_state"]["case.status"] == "resolved"
+    assert metric.details["observed"]["sessions"] == ["refund-thread-1"]
+
+    failing_report = copy.deepcopy(report)
+    failing_checkpoint = failing_report["results"][0]["artifacts"][0]["data"]["events"][0]["checkpoint"]
+    failing_checkpoint["id"] = "ckpt-003"
+    failing_checkpoint.pop("parent_checkpoint_id")
+    failing_checkpoint["thread_id"] = "wrong-thread"
+    failing_checkpoint["values"]["case"]["status"] = "pending"
+    failing_session = failing_report["results"][0]["artifacts"][0]["data"]["events"][0]["session"]
+    failing_session["id"] = "wrong-thread"
+    failing_session["thread_id"] = "wrong-thread"
+    failing_session["checkpoint_id"] = "ckpt-003"
+
+    failing_result = evaluate_agent_report(
+        failing_report,
+        config={"framework_transcript_quality": quality},
+    )
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["framework_transcript_quality"] < 1.0
+    assert {
+        "missing_framework_checkpoint",
+        "missing_framework_session",
+        "framework_checkpoint_state_mismatch",
+        "framework_checkpoint_parent_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_cross_trial_memory_and_skill_regression():
     config = {
         "expected_cross_trial_memory": {
