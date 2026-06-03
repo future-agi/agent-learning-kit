@@ -6459,6 +6459,204 @@ def generate_domain_package_registry_mutation_pack(
     }
 
 
+def select_domain_package_registry_replay_pack(
+    registry: Mapping[str, Any],
+    cases: Sequence[Any] = (),
+    *,
+    preset_names: Optional[Sequence[str]] = None,
+    include_defaults: bool = True,
+    include_existing: bool = True,
+    include_positive_fixtures: bool = True,
+    include_negative_mutations: bool = True,
+    max_cases: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Select a compact registry replay pack from coverage gaps and mutants.
+
+    The policy prefers existing replay rows that add required invariant-family
+    coverage, adds alias-aware passing fixtures for still-missing presets or
+    aliases, and adds one negative mutation per preset/family boundary. The
+    selected cases are local dictionaries ready for replay or Future AGI
+    regression dataset export.
+    """
+
+    active_registry = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, registry)
+        if include_defaults
+        else copy.deepcopy(_as_dict(registry))
+    )
+    registry_config = copy.deepcopy(_as_dict(registry) or active_registry)
+    requirements = _domain_package_registry_requirements(active_registry, preset_names=preset_names)
+    required_keys = {
+        (item["preset"], item["invariant_family"])
+        for item in requirements
+    }
+    required_presets = _domain_package_registry_preset_names(active_registry, preset_names)
+    selected_cases: List[Dict[str, Any]] = []
+    selected: List[Dict[str, Any]] = []
+    covered_keys: set[tuple[str, str]] = set()
+    alias_covered: set[str] = set()
+    limit_reached = False
+
+    def can_add() -> bool:
+        return max_cases is None or len(selected_cases) < max_cases
+
+    def append_selected(record: Mapping[str, Any], case: Mapping[str, Any]) -> None:
+        nonlocal limit_reached
+        if not can_add():
+            limit_reached = True
+            return
+        selected_cases.append(copy.deepcopy(dict(case)))
+        selected.append(copy.deepcopy(dict(record)))
+
+    existing_cases = [_as_dict(item) for item in _as_list(cases) if _as_dict(item)]
+    existing_case_coverage: List[Dict[str, Any]] = []
+    if include_existing and existing_cases:
+        coverage = analyze_domain_package_registry_coverage(
+            registry,
+            existing_cases,
+            preset_names=preset_names,
+            include_defaults=include_defaults,
+        )
+        existing_case_coverage = list(coverage.get("cases") or [])
+        for raw_case, coverage_case in zip(existing_cases, existing_case_coverage):
+            case_keys = {
+                (item["preset"], item["invariant_family"])
+                for item in _as_list(coverage_case.get("covered"))
+                if isinstance(item, Mapping)
+            }
+            useful = required_keys & case_keys
+            case_aliases = _domain_package_case_alias_presets(raw_case, active_registry)
+            if not useful and not case_aliases:
+                continue
+            append_selected(
+                {
+                    "case_id": str(raw_case.get("id") or raw_case.get("case_id") or coverage_case.get("case_id")),
+                    "source": "existing",
+                    "kind": "existing_replay_case",
+                    "covers": _coverage_key_records(useful),
+                    "alias_presets": sorted(case_aliases),
+                },
+                raw_case,
+            )
+            covered_keys.update(useful)
+            alias_covered.update(case_aliases)
+
+    fixture_pack = generate_domain_package_registry_fixtures(
+        registry,
+        preset_names=required_presets,
+        include_defaults=include_defaults,
+    )
+    if include_positive_fixtures:
+        for fixture in fixture_pack["fixtures"]:
+            preset = str(fixture.get("preset") or "")
+            fixture_keys = {
+                (preset, family)
+                for family in _string_list(fixture.get("invariant_families"))
+            }
+            alias = _domain_package_primary_alias(registry, active_registry, preset)
+            missing_keys = (required_keys & fixture_keys) - covered_keys
+            needs_alias = bool(alias and preset not in alias_covered)
+            if not missing_keys and not needs_alias:
+                continue
+            case = _domain_package_case_from_fixture(
+                fixture,
+                registry_config=registry_config,
+                package_type=alias or preset,
+            )
+            append_selected(
+                {
+                    "case_id": case["id"],
+                    "source": "generated",
+                    "kind": "positive_fixture",
+                    "preset": preset,
+                    "package_type": alias or preset,
+                    "covers": _coverage_key_records(fixture_keys & required_keys),
+                    "alias_presets": [preset] if alias else [],
+                },
+                case,
+            )
+            covered_keys.update(fixture_keys & required_keys)
+            if alias:
+                alias_covered.add(preset)
+
+    mutation_pack = generate_domain_package_registry_mutation_pack(
+        registry,
+        preset_names=required_presets,
+        include_defaults=include_defaults,
+    )
+    selected_negative_keys: set[tuple[str, str]] = set()
+    if include_negative_mutations:
+        for mutant in mutation_pack["mutants"]:
+            key = (str(mutant.get("preset") or ""), str(mutant.get("invariant_family") or ""))
+            if key not in required_keys or key in selected_negative_keys:
+                continue
+            alias = _domain_package_primary_alias(registry, active_registry, key[0])
+            case = _domain_package_case_from_mutant(
+                mutant,
+                registry_config=registry_config,
+                package_type=alias or key[0],
+            )
+            append_selected(
+                {
+                    "case_id": case["id"],
+                    "source": "generated",
+                    "kind": "negative_mutation",
+                    "preset": key[0],
+                    "package_type": alias or key[0],
+                    "invariant_family": key[1],
+                    "mutation": copy.deepcopy(_as_dict(mutant.get("mutation"))),
+                    "covers": _coverage_key_records({key}),
+                    "alias_presets": [key[0]] if alias else [],
+                },
+                case,
+            )
+            selected_negative_keys.add(key)
+            if alias:
+                alias_covered.add(key[0])
+
+    selected_coverage = analyze_domain_package_registry_coverage(
+        registry,
+        selected_cases,
+        preset_names=required_presets,
+        include_defaults=include_defaults,
+    ) if selected_cases else {
+        "passed": False,
+        "required": _coverage_key_records(required_keys),
+        "covered": [],
+        "missing": _coverage_key_records(required_keys),
+        "coverage_score": 0.0 if required_keys else 1.0,
+        "cases": [],
+    }
+    selected_positive_count = sum(1 for item in selected if item.get("kind") in {"existing_replay_case", "positive_fixture"})
+    selected_negative_count = sum(1 for item in selected if item.get("kind") == "negative_mutation")
+    return {
+        "registry_version": active_registry.get("version") or active_registry.get("schema_version"),
+        "selection_complete": (
+            not limit_reached
+            and not selected_coverage.get("missing")
+            and (not include_negative_mutations or len(selected_negative_keys) == len(required_keys))
+        ),
+        "selection_policy": {
+            "include_existing": include_existing,
+            "include_positive_fixtures": include_positive_fixtures,
+            "include_negative_mutations": include_negative_mutations,
+            "max_cases": max_cases,
+        },
+        "required": _coverage_key_records(required_keys),
+        "selected": selected,
+        "selected_cases": selected_cases,
+        "selected_case_count": len(selected_cases),
+        "selected_positive_count": selected_positive_count,
+        "selected_negative_count": selected_negative_count,
+        "selected_coverage": selected_coverage,
+        "alias_covered_presets": sorted(alias_covered),
+        "generated_fixture_count": len(fixture_pack["fixtures"]),
+        "generated_mutant_count": len(mutation_pack["mutants"]),
+        "existing_case_count": len(existing_cases),
+    }
+
+
 def analyze_domain_package_registry_coverage(
     registry: Mapping[str, Any],
     cases: Sequence[Any],
@@ -7027,6 +7225,146 @@ def _fixture_for_preset(
         if fixture.get("preset") == preset:
             return copy.deepcopy(dict(fixture))
     return {}
+
+
+def _domain_package_case_from_fixture(
+    fixture: Mapping[str, Any],
+    *,
+    registry_config: Mapping[str, Any],
+    package_type: str,
+) -> Dict[str, Any]:
+    preset = str(fixture.get("preset") or package_type)
+    package = copy.deepcopy(_as_dict(fixture.get("package")))
+    check = copy.deepcopy(_as_dict(fixture.get("check")))
+    _set_domain_package_artifact_type(package, package_type)
+    if package_type:
+        check["package_type"] = package_type
+    report = _domain_package_fixture_report([package])
+    config = {
+        "domain_package_registry": copy.deepcopy(_as_dict(registry_config)),
+        "domain_package_checks": [check],
+        "metric_weights": {"domain_package_quality": 1.0},
+    }
+    return {
+        "id": f"{preset}_positive_{_domain_registry_token(package_type or preset)}",
+        "input": {
+            "observability": {
+                "raw": {
+                    "agent_report": report,
+                    "agent_report_config": config,
+                }
+            }
+        },
+        "expected": {"required_metrics": {"domain_package_quality": 1.0}},
+        "metadata": {
+            "kind": "domain_package_registry_positive_fixture",
+            "preset": preset,
+            "package_type": package_type,
+            "invariant_families": _string_list(fixture.get("invariant_families")),
+        },
+    }
+
+
+def _domain_package_case_from_mutant(
+    mutant: Mapping[str, Any],
+    *,
+    registry_config: Mapping[str, Any],
+    package_type: str,
+) -> Dict[str, Any]:
+    preset = str(mutant.get("preset") or package_type)
+    package = copy.deepcopy(_as_dict(mutant.get("package")))
+    check = copy.deepcopy(_as_dict(mutant.get("check")))
+    _set_domain_package_artifact_type(package, package_type)
+    if package_type:
+        check["package_type"] = package_type
+    report = _domain_package_fixture_report([package])
+    config = {
+        "domain_package_registry": copy.deepcopy(_as_dict(registry_config)),
+        "domain_package_checks": [check],
+        "metric_weights": {"domain_package_quality": 1.0},
+    }
+    return {
+        "id": str(mutant.get("id") or f"{preset}_negative"),
+        "input": {
+            "observability": {
+                "raw": {
+                    "agent_report": report,
+                    "agent_report_config": config,
+                }
+            }
+        },
+        "expected": {"required_metrics": {"domain_package_quality": 1.0}},
+        "metadata": {
+            "kind": "domain_package_registry_negative_mutation",
+            "preset": preset,
+            "package_type": package_type,
+            "invariant_family": mutant.get("invariant_family"),
+            "mutation": copy.deepcopy(_as_dict(mutant.get("mutation"))),
+        },
+    }
+
+
+def _set_domain_package_artifact_type(package: Dict[str, Any], package_type: str) -> None:
+    metadata = _as_dict(package.get("metadata"))
+    metadata["package_type"] = package_type
+    package["metadata"] = metadata
+    data = _as_dict(package.get("data"))
+    if data.get("package_type") is not None or data.get("domain_package_type") is not None:
+        data["package_type"] = package_type
+    package["data"] = data
+
+
+def _domain_package_primary_alias(
+    source_registry: Mapping[str, Any],
+    active_registry: Mapping[str, Any],
+    preset: str,
+) -> str:
+    source_preset = _domain_package_preset_definition(source_registry, preset)
+    for alias in _string_list(source_preset.get("aliases")):
+        if _normalize_domain_package_preset(alias, active_registry) == preset:
+            return alias
+    active_preset = _domain_package_preset_definition(active_registry, preset)
+    for alias in _string_list(active_preset.get("aliases")):
+        if _normalize_domain_package_preset(alias, active_registry) == preset:
+            return alias
+    return ""
+
+
+def _domain_package_case_alias_presets(
+    case: Mapping[str, Any],
+    registry: Mapping[str, Any],
+) -> set[str]:
+    aliases: set[str] = set()
+    for package_type in _domain_package_case_package_types(case):
+        raw = _domain_registry_token(package_type)
+        canonical = _normalize_domain_package_preset(package_type, registry)
+        if canonical and raw and canonical != raw:
+            aliases.add(canonical)
+    return aliases
+
+
+def _domain_package_case_package_types(case: Mapping[str, Any]) -> List[str]:
+    values: List[str] = []
+    raw = _domain_registry_case_raw_evidence(case)
+    config = _as_dict(raw.get("agent_report_config") or raw.get("config"))
+    for check in _as_list(config.get("domain_package_checks")):
+        check_dict = _as_dict(check)
+        values.extend(_string_list(check_dict.get("package_type") or check_dict.get("preset")))
+    report = _as_dict(raw.get("agent_report") or raw.get("report"))
+    for result in _as_list(report.get("results")):
+        for artifact in _as_list(_as_dict(result).get("artifacts")):
+            artifact_dict = _as_dict(artifact)
+            metadata = _as_dict(artifact_dict.get("metadata"))
+            data = _as_dict(artifact_dict.get("data"))
+            values.extend(
+                _string_list(
+                    metadata.get("package_type")
+                    or metadata.get("domain_package_type")
+                    or data.get("package_type")
+                    or data.get("domain_package_type")
+                )
+            )
+    return list(dict.fromkeys(values))
 
 
 def _domain_package_registry_extension_errors(

@@ -38,6 +38,7 @@ from .report import (
     generate_domain_package_registry_mutation_pack,
     normalize_agent_report,
     replay_domain_package_registry,
+    select_domain_package_registry_replay_pack,
     validate_domain_package_registry,
 )
 
@@ -68,5 +69,6 @@ __all__ = [
     "generate_domain_package_registry_mutation_pack",
     "normalize_agent_report",
     "replay_domain_package_registry",
+    "select_domain_package_registry_replay_pack",
     "validate_domain_package_registry",
 ]

@@ -11,6 +11,7 @@ from fi.evals.metrics.agents import (
     generate_domain_package_registry_mutation_pack,
     normalize_agent_report,
     replay_domain_package_registry,
+    select_domain_package_registry_replay_pack,
     validate_domain_package_registry,
 )
 
@@ -5656,6 +5657,81 @@ def test_domain_package_registry_generates_negative_mutation_pack():
         finding_types = {finding["type"] for finding in metric.details["findings"]}
         assert metric.score < 1.0
         assert mutant["mutation"]["expected_finding_type"] in finding_types
+
+
+def test_domain_package_registry_selects_compact_alias_replay_pack():
+    registry = {
+        "version": "futureagi.domain-packages.acme.v1",
+        "presets": {
+            "claim_file": {
+                "version": "acme-claims-2026-06",
+                "aliases": ["enterprise_claim"],
+                "required_fields": ["adjuster.id"],
+            },
+            "contract_review": {
+                "version": "acme-contracts-2026-06",
+                "aliases": ["enterprise_contract"],
+                "required_fields": ["counterparty.id"],
+            },
+        },
+    }
+    claim_fixture_pack = generate_domain_package_registry_fixtures(
+        registry,
+        preset_names=["claim_file"],
+    )
+    claim_fixture = claim_fixture_pack["fixtures"][0]
+    claim_case = {
+        "id": "existing_enterprise_claim",
+        "input": {
+            "observability": {
+                "raw": {
+                    "agent_report": {
+                        "results": [
+                            {
+                                "messages": [{"role": "assistant", "content": "Claim is ready."}],
+                                "artifacts": [claim_fixture["package"]],
+                            }
+                        ]
+                    },
+                    "agent_report_config": {
+                        "domain_package_registry": registry,
+                        "domain_package_checks": [
+                            {
+                                **claim_fixture["check"],
+                                "package_type": "enterprise_claim",
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+        "expected": {"required_metrics": {"domain_package_quality": 1.0}},
+    }
+    claim_case["input"]["observability"]["raw"]["agent_report"]["results"][0]["artifacts"][0]["metadata"]["package_type"] = "enterprise_claim"
+
+    selection = select_domain_package_registry_replay_pack(
+        registry,
+        [claim_case],
+        preset_names=["claim_file", "contract_review", "procurement"],
+    )
+    selected_metadata = [case.get("metadata", {}) for case in selection["selected_cases"]]
+    selected_pairs = {
+        (item.get("preset"), item.get("invariant_family"))
+        for item in selection["selected"]
+        if item.get("kind") == "negative_mutation"
+    }
+
+    assert selection["selection_complete"] is True
+    assert selection["selected_case_count"] == 16
+    assert selection["selected_positive_count"] == 3
+    assert selection["selected_negative_count"] == 13
+    assert selection["generated_mutant_count"] == 23
+    assert selection["selected_coverage"]["coverage_score"] == 1.0
+    assert "claim_file" in selection["alias_covered_presets"]
+    assert "contract_review" in selection["alias_covered_presets"]
+    assert any(item.get("package_type") == "enterprise_contract" for item in selected_metadata)
+    assert ("contract_review", "date_order") in selected_pairs
+    assert ("procurement", "sum_equals") in selected_pairs
 
 
 def test_evaluate_agent_report_scores_tool_argument_schema():
