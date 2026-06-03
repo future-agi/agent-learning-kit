@@ -170,6 +170,8 @@ class AgentReportEvalConfig(BaseModel):
     orchestration_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_streaming_trace: List[str] = Field(default_factory=list)
     streaming_trace_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_world_contract: List[str] = Field(default_factory=list)
+    world_contract_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
@@ -371,6 +373,8 @@ class AgentReportEvaluator:
                 _orchestration_flow_quality_metric(report_context, config),
                 _streaming_trace_coverage_metric(report_context, config),
                 _streaming_interaction_quality_metric(report_context, config),
+                _world_contract_coverage_metric(report_context, config),
+                _world_contract_quality_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_action_outcome_metric(report_context, config),
                 _browser_grounding_quality_metric(report_context, config),
@@ -3489,6 +3493,252 @@ def _streaming_interaction_quality_metric(
             "observed": {
                 "chunks": chunks,
                 "tool_deltas": tool_deltas,
+                "summary": summary,
+                "state": state,
+            },
+        },
+    )
+
+
+def _world_contract_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_world_contract_key(key) for key in config.required_world_contract]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="world_contract_coverage",
+            score=1.0,
+            reason="No required world contract keys provided.",
+        )
+
+    observed = _world_contract_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_world_contract_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="world_contract_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required world contract evidence observed."
+            if not missing
+            else f"Missing world contract evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
+def _world_contract_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    requirements = _as_dict(config.world_contract_quality)
+    if not requirements:
+        return AgentReportMetricResult(
+            name="world_contract_quality",
+            score=1.0,
+            reason="No expected world contract checks provided.",
+        )
+
+    payloads = _world_contract_payloads_from_context(context)
+    actors = _world_contract_entities_from_payloads(payloads, "actors")
+    resources = _world_contract_entities_from_payloads(payloads, "resources")
+    transitions = _world_contract_transitions_from_payloads(payloads)
+    transition_log = _world_contract_transition_log_from_payloads(payloads)
+    invariants = _world_contract_condition_results_from_payloads(payloads, "invariant_results")
+    success_conditions = _world_contract_condition_results_from_payloads(payloads, "success_results")
+    state = _world_contract_state_from_payloads(payloads)
+    summary = _world_contract_summary_from_payloads(payloads, transition_log, invariants, success_conditions)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    actor_names = _world_contract_entity_names(actors)
+    for actor in _string_list(requirements.get("required_actors")):
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="required_actor",
+            expected=actor,
+            actual=sorted(actor_names),
+            match=_normalize_world_contract_name(actor) in actor_names,
+            finding_type="world_actor_missing",
+        )
+
+    resource_names = _world_contract_entity_names(resources)
+    for resource in _string_list(requirements.get("required_resources")):
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="required_resource",
+            expected=resource,
+            actual=sorted(resource_names),
+            match=_normalize_world_contract_name(resource) in resource_names,
+            finding_type="world_resource_missing",
+        )
+
+    for expected in _as_list(requirements.get("required_transitions") or requirements.get("expected_transitions")):
+        expected_dict = _as_dict(expected)
+        expected_value = expected_dict or {"id": expected}
+        match = any(_world_contract_transition_matches(record, expected_value) for record in transition_log)
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="required_transition",
+            expected=expected_value,
+            actual=transition_log,
+            match=match,
+            finding_type="world_transition_missing",
+        )
+
+    min_completed_transitions = _as_int(requirements.get("min_completed_transitions"))
+    if min_completed_transitions is not None:
+        actual = _as_int(summary.get("completed_transition_count")) or 0
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="min_completed_transitions",
+            expected=min_completed_transitions,
+            actual=actual,
+            match=actual >= min_completed_transitions,
+            finding_type="world_transition_count_low",
+        )
+
+    if requirements.get("require_all_required_transitions") is not None:
+        required = bool(requirements.get("require_all_required_transitions"))
+        required_count = _as_int(summary.get("required_transition_count")) or sum(1 for transition in transitions if transition.get("required"))
+        completed_required = _as_int(summary.get("completed_required_transition_count")) or 0
+        matched = required_count == completed_required
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="require_all_required_transitions",
+            expected=required,
+            actual={"required": required_count, "completed": completed_required},
+            match=(matched is required),
+            finding_type="world_required_transition_missing",
+        )
+
+    if requirements.get("require_all_invariants_pass") is not None:
+        required = bool(requirements.get("require_all_invariants_pass"))
+        failures = [item for item in invariants if item.get("pass") is False]
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="require_all_invariants_pass",
+            expected=required,
+            actual=failures,
+            match=((not failures) is required),
+            finding_type="world_invariant_violation",
+        )
+
+    for invariant in _string_list(requirements.get("required_invariants")):
+        result = _world_contract_condition_result(invariants, invariant)
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="required_invariant",
+            expected=invariant,
+            actual=invariants,
+            match=bool(result and result.get("pass") is True),
+            finding_type="world_invariant_missing_or_failed",
+        )
+
+    for condition in _string_list(requirements.get("required_success_conditions")):
+        result = _world_contract_condition_result(success_conditions, condition)
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="required_success_condition",
+            expected=condition,
+            actual=success_conditions,
+            match=bool(result and result.get("pass") is True),
+            finding_type="world_success_condition_missing_or_failed",
+        )
+
+    max_violation_count = _as_int(requirements.get("max_violation_count"))
+    if max_violation_count is not None:
+        actual = _as_int(summary.get("violation_count")) or 0
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="max_violation_count",
+            expected=max_violation_count,
+            actual=actual,
+            match=actual <= max_violation_count,
+            finding_type="world_violation_threshold_exceeded",
+        )
+
+    max_forbidden_transitions = _as_int(requirements.get("max_forbidden_transitions"))
+    if max_forbidden_transitions is not None:
+        actual = _as_int(summary.get("forbidden_transition_count")) or 0
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="max_forbidden_transitions",
+            expected=max_forbidden_transitions,
+            actual=actual,
+            match=actual <= max_forbidden_transitions,
+            finding_type="world_forbidden_transition_observed",
+        )
+
+    expected_terminal_status = requirements.get("required_terminal_status") or requirements.get("terminal_status")
+    if expected_terminal_status:
+        actual = str(summary.get("terminal_status") or "")
+        _append_world_contract_check(
+            checks,
+            findings,
+            check="terminal_status",
+            expected=str(expected_terminal_status),
+            actual=actual,
+            match=actual.lower() == str(expected_terminal_status).lower(),
+            finding_type="world_terminal_status_mismatch",
+        )
+
+    expected_state = _as_dict(requirements.get("expected_state") or requirements.get("final_state"))
+    for path, expected in _flatten_state(expected_state).items():
+        actual = _get_path(state, path)
+        _append_world_contract_check(
+            checks,
+            findings,
+            check=f"state.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="world_state_mismatch",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="world_contract_quality",
+            score=1.0,
+            reason="No expected world contract checks provided.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="world_contract_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} world contract check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": {
+                "actors": actors,
+                "resources": resources,
+                "transitions": transitions,
+                "transition_log": transition_log,
+                "invariants": invariants,
+                "success_conditions": success_conditions,
                 "summary": summary,
                 "state": state,
             },
@@ -8529,6 +8779,402 @@ def _dedupe_streaming_dicts(records: Iterable[Mapping[str, Any]]) -> List[Dict[s
         if not record_dict:
             continue
         key = str(record_dict.get("id") or record_dict.get("event_id") or record_dict.get("sequence") or index)
+        if key not in deduped:
+            deduped[key] = dict(record_dict)
+    return list(deduped.values())
+
+
+def _world_contract_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _world_contract_payloads_from_context(context):
+        observed.add("contract")
+        _merge_world_contract_payload(observed, payload)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "world" in event_type or "contract" in event_type:
+            observed.add("contract")
+            _add_world_contract_key(observed, event_type)
+            _add_world_contract_key(observed, name)
+            _merge_world_contract_payload(observed, payload)
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "world_contract_status",
+            "list_world_transitions",
+            "inspect_world_invariant",
+            "apply_world_transition",
+        }:
+            observed.add("contract")
+        _add_world_contract_key(observed, name)
+    return observed
+
+
+def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("world_contract"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("world_contract"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_world_contract(data, metadata):
+            payloads.append(data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_world_contract(payload, metadata):
+            payloads.append(payload)
+        elif "world" in event_type or "contract" in event_type:
+            if (
+                ("transition_applied" in name or "transition_applied" in event_type)
+                and payload.get("status")
+                and (payload.get("id") or payload.get("transition") or payload.get("action"))
+            ):
+                payloads.append({"kind": "world_contract", "transition_log": [payload], "signals": [event_type, name]})
+            elif "invariant" in name or "invariant" in event_type:
+                invariant_payload = {"kind": "world_contract", "signals": [event_type, name]}
+                result = _as_dict(payload.get("result"))
+                invariant = _as_dict(payload.get("invariant"))
+                if result:
+                    invariant_payload["invariant_results"] = [result]
+                if invariant:
+                    invariant_payload["invariants"] = [invariant]
+                if result or invariant:
+                    payloads.append(invariant_payload)
+    return [payload for payload in payloads if payload]
+
+
+def _looks_like_world_contract(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    if kind == "world_contract":
+        return True
+    return any(key in data for key in ("actors", "resources", "transitions", "invariants", "transition_log")) and any(
+        token in _stringify(data).lower() or token in _stringify(metadata).lower()
+        for token in ("world", "contract", "invariant", "transition", "success_condition")
+    )
+
+
+def _merge_world_contract_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if payload.get("actors"):
+        observed.add("actor")
+    if payload.get("resources"):
+        observed.add("resource")
+    if payload.get("transitions"):
+        observed.add("transition")
+    if payload.get("transition_log"):
+        observed.add("transition_log")
+    if payload.get("invariants") or payload.get("invariant_results"):
+        observed.add("invariant")
+    if payload.get("success_conditions") or payload.get("success_results"):
+        observed.add("success_condition")
+    if payload.get("policy_gates"):
+        observed.add("policy")
+    if payload.get("adversarial_surfaces"):
+        observed.add("adversarial_surface")
+    if payload.get("state"):
+        observed.add("state")
+    for signal in _as_list(payload.get("signals", [])):
+        _add_world_contract_key(observed, str(signal))
+    for collection in ("actors", "resources", "transitions", "transition_log", "invariants", "success_conditions", "policy_gates", "adversarial_surfaces"):
+        for item in _as_list(payload.get(collection, [])):
+            item_dict = _as_dict(item)
+            for key in ("id", "name", "actor", "resource", "action", "status", "type"):
+                _add_world_contract_key(observed, str(item_dict.get(key, "")))
+            for signal in _as_list(item_dict.get("signals", [])):
+                _add_world_contract_key(observed, str(signal))
+            if item_dict.get("required") is True:
+                observed.add("required_transition")
+            if item_dict.get("status") == "success":
+                observed.add("completed_transition")
+            if item_dict.get("status") == "forbidden_transition":
+                observed.add("forbidden_transition")
+            if item_dict.get("violations"):
+                observed.add("violation")
+    summary = _as_dict(payload.get("summary"))
+    if (_as_int(summary.get("completed_transition_count")) or 0) > 0:
+        observed.add("completed_transition")
+    if (_as_int(summary.get("forbidden_transition_count")) or 0) > 0:
+        observed.add("forbidden_transition")
+    if (_as_int(summary.get("violation_count")) or 0) > 0:
+        observed.add("violation")
+    if (_as_int(summary.get("invariant_violation_count")) or 0) > 0:
+        observed.add("invariant_violation")
+    if str(summary.get("terminal_status") or "").lower() == "success":
+        observed.add("success")
+
+
+def _add_world_contract_key(observed: set[str], value: str) -> None:
+    normalized = _normalize_world_contract_key(value)
+    if normalized:
+        observed.add(normalized)
+    lowered = str(value).lower()
+    aliases = {
+        "actor": "actor",
+        "resource": "resource",
+        "transition": "transition",
+        "action": "transition",
+        "completed": "completed_transition",
+        "required": "required_transition",
+        "forbidden": "forbidden_transition",
+        "invariant": "invariant",
+        "success": "success",
+        "policy": "policy",
+        "adversarial": "adversarial_surface",
+        "surface": "adversarial_surface",
+        "violation": "violation",
+        "state": "state",
+        "milestone": "milestone",
+        "tool": "tool",
+        "browser": "browser",
+        "voice": "voice",
+        "memory": "memory",
+    }
+    for token, alias in aliases.items():
+        if token in lowered:
+            observed.add(alias)
+
+
+def _normalize_world_contract_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "world_contract": "contract",
+        "world_contract_status": "contract",
+        "list_world_transitions": "transition",
+        "apply_world_transition": "transition",
+        "inspect_world_invariant": "invariant",
+        "actors": "actor",
+        "resources": "resource",
+        "transitions": "transition",
+        "transition_log": "transition_log",
+        "completed": "completed_transition",
+        "completed_transition": "completed_transition",
+        "required": "required_transition",
+        "required_transition": "required_transition",
+        "forbidden": "forbidden_transition",
+        "forbidden_transition": "forbidden_transition",
+        "invariants": "invariant",
+        "success_conditions": "success_condition",
+        "success_condition": "success_condition",
+        "policy_gate": "policy",
+        "policy_gates": "policy",
+        "adversarial_surfaces": "adversarial_surface",
+        "adversarial_surface": "adversarial_surface",
+        "state_update": "state",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _world_contract_entities_from_payloads(payloads: Sequence[Mapping[str, Any]], key: str) -> List[Dict[str, Any]]:
+    entities: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get(key, [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                entities.append(item_dict)
+    return _dedupe_world_contract_dicts(entities)
+
+
+def _world_contract_transitions_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    transitions: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("transitions", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                transitions.append(item_dict)
+    return _dedupe_world_contract_dicts(transitions)
+
+
+def _world_contract_transition_log_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("transition_log", [])):
+            item_dict = _as_dict(item)
+            if item_dict and (
+                item_dict.get("id")
+                or item_dict.get("transition")
+                or item_dict.get("action")
+                or item_dict.get("status")
+            ):
+                records.append(item_dict)
+    return _dedupe_world_contract_dicts(records)
+
+
+def _world_contract_condition_results_from_payloads(payloads: Sequence[Mapping[str, Any]], key: str) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get(key, [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                results.append(item_dict)
+    return _dedupe_world_contract_dicts(results)
+
+
+def _world_contract_state_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    best_payload = _world_contract_best_payload(payloads)
+    if best_payload:
+        return dict(_as_dict(best_payload.get("state")))
+    state: Dict[str, Any] = {}
+    for payload in payloads:
+        state.update(_as_dict(payload.get("state")))
+    return state
+
+
+def _world_contract_summary_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    transition_log: Sequence[Mapping[str, Any]],
+    invariants: Sequence[Mapping[str, Any]],
+    success_conditions: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    best_payload = _world_contract_best_payload(payloads)
+    summary: Dict[str, Any] = dict(_as_dict(best_payload.get("summary"))) if best_payload else {}
+    if "completed_transition_count" not in summary:
+        summary["completed_transition_count"] = sum(1 for record in transition_log if record.get("status") == "success")
+    if "forbidden_transition_count" not in summary:
+        summary["forbidden_transition_count"] = sum(1 for record in transition_log if record.get("status") == "forbidden_transition")
+    if "violation_count" not in summary:
+        summary["violation_count"] = sum(len(_as_list(record.get("violations", []))) for record in transition_log)
+    if "invariant_violation_count" not in summary:
+        summary["invariant_violation_count"] = sum(1 for result in invariants if result.get("pass") is False)
+    if "success_condition_pass_count" not in summary:
+        summary["success_condition_pass_count"] = sum(1 for result in success_conditions if result.get("pass") is True)
+    if "success_condition_count" not in summary:
+        summary["success_condition_count"] = len(success_conditions)
+    if "terminal_status" not in summary:
+        summary["terminal_status"] = (
+            "success"
+            if success_conditions
+            and summary["success_condition_pass_count"] == len(success_conditions)
+            and summary["invariant_violation_count"] == 0
+            else "incomplete"
+        )
+    return summary
+
+
+def _world_contract_best_payload(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    best_score: Optional[Tuple[int, int, int, int, int, int, int]] = None
+    best_payload: Dict[str, Any] = {}
+    for index, payload in enumerate(payloads):
+        payload_dict = _as_dict(payload)
+        if not payload_dict:
+            continue
+        summary = _as_dict(payload_dict.get("summary"))
+        transition_log = [_as_dict(item) for item in _as_list(payload_dict.get("transition_log", []))]
+        completed = _as_int(summary.get("completed_transition_count"))
+        if completed is None:
+            completed = sum(1 for record in transition_log if record.get("status") == "success")
+        completed_required = _as_int(summary.get("completed_required_transition_count"))
+        if completed_required is None:
+            completed_required = sum(
+                1 for record in transition_log if record.get("status") == "success" and record.get("required") is True
+            )
+        success_passed = _as_int(summary.get("success_condition_pass_count"))
+        if success_passed is None:
+            success_passed = sum(
+                1
+                for result in _as_list(payload_dict.get("success_results", []))
+                if _as_dict(result).get("pass") is True
+            )
+        terminal_success = 1 if str(summary.get("terminal_status") or "").lower() == "success" else 0
+        state_size = len(_as_dict(payload_dict.get("state")))
+        score = (
+            int(completed or 0),
+            int(completed_required or 0),
+            len(transition_log),
+            int(success_passed or 0),
+            terminal_success,
+            state_size,
+            index,
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_payload = payload_dict
+    return best_payload
+
+
+def _world_contract_entity_names(entities: Sequence[Mapping[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for entity in entities:
+        for key in ("id", "name", "role", "type"):
+            value = entity.get(key)
+            if value not in (None, "", [], {}):
+                names.add(_normalize_world_contract_name(value))
+    return names
+
+
+def _normalize_world_contract_name(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("->", "_to_")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
+def _world_contract_transition_matches(record: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    for key in ("id", "name", "action", "actor", "resource", "status"):
+        expected_value = expected.get(key)
+        if expected_value and _normalize_world_contract_name(record.get(key)) != _normalize_world_contract_name(expected_value):
+            return False
+    if expected.get("required") is not None and bool(record.get("required")) != bool(expected.get("required")):
+        return False
+    return bool(record)
+
+
+def _world_contract_condition_result(
+    results: Sequence[Mapping[str, Any]],
+    condition_id: str,
+) -> Optional[Dict[str, Any]]:
+    query = _normalize_world_contract_name(condition_id)
+    for result in results:
+        if query in {
+            _normalize_world_contract_name(result.get("id")),
+            _normalize_world_contract_name(result.get("name")),
+        }:
+            return dict(result)
+    return None
+
+
+def _append_world_contract_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
+
+
+def _dedupe_world_contract_dicts(records: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for index, record in enumerate(records):
+        record_dict = _as_dict(record)
+        if not record_dict:
+            continue
+        key = str(record_dict.get("id") or record_dict.get("name") or record_dict.get("action") or index)
         if key not in deduped:
             deduped[key] = dict(record_dict)
     return list(deduped.values())

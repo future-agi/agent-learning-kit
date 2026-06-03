@@ -25,6 +25,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 19 | [Score Browser Runtime State](19_browser_runtime_state.py) | Check cookies, localStorage/sessionStorage, page errors, and performance timing in browser traces | No |
 | 20 | [Score Orchestration Graph Traces](20_orchestration_trace_quality.py) | Check workflow nodes, routes, retries, recovery, latency/cost budgets, terminal status, and graph state | No |
 | 21 | [Score Streaming Trace Quality](21_streaming_trace_quality.py) | Check stream chunks, tool deltas, interruption recovery, drops, latency, gaps, usage, finalization, and state | No |
+| 22 | [Score World Contract Quality](22_world_contract_quality.py) | Check actors, resources, transitions, invariants, policy gates, success conditions, and final state | No |
 
 ## Quick Start
 
@@ -62,3 +63,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 19**: Score browser storage-state capture, runtime/page-error events, and performance timing thresholds from local trace dictionaries
 - **Cookbook 20**: Score framework-neutral orchestration graph traces for required nodes/routes, retry and recovery behavior, latency/cost budgets, terminal status, and expected state
 - **Cookbook 21**: Score framework-neutral streaming/session traces for chunks, tool deltas, interruption recovery, drops, first-token latency, inter-chunk gaps, finalization, and expected state
+- **Cookbook 22**: Score framework-neutral world contracts for actors, resources, required transitions, invariants, policy gates, adversarial surfaces, success conditions, terminal status, and expected state

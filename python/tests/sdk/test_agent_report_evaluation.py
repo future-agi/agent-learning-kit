@@ -2851,6 +2851,224 @@ def test_evaluate_agent_report_scores_streaming_trace_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_world_contract_quality():
+    world = {
+        "kind": "world_contract",
+        "name": "refund_world",
+        "actors": [{"id": "support_agent"}, {"id": "customer"}],
+        "resources": [{"id": "case"}, {"id": "refund_policy"}],
+        "transitions": [
+            {"id": "verify_identity", "actor": "support_agent", "resource": "case", "required": True, "signals": ["transition", "milestone"]},
+            {"id": "check_policy", "actor": "support_agent", "resource": "refund_policy", "required": True, "signals": ["transition", "policy"]},
+            {"id": "issue_refund", "actor": "support_agent", "resource": "case", "required": True, "signals": ["transition", "tool"]},
+        ],
+        "transition_log": [
+            {"id": "verify_identity", "actor": "support_agent", "resource": "case", "status": "success", "required": True, "signals": ["milestone"]},
+            {"id": "check_policy", "actor": "support_agent", "resource": "refund_policy", "status": "success", "required": True, "signals": ["policy"]},
+            {"id": "issue_refund", "actor": "support_agent", "resource": "case", "status": "success", "required": True, "signals": ["tool"]},
+        ],
+        "invariants": [
+            {"id": "refund_requires_identity"},
+            {"id": "refund_requires_policy"},
+        ],
+        "invariant_results": [
+            {"id": "refund_requires_identity", "pass": True},
+            {"id": "refund_requires_policy", "pass": True},
+        ],
+        "success_conditions": [{"id": "refund_resolved"}],
+        "success_results": [{"id": "refund_resolved", "pass": True}],
+        "policy_gates": [{"id": "identity_gate"}],
+        "adversarial_surfaces": [{"id": "user_message", "type": "prompt_injection"}],
+        "signals": [
+            "actor",
+            "resource",
+            "transition",
+            "completed_transition",
+            "required_transition",
+            "invariant",
+            "success_condition",
+            "policy",
+            "adversarial_surface",
+            "state",
+            "success",
+        ],
+        "summary": {
+            "completed_transition_count": 3,
+            "required_transition_count": 3,
+            "completed_required_transition_count": 3,
+            "forbidden_transition_count": 0,
+            "violation_count": 0,
+            "invariant_violation_count": 0,
+            "success_condition_pass_count": 1,
+            "success_condition_count": 1,
+            "terminal_status": "success",
+        },
+        "state": {
+            "case": {
+                "status": "resolved",
+                "identity_verified": True,
+                "policy_checked": True,
+                "refund_issued": True,
+            }
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Resolve refund order ord_123."},
+                    {
+                        "role": "assistant",
+                        "content": "I verified identity, checked policy, and issued the refund.",
+                        "tool_calls": [
+                            {"id": "status", "name": "world_contract_status", "arguments": {}},
+                            {"id": "refund", "name": "apply_world_transition", "arguments": {"id": "issue_refund"}},
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "world_contract", "name": "refund_world"},
+                        "data": world,
+                    },
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "world_contract", "name": "refund_world"},
+                        "data": {
+                            **world,
+                            "transition_log": [],
+                            "summary": {
+                                **world["summary"],
+                                "completed_transition_count": 0,
+                                "completed_required_transition_count": 0,
+                                "success_condition_pass_count": 0,
+                                "terminal_status": "incomplete",
+                            },
+                            "state": {
+                                "case": {
+                                    "status": "open",
+                                    "identity_verified": False,
+                                    "policy_checked": False,
+                                    "refund_issued": False,
+                                }
+                            },
+                        },
+                    },
+                ],
+                "events": [
+                    {
+                        "type": "world_contract",
+                        "name": "world_contract_ready",
+                        "payload": {
+                            "name": "refund_world",
+                            "signals": ["actor", "resource", "transition", "state"],
+                            "summary": {
+                                **world["summary"],
+                                "completed_transition_count": 0,
+                                "completed_required_transition_count": 0,
+                                "success_condition_pass_count": 0,
+                                "terminal_status": "incomplete",
+                            },
+                        },
+                    }
+                ],
+                "metadata": {"environment_state": {"world_contract": world}},
+            }
+        ]
+    }
+    config = {
+        "required_world_contract": [
+            "actor",
+            "resource",
+            "transition",
+            "completed_transition",
+            "required_transition",
+            "invariant",
+            "success_condition",
+            "policy",
+            "adversarial_surface",
+            "state",
+            "success",
+        ],
+        "world_contract_quality": {
+            "required_actors": ["support_agent", "customer"],
+            "required_resources": ["case", "refund_policy"],
+            "required_transitions": [
+                {"id": "verify_identity", "status": "success"},
+                {"id": "check_policy", "status": "success"},
+                {"id": "issue_refund", "status": "success"},
+            ],
+            "min_completed_transitions": 3,
+            "require_all_required_transitions": True,
+            "require_all_invariants_pass": True,
+            "required_invariants": ["refund_requires_identity", "refund_requires_policy"],
+            "required_success_conditions": ["refund_resolved"],
+            "max_violation_count": 0,
+            "max_forbidden_transitions": 0,
+            "required_terminal_status": "success",
+            "expected_state": {
+                "case": {
+                    "status": "resolved",
+                    "identity_verified": True,
+                    "policy_checked": True,
+                    "refund_issued": True,
+                }
+            },
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["world_contract_coverage"] == 1.0
+    assert scores["world_contract_quality"] == 1.0
+
+    bad_world = {**world}
+    bad_world["transition_log"] = [
+        {"id": "verify_identity", "status": "success", "required": True},
+        {
+            "id": "issue_refund",
+            "status": "forbidden_transition",
+            "required": True,
+            "violations": [{"type": "forbidden_transition"}],
+        },
+    ]
+    bad_world["invariant_results"] = [
+        {"id": "refund_requires_identity", "pass": False},
+        {"id": "refund_requires_policy", "pass": False},
+    ]
+    bad_world["success_results"] = [{"id": "refund_resolved", "pass": False}]
+    bad_world["summary"] = {
+        **world["summary"],
+        "completed_transition_count": 1,
+        "completed_required_transition_count": 1,
+        "forbidden_transition_count": 1,
+        "violation_count": 2,
+        "invariant_violation_count": 2,
+        "success_condition_pass_count": 0,
+        "terminal_status": "incomplete",
+    }
+    bad_world["state"] = {"case": {"status": "open", "identity_verified": True, "policy_checked": False, "refund_issued": False}}
+    report["results"][0]["artifacts"][0]["data"] = bad_world
+    report["results"][0]["metadata"]["environment_state"]["world_contract"] = bad_world
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["world_contract_quality"] < 1.0
+    assert {
+        "world_transition_missing",
+        "world_invariant_violation",
+        "world_success_condition_missing_or_failed",
+        "world_violation_threshold_exceeded",
+        "world_forbidden_transition_observed",
+        "world_terminal_status_mismatch",
+        "world_state_mismatch",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_framework_trace_coverage():
     report = {
         "results": [
