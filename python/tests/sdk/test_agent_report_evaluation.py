@@ -2229,6 +2229,96 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
     assert any(finding["metric"] == "voice_interaction_quality" for finding in failing_result.findings)
 
 
+def test_evaluate_agent_report_scores_webrtc_voice_stats():
+    webrtc_stats = [
+        {
+            "id": "inbound_audio_1",
+            "type": "inbound-rtp",
+            "kind": "audio",
+            "trackIdentifier": "caller-track",
+            "codecId": "codec_opus",
+            "packetsReceived": 1000,
+            "packetsLost": 5,
+            "jitter": 0.012,
+            "audioLevel": 0.18,
+        },
+        {
+            "id": "remote_inbound_audio_1",
+            "type": "remote-inbound-rtp",
+            "kind": "audio",
+            "fractionLost": 0.004,
+            "jitter": 0.006,
+        },
+        {
+            "id": "codec_opus",
+            "type": "codec",
+            "mimeType": "audio/opus",
+            "payloadType": 111,
+        },
+    ]
+    voice_trace = {
+        "kind": "voice_trace",
+        "export_framework": "livekit",
+        "webrtc_stats": webrtc_stats,
+        "diarization": [
+            {"speaker": "caller", "start_ms": 0, "end_ms": 900},
+            {"speaker": "agent", "start_ms": 940, "end_ms": 1300},
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "persona": {"situation": "Handle a WebRTC voice call."},
+                "messages": [{"role": "assistant", "content": "I inspected WebRTC quality evidence."}],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "voice_trace"},
+                        "data": voice_trace,
+                    }
+                ],
+                "metadata": {
+                    "environment_state": {
+                        "voice": {
+                            "webrtc_stats": webrtc_stats,
+                            "diarization": voice_trace["diarization"],
+                        }
+                    }
+                },
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_voice_trace": [
+                "livekit_export",
+                "webrtc",
+                "rtp",
+                "track",
+                "codec",
+                "audio_level",
+                "jitter",
+                "packet_loss",
+                "diarization",
+            ],
+            "required_voice_speakers": ["caller", "agent"],
+            "max_voice_jitter_ms": 20,
+            "max_voice_packet_loss_pct": 1.0,
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["voice_trace_coverage"] == 1.0
+    assert scores["voice_interaction_quality"] == 1.0
+    assert not [
+        finding
+        for finding in result.findings
+        if finding.get("type") == "voice_packet_loss_exceeded"
+    ]
+
+
 def test_evaluate_agent_report_scores_voice_timing_distribution_quality():
     timing_distribution = {
         "kind": "voice_timing_distribution",

@@ -231,8 +231,8 @@ and browser performance timing thresholds.
 Voice trace and interaction metrics understand LiveKit/Pipecat-style export
 replay evidence, waveform fixtures, decoded WAV/PCM media metadata,
 diarization segments, sample-rate/duration/RMS/peak checks,
-MOS/SNR/clipping, jitter, and packet-loss checks in addition to
-VAD/STT/TTS/route/frame evidence.
+MOS/SNR/clipping, WebRTC RTP/track/codec/audio-level stats, jitter, and
+packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
 Trajectory templates let one reusable rubric score framework-neutral reports for
 goal completion, ordered tool calls, tool-call precision/recall/F1, policy
 checks, browser action safety, memory writes, and multimodal artifact support.
@@ -378,7 +378,7 @@ result = evaluate_agent_report(
         "forbidden_browser_prompt_injection_targets": ["coupon_iframe"],
         "expected_browser_state": {"url": "https://shop.example.com/done"},
         "expected_browser_dom_contains": ["Done"],
-        "required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route", "frame", "noise", "overlap", "timeline"],
+        "required_voice_trace": ["audio", "vad", "stt", "tts", "interruption", "route", "frame", "noise", "overlap", "timeline", "webrtc", "rtp", "track", "codec", "audio_level"],
         "expected_voice_route": "billing",
         "expected_voice_transcript_contains": ["order 123"],
         "required_voice_frame_types": ["InputAudioRawFrame", "TranscriptionFrame", "TTSStartedFrame", "TTSAudioRawFrame"],

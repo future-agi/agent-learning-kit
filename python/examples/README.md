@@ -30,6 +30,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 24 | [Score Browser Mutation Resilience](24_browser_mutation_resilience.py) | Check stale selectors, storage drift, runtime faults, network latency, and fallback mitigation evidence | No |
 | 25 | [Score Voice Timing Distributions](25_voice_timing_distribution.py) | Check VAD, end-of-utterance, STT, LLM, TTS, and full-turn p95 timing samples | No |
 | 26 | [Score Export Auth and Pagination](26_export_auth_pagination.py) | Check framework and voice traces include authenticated paginated export evidence | No |
+| 27 | [Score WebRTC Voice Stats](27_voice_webrtc_stats.py) | Check RTP, track, codec, audio-level, jitter, packet loss, and speaker evidence from voice traces | No |
 
 ## Quick Start
 
@@ -70,3 +71,6 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 22**: Score framework-neutral world contracts for actors, resources, required transitions, invariants, policy gates, adversarial surfaces, success conditions, terminal status, and expected state
 - **Cookbook 23**: Score structured adversarial attack packs for required attacks, untrusted surfaces, canary leakage, blocked tool calls, and safe-response evidence
 - **Cookbook 24**: Score browser mutation packs for stale selectors, storage drift, runtime faults, network latency, actionability evidence, and fallback selector mitigation
+- **Cookbook 25**: Score voice timing distributions for VAD, end-of-utterance, STT, LLM, TTS, and full-turn p95 samples
+- **Cookbook 26**: Score authenticated and paginated framework or voice export evidence from local report dictionaries
+- **Cookbook 27**: Score WebRTC getStats-style voice evidence for RTP, track, codec, audio-level, jitter, and packet-loss thresholds

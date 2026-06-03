@@ -12496,7 +12496,7 @@ def _voice_quality_values_from_payloads(
             return
         if source_key == "jitter_seconds" or (source_key == "jitter" and value <= 10):
             value *= 1000
-        if key == "packet_loss_pct" and source_key == "fraction_lost" and value <= 1:
+        if key == "packet_loss_pct" and source_key in {"fraction_lost", "fractionLost"} and value <= 1:
             value *= 100
         if key == "clipping_ratio" and source_key in {"clipping_pct", "clipping_percent"}:
             value = value / 100 if value > 1 else value
@@ -12541,6 +12541,9 @@ def _voice_quality_values_from_payloads(
             "frame_replay",
             "event_replay",
             "timeline",
+            "webrtc_stats",
+            "rtc_stats",
+            "rtp_stats",
         ):
             for nested in _as_list(item.get(list_key, [])):
                 collect(nested, depth + 1)
@@ -12563,7 +12566,7 @@ def _voice_quality_aliases(key: str) -> set[str]:
         "mos": {"mos", "polqa_mos", "p863_mos"},
         "clipping_ratio": {"clipping_ratio", "clip_ratio", "clipped_ratio", "clipping_pct", "clipping_percent"},
         "jitter_ms": {"jitter_ms", "jitter", "jitter_seconds"},
-        "packet_loss_pct": {"packet_loss_pct", "packet_loss_percent", "fraction_lost"},
+        "packet_loss_pct": {"packet_loss_pct", "packet_loss_percent", "fraction_lost", "fractionLost"},
         "sample_rate_hz": {"sample_rate_hz", "sample_rate"},
         "duration_ms": {"duration_ms", "duration"},
         "rms_db": {"rms_db", "rms"},
@@ -12598,6 +12601,9 @@ def _looks_like_voice_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]
             "waveforms",
             "diarization",
             "speaker_segments",
+            "webrtc_stats",
+            "rtc_stats",
+            "rtp_stats",
             "perceptual_metrics",
             "audio_quality",
             "quality_profile",
@@ -12689,6 +12695,25 @@ def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -
             _merge_voice_quality_observed(observed, waveform_dict)
     if _as_list(payload.get("diarization", [])) or _as_list(payload.get("speaker_segments", [])):
         observed.update({"diarization", "speaker"})
+    webrtc_stats = (
+        _as_list(payload.get("webrtc_stats", []))
+        or _as_list(payload.get("rtc_stats", []))
+        or _as_list(payload.get("rtp_stats", []))
+    )
+    if webrtc_stats:
+        observed.update({"webrtc", "rtp"})
+        for stat in webrtc_stats:
+            stat_dict = _as_dict(stat)
+            stat_type = str(stat_dict.get("type") or stat_dict.get("stat_type") or "").lower()
+            if "rtp" in stat_type:
+                observed.add("rtp")
+            if stat_dict.get("track_id") or stat_dict.get("trackIdentifier") or stat_dict.get("track_identifier"):
+                observed.add("track")
+            if stat_dict.get("codec") or stat_dict.get("codec_id") or stat_dict.get("codecId") or stat_dict.get("mime_type") or stat_dict.get("mimeType"):
+                observed.add("codec")
+            if stat_dict.get("audio_level") is not None or stat_dict.get("audioLevel") is not None:
+                observed.add("audio_level")
+            _merge_voice_quality_observed(observed, stat_dict)
     _merge_voice_quality_observed(observed, payload)
 
 
@@ -12710,11 +12735,16 @@ def _merge_voice_quality_observed(observed: set[str], payload: Mapping[str, Any]
         ("packet_loss_pct", "packet_loss"),
         ("packet_loss_percent", "packet_loss"),
         ("fraction_lost", "packet_loss"),
+        ("fractionLost", "packet_loss"),
+        ("packets_lost", "packet_loss"),
+        ("packetsLost", "packet_loss"),
         ("sample_rate_hz", "sample_rate"),
         ("sample_rate", "sample_rate"),
         ("duration_ms", "duration"),
         ("rms_db", "rms"),
         ("peak_db", "peak"),
+        ("audio_level", "audio_level"),
+        ("audioLevel", "audio_level"),
     ):
         if key in payload:
             observed.update({"perceptual", observed_key})
@@ -12722,7 +12752,7 @@ def _merge_voice_quality_observed(observed: set[str], payload: Mapping[str, Any]
         nested = _as_dict(payload.get(key))
         if nested:
             _merge_voice_quality_observed(observed, nested)
-    for key in ("segments", "items", "turns", "frames"):
+    for key in ("segments", "items", "turns", "frames", "webrtc_stats", "rtc_stats", "rtp_stats"):
         for item in _as_list(payload.get(key, [])):
             _merge_voice_quality_observed(observed, _as_dict(item))
 
@@ -12793,6 +12823,24 @@ def _normalize_voice_trace_key(key: str) -> str:
         "pipecat": "pipecat_export",
         "pipecat_frames": "pipecat_export",
         "pipecat_export": "pipecat_export",
+        "webrtc": "webrtc",
+        "webrtc_stats": "webrtc",
+        "rtc_stats": "webrtc",
+        "getstats": "webrtc",
+        "get_stats": "webrtc",
+        "rtp": "rtp",
+        "rtp_stats": "rtp",
+        "inbound_rtp": "rtp",
+        "outbound_rtp": "rtp",
+        "remote_inbound_rtp": "rtp",
+        "track": "track",
+        "track_identifier": "track",
+        "trackidentifier": "track",
+        "codec": "codec",
+        "codec_id": "codec",
+        "mime_type": "codec",
+        "audio_level": "audio_level",
+        "audiolevel": "audio_level",
         "waveform": "waveform",
         "waveforms": "waveform",
         "recording": "waveform",
