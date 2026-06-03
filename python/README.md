@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, browser storage/runtime capture, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, orchestration trace coverage, orchestration flow quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, browser storage/runtime capture, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -212,6 +212,10 @@ final state, final output, and framework errors. Multi-agent framework
 transcript checks also score exported speakers, speaker order, handoffs,
 tool-owner evidence, turn count, required messages, and termination markers
 from AutoGen, CrewAI, OpenAI Agents, or similar orchestration logs.
+Orchestration trace metrics score portable workflow graph traces for required
+nodes, routes/edges, step types, retry counts, recovered errors, latency/cost
+budgets, terminal status, and graph state, regardless of whether the source is
+LangGraph, LiveKit, Pipecat, OpenTelemetry, or a custom runtime.
 Cross-trial memory/skill checks score normalized framework traces and autonomy
 payloads for required memory keys, forbidden writes, precision, recall,
 recall-after-write, persistence across trials, and reusable skill-step
@@ -244,6 +248,7 @@ See [`examples/13_evidence_contradiction_artifact_grounding.py`](examples/13_evi
 See [`examples/14_multi_agent_framework_transcript.py`](examples/14_multi_agent_framework_transcript.py).
 See [`examples/15_structured_artifact_semantics.py`](examples/15_structured_artifact_semantics.py).
 See [`examples/16_cross_trial_memory_skill.py`](examples/16_cross_trial_memory_skill.py).
+See [`examples/20_orchestration_trace_quality.py`](examples/20_orchestration_trace_quality.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -285,6 +290,18 @@ result = evaluate_agent_report(
         "expected_autonomy_skills": [{"name": "refund_policy_check", "required_steps": ["lookup", "verify"]}],
         "expected_autonomy_stop": {"should_stop": True},
         "required_framework_trace": ["agent", "model", "tool", "handoff", "guardrail"],
+        "required_orchestration_trace": ["workflow", "node", "route", "handoff", "tool", "retry", "recovered", "latency", "cost", "state"],
+        "orchestration_trace_quality": {
+            "required_nodes": ["triage_agent", "policy_agent", "refund_tool"],
+            "required_step_types": ["workflow", "tool", "retry"],
+            "expected_routes": [{"from": "triage_agent", "to": "policy_agent", "type": "handoff"}],
+            "min_retry_count": 1,
+            "require_recovered_errors": True,
+            "max_total_latency_ms": 150,
+            "max_total_cost": 100,
+            "required_terminal_status": "success",
+            "expected_state": {"case": {"status": "resolved"}},
+        },
         "framework_transcript_quality": {
             "required_event_methods": ["messages", "tools", "updates"],
             "required_nodes": ["support_agent", "policy_node"],

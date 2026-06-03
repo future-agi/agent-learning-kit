@@ -166,6 +166,8 @@ class AgentReportEvalConfig(BaseModel):
     expected_multi_agent_handoffs: List[Any] = Field(default_factory=list)
     expected_multi_agent_reviews: List[Any] = Field(default_factory=list)
     expected_multi_agent_reconciliation: Dict[str, Any] = Field(default_factory=dict)
+    required_orchestration_trace: List[str] = Field(default_factory=list)
+    orchestration_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
@@ -363,6 +365,8 @@ class AgentReportEvaluator:
                 *_source_contradiction_metrics(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _multi_agent_coordination_quality_metric(report_context, config),
+                _orchestration_trace_coverage_metric(report_context, config),
+                _orchestration_flow_quality_metric(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_action_outcome_metric(report_context, config),
                 _browser_grounding_quality_metric(report_context, config),
@@ -2964,6 +2968,261 @@ def _multi_agent_coordination_quality_metric(
         name="multi_agent_coordination_quality",
         score=round(score, 4),
         reason=f"{matched}/{len(checks)} multi-agent coordination check(s) matched.",
+        details={"checks": checks, "findings": findings},
+    )
+
+
+def _orchestration_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_orchestration_trace_key(key) for key in config.required_orchestration_trace]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="orchestration_trace_coverage",
+            score=1.0,
+            reason="No required orchestration trace keys provided.",
+        )
+
+    observed = _orchestration_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [
+        {"type": "missing_orchestration_trace_key", "key": key}
+        for key in missing
+    ]
+    return AgentReportMetricResult(
+        name="orchestration_trace_coverage",
+        score=round(score, 4),
+        reason=(
+            "All required orchestration trace evidence observed."
+            if not missing
+            else f"Missing orchestration trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": findings,
+        },
+    )
+
+
+def _orchestration_flow_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    requirements = _as_dict(config.orchestration_trace_quality)
+    if not requirements:
+        return AgentReportMetricResult(
+            name="orchestration_flow_quality",
+            score=1.0,
+            reason="No expected orchestration flow checks provided.",
+        )
+
+    payloads = _orchestration_trace_payloads_from_context(context)
+    nodes = _orchestration_nodes_from_payloads(payloads)
+    edges = _orchestration_edges_from_payloads(payloads)
+    steps = _orchestration_steps_from_payloads(payloads)
+    state = _orchestration_state_from_payloads(payloads)
+    summary = _orchestration_summary_from_payloads(payloads, steps, edges)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    node_names = {_normalize_orchestration_name(node.get("name") or node.get("id")) for node in nodes}
+    node_names.update(_normalize_orchestration_name(step.get("node")) for step in steps if step.get("node"))
+
+    for node in _string_list(requirements.get("required_nodes")):
+        normalized = _normalize_orchestration_name(node)
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="required_node",
+            expected=node,
+            actual=sorted(node_names),
+            match=normalized in node_names,
+            finding_type="orchestration_node_missing",
+        )
+
+    for node in _string_list(requirements.get("forbidden_nodes")):
+        normalized = _normalize_orchestration_name(node)
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="forbidden_node",
+            expected=f"absent: {node}",
+            actual=sorted(node_names),
+            match=normalized not in node_names,
+            finding_type="orchestration_forbidden_node_observed",
+        )
+
+    observed_step_types = {
+        _normalize_orchestration_trace_key(signal)
+        for step in steps
+        for signal in _as_list(step.get("signals", []))
+    }
+    observed_step_types.update(_normalize_orchestration_trace_key(step.get("type", "")) for step in steps)
+    for step_type in _string_list(requirements.get("required_step_types")):
+        normalized = _normalize_orchestration_trace_key(step_type)
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="required_step_type",
+            expected=step_type,
+            actual=sorted(observed_step_types),
+            match=normalized in observed_step_types,
+            finding_type="orchestration_step_type_missing",
+        )
+
+    for expected in _as_list(requirements.get("expected_routes") or requirements.get("expected_edges")):
+        expected_dict = _as_dict(expected)
+        match = any(_orchestration_route_matches(edge, expected_dict) for edge in edges)
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="expected_route",
+            expected=expected_dict,
+            actual=edges,
+            match=match,
+            finding_type="orchestration_route_missing",
+        )
+
+    min_retry_count = _as_int(requirements.get("min_retry_count"))
+    if min_retry_count is not None:
+        retry_count = _as_int(summary.get("retry_count")) or 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="min_retry_count",
+            expected=min_retry_count,
+            actual=retry_count,
+            match=retry_count >= min_retry_count,
+            finding_type="orchestration_retry_missing",
+        )
+
+    if requirements.get("require_recovered_errors") is not None:
+        required = bool(requirements.get("require_recovered_errors"))
+        recovered = (_as_int(summary.get("recovered_failures")) or 0) > 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="require_recovered_errors",
+            expected=required,
+            actual=recovered,
+            match=(recovered is required),
+            finding_type="orchestration_recovery_missing",
+        )
+
+    for expected in _as_list(requirements.get("expected_recovered_errors")):
+        expected_dict = _as_dict(expected)
+        match = _orchestration_node_has_recovered_error(steps, expected_dict)
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="expected_recovered_error",
+            expected=expected_dict,
+            actual=steps,
+            match=match,
+            finding_type="orchestration_recovery_missing",
+        )
+
+    max_total_latency_ms = _as_float(requirements.get("max_total_latency_ms"))
+    if max_total_latency_ms is not None:
+        has_latency = _orchestration_has_latency_evidence(steps, summary)
+        actual = _as_float(summary.get("total_latency_ms")) if has_latency else None
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="max_total_latency_ms",
+            expected=max_total_latency_ms,
+            actual=actual,
+            match=actual is not None and actual <= max_total_latency_ms,
+            finding_type="orchestration_latency_threshold_exceeded",
+        )
+
+    max_step_latency_ms = _as_float(requirements.get("max_step_latency_ms"))
+    if max_step_latency_ms is not None:
+        slow_steps = [
+            step
+            for step in steps
+            if (_as_float(step.get("latency_ms")) or 0.0) > max_step_latency_ms
+        ]
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="max_step_latency_ms",
+            expected=max_step_latency_ms,
+            actual=slow_steps,
+            match=not slow_steps,
+            finding_type="orchestration_step_latency_threshold_exceeded",
+        )
+
+    max_total_cost = _as_float(requirements.get("max_total_cost"))
+    if max_total_cost is not None:
+        has_cost = _orchestration_has_cost_evidence(steps, summary)
+        actual = _as_float(summary.get("total_cost")) if has_cost else None
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="max_total_cost",
+            expected=max_total_cost,
+            actual=actual,
+            match=actual is not None and actual <= max_total_cost,
+            finding_type="orchestration_cost_threshold_exceeded",
+        )
+
+    max_error_count = _as_int(requirements.get("max_error_count"))
+    if max_error_count is not None:
+        actual = _as_int(summary.get("failure_count")) or 0
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=actual,
+            match=actual <= max_error_count,
+            finding_type="orchestration_error_threshold_exceeded",
+        )
+
+    expected_terminal_status = requirements.get("required_terminal_status") or requirements.get("terminal_status")
+    if expected_terminal_status:
+        actual = str(summary.get("terminal_status") or "")
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check="terminal_status",
+            expected=str(expected_terminal_status),
+            actual=actual,
+            match=actual.lower() == str(expected_terminal_status).lower(),
+            finding_type="orchestration_terminal_status_mismatch",
+        )
+
+    for path, expected in _flatten_state(_as_dict(requirements.get("expected_state"))).items():
+        actual = _get_path(state, path)
+        _append_orchestration_quality_check(
+            checks,
+            findings,
+            check=f"state.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="orchestration_state_mismatch",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="orchestration_flow_quality",
+            score=1.0,
+            reason="No expected orchestration flow checks provided.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="orchestration_flow_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} orchestration flow check(s) matched.",
         details={"checks": checks, "findings": findings},
     )
 
@@ -7167,6 +7426,448 @@ def _normalize_retrieval_memory_key(key: str) -> str:
         "retrieval_memory_status": "trace",
     }
     return aliases.get(normalized, normalized)
+
+
+def _orchestration_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _orchestration_trace_payloads_from_context(context):
+        observed.add("trace")
+        _merge_orchestration_trace_payload(observed, payload)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "orchestration" in event_type or "workflow" in event_type:
+            observed.add("trace")
+            _add_orchestration_trace_key(observed, event_type)
+            _add_orchestration_trace_key(observed, name)
+            _merge_orchestration_trace_payload(observed, payload)
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "orchestration_trace_status",
+            "list_orchestration_steps",
+            "inspect_orchestration_node",
+            "inspect_orchestration_edge",
+        }:
+            observed.update({"trace", "step"})
+        _add_orchestration_trace_key(observed, name)
+    return observed
+
+
+def _orchestration_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("orchestration_trace"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_trace = _as_dict(metadata_state.get("orchestration_trace"))
+    if metadata_trace:
+        payloads.append(metadata_trace)
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_orchestration_trace(data, metadata):
+            payloads.append(data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_orchestration_trace(payload, metadata):
+            payloads.append(payload)
+        elif "orchestration_step" in event_type:
+            payloads.append({"kind": "orchestration_trace", "steps": [payload]})
+        elif "orchestration" in event_type or "workflow" in event_type:
+            wrapped = {"kind": "orchestration_trace", "events": [payload], "signals": [event_type, name]}
+            if payload:
+                wrapped["steps"] = [payload]
+            payloads.append(wrapped)
+    return [payload for payload in payloads if payload]
+
+
+def _looks_like_orchestration_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    if kind == "orchestration_trace":
+        return True
+    return any(key in data for key in ("nodes", "edges", "steps", "summary")) and any(
+        token in _stringify(data).lower() or token in _stringify(metadata).lower()
+        for token in ("orchestration", "workflow", "route", "handoff", "retry")
+    )
+
+
+def _merge_orchestration_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if payload.get("nodes"):
+        observed.add("node")
+    if payload.get("edges"):
+        observed.add("route")
+    if payload.get("steps"):
+        observed.add("step")
+    if payload.get("state"):
+        observed.add("state")
+    for signal in _as_list(payload.get("signals", [])):
+        _add_orchestration_trace_key(observed, str(signal))
+    for collection_name in ("nodes", "edges", "steps", "events"):
+        for item in _as_list(payload.get(collection_name, [])):
+            item_dict = _as_dict(item)
+            for key in ("type", "name", "node", "status", "event", "method"):
+                _add_orchestration_trace_key(observed, str(item_dict.get(key, "")))
+            for signal in _as_list(item_dict.get("signals", [])):
+                _add_orchestration_trace_key(observed, str(signal))
+            if item_dict.get("error"):
+                observed.add("error")
+            if item_dict.get("latency_ms") is not None:
+                observed.add("latency")
+            if item_dict.get("cost") not in (None, "", [], {}):
+                observed.add("cost")
+            if item_dict.get("recovered") is True:
+                observed.add("recovered")
+            if (_as_int(item_dict.get("attempt")) or 0) > 1:
+                observed.add("retry")
+    summary = _as_dict(payload.get("summary"))
+    if (_as_int(summary.get("retry_count")) or 0) > 0:
+        observed.add("retry")
+    if (_as_int(summary.get("recovered_failures")) or 0) > 0:
+        observed.add("recovered")
+    if (_as_int(summary.get("failure_count")) or 0) > 0:
+        observed.add("error")
+    if summary.get("total_latency_ms") is not None:
+        observed.add("latency")
+    if summary.get("total_cost") is not None:
+        observed.add("cost")
+
+
+def _add_orchestration_trace_key(observed: set[str], value: str) -> None:
+    normalized = _normalize_orchestration_trace_key(value)
+    if normalized:
+        observed.add(normalized)
+    lowered = str(value).lower()
+    aliases = {
+        "orchestration": "trace",
+        "workflow": "workflow",
+        "invoke_workflow": "workflow",
+        "graph": "workflow",
+        "chain": "workflow",
+        "agent": "agent",
+        "node": "node",
+        "task": "task",
+        "tool": "tool",
+        "function": "tool",
+        "execute_tool": "tool",
+        "route": "route",
+        "edge": "route",
+        "handoff": "handoff",
+        "transfer": "handoff",
+        "retry": "retry",
+        "recover": "recovered",
+        "error": "error",
+        "exception": "error",
+        "latency": "latency",
+        "duration": "latency",
+        "cost": "cost",
+        "token": "cost",
+        "usage": "cost",
+        "state": "state",
+        "checkpoint": "checkpoint",
+        "memory": "memory",
+        "retriev": "retrieval",
+        "model": "model",
+        "llm": "model",
+        "voice": "voice",
+        "livekit": "voice",
+        "pipecat": "voice",
+        "frame": "frame",
+        "interrupt": "interrupt",
+    }
+    for token, alias in aliases.items():
+        if token in lowered:
+            observed.add(alias)
+
+
+def _normalize_orchestration_trace_key(key: Any) -> str:
+    normalized = str(key or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "orchestration_trace": "trace",
+        "orchestration_trace_status": "trace",
+        "list_orchestration_steps": "step",
+        "inspect_orchestration_node": "node",
+        "inspect_orchestration_edge": "route",
+        "invoke_workflow": "workflow",
+        "graph": "workflow",
+        "chain": "workflow",
+        "flow": "workflow",
+        "invoke_agent": "agent",
+        "execute_tool": "tool",
+        "function": "tool",
+        "function_call": "tool",
+        "routing": "route",
+        "edge": "route",
+        "transfer": "handoff",
+        "delegation": "handoff",
+        "recover": "recovered",
+        "recovery": "recovered",
+        "exception": "error",
+        "failure": "error",
+        "duration": "latency",
+        "duration_ms": "latency",
+        "tokens": "cost",
+        "usage": "cost",
+        "updates": "state",
+        "values": "state",
+        "retriever": "retrieval",
+        "llm": "model",
+        "generation": "model",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _orchestration_nodes_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    nodes: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("nodes", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                nodes.append(item_dict)
+        for step in _as_list(payload.get("steps", [])):
+            step_dict = _as_dict(step)
+            node = step_dict.get("node")
+            if node:
+                nodes.append({"id": _normalize_orchestration_name(node), "name": str(node), "signals": step_dict.get("signals", [])})
+    return _dedupe_orchestration_dicts(nodes)
+
+
+def _orchestration_edges_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    edges: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("edges", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                edges.append(item_dict)
+        previous_node = ""
+        for step in _as_list(payload.get("steps", [])):
+            step_dict = _as_dict(step)
+            route_from = step_dict.get("route_from")
+            route_to = step_dict.get("route_to")
+            node = step_dict.get("node")
+            if route_from and route_to:
+                edges.append({"from": route_from, "to": route_to, "type": "handoff" if "handoff" in _as_list(step_dict.get("signals", [])) else "route"})
+            if previous_node and node and previous_node != node:
+                edges.append({"from": previous_node, "to": node, "type": "sequence"})
+            if node:
+                previous_node = str(node)
+            elif route_to:
+                previous_node = str(route_to)
+    return _dedupe_orchestration_dicts(edges)
+
+
+def _orchestration_steps_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    steps: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for item in _as_list(payload.get("steps", [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                steps.append(item_dict)
+    return _dedupe_orchestration_dicts(steps)
+
+
+def _orchestration_state_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for payload in payloads:
+        state.update(_as_dict(payload.get("state")))
+        for step in _as_list(payload.get("steps", [])):
+            step_state = _as_dict(_as_dict(step).get("state"))
+            if step_state:
+                state.update(step_state)
+    return state
+
+
+def _orchestration_summary_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    steps: Sequence[Mapping[str, Any]],
+    edges: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    for payload in payloads:
+        summary.update(_as_dict(payload.get("summary")))
+    if not summary:
+        summary = {}
+    retry_count = _as_int(summary.get("retry_count"))
+    if retry_count is None:
+        retry_count = sum(
+            1
+            for step in steps
+            if "retry" in _as_list(step.get("signals", [])) or (_as_int(step.get("attempt")) or 0) > 1
+        )
+    failure_count = _as_int(summary.get("failure_count"))
+    if failure_count is None:
+        failure_count = sum(1 for step in steps if step.get("error") or "error" in _as_list(step.get("signals", [])))
+    recovered_failures = _as_int(summary.get("recovered_failures"))
+    if recovered_failures is None:
+        recovered_failures = len(_orchestration_recovered_steps(steps))
+    total_latency = _as_float(summary.get("total_latency_ms"))
+    if total_latency is None and any(step.get("latency_ms") not in (None, "", [], {}) for step in steps):
+        total_latency = sum(_as_float(step.get("latency_ms")) or 0.0 for step in steps)
+    total_cost = _as_float(summary.get("total_cost"))
+    if total_cost is None and any(step.get("cost") not in (None, "", [], {}) for step in steps):
+        total_cost = sum(_orchestration_numeric_cost(step.get("cost")) for step in steps)
+    terminal_status = summary.get("terminal_status") or (steps[-1].get("status") if steps else None) or "unknown"
+    normalized = {
+        **summary,
+        "edge_count": _as_int(summary.get("edge_count")) or len(edges),
+        "step_count": _as_int(summary.get("step_count")) or len(steps),
+        "retry_count": retry_count,
+        "failure_count": failure_count,
+        "recovered_failures": recovered_failures,
+        "terminal_status": terminal_status,
+    }
+    if total_latency is not None:
+        normalized["total_latency_ms"] = total_latency
+    if total_cost is not None:
+        normalized["total_cost"] = total_cost
+    return normalized
+
+
+def _orchestration_has_latency_evidence(
+    steps: Sequence[Mapping[str, Any]],
+    summary: Mapping[str, Any],
+) -> bool:
+    return summary.get("total_latency_ms") is not None or any(
+        step.get("latency_ms") not in (None, "", [], {}) for step in steps
+    )
+
+
+def _orchestration_has_cost_evidence(
+    steps: Sequence[Mapping[str, Any]],
+    summary: Mapping[str, Any],
+) -> bool:
+    return summary.get("total_cost") is not None or any(
+        step.get("cost") not in (None, "", [], {}) for step in steps
+    )
+
+
+def _orchestration_route_matches(edge: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    expected_from = expected.get("from") or expected.get("source")
+    expected_to = expected.get("to") or expected.get("target")
+    expected_type = expected.get("type") or expected.get("kind")
+    if expected_from and _normalize_orchestration_name(edge.get("from")) != _normalize_orchestration_name(expected_from):
+        return False
+    if expected_to and _normalize_orchestration_name(edge.get("to")) != _normalize_orchestration_name(expected_to):
+        return False
+    if expected_type and _normalize_orchestration_trace_key(edge.get("type")) != _normalize_orchestration_trace_key(expected_type):
+        return False
+    return bool(edge.get("from") and edge.get("to"))
+
+
+def _orchestration_node_has_recovered_error(
+    steps: Sequence[Mapping[str, Any]],
+    expected: Mapping[str, Any],
+) -> bool:
+    expected_node = _normalize_orchestration_name(expected.get("node") or expected.get("name") or expected.get("agent"))
+    recovered_nodes = {
+        _normalize_orchestration_name(step.get("node"))
+        for step in _orchestration_recovered_steps(steps)
+    }
+    if expected_node:
+        return expected_node in recovered_nodes
+    return bool(recovered_nodes)
+
+
+def _orchestration_recovered_steps(steps: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    recovered = [
+        dict(step)
+        for step in steps
+        if step.get("recovered") is True or "recovered" in _as_list(step.get("signals", []))
+    ]
+    failed_nodes: set[str] = set()
+    for step in steps:
+        node = _normalize_orchestration_name(step.get("node"))
+        if not node:
+            continue
+        if step.get("error") or "error" in _as_list(step.get("signals", [])):
+            failed_nodes.add(node)
+            continue
+        if node in failed_nodes and str(step.get("status", "")).lower() in {"success", "succeeded", "complete", "completed"}:
+            recovered.append(dict(step))
+            failed_nodes.remove(node)
+    return _dedupe_orchestration_dicts(recovered)
+
+
+def _orchestration_numeric_cost(value: Any) -> float:
+    numeric = _as_float(value)
+    if numeric is not None:
+        return numeric
+    if isinstance(value, str):
+        return 0.0
+    if isinstance(value, Mapping):
+        total = 0.0
+        for key, item in value.items():
+            if any(token in str(key).lower() for token in ("cost", "token", "usage", "total")):
+                total += _orchestration_numeric_cost(item)
+        return total
+    if isinstance(value, (list, tuple, set)):
+        return sum(_orchestration_numeric_cost(item) for item in value)
+    return 0.0
+
+
+def _dedupe_orchestration_dicts(records: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        record_dict = _as_dict(record)
+        if not record_dict:
+            continue
+        key = str(
+            record_dict.get("id")
+            or f"{record_dict.get('from', '')}->{record_dict.get('to', '')}:{record_dict.get('type', '')}"
+            or record_dict.get("name")
+            or record_dict
+        )
+        if key in deduped:
+            existing = deduped[key]
+            signals = set(_as_list(existing.get("signals", [])))
+            signals.update(_as_list(record_dict.get("signals", [])))
+            if signals:
+                existing["signals"] = sorted(str(signal) for signal in signals)
+            for item_key, item_value in record_dict.items():
+                if item_value not in (None, "", [], {}) and existing.get(item_key) in (None, "", [], {}):
+                    existing[item_key] = item_value
+        else:
+            deduped[key] = dict(record_dict)
+    return list(deduped.values())
+
+
+def _normalize_orchestration_name(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("->", "_to_")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
+def _append_orchestration_quality_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
 
 
 def _multi_agent_trace_observed(context: Mapping[str, Any]) -> set[str]:
