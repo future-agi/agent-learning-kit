@@ -4899,6 +4899,159 @@ def test_evaluate_agent_report_scores_framework_runtime_contract():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_framework_lifecycle_quality():
+    lifecycle_trace = {
+        "kind": "framework_lifecycle_trace",
+        "name": "langgraph-lifecycle",
+        "framework": "langgraph",
+        "session_id": "thread-123",
+        "signals": [
+            "framework_lifecycle",
+            "initialize",
+            "tool_registration",
+            "start_session",
+            "invocation",
+            "streaming",
+            "checkpoint",
+            "retry",
+            "cancellation",
+            "resume",
+            "cleanup",
+            "state_persistence",
+            "session",
+            "recovery",
+            "error",
+        ],
+        "summary": {
+            "phase_count": 10,
+            "session_count": 1,
+            "tool_registration_count": 1,
+            "invocation_count": 1,
+            "streaming_event_count": 1,
+            "checkpoint_count": 1,
+            "retry_count": 1,
+            "cancellation_count": 1,
+            "resume_count": 1,
+            "cleanup_count": 1,
+            "error_count": 1,
+            "recovered_error_count": 1,
+            "state_persistence": True,
+            "cleanup_complete": True,
+            "terminal_status": "completed",
+        },
+        "sessions": [{"id": "thread-123", "phase_count": 10}],
+        "phases": [
+            {"id": "init", "stage": "initialize", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "initialize", "session", "state"], "state_keys": ["config"]},
+            {"id": "tools", "stage": "tool_registration", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "tool_registration", "tool", "session"], "tool_names": ["search_order"]},
+            {"id": "start", "stage": "start_session", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "start_session", "session", "state"], "state_keys": ["thread_id"]},
+            {"id": "invoke", "stage": "invoke", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "invoke", "invocation", "session"]},
+            {"id": "stream", "stage": "stream", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "stream", "streaming", "session"]},
+            {"id": "checkpoint", "stage": "checkpoint", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "checkpoint", "state_persistence", "session"], "state_keys": ["thread_id"]},
+            {"id": "retry", "stage": "retry", "status": "error", "session_id": "thread-123", "signals": ["lifecycle", "retry", "error", "recovery", "session"], "error": "tool timeout"},
+            {"id": "cancel", "stage": "cancel", "status": "cancelled", "session_id": "thread-123", "signals": ["lifecycle", "cancel", "cancellation", "session"]},
+            {"id": "resume", "stage": "resume", "status": "resumed", "session_id": "thread-123", "signals": ["lifecycle", "resume", "state_persistence", "session"], "state_keys": ["thread_id"]},
+            {"id": "shutdown", "stage": "shutdown", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "shutdown", "cleanup", "session"]},
+        ],
+        "state": {"thread_id": "thread-123"},
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Lifecycle trace captured."}],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_lifecycle_trace", "framework": "langgraph"},
+                        "data": lifecycle_trace,
+                    }
+                ],
+                "metadata": {"environment_state": {"framework_lifecycle_trace": lifecycle_trace}},
+            }
+        ]
+    }
+    config = {
+        "required_framework_lifecycle": [
+            "framework_lifecycle",
+            "initialize",
+            "tool_registration",
+            "start_session",
+            "invocation",
+            "streaming",
+            "checkpoint",
+            "retry",
+            "cancellation",
+            "resume",
+            "cleanup",
+            "state_persistence",
+            "session",
+        ],
+        "framework_lifecycle_quality": {
+            "framework": "langgraph",
+            "required_sessions": ["thread-123"],
+            "required_stages": ["initialize", "tool_registration", "start_session", "invoke", "checkpoint", "resume", "shutdown"],
+            "min_phase_count": 10,
+            "min_tool_registrations": 1,
+            "min_invocations": 1,
+            "min_recovered_errors": 1,
+            "require_streaming": True,
+            "require_checkpoint": True,
+            "require_retry": True,
+            "require_cancellation": True,
+            "require_resume": True,
+            "require_cleanup": True,
+            "require_state_persistence": True,
+            "terminal_status": "completed",
+            "max_error_count": 1,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_lifecycle_coverage"] == 1.0
+    assert scores["framework_lifecycle_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_trace = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_report["results"][0]["metadata"]["environment_state"]["framework_lifecycle_trace"] = bad_trace
+    bad_trace["signals"] = ["framework_lifecycle", "initialize", "start_session", "error"]
+    bad_trace["summary"] = {
+        "phase_count": 3,
+        "session_count": 1,
+        "tool_registration_count": 0,
+        "invocation_count": 0,
+        "streaming_event_count": 0,
+        "checkpoint_count": 0,
+        "retry_count": 0,
+        "cancellation_count": 0,
+        "resume_count": 0,
+        "cleanup_count": 0,
+        "error_count": 2,
+        "recovered_error_count": 0,
+        "state_persistence": False,
+        "terminal_status": "error",
+    }
+    bad_trace["phases"] = [
+        {"id": "init", "stage": "initialize", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "initialize", "session"]},
+        {"id": "start", "stage": "start_session", "status": "completed", "session_id": "thread-123", "signals": ["lifecycle", "start_session", "session"]},
+        {"id": "failed", "stage": "invoke", "status": "error", "session_id": "thread-123", "signals": ["lifecycle", "invoke", "error", "session"]},
+    ]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["framework_lifecycle_coverage"] < 1.0
+    assert bad_scores["framework_lifecycle_quality"] < 1.0
+    assert {
+        "missing_framework_lifecycle_key",
+        "framework_lifecycle_tool_registration_low",
+        "framework_lifecycle_checkpoint_missing",
+        "framework_lifecycle_resume_missing",
+        "framework_lifecycle_cleanup_missing",
+        "framework_lifecycle_error_count_high",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_observability_replay_pack_quality():
     replay_pack = {
         "kind": "observability_replay_pack",

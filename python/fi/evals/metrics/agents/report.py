@@ -182,6 +182,8 @@ class AgentReportEvalConfig(BaseModel):
     required_framework_trace: List[str] = Field(default_factory=list)
     required_framework_runtime: List[str] = Field(default_factory=list)
     framework_runtime_contract: Dict[str, Any] = Field(default_factory=dict)
+    required_framework_lifecycle: List[str] = Field(default_factory=list)
+    framework_lifecycle_quality: Dict[str, Any] = Field(default_factory=dict)
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
@@ -382,6 +384,8 @@ class AgentReportEvaluator:
                 _framework_trace_coverage_metric(report_context, config),
                 *_framework_runtime_coverage_metrics(report_context, config),
                 *_framework_runtime_contract_metrics(report_context, config),
+                *_framework_lifecycle_coverage_metrics(report_context, config),
+                *_framework_lifecycle_quality_metrics(report_context, config),
                 *_framework_adapter_conformance_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
@@ -4682,6 +4686,217 @@ def _framework_runtime_contract_metric(
         name="framework_runtime_contract",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} framework runtime contract check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _framework_lifecycle_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_framework_lifecycle and not _framework_lifecycle_payloads_from_context(context):
+        return []
+    return [_framework_lifecycle_coverage_metric(context, config)]
+
+
+def _framework_lifecycle_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_lifecycle_key(key) for key in config.required_framework_lifecycle]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_lifecycle_coverage",
+            score=1.0,
+            reason="No required framework lifecycle keys provided.",
+        )
+    observed = _framework_lifecycle_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="framework_lifecycle_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required framework lifecycle evidence observed."
+            if not missing
+            else f"Missing framework lifecycle evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_framework_lifecycle_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _framework_lifecycle_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_lifecycle_quality:
+        return []
+    return [_framework_lifecycle_quality_metric(context, config.framework_lifecycle_quality)]
+
+
+def _framework_lifecycle_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _framework_lifecycle_summary(_framework_lifecycle_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    min_phase_count = _as_int(requirements.get("min_phase_count") or requirements.get("min_phases"))
+    if min_phase_count is not None:
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="min_phase_count",
+            expected=min_phase_count,
+            actual=observed["phase_count"],
+            match=observed["phase_count"] >= min_phase_count,
+            finding_type="framework_lifecycle_phase_count_low",
+        )
+
+    expected_framework = requirements.get("framework") or requirements.get("required_framework")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_framework_lifecycle_key(expected_framework)
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="framework_lifecycle_framework_mismatch",
+        )
+
+    for session in _string_list(requirements.get("required_sessions") or requirements.get("sessions")):
+        expected = str(session)
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="session",
+            expected=expected,
+            actual=observed["sessions"],
+            match=expected in observed["sessions"],
+            finding_type="framework_lifecycle_session_missing",
+        )
+
+    for stage in _string_list(requirements.get("required_stages") or requirements.get("stages")):
+        normalized = _normalize_framework_lifecycle_stage(stage)
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="stage",
+            expected=normalized,
+            actual=observed["stages"],
+            match=normalized in observed["stages"],
+            finding_type="framework_lifecycle_stage_missing",
+        )
+
+    for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_framework_lifecycle_key(signal)
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="signal",
+            expected=normalized,
+            actual=observed["signals"],
+            match=normalized in observed["signals"],
+            finding_type="framework_lifecycle_signal_missing",
+        )
+
+    count_checks = (
+        ("min_tool_registrations", "tool_registration_count", "framework_lifecycle_tool_registration_low"),
+        ("min_invocations", "invocation_count", "framework_lifecycle_invocation_count_low"),
+        ("min_recovered_errors", "recovered_error_count", "framework_lifecycle_recovery_count_low"),
+    )
+    for key, observed_key, finding_type in count_checks:
+        expected = _as_int(requirements.get(key))
+        if expected is None:
+            continue
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check=key,
+            expected=expected,
+            actual=observed[observed_key],
+            match=observed[observed_key] >= expected,
+            finding_type=finding_type,
+        )
+
+    bool_checks = (
+        ("require_streaming", "has_streaming", "framework_lifecycle_streaming_missing"),
+        ("require_checkpoint", "has_checkpoint", "framework_lifecycle_checkpoint_missing"),
+        ("require_retry", "has_retry", "framework_lifecycle_retry_missing"),
+        ("require_cancellation", "has_cancellation", "framework_lifecycle_cancellation_missing"),
+        ("require_cancel", "has_cancellation", "framework_lifecycle_cancellation_missing"),
+        ("require_resume", "has_resume", "framework_lifecycle_resume_missing"),
+        ("require_cleanup", "has_cleanup", "framework_lifecycle_cleanup_missing"),
+        ("require_state_persistence", "state_persistence", "framework_lifecycle_state_persistence_missing"),
+    )
+    for key, observed_key, finding_type in bool_checks:
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[observed_key],
+            match=observed[observed_key] is required,
+            finding_type=finding_type,
+        )
+
+    terminal_status = requirements.get("terminal_status") or requirements.get("required_terminal_status")
+    if terminal_status not in (None, "", [], {}):
+        normalized = _normalize_framework_lifecycle_key(terminal_status)
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="terminal_status",
+            expected=normalized,
+            actual=observed["terminal_status"],
+            match=observed["terminal_status"] == normalized,
+            finding_type="framework_lifecycle_terminal_status_mismatch",
+        )
+
+    max_error_count = _as_int(requirements.get("max_error_count") or requirements.get("max_errors"))
+    if max_error_count is not None:
+        _append_framework_lifecycle_check(
+            checks,
+            findings,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=observed["error_count"],
+            match=observed["error_count"] <= max_error_count,
+            finding_type="framework_lifecycle_error_count_high",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_lifecycle_quality",
+            score=1.0,
+            reason="No framework lifecycle quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_lifecycle_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework lifecycle quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -11229,6 +11444,301 @@ def _append_framework_runtime_check(
 
 
 def _normalize_framework_runtime_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _framework_lifecycle_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_lifecycle(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_lifecycle(payload, metadata):
+            payloads.append(payload)
+        elif "framework_lifecycle" in event_type:
+            if _as_list(payload.get("phases", [])):
+                payloads.append(
+                    {
+                        "kind": "framework_lifecycle_trace",
+                        "framework": payload.get("framework"),
+                        "phases": _as_list(payload.get("phases", [])),
+                    }
+                )
+            elif {"stage", "status"} & set(payload):
+                payloads.append({"kind": "framework_lifecycle_trace", "phases": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("framework_lifecycle_trace"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _framework_lifecycle_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _framework_lifecycle_payloads_from_context(context):
+        observed.update({"framework_lifecycle", "lifecycle"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_lifecycle_key(signal)
+            if normalized:
+                observed.add(normalized)
+        for phase in _framework_lifecycle_phases([payload]):
+            phase_dict = _as_dict(phase)
+            stage = _normalize_framework_lifecycle_stage(phase_dict.get("stage"))
+            if stage:
+                observed.add(stage)
+            for signal in _as_list(phase_dict.get("signals", [])):
+                normalized = _normalize_framework_lifecycle_key(signal)
+                if normalized:
+                    observed.add(normalized)
+            if phase_dict.get("session_id"):
+                observed.add("session")
+            if _as_list(phase_dict.get("state_keys", [])):
+                observed.add("state")
+            if _as_list(phase_dict.get("tool_names", [])):
+                observed.update({"tool", "tool_registration"})
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = _normalize_framework_lifecycle_key(_get(tool_call, "name", _get(tool_call, "tool", "")))
+        if name in {
+            "framework_lifecycle_status",
+            "list_framework_lifecycle_phases",
+            "inspect_framework_lifecycle_phase",
+            "inspect_framework_session",
+        }:
+            observed.update({"framework_lifecycle", "lifecycle"})
+        if "session" in name:
+            observed.add("session")
+    return observed
+
+
+def _looks_like_framework_lifecycle(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_lifecycle_trace" or (
+        "phases" in data and "summary" in data and ("framework" in data or "sessions" in data)
+    )
+
+
+def _framework_lifecycle_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    sessions: set[str] = set()
+    stages: set[str] = set()
+    signals: set[str] = set()
+    phases: List[Dict[str, Any]] = []
+    seen_phases: set[tuple[str, str, str, str]] = set()
+    terminal_status = ""
+    tool_registration_count = 0
+    invocation_count = 0
+    streaming_count = 0
+    checkpoint_count = 0
+    retry_count = 0
+    cancellation_count = 0
+    resume_count = 0
+    cleanup_count = 0
+    error_count = 0
+    recovered_error_count = 0
+    state_persistence = False
+    summary_phase_count = 0
+    summary_counts = {
+        "tool_registration_count": 0,
+        "invocation_count": 0,
+        "streaming_event_count": 0,
+        "checkpoint_count": 0,
+        "retry_count": 0,
+        "cancellation_count": 0,
+        "resume_count": 0,
+        "cleanup_count": 0,
+        "error_count": 0,
+        "recovered_error_count": 0,
+    }
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        framework = _normalize_framework_lifecycle_key(payload_dict.get("framework"))
+        if framework:
+            frameworks.add(framework)
+        for signal in _as_list(payload_dict.get("signals", [])):
+            normalized = _normalize_framework_lifecycle_key(signal)
+            if normalized:
+                signals.add(normalized)
+        summary = _as_dict(payload_dict.get("summary"))
+        terminal_status = terminal_status or _normalize_framework_lifecycle_key(summary.get("terminal_status"))
+        state_persistence = state_persistence or bool(summary.get("state_persistence")) or bool(_as_dict(payload_dict.get("state")))
+        summary_phase_count = max(summary_phase_count, _as_int(summary.get("phase_count")) or 0)
+        for key in summary_counts:
+            summary_counts[key] = max(summary_counts[key], _as_int(summary.get(key)) or 0)
+        for session in _as_list(payload_dict.get("sessions", [])):
+            session_dict = _as_dict(session)
+            session_id = str(session_dict.get("id") or session_dict.get("session_id") or "")
+            if session_id:
+                sessions.add(session_id)
+
+        for phase in _framework_lifecycle_phases([payload_dict]):
+            phase_dict = _as_dict(phase)
+            stage = _normalize_framework_lifecycle_stage(phase_dict.get("stage"))
+            session_id = str(phase_dict.get("session_id") or payload_dict.get("session_id") or "")
+            key = (
+                str(phase_dict.get("id") or ""),
+                stage,
+                session_id,
+                str(phase_dict.get("sequence") or ""),
+            )
+            if key in seen_phases:
+                continue
+            seen_phases.add(key)
+            phases.append(phase_dict)
+            if framework:
+                frameworks.add(framework)
+            if session_id:
+                sessions.add(session_id)
+            if stage:
+                stages.add(stage)
+            phase_signals = {
+                _normalize_framework_lifecycle_key(signal)
+                for signal in _as_list(phase_dict.get("signals", []))
+                if _normalize_framework_lifecycle_key(signal)
+            }
+            signals.update(phase_signals)
+            if "tool_registration" in phase_signals:
+                tool_registration_count += 1
+            if "invocation" in phase_signals:
+                invocation_count += 1
+            if "streaming" in phase_signals:
+                streaming_count += 1
+            if "checkpoint" in phase_signals:
+                checkpoint_count += 1
+            if "retry" in phase_signals:
+                retry_count += 1
+            if "cancellation" in phase_signals:
+                cancellation_count += 1
+            if "resume" in phase_signals:
+                resume_count += 1
+            if "cleanup" in phase_signals:
+                cleanup_count += 1
+            if "error" in phase_signals:
+                error_count += 1
+            if "recovery" in phase_signals:
+                recovered_error_count += 1
+            if "state_persistence" in phase_signals or _as_list(phase_dict.get("state_keys", [])):
+                state_persistence = True
+
+    if not terminal_status:
+        terminal_status = "completed" if cleanup_count else "running"
+    tool_registration_count = max(tool_registration_count, summary_counts["tool_registration_count"])
+    invocation_count = max(invocation_count, summary_counts["invocation_count"])
+    streaming_count = max(streaming_count, summary_counts["streaming_event_count"])
+    checkpoint_count = max(checkpoint_count, summary_counts["checkpoint_count"])
+    retry_count = max(retry_count, summary_counts["retry_count"])
+    cancellation_count = max(cancellation_count, summary_counts["cancellation_count"])
+    resume_count = max(resume_count, summary_counts["resume_count"])
+    cleanup_count = max(cleanup_count, summary_counts["cleanup_count"])
+    error_count = max(error_count, summary_counts["error_count"])
+    recovered_error_count = max(recovered_error_count, summary_counts["recovered_error_count"])
+    return {
+        "phase_count": max(len(phases), summary_phase_count),
+        "frameworks": sorted(frameworks),
+        "sessions": sorted(sessions),
+        "stages": sorted(stages),
+        "signals": sorted(signals),
+        "tool_registration_count": tool_registration_count,
+        "invocation_count": invocation_count,
+        "streaming_event_count": streaming_count,
+        "checkpoint_count": checkpoint_count,
+        "retry_count": retry_count,
+        "cancellation_count": cancellation_count,
+        "resume_count": resume_count,
+        "cleanup_count": cleanup_count,
+        "error_count": error_count,
+        "recovered_error_count": recovered_error_count,
+        "state_persistence": state_persistence,
+        "has_streaming": streaming_count > 0,
+        "has_checkpoint": checkpoint_count > 0,
+        "has_retry": retry_count > 0,
+        "has_cancellation": cancellation_count > 0,
+        "has_resume": resume_count > 0,
+        "has_cleanup": cleanup_count > 0,
+        "terminal_status": terminal_status,
+        "phases": phases,
+    }
+
+
+def _framework_lifecycle_phases(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    phases: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_phases: List[Dict[str, Any]] = []
+        for phase in _as_list(payload_dict.get("phases", [])):
+            phase_dict = _as_dict(phase)
+            if phase_dict:
+                payload_phases.append(phase_dict)
+        if not payload_phases and {"stage", "status"} & set(payload_dict):
+            payload_phases.append(payload_dict)
+        phases.extend(payload_phases)
+    return phases
+
+
+def _append_framework_lifecycle_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_lifecycle_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_lifecycle_stage(value: Any) -> str:
+    normalized = _normalize_framework_lifecycle_key(value)
+    aliases = {
+        "init": "initialize",
+        "setup": "initialize",
+        "startup": "initialize",
+        "register": "tool_registration",
+        "register_tool": "tool_registration",
+        "register_tools": "tool_registration",
+        "tools_list": "tool_registration",
+        "start": "start_session",
+        "session_start": "start_session",
+        "run": "invoke",
+        "call": "invoke",
+        "ainvoke": "invoke",
+        "streaming": "stream",
+        "cancel": "cancel",
+        "cancellation": "cancel",
+        "checkpoint_write": "checkpoint",
+        "cleanup": "cleanup",
+        "shutdown": "shutdown",
+        "teardown": "teardown",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_lifecycle_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
