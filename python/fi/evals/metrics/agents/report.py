@@ -187,6 +187,8 @@ class AgentReportEvalConfig(BaseModel):
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
     required_framework_capabilities: List[str] = Field(default_factory=list)
     framework_capability_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_framework_probes: List[str] = Field(default_factory=list)
+    framework_probe_quality: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
@@ -391,6 +393,8 @@ class AgentReportEvaluator:
                 *_framework_adapter_conformance_metrics(report_context, config),
                 *_framework_capability_coverage_metrics(report_context, config),
                 *_framework_capability_quality_metrics(report_context, config),
+                *_framework_probe_coverage_metrics(report_context, config),
+                *_framework_probe_quality_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
@@ -5238,6 +5242,241 @@ def _framework_capability_quality_metric(
         name="framework_capability_quality",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} framework capability quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _framework_probe_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_framework_probes and not _framework_probe_payloads_from_context(context):
+        return []
+    return [_framework_probe_coverage_metric(context, config)]
+
+
+def _framework_probe_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_probe_operation(key) for key in config.required_framework_probes]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_probe_coverage",
+            score=1.0,
+            reason="No required framework probe keys provided.",
+        )
+    observed = _framework_probe_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="framework_probe_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required framework probe evidence observed."
+            if not missing
+            else f"Missing framework probe evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_framework_probe_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _framework_probe_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_probe_quality:
+        return []
+    return [_framework_probe_quality_metric(context, config.framework_probe_quality)]
+
+
+def _framework_probe_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _framework_probe_summary(_framework_probe_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    expected_framework = requirements.get("framework") or requirements.get("required_framework")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_framework_probe_key(expected_framework)
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="framework_probe_framework_mismatch",
+        )
+
+    for operation in _string_list(requirements.get("required_operations") or requirements.get("operations")):
+        normalized = _normalize_framework_probe_operation(operation)
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="required_operation",
+            expected=normalized,
+            actual=observed["passed_operations"],
+            match=normalized in observed["passed_operations"],
+            finding_type="framework_probe_required_operation_missing",
+        )
+
+    for category in _string_list(requirements.get("required_categories") or requirements.get("categories")):
+        normalized = _normalize_framework_probe_category(category)
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="required_category",
+            expected=normalized,
+            actual=observed["passed_categories"],
+            match=normalized in observed["passed_categories"],
+            finding_type="framework_probe_category_missing",
+        )
+
+    min_passed = _as_int(requirements.get("min_passed_probes") or requirements.get("min_passed_count"))
+    if min_passed is not None:
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="min_passed_probes",
+            expected=min_passed,
+            actual=observed["passed_count"],
+            match=observed["passed_count"] >= min_passed,
+            finding_type="framework_probe_passed_count_low",
+        )
+
+    min_required_pass_rate = _as_float(
+        requirements.get("min_required_pass_rate")
+        if requirements.get("min_required_pass_rate") is not None
+        else requirements.get("min_pass_rate")
+    )
+    if min_required_pass_rate is not None:
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="min_required_pass_rate",
+            expected=min_required_pass_rate,
+            actual=observed["required_pass_rate"],
+            match=observed["required_pass_rate"] >= min_required_pass_rate,
+            finding_type="framework_probe_required_pass_rate_low",
+        )
+
+    max_failed = _as_int(requirements.get("max_failed_probes"))
+    if max_failed is None:
+        max_failed = _as_int(requirements.get("max_failed_count"))
+    if max_failed is not None:
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="max_failed_probes",
+            expected=max_failed,
+            actual=observed["failed_count"],
+            match=observed["failed_count"] <= max_failed,
+            finding_type="framework_probe_failed_count_high",
+        )
+
+    max_blocked = _as_int(requirements.get("max_blocked_probes"))
+    if max_blocked is None:
+        max_blocked = _as_int(requirements.get("max_blocked_count"))
+    if max_blocked is not None:
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="max_blocked_probes",
+            expected=max_blocked,
+            actual=observed["blocked_count"],
+            match=observed["blocked_count"] <= max_blocked,
+            finding_type="framework_probe_blocked_count_high",
+        )
+
+    if requirements.get("require_evidence") is not None:
+        required = bool(requirements.get("require_evidence"))
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="require_evidence",
+            expected=required,
+            actual=observed["evidence_count"] > 0,
+            match=(observed["evidence_count"] > 0) is required,
+            finding_type="framework_probe_evidence_missing",
+        )
+
+    max_latency_ms = _as_float(requirements.get("max_latency_ms") or requirements.get("max_probe_latency_ms"))
+    if max_latency_ms is not None and observed["max_latency_ms"] is not None:
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="max_latency_ms",
+            expected=max_latency_ms,
+            actual=observed["max_latency_ms"],
+            match=observed["max_latency_ms"] <= max_latency_ms,
+            finding_type="framework_probe_latency_high",
+        )
+
+    for operation in _string_list(requirements.get("forbidden_failed_operations")):
+        normalized = _normalize_framework_probe_operation(operation)
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check="forbidden_failed_operation",
+            expected=normalized,
+            actual=observed["failed_operations"],
+            match=normalized not in observed["failed_operations"],
+            finding_type="framework_probe_forbidden_failure",
+        )
+
+    bool_checks = (
+        ("require_tools", "has_tools", "framework_probe_tools_missing"),
+        ("require_memory", "has_memory", "framework_probe_memory_missing"),
+        ("require_streaming", "has_streaming", "framework_probe_streaming_missing"),
+        ("require_lifecycle", "has_lifecycle", "framework_probe_lifecycle_missing"),
+        ("require_orchestration", "has_orchestration", "framework_probe_orchestration_missing"),
+        ("require_security", "has_security", "framework_probe_security_missing"),
+        ("require_observability", "has_observability", "framework_probe_observability_missing"),
+        ("require_exports", "has_exports", "framework_probe_exports_missing"),
+    )
+    for key, observed_key, finding_type in bool_checks:
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_framework_probe_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[observed_key],
+            match=observed[observed_key] is required,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_probe_quality",
+            score=1.0,
+            reason="No framework probe quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_probe_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework probe quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -12342,6 +12581,354 @@ def _normalize_framework_capability_key(value: Any) -> str:
         "guardrails": "security",
     }
     return aliases.get(normalized, normalized)
+
+
+def _framework_probe_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_probe(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_probe(payload, metadata):
+            payloads.append(payload)
+        elif "framework_probe" in event_type:
+            if _as_list(payload.get("probes", [])):
+                payloads.append({"kind": "framework_probe_suite", **payload})
+            elif {"operation", "status"} & set(payload):
+                payloads.append({"kind": "framework_probe_suite", "probes": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("framework_probe_suite"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _framework_probe_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _framework_probe_payloads_from_context(context):
+        observed.update({"framework_probe", "probe_suite", "probe"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_probe_operation(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for collection_key in (
+            "categories",
+            "passed_categories",
+            "operations",
+            "passed_operations",
+            "failed_operations",
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = _normalize_framework_probe_operation(item)
+                if normalized:
+                    observed.add(normalized)
+        for probe in _framework_probe_records([payload]):
+            probe_dict = _as_dict(probe)
+            for key in ("operation", "category", "status", "capability"):
+                normalized = _normalize_framework_probe_operation(probe_dict.get(key))
+                if normalized:
+                    observed.add(normalized)
+            for signal in _as_list(probe_dict.get("signals", [])):
+                normalized = _normalize_framework_probe_operation(signal)
+                if normalized:
+                    observed.add(normalized)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = _normalize_framework_probe_operation(_get(tool_call, "name", _get(tool_call, "tool", "")))
+        if name in {
+            "framework_probe_status",
+            "list_framework_probes",
+            "inspect_framework_probe",
+            "list_framework_probe_failures",
+        }:
+            observed.update({"framework_probe", "probe_suite", "probe"})
+        if name:
+            observed.add(name)
+    return observed
+
+
+def _looks_like_framework_probe(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_probe_suite" or (
+        "probes" in data and ("summary" in data or "framework" in data)
+    )
+
+
+def _framework_probe_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    categories: set[str] = set()
+    passed_categories: set[str] = set()
+    operations: set[str] = set()
+    passed_operations: set[str] = set()
+    failed_operations: set[str] = set()
+    signals: set[str] = set()
+    probe_records: List[Dict[str, Any]] = []
+    seen_probes: set[str] = set()
+    passed_count = 0
+    failed_count = 0
+    skipped_count = 0
+    blocked_count = 0
+    required_count = 0
+    required_passed_count = 0
+    evidence_count = 0
+    error_count = 0
+    max_latency_ms: Optional[float] = None
+    summary_probe_count = 0
+    summary_counts = {
+        "passed_count": 0,
+        "failed_count": 0,
+        "skipped_count": 0,
+        "blocked_count": 0,
+        "required_count": 0,
+        "required_passed_count": 0,
+        "evidence_count": 0,
+        "error_count": 0,
+    }
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        framework = _normalize_framework_probe_key(payload_dict.get("framework"))
+        if framework:
+            frameworks.add(framework)
+        for signal in _as_list(payload_dict.get("signals", [])):
+            normalized = _normalize_framework_probe_key(signal)
+            if normalized:
+                signals.add(normalized)
+        summary = _as_dict(payload_dict.get("summary"))
+        summary_probe_count = max(summary_probe_count, _as_int(summary.get("probe_count")) or 0)
+        for key in summary_counts:
+            summary_counts[key] = max(summary_counts[key], _as_int(summary.get(key)) or 0)
+        for collection_key, target in (
+            ("categories", categories),
+            ("passed_categories", passed_categories),
+            ("operations", operations),
+            ("passed_operations", passed_operations),
+            ("failed_operations", failed_operations),
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = (
+                    _normalize_framework_probe_category(item)
+                    if "categories" in collection_key
+                    else _normalize_framework_probe_operation(item)
+                )
+                if normalized:
+                    target.add(normalized)
+        summary_max_latency = _as_float(summary.get("max_latency_ms"))
+        if summary_max_latency is not None:
+            max_latency_ms = summary_max_latency if max_latency_ms is None else max(max_latency_ms, summary_max_latency)
+        for probe in _framework_probe_records([payload_dict]):
+            probe_dict = _as_dict(probe)
+            operation = _normalize_framework_probe_operation(probe_dict.get("operation") or probe_dict.get("name") or probe_dict.get("id"))
+            if not operation:
+                continue
+            key = str(probe_dict.get("id") or operation)
+            if key in seen_probes:
+                continue
+            seen_probes.add(key)
+            probe_records.append(probe_dict)
+            status = _normalize_framework_probe_status(probe_dict.get("status")) or "passed"
+            category = _normalize_framework_probe_category(probe_dict.get("category") or operation)
+            operations.add(operation)
+            if category:
+                categories.add(category)
+            if bool(probe_dict.get("required", True)):
+                required_count += 1
+            if status == "passed":
+                passed_count += 1
+                passed_operations.add(operation)
+                if category:
+                    passed_categories.add(category)
+                if bool(probe_dict.get("required", True)):
+                    required_passed_count += 1
+            elif status == "blocked":
+                blocked_count += 1
+                failed_operations.add(operation)
+            elif status == "skipped":
+                skipped_count += 1
+            else:
+                failed_count += 1
+                failed_operations.add(operation)
+            if probe_dict.get("error") or status in {"failed", "blocked"}:
+                error_count += 1
+            evidence_count += len(_as_list(probe_dict.get("evidence", [])))
+            latency = _as_float(probe_dict.get("latency_ms"))
+            if latency is not None:
+                max_latency_ms = latency if max_latency_ms is None else max(max_latency_ms, latency)
+            for signal in _as_list(probe_dict.get("signals", [])):
+                normalized = _normalize_framework_probe_key(signal)
+                if normalized:
+                    signals.add(normalized)
+
+    passed_count = max(passed_count, summary_counts["passed_count"])
+    failed_count = max(failed_count, summary_counts["failed_count"])
+    skipped_count = max(skipped_count, summary_counts["skipped_count"])
+    blocked_count = max(blocked_count, summary_counts["blocked_count"])
+    required_count = max(required_count, summary_counts["required_count"])
+    required_passed_count = max(required_passed_count, summary_counts["required_passed_count"])
+    evidence_count = max(evidence_count, summary_counts["evidence_count"])
+    error_count = max(error_count, summary_counts["error_count"])
+    probe_count = max(len(probe_records), summary_probe_count, passed_count + failed_count + skipped_count + blocked_count)
+    required_pass_rate = round(required_passed_count / required_count, 4) if required_count else 1.0
+    pass_rate = round(passed_count / probe_count, 4) if probe_count else 1.0
+    passed_category_set = set(passed_categories)
+    return {
+        "probe_count": probe_count,
+        "passed_count": passed_count,
+        "failed_count": failed_count,
+        "skipped_count": skipped_count,
+        "blocked_count": blocked_count,
+        "pass_rate": pass_rate,
+        "required_count": required_count,
+        "required_passed_count": required_passed_count,
+        "required_pass_rate": required_pass_rate,
+        "evidence_count": evidence_count,
+        "error_count": error_count,
+        "frameworks": sorted(frameworks),
+        "categories": sorted(categories),
+        "passed_categories": sorted(passed_categories),
+        "operations": sorted(operations),
+        "passed_operations": sorted(passed_operations),
+        "failed_operations": sorted(failed_operations),
+        "signals": sorted(signals),
+        "max_latency_ms": max_latency_ms,
+        "has_tools": "tools" in passed_category_set,
+        "has_memory": "memory" in passed_category_set,
+        "has_streaming": "streaming" in passed_category_set,
+        "has_lifecycle": "lifecycle" in passed_category_set,
+        "has_orchestration": "orchestration" in passed_category_set,
+        "has_security": "security" in passed_category_set,
+        "has_observability": "observability" in passed_category_set,
+        "has_exports": "exports" in passed_category_set,
+        "probes": probe_records,
+    }
+
+
+def _framework_probe_records(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_records: List[Dict[str, Any]] = []
+        for probe in _as_list(payload_dict.get("probes", [])):
+            probe_dict = _as_dict(probe)
+            if probe_dict:
+                payload_records.append(probe_dict)
+        if not payload_records and {"operation", "status"} & set(payload_dict):
+            payload_records.append(payload_dict)
+        records.extend(payload_records)
+    return records
+
+
+def _append_framework_probe_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_probe_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_probe_status(value: Any) -> str:
+    normalized = _normalize_framework_probe_key(value)
+    aliases = {
+        "pass": "passed",
+        "passes": "passed",
+        "success": "passed",
+        "succeeded": "passed",
+        "ok": "passed",
+        "true": "passed",
+        "fail": "failed",
+        "failure": "failed",
+        "error": "failed",
+        "false": "failed",
+        "blocked_by_policy": "blocked",
+        "unsupported": "blocked",
+        "skip": "skipped",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"passed", "failed", "skipped", "blocked"} else ""
+
+
+def _normalize_framework_probe_category(value: Any) -> str:
+    normalized = _normalize_framework_probe_key(value)
+    aliases = {
+        "tool": "tools",
+        "function": "tools",
+        "function_calling": "tools",
+        "tool_calling": "tools",
+        "mcp": "tools",
+        "state": "memory",
+        "checkpoint": "lifecycle",
+        "session": "lifecycle",
+        "trace": "observability",
+        "telemetry": "observability",
+        "log": "observability",
+        "artifact": "exports",
+        "export": "exports",
+        "workflow": "orchestration",
+        "graph": "orchestration",
+        "policy": "security",
+        "guardrail": "security",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_probe_operation(value: Any) -> str:
+    normalized = _normalize_framework_probe_key(value)
+    aliases = {
+        "ainvoke": "invoke",
+        "run": "invoke",
+        "call": "invoke",
+        "stream_events": "stream",
+        "astream": "stream",
+        "tools": "list_tools",
+        "tools_list": "list_tools",
+        "tool_schema": "list_tools",
+        "tools_call": "tool_call",
+        "call_tool": "tool_call",
+        "memory_write": "write_memory",
+        "memory_read": "read_memory",
+        "checkpoint_write": "checkpoint_save",
+        "checkpoint_read": "checkpoint_resume",
+        "resume": "checkpoint_resume",
+        "guardrails": "guardrail",
+        "policy_gate": "guardrail",
+        "trace": "trace_export",
+        "otel_export": "trace_export",
+        "futureagi_export": "export",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_probe_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_").replace("/", "_")
 
 
 def _framework_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:

@@ -5280,6 +5280,195 @@ def test_evaluate_agent_report_scores_framework_capability_matrix():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_framework_probe_suite():
+    probe_suite = {
+        "kind": "framework_probe_suite",
+        "name": "langgraph-probes",
+        "framework": "langgraph",
+        "version": "1.0",
+        "signals": [
+            "framework_probe",
+            "invoke",
+            "list_tools",
+            "tool_call",
+            "write_memory",
+            "read_memory",
+            "stream",
+            "checkpoint_save",
+            "checkpoint_resume",
+            "handoff",
+            "guardrail",
+            "trace_export",
+            "export",
+        ],
+        "summary": {
+            "probe_count": 12,
+            "passed_count": 12,
+            "failed_count": 0,
+            "skipped_count": 0,
+            "blocked_count": 0,
+            "pass_rate": 1.0,
+            "required_count": 12,
+            "required_passed_count": 12,
+            "required_pass_rate": 1.0,
+            "evidence_count": 12,
+            "error_count": 0,
+            "categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "passed_categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "operations": ["invoke", "list_tools", "tool_call", "write_memory", "read_memory", "stream", "checkpoint_save", "checkpoint_resume", "handoff", "guardrail", "trace_export", "export"],
+            "passed_operations": ["invoke", "list_tools", "tool_call", "write_memory", "read_memory", "stream", "checkpoint_save", "checkpoint_resume", "handoff", "guardrail", "trace_export", "export"],
+            "failed_operations": [],
+            "max_latency_ms": 22,
+        },
+        "probes": [
+            {"id": "invoke", "operation": "invoke", "category": "runtime", "status": "passed", "required": True, "latency_ms": 22, "evidence": [{"type": "dry_run"}]},
+            {"id": "list_tools", "operation": "list_tools", "category": "tools", "status": "passed", "required": True, "evidence": [{"type": "mcp"}]},
+            {"id": "tool_call", "operation": "tool_call", "category": "tools", "status": "passed", "required": True, "evidence": [{"type": "mcp"}]},
+            {"id": "write_memory", "operation": "write_memory", "category": "memory", "status": "passed", "required": True, "evidence": [{"type": "state"}]},
+            {"id": "read_memory", "operation": "read_memory", "category": "memory", "status": "passed", "required": True, "evidence": [{"type": "state"}]},
+            {"id": "stream", "operation": "stream", "category": "streaming", "status": "passed", "required": True, "evidence": [{"type": "event"}]},
+            {"id": "checkpoint_save", "operation": "checkpoint_save", "category": "lifecycle", "status": "passed", "required": True, "evidence": [{"type": "checkpoint"}]},
+            {"id": "checkpoint_resume", "operation": "checkpoint_resume", "category": "lifecycle", "status": "passed", "required": True, "evidence": [{"type": "checkpoint"}]},
+            {"id": "handoff", "operation": "handoff", "category": "orchestration", "status": "passed", "required": True, "evidence": [{"type": "handoff"}]},
+            {"id": "guardrail", "operation": "guardrail", "category": "security", "status": "passed", "required": True, "evidence": [{"type": "policy"}]},
+            {"id": "trace_export", "operation": "trace_export", "category": "observability", "status": "passed", "required": True, "evidence": [{"type": "otel"}]},
+            {"id": "export", "operation": "export", "category": "exports", "status": "passed", "required": True, "evidence": [{"type": "futureagi"}]},
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Framework probes passed."}],
+                "tool_calls": [
+                    {"id": "status", "name": "framework_probe_status", "arguments": {}},
+                    {"id": "tools", "name": "list_framework_probes", "arguments": {"category": "tools"}},
+                    {"id": "failures", "name": "list_framework_probe_failures", "arguments": {}},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_probe_suite", "framework": "langgraph"},
+                        "data": probe_suite,
+                    }
+                ],
+                "metadata": {"environment_state": {"framework_probe_suite": probe_suite}},
+            }
+        ]
+    }
+    config = {
+        "required_framework_probes": [
+            "framework_probe",
+            "invoke",
+            "list_tools",
+            "tool_call",
+            "write_memory",
+            "read_memory",
+            "stream",
+            "checkpoint_save",
+            "checkpoint_resume",
+            "handoff",
+            "guardrail",
+            "trace_export",
+            "export",
+        ],
+        "framework_probe_quality": {
+            "framework": "langgraph",
+            "required_operations": [
+                "invoke",
+                "list_tools",
+                "tool_call",
+                "write_memory",
+                "read_memory",
+                "stream",
+                "checkpoint_save",
+                "checkpoint_resume",
+                "handoff",
+                "guardrail",
+                "trace_export",
+                "export",
+            ],
+            "required_categories": ["tools", "memory", "streaming", "lifecycle", "orchestration", "security", "observability", "exports"],
+            "min_passed_probes": 12,
+            "min_required_pass_rate": 1.0,
+            "max_failed_probes": 0,
+            "max_blocked_probes": 0,
+            "require_evidence": True,
+            "max_latency_ms": 50,
+            "forbidden_failed_operations": ["write_memory", "stream", "guardrail", "export"],
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+            "require_lifecycle": True,
+            "require_orchestration": True,
+            "require_security": True,
+            "require_observability": True,
+            "require_exports": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_probe_coverage"] == 1.0
+    assert scores["framework_probe_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_suite = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_report["results"][0]["metadata"]["environment_state"]["framework_probe_suite"] = bad_suite
+    bad_suite["signals"] = ["framework_probe", "invoke", "list_tools", "checkpoint_save"]
+    bad_suite["summary"] = {
+        "probe_count": 8,
+        "passed_count": 4,
+        "failed_count": 3,
+        "skipped_count": 0,
+        "blocked_count": 1,
+        "pass_rate": 0.5,
+        "required_count": 8,
+        "required_passed_count": 4,
+        "required_pass_rate": 0.5,
+        "evidence_count": 0,
+        "error_count": 4,
+        "categories": ["runtime", "tools", "memory", "streaming", "lifecycle", "security", "exports"],
+        "passed_categories": ["runtime", "tools", "lifecycle"],
+        "operations": ["invoke", "list_tools", "write_memory", "read_memory", "stream", "checkpoint_save", "guardrail", "export"],
+        "passed_operations": ["invoke", "list_tools", "checkpoint_save"],
+        "failed_operations": ["write_memory", "read_memory", "stream", "guardrail", "export"],
+        "max_latency_ms": 120,
+    }
+    bad_suite["probes"] = [
+        {"id": "invoke", "operation": "invoke", "category": "runtime", "status": "passed", "required": True, "latency_ms": 120, "evidence": []},
+        {"id": "list_tools", "operation": "list_tools", "category": "tools", "status": "passed", "required": True, "evidence": []},
+        {"id": "write_memory", "operation": "write_memory", "category": "memory", "status": "failed", "required": True, "error": "store unavailable", "evidence": []},
+        {"id": "read_memory", "operation": "read_memory", "category": "memory", "status": "failed", "required": True, "error": "store unavailable", "evidence": []},
+        {"id": "stream", "operation": "stream", "category": "streaming", "status": "failed", "required": True, "error": "no chunks", "evidence": []},
+        {"id": "checkpoint_save", "operation": "checkpoint_save", "category": "lifecycle", "status": "passed", "required": True, "evidence": []},
+        {"id": "guardrail", "operation": "guardrail", "category": "security", "status": "blocked", "required": True, "error": "policy disabled", "evidence": []},
+        {"id": "export", "operation": "export", "category": "exports", "status": "failed", "required": True, "error": "export missing", "evidence": []},
+    ]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["framework_probe_coverage"] < 1.0
+    assert bad_scores["framework_probe_quality"] < 1.0
+    assert {
+        "missing_framework_probe_key",
+        "framework_probe_required_operation_missing",
+        "framework_probe_category_missing",
+        "framework_probe_passed_count_low",
+        "framework_probe_required_pass_rate_low",
+        "framework_probe_failed_count_high",
+        "framework_probe_blocked_count_high",
+        "framework_probe_evidence_missing",
+        "framework_probe_latency_high",
+        "framework_probe_forbidden_failure",
+        "framework_probe_memory_missing",
+        "framework_probe_streaming_missing",
+        "framework_probe_security_missing",
+        "framework_probe_exports_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_observability_replay_pack_quality():
     replay_pack = {
         "kind": "observability_replay_pack",
