@@ -193,6 +193,8 @@ class AgentReportEvalConfig(BaseModel):
     framework_portability_quality: Dict[str, Any] = Field(default_factory=dict)
     required_agent_trust_boundary: List[str] = Field(default_factory=list)
     agent_trust_boundary_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_agent_control_plane: List[str] = Field(default_factory=list)
+    agent_control_plane_quality: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
@@ -403,6 +405,8 @@ class AgentReportEvaluator:
                 *_framework_portability_quality_metrics(report_context, config),
                 *_agent_trust_boundary_coverage_metrics(report_context, config),
                 *_agent_trust_boundary_quality_metrics(report_context, config),
+                *_agent_control_plane_coverage_metrics(report_context, config),
+                *_agent_control_plane_quality_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
@@ -6084,6 +6088,317 @@ def _agent_trust_boundary_quality_metric(
         name="agent_trust_boundary_quality",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} agent trust-boundary quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _agent_control_plane_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_agent_control_plane and not _agent_control_plane_payloads_from_context(context):
+        return []
+    return [_agent_control_plane_coverage_metric(context, config)]
+
+
+def _agent_control_plane_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_agent_control_plane_key(key) for key in config.required_agent_control_plane]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="agent_control_plane_coverage",
+            score=1.0,
+            reason="No required agent control-plane keys provided.",
+        )
+    observed = _agent_control_plane_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="agent_control_plane_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required agent control-plane evidence observed."
+            if not missing
+            else f"Missing agent control-plane evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_agent_control_plane_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _agent_control_plane_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.agent_control_plane_quality:
+        return []
+    return [_agent_control_plane_quality_metric(context, config.agent_control_plane_quality)]
+
+
+def _agent_control_plane_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _agent_control_plane_summary(_agent_control_plane_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    expected_framework = requirements.get("framework") or requirements.get("runtime")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_agent_control_plane_key(expected_framework)
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="agent_control_plane_framework_mismatch",
+        )
+
+    for control in _string_list(requirements.get("required_controls") or requirements.get("controls")):
+        normalized = _normalize_agent_control_plane_key(control)
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="required_control",
+            expected=normalized,
+            actual=observed["present_controls"],
+            match=normalized in observed["present_controls"],
+            finding_type="agent_control_plane_required_control_missing",
+        )
+
+    for category in _string_list(requirements.get("required_categories") or requirements.get("categories")):
+        normalized = _normalize_agent_control_plane_category(category)
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="required_category",
+            expected=normalized,
+            actual=observed["present_categories"],
+            match=normalized in observed["present_categories"],
+            finding_type="agent_control_plane_category_missing",
+        )
+
+    for action in _string_list(requirements.get("required_actions") or requirements.get("actions")):
+        normalized = _normalize_agent_control_plane_key(action)
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="required_action",
+            expected=normalized,
+            actual=observed["actions"],
+            match=normalized in observed["actions"],
+            finding_type="agent_control_plane_action_missing",
+        )
+
+    for budget in _string_list(requirements.get("required_budgets") or requirements.get("budgets")):
+        normalized = _normalize_agent_control_plane_key(budget)
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="required_budget",
+            expected=normalized,
+            actual=observed["budgets"],
+            match=normalized in observed["budgets"],
+            finding_type="agent_control_plane_budget_missing",
+        )
+
+    min_present = _as_int(
+        requirements.get("min_present_controls")
+        or requirements.get("min_present_count")
+        or requirements.get("min_controls")
+    )
+    if min_present is not None:
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="min_present_controls",
+            expected=min_present,
+            actual=observed["present_control_count"],
+            match=observed["present_control_count"] >= min_present,
+            finding_type="agent_control_plane_present_control_count_low",
+        )
+
+    min_control_rate = _as_float(requirements.get("min_control_rate"))
+    if min_control_rate is not None:
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="min_control_rate",
+            expected=min_control_rate,
+            actual=observed["control_rate"],
+            match=observed["control_rate"] >= min_control_rate,
+            finding_type="agent_control_plane_control_rate_low",
+        )
+
+    min_required_control_rate = _as_float(
+        requirements.get("min_required_control_rate")
+        if requirements.get("min_required_control_rate") is not None
+        else requirements.get("min_required_rate")
+    )
+    if min_required_control_rate is not None:
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="min_required_control_rate",
+            expected=min_required_control_rate,
+            actual=observed["required_control_rate"],
+            match=observed["required_control_rate"] >= min_required_control_rate,
+            finding_type="agent_control_plane_required_control_rate_low",
+        )
+
+    max_missing = _as_int(requirements.get("max_missing_controls"))
+    if max_missing is None:
+        max_missing = _as_int(requirements.get("max_missing_count"))
+    if max_missing is not None:
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="max_missing_controls",
+            expected=max_missing,
+            actual=observed["missing_control_count"],
+            match=observed["missing_control_count"] <= max_missing,
+            finding_type="agent_control_plane_missing_control_count_high",
+        )
+
+    max_blocked = _as_int(requirements.get("max_blocked_controls"))
+    if max_blocked is None:
+        max_blocked = _as_int(requirements.get("max_blocked_count"))
+    if max_blocked is not None:
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="max_blocked_controls",
+            expected=max_blocked,
+            actual=observed["blocked_control_count"],
+            match=observed["blocked_control_count"] <= max_blocked,
+            finding_type="agent_control_plane_blocked_control_count_high",
+        )
+
+    for requirement_key, observed_key, finding_type in (
+        ("max_exceeded_budgets", "exceeded_budget_count", "agent_control_plane_exceeded_budget_count_high"),
+        ("max_missing_escalations", "missing_escalation_count", "agent_control_plane_missing_escalation_count_high"),
+        ("max_uncontained_incidents", "uncontained_incident_count", "agent_control_plane_uncontained_incident_count_high"),
+        ("max_high_risk_uncontained_incidents", "high_risk_uncontained_count", "agent_control_plane_high_risk_uncontained_count_high"),
+    ):
+        expected = _as_int(requirements.get(requirement_key))
+        if expected is None:
+            continue
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=expected,
+            actual=observed[observed_key],
+            match=observed[observed_key] <= expected,
+            finding_type=finding_type,
+        )
+
+    for requirement_key, observed_key, finding_type in (
+        ("min_approved_actions", "approved_action_count", "agent_control_plane_approved_action_count_low"),
+        ("min_rollback_actions", "rolled_back_action_count", "agent_control_plane_rollback_action_count_low"),
+    ):
+        expected = _as_int(requirements.get(requirement_key))
+        if expected is None:
+            continue
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=expected,
+            actual=observed[observed_key],
+            match=observed[observed_key] >= expected,
+            finding_type=finding_type,
+        )
+
+    if requirements.get("require_evidence") is not None:
+        required = bool(requirements.get("require_evidence"))
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="require_evidence",
+            expected=required,
+            actual=observed["evidence_count"] > 0,
+            match=(observed["evidence_count"] > 0) is required,
+            finding_type="agent_control_plane_evidence_missing",
+        )
+
+    forbidden_missing = [
+        _normalize_agent_control_plane_key(control)
+        for control in _string_list(requirements.get("forbidden_missing_controls"))
+        if _normalize_agent_control_plane_key(control)
+    ]
+    for control in forbidden_missing:
+        actual_missing = sorted(
+            set(observed["partial_controls"])
+            | set(observed["missing_controls"])
+            | set(observed["blocked_controls"])
+        )
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check="forbidden_missing_control",
+            expected=control,
+            actual=actual_missing,
+            match=control not in actual_missing,
+            finding_type="agent_control_plane_forbidden_missing_control",
+        )
+
+    bool_checks = (
+        ("require_risk_scoring", "has_risk_scoring", "agent_control_plane_risk_scoring_missing"),
+        ("require_action_policy", "has_action_policy", "agent_control_plane_action_policy_missing"),
+        ("require_approval_gates", "has_approval_gates", "agent_control_plane_approval_missing"),
+        ("require_rollback", "has_rollback", "agent_control_plane_rollback_missing"),
+        ("require_kill_switch", "has_kill_switch", "agent_control_plane_kill_switch_missing"),
+        ("require_circuit_breakers", "has_circuit_breakers", "agent_control_plane_circuit_breaker_missing"),
+        ("require_rate_limits", "has_rate_limits", "agent_control_plane_rate_limit_missing"),
+        ("require_budgets", "has_budgets", "agent_control_plane_budget_missing"),
+        ("require_audit", "has_audit", "agent_control_plane_audit_missing"),
+        ("require_containment", "has_containment", "agent_control_plane_containment_missing"),
+        ("require_drift_detection", "has_drift_detection", "agent_control_plane_drift_detection_missing"),
+    )
+    for key, observed_key, finding_type in bool_checks:
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_agent_control_plane_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[observed_key],
+            match=observed[observed_key] is required,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="agent_control_plane_quality",
+            score=1.0,
+            reason="No agent control-plane quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="agent_control_plane_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} agent control-plane quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -14579,6 +14894,692 @@ def _normalize_agent_trust_boundary_key(value: Any) -> str:
         "approval_gate": "human_approval",
         "allow_list": "allowlist",
         "deny_list": "denylist",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _agent_control_plane_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type not in {"trace", "json", "config", "security", "control_plane"}:
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_agent_control_plane(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        event_name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_agent_control_plane(payload, metadata):
+            payloads.append(payload)
+        elif "agent_control" in event_type or "agent_control" in event_name:
+            if any(_as_list(payload.get(key, [])) for key in ("actions", "controls", "budgets", "escalations", "incidents")):
+                payloads.append({"kind": "agent_control_plane", **payload})
+            elif {"id", "risk_level", "status"} & set(payload):
+                payloads.append({"kind": "agent_control_plane", "actions": [payload]})
+            elif {"id", "category", "status"} & set(payload):
+                payloads.append({"kind": "agent_control_plane", "controls": [payload]})
+            elif {"id", "severity", "status"} & set(payload):
+                payloads.append({"kind": "agent_control_plane", "incidents": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("agent_control_plane"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _agent_control_plane_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _agent_control_plane_payloads_from_context(context):
+        observed.update({"agent_control_plane", "control_plane", "runtime_governance", "agency_control"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_agent_control_plane_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for collection_key in (
+            "categories",
+            "present_categories",
+            "missing_categories",
+            "controls",
+            "present_controls",
+            "partial_controls",
+            "missing_controls",
+            "blocked_controls",
+            "actions",
+            "high_risk_actions",
+            "budgets",
+            "exceeded_budgets",
+            "incidents",
+            "uncontained_incidents",
+            "gaps",
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = (
+                    _normalize_agent_control_plane_category(item)
+                    if "categories" in collection_key
+                    else _normalize_agent_control_plane_key(item)
+                )
+                if normalized:
+                    observed.add(normalized)
+        for key in ("actions", "controls", "budgets", "escalations", "incidents"):
+            for record in _agent_control_plane_records([payload], key):
+                _add_agent_control_record_observed(observed, record)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = _normalize_agent_control_plane_key(_get(tool_call, "name", _get(tool_call, "tool", "")))
+        if name in {
+            "agent_control_plane_status",
+            "list_agent_control_actions",
+            "inspect_agent_control_action",
+            "list_agent_control_controls",
+            "list_agent_control_budgets",
+            "list_agent_control_incidents",
+            "list_agent_control_gaps",
+        }:
+            observed.update({"agent_control_plane", "control_plane", "runtime_governance", "agency_control"})
+        if name:
+            observed.add(name)
+    return observed
+
+
+def _add_agent_control_record_observed(observed: set[str], record: Mapping[str, Any]) -> None:
+    record_dict = _as_dict(record)
+    for key in ("id", "name", "type", "category", "status", "risk_level", "severity", "action", "tool"):
+        normalized = (
+            _normalize_agent_control_plane_category(record_dict.get(key))
+            if key == "category"
+            else _normalize_agent_control_plane_key(record_dict.get(key))
+        )
+        if normalized:
+            observed.add(normalized)
+    for signal in _as_list(record_dict.get("signals", [])):
+        normalized = _normalize_agent_control_plane_key(signal)
+        if normalized:
+            observed.add(normalized)
+    for item in _as_list(record_dict.get("controls", [])):
+        normalized = _normalize_agent_control_plane_category(item)
+        if normalized:
+            observed.add(normalized)
+
+
+def _looks_like_agent_control_plane(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "agent_control_plane" or (
+        "controls" in data
+        and ("actions" in data or "budgets" in data or "incidents" in data or kind == "control_plane")
+    )
+
+
+def _agent_control_plane_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    actions: set[str] = set()
+    high_risk_actions: set[str] = set()
+    controls: set[str] = set()
+    present_controls: set[str] = set()
+    partial_controls: set[str] = set()
+    missing_controls: set[str] = set()
+    blocked_controls: set[str] = set()
+    categories: set[str] = set()
+    present_categories: set[str] = set()
+    missing_categories: set[str] = set()
+    budgets: set[str] = set()
+    exceeded_budgets: set[str] = set()
+    escalations: set[str] = set()
+    incidents: set[str] = set()
+    uncontained_incidents: set[str] = set()
+    signals: set[str] = set()
+    seen: Dict[str, set[str]] = {
+        "actions": set(),
+        "controls": set(),
+        "budgets": set(),
+        "escalations": set(),
+        "incidents": set(),
+    }
+    action_records: List[Dict[str, Any]] = []
+    control_records: List[Dict[str, Any]] = []
+    budget_records: List[Dict[str, Any]] = []
+    escalation_records: List[Dict[str, Any]] = []
+    incident_records: List[Dict[str, Any]] = []
+    present_control_count = 0
+    partial_control_count = 0
+    missing_control_count = 0
+    blocked_control_count = 0
+    required_control_count = 0
+    required_present_control_count = 0
+    approved_action_count = 0
+    blocked_action_count = 0
+    escalated_action_count = 0
+    rolled_back_action_count = 0
+    failed_action_count = 0
+    high_risk_action_count = 0
+    within_budget_count = 0
+    exceeded_budget_count = 0
+    missing_budget_count = 0
+    approved_escalation_count = 0
+    missing_escalation_count = 0
+    contained_incident_count = 0
+    uncontained_incident_count = 0
+    high_risk_uncontained_count = 0
+    evidence_count = 0
+    summary_counts = {
+        "action_count": 0,
+        "high_risk_action_count": 0,
+        "approved_action_count": 0,
+        "blocked_action_count": 0,
+        "escalated_action_count": 0,
+        "rolled_back_action_count": 0,
+        "failed_action_count": 0,
+        "control_count": 0,
+        "present_control_count": 0,
+        "partial_control_count": 0,
+        "missing_control_count": 0,
+        "blocked_control_count": 0,
+        "required_control_count": 0,
+        "required_present_control_count": 0,
+        "budget_count": 0,
+        "within_budget_count": 0,
+        "exceeded_budget_count": 0,
+        "missing_budget_count": 0,
+        "escalation_count": 0,
+        "approved_escalation_count": 0,
+        "missing_escalation_count": 0,
+        "incident_count": 0,
+        "contained_incident_count": 0,
+        "uncontained_incident_count": 0,
+        "high_risk_uncontained_count": 0,
+        "evidence_count": 0,
+    }
+    summary_flags = {
+        "has_risk_scoring": False,
+        "has_action_policy": False,
+        "has_approval_gates": False,
+        "has_rollback": False,
+        "has_kill_switch": False,
+        "has_circuit_breakers": False,
+        "has_rate_limits": False,
+        "has_budgets": False,
+        "has_audit": False,
+        "has_containment": False,
+        "has_drift_detection": False,
+    }
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        framework = _normalize_agent_control_plane_key(payload_dict.get("framework") or payload_dict.get("runtime"))
+        if framework:
+            frameworks.add(framework)
+        for signal in _as_list(payload_dict.get("signals", [])):
+            normalized = _normalize_agent_control_plane_key(signal)
+            if normalized:
+                signals.add(normalized)
+        summary = _as_dict(payload_dict.get("summary"))
+        for key in summary_counts:
+            summary_counts[key] = max(summary_counts[key], _as_int(summary.get(key)) or 0)
+        for key in summary_flags:
+            summary_flags[key] = summary_flags[key] or bool(summary.get(key))
+        for collection_key, target in (
+            ("categories", categories),
+            ("present_categories", present_categories),
+            ("missing_categories", missing_categories),
+            ("actions", actions),
+            ("high_risk_actions", high_risk_actions),
+            ("controls", controls),
+            ("present_controls", present_controls),
+            ("partial_controls", partial_controls),
+            ("missing_controls", missing_controls),
+            ("blocked_controls", blocked_controls),
+            ("budgets", budgets),
+            ("exceeded_budgets", exceeded_budgets),
+            ("incidents", incidents),
+            ("uncontained_incidents", uncontained_incidents),
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = (
+                    _normalize_agent_control_plane_category(item)
+                    if "categories" in collection_key
+                    else _normalize_agent_control_plane_key(item)
+                )
+                if normalized:
+                    target.add(normalized)
+
+        for action in _agent_control_plane_records([payload_dict], "actions"):
+            action_id = _agent_control_record_id(action)
+            if not action_id or action_id in seen["actions"]:
+                continue
+            seen["actions"].add(action_id)
+            actions.add(action_id)
+            action_records.append(action)
+            status = _normalize_agent_control_action_status(action.get("status"))
+            risk = _normalize_agent_control_risk(action.get("risk_level") or action.get("risk") or action.get("severity"))
+            if risk in {"high", "critical"}:
+                high_risk_action_count += 1
+                high_risk_actions.add(action_id)
+            if status == "approved":
+                approved_action_count += 1
+            elif status == "blocked":
+                blocked_action_count += 1
+            elif status == "escalated":
+                escalated_action_count += 1
+            elif status == "rolled_back":
+                rolled_back_action_count += 1
+            elif status == "failed":
+                failed_action_count += 1
+            evidence_count += len(_as_list(action.get("evidence", [])))
+            for category in _as_list(action.get("controls", [])):
+                normalized = _normalize_agent_control_plane_category(category)
+                if normalized:
+                    categories.add(normalized)
+
+        for control in _agent_control_plane_records([payload_dict], "controls"):
+            control_id = _agent_control_record_id(control)
+            if not control_id or control_id in seen["controls"]:
+                continue
+            seen["controls"].add(control_id)
+            controls.add(control_id)
+            control_records.append(control)
+            status = _normalize_agent_control_plane_status(control.get("status")) or "present"
+            category = _normalize_agent_control_plane_category(control.get("category") or control_id)
+            if category:
+                categories.add(category)
+            if bool(control.get("required", True)):
+                required_control_count += 1
+            if status == "present":
+                present_control_count += 1
+                present_controls.add(control_id)
+                if category:
+                    present_categories.add(category)
+                if bool(control.get("required", True)):
+                    required_present_control_count += 1
+            elif status == "partial":
+                partial_control_count += 1
+                partial_controls.add(control_id)
+                if category:
+                    missing_categories.add(category)
+            elif status == "blocked":
+                blocked_control_count += 1
+                blocked_controls.add(control_id)
+                if category:
+                    missing_categories.add(category)
+            else:
+                missing_control_count += 1
+                missing_controls.add(control_id)
+                if category:
+                    missing_categories.add(category)
+            evidence_count += len(_as_list(control.get("evidence", [])))
+
+        for budget in _agent_control_plane_records([payload_dict], "budgets"):
+            budget_id = _agent_control_record_id(budget)
+            if not budget_id or budget_id in seen["budgets"]:
+                continue
+            seen["budgets"].add(budget_id)
+            budgets.add(budget_id)
+            budget_records.append(budget)
+            status = _normalize_agent_control_budget_status(budget.get("status"))
+            if status == "within":
+                within_budget_count += 1
+            elif status == "exceeded":
+                exceeded_budget_count += 1
+                exceeded_budgets.add(budget_id)
+            elif status in {"missing", "blocked"}:
+                missing_budget_count += 1
+            evidence_count += len(_as_list(budget.get("evidence", [])))
+
+        for escalation in _agent_control_plane_records([payload_dict], "escalations"):
+            escalation_id = _agent_control_record_id(escalation)
+            if not escalation_id or escalation_id in seen["escalations"]:
+                continue
+            seen["escalations"].add(escalation_id)
+            escalations.add(escalation_id)
+            escalation_records.append(escalation)
+            status = _normalize_agent_control_escalation_status(escalation.get("status"))
+            if status == "approved":
+                approved_escalation_count += 1
+            elif status in {"missing", "pending"}:
+                missing_escalation_count += 1
+            evidence_count += len(_as_list(escalation.get("evidence", [])))
+
+        for incident in _agent_control_plane_records([payload_dict], "incidents"):
+            incident_id = _agent_control_record_id(incident)
+            if not incident_id or incident_id in seen["incidents"]:
+                continue
+            seen["incidents"].add(incident_id)
+            incidents.add(incident_id)
+            incident_records.append(incident)
+            status = _normalize_agent_control_incident_status(incident.get("status"))
+            severity = _normalize_agent_control_risk(incident.get("severity") or incident.get("risk"))
+            if status in {"contained", "rolled_back", "escalated"}:
+                contained_incident_count += 1
+            elif status in {"open", "uncontained"}:
+                uncontained_incident_count += 1
+                uncontained_incidents.add(incident_id)
+                if severity in {"high", "critical"}:
+                    high_risk_uncontained_count += 1
+            evidence_count += len(_as_list(incident.get("evidence", [])))
+            for category in _as_list(incident.get("controls", [])):
+                normalized = _normalize_agent_control_plane_category(category)
+                if normalized:
+                    categories.add(normalized)
+
+    present_control_count = max(present_control_count, summary_counts["present_control_count"])
+    partial_control_count = max(partial_control_count, summary_counts["partial_control_count"])
+    missing_control_count = max(missing_control_count, summary_counts["missing_control_count"])
+    blocked_control_count = max(blocked_control_count, summary_counts["blocked_control_count"])
+    required_control_count = max(required_control_count, summary_counts["required_control_count"])
+    required_present_control_count = max(required_present_control_count, summary_counts["required_present_control_count"])
+    high_risk_action_count = max(high_risk_action_count, summary_counts["high_risk_action_count"])
+    approved_action_count = max(approved_action_count, summary_counts["approved_action_count"])
+    blocked_action_count = max(blocked_action_count, summary_counts["blocked_action_count"])
+    escalated_action_count = max(escalated_action_count, summary_counts["escalated_action_count"])
+    rolled_back_action_count = max(rolled_back_action_count, summary_counts["rolled_back_action_count"])
+    failed_action_count = max(failed_action_count, summary_counts["failed_action_count"])
+    within_budget_count = max(within_budget_count, summary_counts["within_budget_count"])
+    exceeded_budget_count = max(exceeded_budget_count, summary_counts["exceeded_budget_count"])
+    missing_budget_count = max(missing_budget_count, summary_counts["missing_budget_count"])
+    approved_escalation_count = max(approved_escalation_count, summary_counts["approved_escalation_count"])
+    missing_escalation_count = max(missing_escalation_count, summary_counts["missing_escalation_count"])
+    contained_incident_count = max(contained_incident_count, summary_counts["contained_incident_count"])
+    uncontained_incident_count = max(uncontained_incident_count, summary_counts["uncontained_incident_count"])
+    high_risk_uncontained_count = max(high_risk_uncontained_count, summary_counts["high_risk_uncontained_count"])
+    evidence_count = max(evidence_count, summary_counts["evidence_count"])
+    action_count = max(len(action_records), summary_counts["action_count"])
+    control_count = max(
+        len(control_records),
+        summary_counts["control_count"],
+        present_control_count + partial_control_count + missing_control_count + blocked_control_count,
+    )
+    budget_count = max(
+        len(budget_records),
+        summary_counts["budget_count"],
+        within_budget_count + exceeded_budget_count + missing_budget_count,
+    )
+    escalation_count = max(
+        len(escalation_records),
+        summary_counts["escalation_count"],
+        approved_escalation_count + missing_escalation_count,
+    )
+    incident_count = max(
+        len(incident_records),
+        summary_counts["incident_count"],
+        contained_incident_count + uncontained_incident_count,
+    )
+    control_rate = round(present_control_count / control_count, 4) if control_count else 1.0
+    required_control_rate = round(required_present_control_count / required_control_count, 4) if required_control_count else 1.0
+    present_category_set = set(present_categories)
+    return {
+        "action_count": action_count,
+        "high_risk_action_count": high_risk_action_count,
+        "approved_action_count": approved_action_count,
+        "blocked_action_count": blocked_action_count,
+        "escalated_action_count": escalated_action_count,
+        "rolled_back_action_count": rolled_back_action_count,
+        "failed_action_count": failed_action_count,
+        "control_count": control_count,
+        "present_control_count": present_control_count,
+        "partial_control_count": partial_control_count,
+        "missing_control_count": missing_control_count,
+        "blocked_control_count": blocked_control_count,
+        "required_control_count": required_control_count,
+        "required_present_control_count": required_present_control_count,
+        "control_rate": control_rate,
+        "required_control_rate": required_control_rate,
+        "budget_count": budget_count,
+        "within_budget_count": within_budget_count,
+        "exceeded_budget_count": exceeded_budget_count,
+        "missing_budget_count": missing_budget_count,
+        "escalation_count": escalation_count,
+        "approved_escalation_count": approved_escalation_count,
+        "missing_escalation_count": missing_escalation_count,
+        "incident_count": incident_count,
+        "contained_incident_count": contained_incident_count,
+        "uncontained_incident_count": uncontained_incident_count,
+        "high_risk_uncontained_count": high_risk_uncontained_count,
+        "evidence_count": evidence_count,
+        "frameworks": sorted(frameworks),
+        "actions": sorted(actions),
+        "high_risk_actions": sorted(high_risk_actions),
+        "controls": sorted(controls),
+        "present_controls": sorted(present_controls),
+        "partial_controls": sorted(partial_controls),
+        "missing_controls": sorted(missing_controls),
+        "blocked_controls": sorted(blocked_controls),
+        "categories": sorted(categories),
+        "present_categories": sorted(present_categories),
+        "missing_categories": sorted(missing_categories),
+        "budgets": sorted(budgets),
+        "exceeded_budgets": sorted(exceeded_budgets),
+        "escalations": sorted(escalations),
+        "incidents": sorted(incidents),
+        "uncontained_incidents": sorted(uncontained_incidents),
+        "gaps": sorted(partial_controls | missing_controls | blocked_controls | exceeded_budgets | uncontained_incidents),
+        "signals": sorted(signals),
+        "has_risk_scoring": summary_flags["has_risk_scoring"] or "risk_scoring" in present_category_set,
+        "has_action_policy": summary_flags["has_action_policy"] or "action_policy" in present_category_set,
+        "has_approval_gates": summary_flags["has_approval_gates"] or "approval" in present_category_set,
+        "has_rollback": summary_flags["has_rollback"] or "rollback" in present_category_set,
+        "has_kill_switch": summary_flags["has_kill_switch"] or "kill_switch" in present_category_set,
+        "has_circuit_breakers": summary_flags["has_circuit_breakers"] or "circuit_breaker" in present_category_set,
+        "has_rate_limits": summary_flags["has_rate_limits"] or "rate_limit" in present_category_set,
+        "has_budgets": summary_flags["has_budgets"] or "budget" in present_category_set or within_budget_count > 0,
+        "has_audit": summary_flags["has_audit"] or "audit" in present_category_set,
+        "has_containment": summary_flags["has_containment"] or "containment" in present_category_set,
+        "has_drift_detection": summary_flags["has_drift_detection"] or "drift_detection" in present_category_set,
+        "action_records": action_records,
+        "control_records": control_records,
+        "budget_records": budget_records,
+        "escalation_records": escalation_records,
+        "incident_records": incident_records,
+    }
+
+
+def _agent_control_plane_records(
+    payloads: Sequence[Mapping[str, Any]],
+    key: str,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        for item in _as_list(payload_dict.get(key, [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                records.append(item_dict)
+    return records
+
+
+def _agent_control_record_id(record: Mapping[str, Any]) -> str:
+    return _normalize_agent_control_plane_key(
+        record.get("id")
+        or record.get("name")
+        or record.get("control")
+        or record.get("action")
+        or record.get("budget")
+        or record.get("incident")
+        or record.get("tool")
+    )
+
+
+def _append_agent_control_plane_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "agent_control_plane_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_agent_control_plane_status(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "yes": "present",
+        "true": "present",
+        "enabled": "present",
+        "implemented": "present",
+        "available": "present",
+        "pass": "present",
+        "limited": "partial",
+        "planned": "partial",
+        "no": "missing",
+        "false": "missing",
+        "absent": "missing",
+        "failed": "missing",
+        "denied": "blocked",
+        "forbidden": "blocked",
+        "policy_blocked": "blocked",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"present", "partial", "missing", "blocked"} else ""
+
+
+def _normalize_agent_control_action_status(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "allow": "allowed",
+        "permitted": "allowed",
+        "pass": "allowed",
+        "deny": "blocked",
+        "denied": "blocked",
+        "prevented": "blocked",
+        "needs_approval": "escalated",
+        "approval_required": "escalated",
+        "undo": "rolled_back",
+        "reverted": "rolled_back",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"allowed", "blocked", "approved", "escalated", "rolled_back", "failed"} else ""
+
+
+def _normalize_agent_control_budget_status(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "ok": "within",
+        "pass": "within",
+        "under": "within",
+        "over": "exceeded",
+        "breached": "exceeded",
+        "absent": "missing",
+        "denied": "blocked",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"within", "exceeded", "missing", "blocked"} else ""
+
+
+def _normalize_agent_control_escalation_status(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "allow": "approved",
+        "accepted": "approved",
+        "deny": "rejected",
+        "denied": "rejected",
+        "absent": "missing",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"approved", "pending", "rejected", "missing"} else ""
+
+
+def _normalize_agent_control_incident_status(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "resolved": "contained",
+        "closed": "contained",
+        "mitigated": "contained",
+        "reverted": "rolled_back",
+        "rollback": "rolled_back",
+        "needs_review": "escalated",
+        "unresolved": "open",
+        "escaped": "uncontained",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"contained", "open", "rolled_back", "escalated", "uncontained"} else ""
+
+
+def _normalize_agent_control_risk(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "sev1": "critical",
+        "p0": "critical",
+        "blocker": "critical",
+        "sev2": "high",
+        "p1": "high",
+        "important": "high",
+        "sev3": "medium",
+        "p2": "medium",
+        "moderate": "medium",
+        "sev4": "low",
+        "p3": "low",
+        "minor": "low",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"low", "medium", "high", "critical"} else "medium"
+
+
+def _normalize_agent_control_plane_category(value: Any) -> str:
+    normalized = _normalize_agent_control_plane_key(value)
+    aliases = {
+        "risk": "risk_scoring",
+        "risk_score": "risk_scoring",
+        "agency_risk": "risk_scoring",
+        "agency_risk_index": "risk_scoring",
+        "policy": "action_policy",
+        "policy_gate": "action_policy",
+        "fsm": "action_policy",
+        "conformance": "action_policy",
+        "human_approval": "approval",
+        "hitl": "approval",
+        "escalation": "approval",
+        "reversibility": "rollback",
+        "undo": "rollback",
+        "shutdown": "kill_switch",
+        "stop": "kill_switch",
+        "breaker": "circuit_breaker",
+        "throttle": "rate_limit",
+        "quota": "budget",
+        "logging": "audit",
+        "trace": "audit",
+        "telemetry": "audit",
+        "sandbox": "containment",
+        "isolation": "containment",
+        "drift": "drift_detection",
+        "goal_drift": "drift_detection",
+    }
+    return aliases.get(normalized, normalized or "general")
+
+
+def _normalize_agent_control_plane_key(value: Any) -> str:
+    normalized = (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace(".", "_")
+        .replace("/", "_")
+        .replace(":", "_")
+    )
+    aliases = {
+        "controlplane": "control_plane",
+        "agent_governance": "runtime_governance",
+        "human_in_the_loop": "approval",
+        "kill_switches": "kill_switch",
+        "circuit_breakers": "circuit_breaker",
+        "rate_limits": "rate_limit",
+        "budgets": "budget",
+        "rollbacks": "rollback",
     }
     return aliases.get(normalized, normalized)
 

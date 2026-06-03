@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, observability replay coverage, observability replay quality, optimizer trace coverage, optimizer trace quality with governance checks, framework trace coverage, framework runtime coverage, framework runtime contract, framework lifecycle coverage, framework lifecycle quality, framework capability coverage, framework capability quality, framework probe coverage, framework probe quality, framework portability coverage, framework portability quality, agent trust-boundary coverage, agent trust-boundary quality, framework transcript quality with checkpoint/session-state checks, orchestration trace coverage, orchestration flow quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, browser storage/runtime capture, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, observability replay coverage, observability replay quality, optimizer trace coverage, optimizer trace quality with governance checks, framework trace coverage, framework runtime coverage, framework runtime contract, framework lifecycle coverage, framework lifecycle quality, framework capability coverage, framework capability quality, framework probe coverage, framework probe quality, framework portability coverage, framework portability quality, agent trust-boundary coverage, agent trust-boundary quality, agent control-plane coverage, agent control-plane quality, framework transcript quality with checkpoint/session-state checks, orchestration trace coverage, orchestration flow quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, browser storage/runtime capture, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -336,13 +336,22 @@ result = evaluate_agent_report(
         },
         "required_agent_trust_boundary": ["identity", "permissions", "sandbox", "audit", "canaries", "memory_isolation", "network_egress", "secret_handling"],
         "agent_trust_boundary_quality": {
-            "framework": "futureagi",
+            "framework": "generic_agent_runtime",
             "required_controls": ["agent_identity", "least_privilege_tools", "runtime_sandbox", "audit_log", "canary_tokens"],
             "required_categories": ["identity", "permissions", "sandbox", "audit", "canaries", "memory_isolation", "network_egress", "secret_handling"],
             "min_present_controls": 5,
             "min_control_rate": 0.9,
             "max_high_risk_unmitigated_threats": 0,
             "min_canaries": 1,
+            "require_evidence": True,
+        },
+        "required_agent_control_plane": ["agent_control_plane", "risk_scoring", "action_policy", "approval", "rollback", "kill_switch", "circuit_breaker", "rate_limit", "budget", "audit", "containment", "drift_detection"],
+        "agent_control_plane_quality": {
+            "framework": "generic_agent_runtime",
+            "required_categories": ["risk_scoring", "action_policy", "approval", "rollback", "kill_switch", "circuit_breaker", "rate_limit", "budget", "audit", "containment", "drift_detection"],
+            "min_control_rate": 0.9,
+            "max_exceeded_budgets": 0,
+            "max_high_risk_uncontained_incidents": 0,
             "require_evidence": True,
         },
         "required_orchestration_trace": ["workflow", "node", "route", "handoff", "tool", "retry", "recovered", "latency", "cost", "state"],
