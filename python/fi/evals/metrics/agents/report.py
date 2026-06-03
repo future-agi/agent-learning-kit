@@ -130,6 +130,11 @@ class AgentReportEvalConfig(BaseModel):
     max_voice_clipping_ratio: Optional[float] = None
     max_voice_jitter_ms: Optional[int] = None
     max_voice_packet_loss_pct: Optional[float] = None
+    min_voice_sample_rate_hz: Optional[int] = None
+    min_voice_duration_ms: Optional[int] = None
+    max_voice_duration_ms: Optional[int] = None
+    min_voice_rms_db: Optional[float] = None
+    max_voice_peak_db: Optional[float] = None
     required_artifact_types: List[str] = Field(default_factory=list)
     required_browser_trace: List[str] = Field(default_factory=list)
     expected_browser_actions: List[Any] = Field(default_factory=list)
@@ -3647,6 +3652,11 @@ def _voice_interaction_quality_metric(
         and config.max_voice_clipping_ratio is None
         and config.max_voice_jitter_ms is None
         and config.max_voice_packet_loss_pct is None
+        and config.min_voice_sample_rate_hz is None
+        and config.min_voice_duration_ms is None
+        and config.max_voice_duration_ms is None
+        and config.min_voice_rms_db is None
+        and config.max_voice_peak_db is None
     ):
         return AgentReportMetricResult(
             name="voice_interaction_quality",
@@ -3813,6 +3823,76 @@ def _voice_interaction_quality_metric(
             actual=max_loss,
             match=match,
             finding_type="voice_packet_loss_exceeded" if max_loss is not None else "voice_packet_loss_missing",
+        )
+
+    if config.min_voice_sample_rate_hz is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "sample_rate_hz")
+        min_rate = min(values) if values else None
+        match = min_rate is not None and min_rate >= config.min_voice_sample_rate_hz
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="sample_rate_hz",
+            expected=f">= {config.min_voice_sample_rate_hz}",
+            actual=min_rate,
+            match=match,
+            finding_type="voice_sample_rate_too_low" if min_rate is not None else "voice_sample_rate_missing",
+        )
+
+    if config.min_voice_duration_ms is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "duration_ms")
+        min_duration = min(values) if values else None
+        match = min_duration is not None and min_duration >= config.min_voice_duration_ms
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="duration_ms_min",
+            expected=f">= {config.min_voice_duration_ms}",
+            actual=min_duration,
+            match=match,
+            finding_type="voice_duration_too_short" if min_duration is not None else "voice_duration_missing",
+        )
+
+    if config.max_voice_duration_ms is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "duration_ms")
+        max_duration = max(values) if values else None
+        match = max_duration is not None and max_duration <= config.max_voice_duration_ms
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="duration_ms_max",
+            expected=f"<= {config.max_voice_duration_ms}",
+            actual=max_duration,
+            match=match,
+            finding_type="voice_duration_too_long" if max_duration is not None else "voice_duration_missing",
+        )
+
+    if config.min_voice_rms_db is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "rms_db")
+        min_rms = min(values) if values else None
+        match = min_rms is not None and min_rms >= config.min_voice_rms_db
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="rms_db",
+            expected=f">= {config.min_voice_rms_db}",
+            actual=min_rms,
+            match=match,
+            finding_type="voice_rms_too_low" if min_rms is not None else "voice_rms_missing",
+        )
+
+    if config.max_voice_peak_db is not None:
+        values = _voice_quality_values_from_payloads(payloads, context, voice_state, "peak_db")
+        max_peak = max(values) if values else None
+        match = max_peak is not None and max_peak <= config.max_voice_peak_db
+        _append_voice_quality_check(
+            checks,
+            findings,
+            check="peak_db",
+            expected=f"<= {config.max_voice_peak_db}",
+            actual=max_peak,
+            match=match,
+            finding_type="voice_peak_exceeded" if max_peak is not None else "voice_peak_missing",
         )
 
     if not checks:
@@ -8578,6 +8658,10 @@ def _voice_quality_aliases(key: str) -> set[str]:
         "clipping_ratio": {"clipping_ratio", "clip_ratio", "clipped_ratio", "clipping_pct", "clipping_percent"},
         "jitter_ms": {"jitter_ms", "jitter", "jitter_seconds"},
         "packet_loss_pct": {"packet_loss_pct", "packet_loss_percent", "fraction_lost"},
+        "sample_rate_hz": {"sample_rate_hz", "sample_rate"},
+        "duration_ms": {"duration_ms", "duration"},
+        "rms_db": {"rms_db", "rms"},
+        "peak_db": {"peak_db", "peak"},
     }
     return aliases.get(key, {key})
 
@@ -8680,6 +8764,8 @@ def _merge_voice_trace_payload(observed: set[str], payload: Mapping[str, Any]) -
             waveform_dict = _as_dict(waveform)
             if waveform_dict.get("speaker") or waveform_dict.get("speaker_id"):
                 observed.add("speaker")
+            if waveform_dict.get("decoded_audio") or waveform_dict.get("media_format"):
+                observed.add("media")
             _merge_voice_quality_observed(observed, waveform_dict)
     if _as_list(payload.get("diarization", [])) or _as_list(payload.get("speaker_segments", [])):
         observed.update({"diarization", "speaker"})
@@ -8704,6 +8790,11 @@ def _merge_voice_quality_observed(observed: set[str], payload: Mapping[str, Any]
         ("packet_loss_pct", "packet_loss"),
         ("packet_loss_percent", "packet_loss"),
         ("fraction_lost", "packet_loss"),
+        ("sample_rate_hz", "sample_rate"),
+        ("sample_rate", "sample_rate"),
+        ("duration_ms", "duration"),
+        ("rms_db", "rms"),
+        ("peak_db", "peak"),
     ):
         if key in payload:
             observed.update({"perceptual", observed_key})
@@ -8758,6 +8849,9 @@ def _normalize_voice_trace_key(key: str) -> str:
         "waveforms": "waveform",
         "recording": "waveform",
         "recordings": "waveform",
+        "media": "media",
+        "decoded_audio": "media",
+        "media_format": "media",
         "diarization": "diarization",
         "speaker_segment": "diarization",
         "speaker_segments": "diarization",
@@ -8778,6 +8872,14 @@ def _normalize_voice_trace_key(key: str) -> str:
         "jitter_ms": "jitter",
         "packet_loss_pct": "packet_loss",
         "packet_loss": "packet_loss",
+        "sample_rate": "sample_rate",
+        "sample_rate_hz": "sample_rate",
+        "duration": "duration",
+        "duration_ms": "duration",
+        "rms": "rms",
+        "rms_db": "rms",
+        "peak": "peak",
+        "peak_db": "peak",
     }
     return aliases.get(normalized, normalized)
 

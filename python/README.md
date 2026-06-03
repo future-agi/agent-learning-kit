@@ -222,8 +222,10 @@ Browser Use history, imported actionability timelines, image-derived pixel
 screenshot diffs, layout-shift distributions, video artifacts, layout-shift
 perturbations, and stale-screenshot avoidance checks.
 Voice trace and interaction metrics understand LiveKit/Pipecat-style export
-replay evidence, waveform fixtures, diarization segments, MOS/SNR/clipping,
-jitter, and packet-loss checks in addition to VAD/STT/TTS/route/frame evidence.
+replay evidence, waveform fixtures, decoded WAV/PCM media metadata,
+diarization segments, sample-rate/duration/RMS/peak checks,
+MOS/SNR/clipping, jitter, and packet-loss checks in addition to
+VAD/STT/TTS/route/frame evidence.
 Trajectory templates let one reusable rubric score framework-neutral reports for
 goal completion, ordered tool calls, tool-call precision/recall/F1, policy
 checks, browser action safety, memory writes, and multimodal artifact support.
@@ -351,6 +353,11 @@ result = evaluate_agent_report(
         "max_voice_clipping_ratio": 0.01,
         "max_voice_jitter_ms": 30,
         "max_voice_packet_loss_pct": 1.0,
+        "min_voice_sample_rate_hz": 16000,
+        "min_voice_duration_ms": 750,
+        "max_voice_duration_ms": 1500,
+        "min_voice_rms_db": -35,
+        "max_voice_peak_db": -0.1,
         "allowed_domains": ["shop.example.com"],
         "memory_allowed_keys": ["order_id", "status"],
         "tool_argument_schemas": {

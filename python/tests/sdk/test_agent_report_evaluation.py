@@ -1506,6 +1506,8 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
                                 {
                                     "id": "caller_wave",
                                     "speaker": "caller",
+                                    "decoded_audio": True,
+                                    "media_format": "wav",
                                     "duration_ms": 1700,
                                     "sample_rate_hz": 24000,
                                     "snr_db": 31,
@@ -1513,6 +1515,8 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
                                     "clipping_ratio": 0.002,
                                     "jitter_ms": 16,
                                     "packet_loss_pct": 0.3,
+                                    "rms_db": -18.2,
+                                    "peak_db": -3.1,
                                 }
                             ],
                             "diarization": [
@@ -1574,11 +1578,17 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
                                 {
                                     "id": "caller_wave",
                                     "speaker": "caller",
+                                    "decoded_audio": True,
+                                    "media_format": "wav",
+                                    "duration_ms": 1700,
+                                    "sample_rate_hz": 24000,
                                     "snr_db": 31,
                                     "mos": 4.2,
                                     "clipping_ratio": 0.002,
                                     "jitter_ms": 16,
                                     "packet_loss_pct": 0.3,
+                                    "rms_db": -18.2,
+                                    "peak_db": -3.1,
                                 }
                             ],
                             "diarization": [
@@ -1621,12 +1631,18 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
             "max_voice_clipping_ratio": 0.01,
             "max_voice_jitter_ms": 30,
             "max_voice_packet_loss_pct": 1.0,
+            "min_voice_sample_rate_hz": 16000,
+            "min_voice_duration_ms": 1000,
+            "max_voice_duration_ms": 2500,
+            "min_voice_rms_db": -40,
+            "max_voice_peak_db": -1,
             "required_voice_trace": [
                 "frame",
                 "noise",
                 "overlap",
                 "timeline",
                 "waveform",
+                "media",
                 "diarization",
                 "perceptual",
                 "snr",
@@ -1634,6 +1650,10 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
                 "clipping",
                 "jitter",
                 "packet_loss",
+                "sample_rate",
+                "duration",
+                "rms",
+                "peak",
             ],
         },
     )
