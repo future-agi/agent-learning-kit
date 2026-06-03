@@ -4,8 +4,11 @@ from types import SimpleNamespace
 
 from fi.evals.metrics.agents import (
     AgentReportEvaluator,
+    diff_domain_package_registries,
     evaluate_agent_report,
     normalize_agent_report,
+    replay_domain_package_registry,
+    validate_domain_package_registry,
 )
 
 
@@ -5386,6 +5389,120 @@ def test_evaluate_agent_report_scores_domain_package_registry_overrides():
     assert "domain_package_numeric_limit_exceeded" in finding_types
     assert "domain_package_required_field_missing" in finding_types
     assert "domain_package_collection_item_missing" in finding_types
+
+
+def test_domain_package_registry_validation_diff_and_replay_gate():
+    base_registry = {
+        "version": "futureagi.domain-packages.acme.v1",
+        "presets": {
+            "claim_file": {
+                "version": "acme-claims-2026-06",
+                "aliases": ["enterprise_claim"],
+                "required_fields": ["adjuster.id"],
+                "invariants": [
+                    {
+                        "type": "collection_contains",
+                        "items_path": "documents",
+                        "field": "type",
+                        "values_key": "claim_audit_documents",
+                        "default_values": ["audit_trail"],
+                    }
+                ],
+            }
+        },
+    }
+    migrated_registry = {
+        "version": "futureagi.domain-packages.acme.v2",
+        "presets": {
+            "claim_file": {
+                "version": "acme-claims-2026-07",
+                "aliases": ["enterprise_claim"],
+                "required_fields": ["adjuster.id", "supervisor.id"],
+            }
+        },
+    }
+    invalid_registry = {
+        "version": "futureagi.domain-packages.invalid.v1",
+        "presets": {
+            "claim_file": {"aliases": ["duplicate_alias"], "invariants": [{"path": "status"}]},
+            "contract_review": {"aliases": ["duplicate_alias"]},
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Review the enterprise claim packet."},
+                    {"role": "assistant", "content": "Enterprise claim ECLM-9 is review complete."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "enterprise_claim_9",
+                            "kind": "domain_package",
+                            "package_type": "enterprise_claim",
+                        },
+                        "data": {
+                            "claim_id": "ECLM-9",
+                            "status": "review_complete",
+                            "claimant": {"id": "cust_9"},
+                            "adjuster": {"id": "adj_1"},
+                            "loss": {"date": "2026-06-01"},
+                            "coverage": {"limit": 1000.0},
+                            "amount": 1020.0,
+                            "documents": [
+                                {"type": "loss_notice"},
+                                {"type": "policy"},
+                                {"type": "audit_trail"},
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "domain_package_checks": [
+            {
+                "id": "enterprise_claim_preset",
+                "package_id": "enterprise_claim_9",
+                "package_type": "enterprise_claim",
+                "allowed_statuses": ["review_complete"],
+                "amount_tolerance": 25.0,
+                "claim_audit_documents": ["audit_trail"],
+            }
+        ]
+    }
+    regression_case = {
+        "id": "enterprise_claim_9",
+        "input": {
+            "observability": {
+                "raw": {
+                    "agent_report": report,
+                    "agent_report_config": config,
+                }
+            }
+        },
+        "expected": {"required_metrics": {"domain_package_quality": 1.0}},
+    }
+
+    valid = validate_domain_package_registry(base_registry)
+    invalid = validate_domain_package_registry(invalid_registry)
+    diff = diff_domain_package_registries(base_registry, migrated_registry)
+    passing_replay = replay_domain_package_registry(base_registry, [regression_case], threshold=1.0)
+    failing_replay = replay_domain_package_registry(migrated_registry, [regression_case], threshold=1.0)
+
+    assert valid["valid"] is True
+    assert invalid["valid"] is False
+    assert "alias_conflict" in {error["type"] for error in invalid["errors"]}
+    assert "invariant_type_missing" in {error["type"] for error in invalid["errors"]}
+    assert diff["compatible"] is False
+    assert {"type": "required_field_added", "preset": "claim_file", "path": "supervisor.id"} in diff["breaking_changes"]
+    assert passing_replay["passed"] is True
+    assert passing_replay["cases"][0]["score"] == 1.0
+    assert failing_replay["passed"] is False
+    assert failing_replay["cases"][0]["score"] < 1.0
 
 
 def test_evaluate_agent_report_scores_tool_argument_schema():

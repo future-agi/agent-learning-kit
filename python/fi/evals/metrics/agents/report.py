@@ -6085,6 +6085,401 @@ DEFAULT_DOMAIN_PACKAGE_REGISTRY: Dict[str, Any] = {
 }
 
 
+def validate_domain_package_registry(
+    registry: Mapping[str, Any],
+    *,
+    include_defaults: bool = True,
+) -> Dict[str, Any]:
+    """
+    Lint a domain-package registry before using it in evaluation.
+
+    The helper is intentionally local and deterministic. It verifies registry
+    shape, preset aliases, extension chains, required fields, and invariant
+    templates without calling any hosted service.
+    """
+
+    raw_registry = _as_dict(registry)
+    active_registry = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, raw_registry)
+        if include_defaults
+        else copy.deepcopy(raw_registry)
+    )
+    errors: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+
+    if not raw_registry:
+        errors.append({"type": "registry_empty", "message": "Registry must be a mapping."})
+    if not raw_registry.get("version") and not raw_registry.get("schema_version"):
+        warnings.append(
+            {
+                "type": "registry_version_missing",
+                "message": "Registry should include a stable version or schema_version.",
+            }
+        )
+
+    presets = _as_dict(active_registry.get("presets"))
+    if not presets:
+        errors.append({"type": "registry_presets_missing", "message": "Registry has no presets."})
+
+    alias_owners: Dict[str, str] = {}
+    for preset_name, raw_preset in presets.items():
+        canonical = _domain_registry_token(preset_name)
+        preset = _as_dict(raw_preset)
+        if not preset:
+            errors.append({"type": "preset_invalid", "preset": canonical, "message": "Preset must be a mapping."})
+            continue
+        if not preset.get("version"):
+            warnings.append({"type": "preset_version_missing", "preset": canonical})
+        for field in _string_list(preset.get("required_fields")):
+            if not field.strip():
+                errors.append({"type": "required_field_empty", "preset": canonical})
+        for alias in [canonical, *_string_list(preset.get("aliases"))]:
+            alias_key = _domain_registry_token(alias)
+            owner = alias_owners.get(alias_key)
+            if owner and owner != canonical:
+                errors.append(
+                    {
+                        "type": "alias_conflict",
+                        "alias": alias_key,
+                        "left_preset": owner,
+                        "right_preset": canonical,
+                    }
+                )
+            alias_owners[alias_key] = canonical
+        for invariant_index, raw_invariant in enumerate(_as_list(preset.get("invariants"))):
+            invariant = _as_dict(raw_invariant)
+            if not invariant:
+                errors.append(
+                    {
+                        "type": "invariant_invalid",
+                        "preset": canonical,
+                        "index": invariant_index,
+                        "message": "Invariant must be a mapping.",
+                    }
+                )
+                continue
+            errors.extend(
+                _domain_package_registry_invariant_errors(
+                    invariant,
+                    preset=canonical,
+                    index=invariant_index,
+                )
+            )
+
+    errors.extend(_domain_package_registry_extension_errors(presets))
+    return {
+        "valid": not errors,
+        "version": active_registry.get("version") or active_registry.get("schema_version"),
+        "preset_count": len(presets),
+        "presets": sorted(_domain_registry_token(name) for name in presets),
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def diff_domain_package_registries(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    *,
+    include_defaults: bool = True,
+) -> Dict[str, Any]:
+    """
+    Compare two domain-package registries and flag compatibility risk.
+
+    Breaking changes are intentionally conservative: removed presets/aliases,
+    added required fields, and removed allowed values can make historical
+    package rows fail replay gates.
+    """
+
+    left = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, before)
+        if include_defaults
+        else copy.deepcopy(_as_dict(before))
+    )
+    right = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, after)
+        if include_defaults
+        else copy.deepcopy(_as_dict(after))
+    )
+    left_presets = _as_dict(left.get("presets"))
+    right_presets = _as_dict(right.get("presets"))
+    left_names = {_domain_registry_token(name) for name in left_presets}
+    right_names = {_domain_registry_token(name) for name in right_presets}
+
+    added_presets = sorted(right_names - left_names)
+    removed_presets = sorted(left_names - right_names)
+    changed_presets: List[Dict[str, Any]] = []
+    breaking_changes: List[Dict[str, Any]] = [
+        {"type": "preset_removed", "preset": name}
+        for name in removed_presets
+    ]
+
+    for preset_name in sorted(left_names & right_names):
+        left_preset = _domain_package_preset_definition(left, preset_name)
+        right_preset = _domain_package_preset_definition(right, preset_name)
+        change = _diff_domain_package_preset(left_preset, right_preset, preset=preset_name)
+        if change["changed"]:
+            changed_presets.append(change)
+            breaking_changes.extend(change["breaking_changes"])
+
+    alias_changes = _diff_domain_package_aliases(left, right)
+    breaking_changes.extend(
+        {"type": "alias_removed", "alias": alias}
+        for alias in alias_changes["removed"]
+    )
+    return {
+        "compatible": not breaking_changes,
+        "version_before": left.get("version") or left.get("schema_version"),
+        "version_after": right.get("version") or right.get("schema_version"),
+        "added_presets": added_presets,
+        "removed_presets": removed_presets,
+        "changed_presets": changed_presets,
+        "alias_changes": alias_changes,
+        "breaking_changes": breaking_changes,
+    }
+
+
+def replay_domain_package_registry(
+    registry: Mapping[str, Any],
+    cases: Sequence[Any],
+    *,
+    threshold: float = 0.85,
+) -> Dict[str, Any]:
+    """
+    Replay regression rows with a candidate domain-package registry.
+
+    Cases may be `AgentRegressionDataset.to_records()` records or Future
+    AGI-ready rows from `to_futureagi_rows()`. Each case must preserve a raw
+    `agent_report` and `agent_report_config` under observability raw evidence.
+    """
+
+    validation = validate_domain_package_registry(registry)
+    results: List[Dict[str, Any]] = []
+    for index, raw_case in enumerate(_as_list(cases), start=1):
+        case = _as_dict(raw_case)
+        case_id = str(case.get("id") or case.get("case_id") or f"case_{index}")
+        expected = _as_dict(case.get("expected") or case.get("expected_response"))
+        case_threshold = _as_float(_as_dict(expected.get("required_metrics")).get("domain_package_quality"))
+        if case_threshold is None:
+            case_threshold = threshold
+        raw_evidence = _domain_registry_case_raw_evidence(case)
+        report = raw_evidence.get("agent_report") or raw_evidence.get("report")
+        config = _as_dict(raw_evidence.get("agent_report_config") or raw_evidence.get("config"))
+        if not isinstance(report, Mapping):
+            results.append(
+                {
+                    "case_id": case_id,
+                    "passed": False,
+                    "score": 0.0,
+                    "threshold": case_threshold,
+                    "reason": "Missing raw agent_report replay evidence.",
+                    "findings": [{"type": "domain_package_replay_evidence_missing"}],
+                }
+            )
+            continue
+        replay_config = copy.deepcopy(config)
+        replay_config["domain_package_registry"] = copy.deepcopy(_as_dict(registry))
+        evaluation = evaluate_agent_report(report, config=replay_config, threshold=case_threshold)
+        domain_metric = next(
+            (metric for metric in evaluation.cases[0].metrics if metric.name == "domain_package_quality"),
+            None,
+        ) if evaluation.cases else None
+        score = domain_metric.score if domain_metric else 0.0
+        results.append(
+            {
+                "case_id": case_id,
+                "passed": score >= case_threshold,
+                "score": score,
+                "threshold": case_threshold,
+                "reason": domain_metric.reason if domain_metric else "Missing domain_package_quality metric.",
+                "findings": evaluation.findings,
+            }
+        )
+    failing = [item for item in results if not item["passed"]]
+    return {
+        "passed": validation["valid"] and not failing,
+        "registry_valid": validation["valid"],
+        "validation": validation,
+        "case_count": len(results),
+        "failure_count": len(failing),
+        "cases": results,
+    }
+
+
+def _domain_package_registry_invariant_errors(
+    invariant: Mapping[str, Any],
+    *,
+    preset: str,
+    index: int,
+) -> List[Dict[str, Any]]:
+    invariant_type = str(invariant.get("type") or invariant.get("check") or invariant.get("kind") or "").strip().lower()
+    errors: List[Dict[str, Any]] = []
+    supported = {
+        "field_present",
+        "required_field",
+        "present",
+        "field_equals",
+        "equals",
+        "status_in",
+        "ledger_balanced",
+        "calendar_no_overlap",
+        "chronological",
+        "required_participants",
+        "numeric_lte",
+        "amount_lte",
+        "date_order",
+        "before",
+        "collection_contains",
+        "required_items",
+        "collection_min_count",
+        "min_count",
+        "all_rows_field_in",
+        "row_status_in",
+        "sum_equals",
+        "line_items_total",
+    }
+    if not invariant_type:
+        errors.append({"type": "invariant_type_missing", "preset": preset, "index": index})
+        return errors
+    if invariant_type not in supported:
+        errors.append(
+            {
+                "type": "invariant_type_unknown",
+                "preset": preset,
+                "index": index,
+                "invariant_type": invariant_type,
+            }
+        )
+    if invariant_type in {"field_present", "required_field", "present", "field_equals", "equals", "status_in", "numeric_lte", "amount_lte"}:
+        if not invariant.get("path"):
+            errors.append({"type": "invariant_path_missing", "preset": preset, "index": index})
+    if invariant_type in {"date_order", "before"}:
+        if not (invariant.get("start_path") or invariant.get("before_path")):
+            errors.append({"type": "invariant_start_path_missing", "preset": preset, "index": index})
+        if not (invariant.get("end_path") or invariant.get("after_path")):
+            errors.append({"type": "invariant_end_path_missing", "preset": preset, "index": index})
+    if invariant_type in {"collection_contains", "required_items", "collection_min_count", "min_count", "all_rows_field_in", "row_status_in", "sum_equals", "line_items_total"}:
+        if not (invariant.get("items_path") or invariant.get("rows_path")):
+            errors.append({"type": "invariant_collection_path_missing", "preset": preset, "index": index})
+    return errors
+
+
+def _domain_package_registry_extension_errors(
+    presets: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    errors: List[Dict[str, Any]] = []
+    names = {_domain_registry_token(name) for name in presets}
+    for name, raw_preset in presets.items():
+        preset_name = _domain_registry_token(name)
+        seen: set[str] = set()
+        current = _as_dict(raw_preset)
+        while current.get("extends") or current.get("base"):
+            parent = _domain_registry_token(current.get("extends") or current.get("base"))
+            if parent not in names:
+                errors.append({"type": "preset_parent_missing", "preset": preset_name, "parent": parent})
+                break
+            if parent in seen:
+                errors.append({"type": "preset_extension_cycle", "preset": preset_name, "parent": parent})
+                break
+            seen.add(parent)
+            current = _as_dict(presets.get(parent))
+    return errors
+
+
+def _diff_domain_package_preset(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    *,
+    preset: str,
+) -> Dict[str, Any]:
+    before_required = set(_string_list(before.get("required_fields")))
+    after_required = set(_string_list(after.get("required_fields")))
+    before_invariants = {_domain_package_invariant_signature(item) for item in _as_list(before.get("invariants"))}
+    after_invariants = {_domain_package_invariant_signature(item) for item in _as_list(after.get("invariants"))}
+    before_allowed = _domain_package_allowed_values(before)
+    after_allowed = _domain_package_allowed_values(after)
+    added_required_fields = sorted(after_required - before_required)
+    removed_required_fields = sorted(before_required - after_required)
+    added_invariants = sorted(after_invariants - before_invariants)
+    removed_invariants = sorted(before_invariants - after_invariants)
+    breaking_changes = [
+        {"type": "required_field_added", "preset": preset, "path": path}
+        for path in added_required_fields
+    ]
+    for key, values in before_allowed.items():
+        removed_values = sorted(values - after_allowed.get(key, set()))
+        breaking_changes.extend(
+            {"type": "allowed_value_removed", "preset": preset, "path": key, "value": value}
+            for value in removed_values
+        )
+    return {
+        "preset": preset,
+        "changed": bool(
+            added_required_fields
+            or removed_required_fields
+            or added_invariants
+            or removed_invariants
+            or before.get("version") != after.get("version")
+        ),
+        "version_before": before.get("version"),
+        "version_after": after.get("version"),
+        "added_required_fields": added_required_fields,
+        "removed_required_fields": removed_required_fields,
+        "added_invariants": added_invariants,
+        "removed_invariants": removed_invariants,
+        "breaking_changes": breaking_changes,
+    }
+
+
+def _domain_package_invariant_signature(raw_invariant: Any) -> str:
+    invariant = _as_dict(raw_invariant)
+    for key in ("description", "reason", "metadata"):
+        invariant.pop(key, None)
+    return json.dumps(invariant, sort_keys=True, default=str)
+
+
+def _domain_package_allowed_values(preset: Mapping[str, Any]) -> Dict[str, set[str]]:
+    values: Dict[str, set[str]] = {}
+    for invariant in _as_list(preset.get("invariants")):
+        item = _as_dict(invariant)
+        invariant_type = str(item.get("type") or "").lower()
+        if invariant_type not in {"status_in", "all_rows_field_in", "row_status_in"}:
+            continue
+        key = str(item.get("path") or f"{item.get('rows_path') or item.get('items_path')}.{item.get('field') or 'status'}")
+        values[key] = {_normalize_domain_value(value) for value in _as_list(item.get("allowed") or item.get("values"))}
+    return values
+
+
+def _diff_domain_package_aliases(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> Dict[str, Any]:
+    before_aliases = _domain_package_registry_aliases(before)
+    after_aliases = _domain_package_registry_aliases(after)
+    before_keys = set(before_aliases)
+    after_keys = set(after_aliases)
+    changed = {
+        alias: {"before": before_aliases[alias], "after": after_aliases[alias]}
+        for alias in sorted(before_keys & after_keys)
+        if before_aliases[alias] != after_aliases[alias]
+    }
+    return {
+        "added": sorted(after_keys - before_keys),
+        "removed": sorted(before_keys - after_keys),
+        "changed": changed,
+    }
+
+
+def _domain_registry_case_raw_evidence(case: Mapping[str, Any]) -> Dict[str, Any]:
+    observability = _as_dict(case.get("observability"))
+    if not observability:
+        observability = _as_dict(_as_dict(case.get("input")).get("observability"))
+    raw = _as_dict(observability.get("raw"))
+    if not raw:
+        raw = _as_dict(case.get("raw"))
+    return raw
+
+
 def _domain_package_checks(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,

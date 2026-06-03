@@ -32,7 +32,10 @@ from .report import (
     AgentReportEvaluation,
     AgentReportEvaluator,
     evaluate_agent_report,
+    diff_domain_package_registries,
     normalize_agent_report,
+    replay_domain_package_registry,
+    validate_domain_package_registry,
 )
 
 __all__ = [
@@ -56,5 +59,8 @@ __all__ = [
     "ReasoningQuality",
     "AgentReportEvaluator",
     "evaluate_agent_report",
+    "diff_domain_package_registries",
     "normalize_agent_report",
+    "replay_domain_package_registry",
+    "validate_domain_package_registry",
 ]
