@@ -180,6 +180,7 @@ class AgentReportEvalConfig(BaseModel):
     required_adversarial_attacks: List[str] = Field(default_factory=list)
     adversarial_resilience: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
+    framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
     expected_retrieval_doc_ids: List[str] = Field(default_factory=list)
     forbidden_retrieval_doc_ids: List[str] = Field(default_factory=list)
@@ -373,6 +374,7 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                *_framework_adapter_conformance_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
@@ -4450,6 +4452,101 @@ def _framework_trace_coverage_metric(
             "observed": sorted(observed),
             "missing": missing,
             "findings": findings,
+        },
+    )
+
+
+def _framework_adapter_conformance_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_adapter_conformance:
+        return []
+    return [_framework_adapter_conformance_metric(context, config.framework_adapter_conformance)]
+
+
+def _framework_adapter_conformance_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+
+    records = _framework_trace_records_from_context(context)
+    payloads = _framework_trace_payloads_from_context(context)
+    required_signals = [
+        _normalize_framework_trace_key(signal)
+        for signal in _string_list(
+            requirements.get("required_signals")
+            or requirements.get("signals")
+            or requirements.get("required_trace_signals")
+        )
+    ]
+    required_signals = [signal for signal in required_signals if signal]
+    required_mappings = _framework_adapter_required_mappings(
+        requirements.get("required_mappings")
+        or requirements.get("mappings")
+        or requirements.get("field_mappings")
+        or {}
+    )
+    observed_signals = _framework_adapter_observed_signals(records, payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for signal in required_signals:
+        matched = signal in observed_signals
+        _append_framework_adapter_check(
+            checks,
+            findings,
+            check="signal",
+            signal=signal,
+            path=None,
+            matched=matched,
+            finding_type="framework_adapter_signal_missing",
+            observed=sorted(observed_signals),
+        )
+
+    for signal, paths in required_mappings.items():
+        signal_records = [
+            record
+            for record in records
+            if signal in {
+                _normalize_framework_trace_key(item)
+                for item in _as_list(record.get("signals", []))
+            }
+        ]
+        for path in paths:
+            matching_records = [
+                str(record.get("id") or record.get("span_id") or record.get("name") or "")
+                for record in signal_records
+                if _framework_adapter_record_has_path(record, path)
+            ]
+            _append_framework_adapter_check(
+                checks,
+                findings,
+                check="mapping",
+                signal=signal,
+                path=path,
+                matched=bool(matching_records),
+                finding_type="framework_adapter_mapping_missing",
+                observed=[item for item in matching_records if item],
+            )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_adapter_conformance",
+            score=1.0,
+            reason="No framework adapter conformance checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["matched"])
+    return AgentReportMetricResult(
+        name="framework_adapter_conformance",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework adapter conformance check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": {"signals": sorted(observed_signals)},
         },
     )
 
@@ -10503,6 +10600,95 @@ def _framework_trace_records_from_context(context: Mapping[str, Any]) -> List[Di
     return records
 
 
+def _framework_adapter_observed_signals(
+    records: Sequence[Mapping[str, Any]],
+    payloads: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    observed: set[str] = set()
+    for payload in payloads:
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_trace_key(signal)
+            if normalized:
+                observed.add(normalized)
+        conformance = _as_dict(payload.get("adapter_conformance"))
+        for signal in _as_list(conformance.get("observed_signals", [])):
+            normalized = _normalize_framework_trace_key(signal)
+            if normalized:
+                observed.add(normalized)
+    for record in records:
+        for signal in _as_list(record.get("signals", [])):
+            normalized = _normalize_framework_trace_key(signal)
+            if normalized:
+                observed.add(normalized)
+    return observed
+
+
+def _framework_adapter_required_mappings(value: Any) -> Dict[str, List[str]]:
+    mappings: Dict[str, List[str]] = {}
+    for signal, raw_paths in _as_dict(value).items():
+        normalized_signal = _normalize_framework_trace_key(signal)
+        if not normalized_signal:
+            continue
+        if isinstance(raw_paths, Mapping):
+            paths = (
+                raw_paths.get("required_fields")
+                or raw_paths.get("fields")
+                or raw_paths.get("paths")
+                or raw_paths.get("path")
+                or []
+            )
+        else:
+            paths = raw_paths
+        normalized_paths = [str(path) for path in _as_list(paths) if str(path).strip()]
+        if normalized_paths:
+            mappings[normalized_signal] = normalized_paths
+    return mappings
+
+
+def _framework_adapter_record_has_path(record: Mapping[str, Any], path: str) -> bool:
+    for source in (
+        record,
+        _as_dict(record.get("attributes")),
+        _as_dict(record.get("framework_event")),
+        _as_dict(record.get("metadata")),
+    ):
+        value = _framework_source_value(source, path)
+        if value not in (None, "", [], {}):
+            return True
+    return False
+
+
+def _append_framework_adapter_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    signal: str,
+    path: Optional[str],
+    matched: bool,
+    finding_type: str,
+    observed: Any,
+) -> None:
+    record = {
+        "check": check,
+        "signal": signal,
+        "path": path,
+        "matched": matched,
+        "observed": observed,
+    }
+    checks.append(record)
+    if not matched:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_adapter_conformance",
+                "signal": signal,
+                "path": path,
+                "observed": observed,
+            }
+        )
+
+
 def _framework_transcript_methods(records: Sequence[Mapping[str, Any]]) -> set[str]:
     methods: set[str] = set()
     for record in records:
@@ -11308,6 +11494,8 @@ def _merge_framework_trace_payload(observed: set[str], payload: Mapping[str, Any
         observed.add("framework")
     _merge_export_metadata_observed(observed, payload)
     _merge_otlp_framework_payload(observed, payload)
+    if payload.get("adapter_conformance"):
+        observed.add("adapter_conformance")
     for signal in _as_list(payload.get("signals", [])):
         _add_framework_trace_key(observed, str(signal))
     spans = [*_as_list(payload.get("spans", [])), *_as_list(payload.get("events", []))]
@@ -11595,6 +11783,8 @@ def _add_framework_trace_key(observed: set[str], value: str) -> None:
         "auth": "export_auth",
         "pagination": "export_pagination",
         "paginated": "export_pagination",
+        "adapter_conformance": "adapter_conformance",
+        "adapter conformance": "adapter_conformance",
     }
     normalized = _normalize_framework_trace_key(value)
     if normalized:

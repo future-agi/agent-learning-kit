@@ -4457,6 +4457,99 @@ def test_evaluate_agent_report_scores_framework_trace_coverage():
     assert complete_scores["framework_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_framework_adapter_conformance():
+    trace = {
+        "kind": "framework_trace",
+        "framework": "custom_runtime",
+        "signals": ["adapter_conformance", "model", "tool", "memory", "state", "cost"],
+        "spans": [
+            {
+                "id": "model_1",
+                "name": "custom model call",
+                "signals": ["model", "cost"],
+                "input": "order 123",
+                "output": "Use search_order.",
+                "cost": {"total_tokens": 48},
+            },
+            {
+                "id": "tool_1",
+                "name": "custom tool call",
+                "signals": ["tool"],
+                "tool_name": "search_order",
+                "input": {"order_id": "123"},
+            },
+            {
+                "id": "memory_1",
+                "name": "memory_update",
+                "signals": ["memory"],
+                "memory": {"operation": "write", "key": "case_summary"},
+            },
+            {
+                "id": "state_1",
+                "name": "state update",
+                "signals": ["state"],
+                "state": {"case": {"status": "resolved"}},
+            },
+        ],
+        "adapter_conformance": {"score": 1.0, "passed": True},
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Adapter inspected."}],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "custom_runtime"},
+                        "data": trace,
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "required_framework_trace": [
+            "adapter_conformance",
+            "model",
+            "tool",
+            "memory",
+            "state",
+            "cost",
+        ],
+        "framework_adapter_conformance": {
+            "required_signals": ["model", "tool", "memory", "state", "cost"],
+            "required_mappings": {
+                "model": ["input", "output", "cost"],
+                "tool": ["tool_name", "input"],
+                "memory": ["memory.operation", "memory.key"],
+                "state": ["state"],
+            },
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_trace_coverage"] == 1.0
+    assert scores["framework_adapter_conformance"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_trace = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_trace["signals"] = ["adapter_conformance", "model", "tool", "memory", "cost"]
+    bad_trace["spans"][2] = {"id": "memory_1", "name": "memory_update", "signals": ["memory"]}
+    bad_trace["spans"] = bad_trace["spans"][:3]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+
+    assert bad_scores["framework_trace_coverage"] < 1.0
+    assert bad_scores["framework_adapter_conformance"] < 1.0
+    assert {
+        "framework_adapter_signal_missing",
+        "framework_adapter_mapping_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_raw_traceai_framework_events():
     report = {
         "results": [
