@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -206,7 +206,9 @@ agent testing, simulation, optimization, and pentesting loops.
 Framework trace coverage accepts normalized `framework_trace` artifacts/events
 and raw TraceAI/OpenTelemetry-style span events or OTLP `resourceSpans`
 exports, so captured framework runs can be scored before or after simulator
-normalization.
+normalization. Framework transcript quality checks LangChain/LangGraph-style
+event streams for required projection methods, nodes, subgraphs, tool sequence,
+final state, final output, and framework errors.
 Browser trace and grounding metrics also understand Playwright trace import
 evidence, HAR/resource-body replay, OpenAI Computer Use trace provenance,
 Browser Use history, imported actionability timelines, image-derived pixel
@@ -219,6 +221,7 @@ Trajectory templates let one reusable rubric score framework-neutral reports for
 goal completion, ordered tool calls, tool-call precision/recall/F1, policy
 checks, browser action safety, memory writes, and multimodal artifact support.
 See [`examples/11_trajectory_template_evaluation.py`](examples/11_trajectory_template_evaluation.py).
+See [`examples/12_framework_transcript_quality.py`](examples/12_framework_transcript_quality.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -251,6 +254,14 @@ result = evaluate_agent_report(
         "expected_autonomy_skills": [{"name": "refund_policy_check", "required_steps": ["lookup", "verify"]}],
         "expected_autonomy_stop": {"should_stop": True},
         "required_framework_trace": ["agent", "model", "tool", "handoff", "guardrail"],
+        "framework_transcript_quality": {
+            "required_event_methods": ["messages", "tools", "updates"],
+            "required_nodes": ["support_agent", "policy_node"],
+            "required_subgraphs": ["refund_graph"],
+            "expected_tool_sequence": ["lookup_order", "issue_refund"],
+            "expected_state": {"case": {"status": "resolved"}},
+            "output_contains": ["refund approved"],
+        },
         "required_retrieval_memory_trace": ["query", "document", "citation", "memory_read"],
         "expected_retrieval_doc_ids": ["refund_policy_current"],
         "forbidden_retrieval_doc_ids": ["refund_policy_old"],

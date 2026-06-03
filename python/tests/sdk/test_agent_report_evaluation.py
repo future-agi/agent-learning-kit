@@ -2373,6 +2373,118 @@ def test_evaluate_agent_report_scores_raw_traceai_framework_events():
     assert scores["framework_trace_coverage"] == 1.0
 
 
+def test_evaluate_agent_report_scores_framework_transcript_quality():
+    quality = {
+        "required_event_methods": ["messages", "tools", "updates"],
+        "required_nodes": ["support_agent", "policy_node"],
+        "required_subgraphs": ["refund_graph"],
+        "expected_tool_sequence": ["lookup_order", "issue_refund"],
+        "expected_state": {"case": {"status": "resolved", "approval": "captured"}},
+        "output_contains": ["Refund approved for order ord_123"],
+    }
+    records = [
+        {
+            "name": "message support_agent",
+            "method": "messages",
+            "namespace": ["refund_graph:run_1", "support_agent:task_1"],
+            "node": "support_agent",
+            "subgraph": "refund_graph",
+            "message_text": "I will look up order ord_123.",
+            "signals": ["agent", "model"],
+        },
+        {
+            "name": "tool lookup_order",
+            "method": "tools",
+            "namespace": ["refund_graph:run_1", "support_agent:task_1"],
+            "tool_name": "lookup_order",
+            "signals": ["tool"],
+        },
+        {
+            "name": "tool issue_refund",
+            "method": "tools",
+            "namespace": ["refund_graph:run_1", "support_agent:task_1"],
+            "tool_name": "issue_refund",
+            "signals": ["tool"],
+        },
+        {
+            "name": "updates policy_node",
+            "method": "updates",
+            "namespace": ["refund_graph:run_1", "policy_node:task_2"],
+            "node": "policy_node",
+            "subgraph": "refund_graph",
+            "state": {"case": {"status": "resolved", "approval": "captured"}},
+            "signals": ["state"],
+        },
+        {
+            "name": "final output",
+            "method": "values",
+            "namespace": ["refund_graph:run_1", "support_agent:task_1"],
+            "final_output": "Refund approved for order ord_123.",
+            "signals": ["state"],
+        },
+    ]
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Refund order ord_123."},
+                    {"role": "assistant", "content": "Refund approved for order ord_123."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "langgraph"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "langgraph",
+                            "events": records,
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config={"framework_transcript_quality": quality})
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["framework_transcript_quality"] == 1.0
+
+    bad_records = [
+        {
+            "name": "tool issue_refund",
+            "method": "tools",
+            "namespace": ["refund_graph:run_1", "support_agent:task_1"],
+            "tool_name": "issue_refund",
+            "signals": ["tool"],
+            "error": "approval missing",
+        },
+        {
+            "name": "updates support_agent",
+            "method": "updates",
+            "namespace": ["refund_graph:run_1", "support_agent:task_1"],
+            "state": {"case": {"status": "pending", "approval": "missing"}},
+            "signals": ["state"],
+        },
+    ]
+    report["results"][0]["messages"][1]["content"] = "Refund still pending."
+    report["results"][0]["artifacts"][0]["data"]["events"] = bad_records
+
+    failing_result = evaluate_agent_report(report, config={"framework_transcript_quality": quality})
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["framework_transcript_quality"] < 1.0
+    assert {
+        "missing_framework_event_method",
+        "missing_framework_node",
+        "framework_tool_sequence_mismatch",
+        "framework_state_mismatch",
+        "framework_output_missing",
+        "framework_error_observed",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_raw_otlp_framework_trace_export():
     report = {
         "results": [

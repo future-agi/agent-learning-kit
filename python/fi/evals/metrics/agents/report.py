@@ -170,6 +170,7 @@ class AgentReportEvalConfig(BaseModel):
     allow_extra_tool_arguments: bool = False
     expected_tool_outcomes: Dict[str, Any] = Field(default_factory=dict)
     trajectory_templates: List[Any] = Field(default_factory=list)
+    framework_transcript_quality: Dict[str, Any] = Field(default_factory=dict)
     required_tool_fault_recovery: List[str] = Field(default_factory=list)
     min_trial_pass_rate: Optional[float] = None
     max_trial_score_spread: Optional[float] = None
@@ -332,6 +333,7 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                *_framework_transcript_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
                 _retrieval_context_quality_metric(report_context, config),
                 _source_grounding_metric(report_context, config),
@@ -2617,6 +2619,156 @@ def _framework_trace_coverage_metric(
     )
 
 
+def _framework_transcript_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    requirements = _framework_transcript_requirements(context, config)
+    if not requirements:
+        return []
+    return [_framework_transcript_quality_metric(context, requirements)]
+
+
+def _framework_transcript_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    records = _framework_trace_records_from_context(context)
+    payloads = _framework_trace_payloads_from_context(context)
+    observed_methods = _framework_transcript_methods(records)
+    observed_nodes = _framework_transcript_nodes(records)
+    observed_subgraphs = _framework_transcript_subgraphs(records)
+    observed_tools = _framework_transcript_tools(records)
+    flattened_state = _framework_transcript_state(records, payloads)
+    output_text = _framework_transcript_output_text(context, records, payloads)
+    errors = _framework_transcript_errors(records)
+
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for method in _string_list(requirements.get("required_event_methods") or requirements.get("required_methods")):
+        normalized = _normalize_framework_name(method)
+        matched = normalized in observed_methods
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="event_method",
+            target=method,
+            matched=matched,
+            finding_type="missing_framework_event_method",
+            observed=sorted(observed_methods),
+        )
+
+    for node in _string_list(requirements.get("required_nodes") or requirements.get("nodes")):
+        matched = _framework_name_observed(node, observed_nodes)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="node",
+            target=node,
+            matched=matched,
+            finding_type="missing_framework_node",
+            observed=sorted(observed_nodes),
+        )
+
+    for subgraph in _string_list(requirements.get("required_subgraphs") or requirements.get("subgraphs")):
+        matched = _framework_name_observed(subgraph, observed_subgraphs)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="subgraph",
+            target=subgraph,
+            matched=matched,
+            finding_type="missing_framework_subgraph",
+            observed=sorted(observed_subgraphs),
+        )
+
+    expected_tools = [
+        _framework_expected_tool_name(item)
+        for item in _as_list(
+            requirements.get("expected_tool_sequence")
+            or requirements.get("tool_sequence")
+            or requirements.get("required_tool_sequence")
+        )
+    ]
+    expected_tools = [tool for tool in expected_tools if tool]
+    if expected_tools:
+        matched = _contains_subsequence(observed_tools, expected_tools)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="tool_sequence",
+            target=expected_tools,
+            matched=matched,
+            finding_type="framework_tool_sequence_mismatch",
+            observed=observed_tools,
+        )
+
+    for term in _string_list(requirements.get("output_contains") or requirements.get("final_output_contains")):
+        matched = _text_contains(output_text, term)
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="output_contains",
+            target=term,
+            matched=matched,
+            finding_type="framework_output_missing",
+            observed=output_text,
+        )
+
+    expected_state = _as_dict(requirements.get("expected_state") or requirements.get("state"))
+    for path, expected_value in _flatten_state(expected_state).items():
+        actual = flattened_state.get(path)
+        matched = actual == expected_value
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="state",
+            target={path: expected_value},
+            matched=matched,
+            finding_type="framework_state_mismatch",
+            observed={path: actual},
+        )
+
+    if not bool(requirements.get("allow_errors", False)):
+        _append_framework_transcript_check(
+            checks,
+            findings,
+            check="no_errors",
+            target="no framework errors",
+            matched=not errors,
+            finding_type="framework_error_observed",
+            observed=errors,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_transcript_quality",
+            score=1.0,
+            reason="No framework transcript quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["matched"])
+    score = matched / len(checks)
+    return AgentReportMetricResult(
+        name="framework_transcript_quality",
+        score=round(score, 4),
+        reason=f"{matched}/{len(checks)} framework transcript quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": {
+                "methods": sorted(observed_methods),
+                "nodes": sorted(observed_nodes),
+                "subgraphs": sorted(observed_subgraphs),
+                "tool_sequence": observed_tools,
+                "state": flattened_state,
+                "errors": errors,
+            },
+        },
+    )
+
+
 def _retrieval_memory_attribution_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -4245,6 +4397,323 @@ def _framework_trace_observed(context: Mapping[str, Any]) -> set[str]:
             observed.update({"trace", "span"})
         _add_framework_trace_key(observed, name)
     return observed
+
+
+def _framework_transcript_requirements(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> Dict[str, Any]:
+    metadata = _as_dict(context.get("metadata", {}))
+    requirements: Dict[str, Any] = {}
+    metadata_requirements = _as_dict(metadata.get("framework_transcript_quality"))
+    if metadata_requirements:
+        requirements.update(metadata_requirements)
+    if config.framework_transcript_quality:
+        requirements.update(dict(config.framework_transcript_quality))
+    return {key: value for key, value in requirements.items() if value not in (None, "", [], {})}
+
+
+def _framework_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_trace(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_trace(payload, metadata):
+            payloads.append(payload)
+        elif "framework" in event_type or "span" in event_type or _looks_like_raw_framework_event(event_type, name, payload, metadata):
+            payloads.append({"kind": "framework_trace", "events": [_as_dict(event)]})
+    return payloads
+
+
+def _framework_trace_records_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in _framework_trace_payloads_from_context(context):
+        for record in [*_as_list(payload.get("spans", [])), *_as_list(payload.get("events", []))]:
+            record_dict = _as_dict(record)
+            if record_dict:
+                records.append(record_dict)
+    return records
+
+
+def _framework_transcript_methods(records: Sequence[Mapping[str, Any]]) -> set[str]:
+    methods: set[str] = set()
+    for record in records:
+        event = _framework_record_event(record)
+        for value in (
+            record.get("method"),
+            record.get("type"),
+            event.get("method"),
+            _as_dict(record.get("attributes", {})).get("method"),
+        ):
+            normalized = _normalize_framework_name(value)
+            if normalized:
+                methods.add(normalized)
+    return methods
+
+
+def _framework_transcript_nodes(records: Sequence[Mapping[str, Any]]) -> set[str]:
+    nodes: set[str] = set()
+    for record in records:
+        event = _framework_record_event(record)
+        for value in (
+            record.get("node"),
+            record.get("name"),
+            event.get("node"),
+            _as_dict(record.get("attributes", {})).get("node"),
+        ):
+            nodes.update(_framework_name_candidates(value))
+        namespace = event.get("namespace") or record.get("namespace") or _as_dict(record.get("attributes", {})).get("namespace")
+        segments = _framework_namespace_segments(namespace)
+        if segments:
+            nodes.add(_normalize_framework_name(segments[-1]))
+            nodes.update(_normalize_framework_name(segment) for segment in segments)
+    return {node for node in nodes if node}
+
+
+def _framework_transcript_subgraphs(records: Sequence[Mapping[str, Any]]) -> set[str]:
+    subgraphs: set[str] = set()
+    for record in records:
+        event = _framework_record_event(record)
+        attributes = _as_dict(record.get("attributes", {}))
+        for value in (
+            record.get("subgraph"),
+            record.get("graph_name"),
+            event.get("subgraph"),
+            event.get("graph_name"),
+            attributes.get("subgraph"),
+            attributes.get("graph_name"),
+        ):
+            subgraphs.update(_framework_name_candidates(value))
+        segments = _framework_namespace_segments(
+            event.get("namespace") or record.get("namespace") or attributes.get("namespace")
+        )
+        if len(segments) > 1:
+            subgraphs.update(_normalize_framework_name(segment) for segment in segments[:-1])
+    return {subgraph for subgraph in subgraphs if subgraph}
+
+
+def _framework_transcript_tools(records: Sequence[Mapping[str, Any]]) -> List[str]:
+    tools: List[str] = []
+    for record in records:
+        tool_name = _framework_record_tool_name(record)
+        if not tool_name:
+            continue
+        normalized = _normalize_framework_name(tool_name)
+        if normalized:
+            tools.append(normalized)
+    return tools
+
+
+def _framework_transcript_state(
+    records: Sequence[Mapping[str, Any]],
+    payloads: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for payload in payloads:
+        _deep_merge_dict(state, _as_dict(payload.get("state")))
+    for record in records:
+        event = _framework_record_event(record)
+        method = _normalize_framework_name(record.get("method") or record.get("type") or event.get("method"))
+        attributes = _as_dict(record.get("attributes", {}))
+        for source in (
+            _as_dict(record.get("state")),
+            _as_dict(record.get("output")) if method in {"values", "updates", "state"} else {},
+            _as_dict(event.get("state")),
+            _as_dict(event.get("data")) if method in {"values", "updates", "state"} else {},
+            _as_dict(attributes.get("state")),
+            _as_dict(attributes.get("langgraph.state.updates")),
+            _as_dict(attributes.get("langgraph_state_updates")),
+        ):
+            if source:
+                _deep_merge_dict(state, source)
+    return _flatten_state(state)
+
+
+def _framework_transcript_output_text(
+    context: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+    payloads: Sequence[Mapping[str, Any]],
+) -> str:
+    parts = [
+        _final_assistant_content(_as_list(context.get("messages", []))) or "",
+        str(context.get("transcript") or ""),
+    ]
+    for payload in payloads:
+        parts.append(_stringify(payload.get("output")))
+        parts.append(_stringify(payload.get("final_output")))
+    for record in records:
+        event = _framework_record_event(record)
+        attributes = _as_dict(record.get("attributes", {}))
+        for value in (
+            record.get("message_text"),
+            record.get("text"),
+            record.get("output"),
+            event.get("message_text"),
+            event.get("text"),
+            event.get("output"),
+            event.get("final_output"),
+            attributes.get("message_text"),
+            attributes.get("output.value"),
+            attributes.get("gen_ai.output"),
+            attributes.get("gen_ai.completion"),
+        ):
+            parts.append(_stringify(value))
+    return "\n".join(part for part in parts if part)
+
+
+def _framework_transcript_errors(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    errors: List[Dict[str, Any]] = []
+    for record in records:
+        signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+        error = record.get("error")
+        status = _as_dict(record.get("status"))
+        status_code = str(status.get("code") or "").upper()
+        if not error and status_code in {"2", "ERROR", "STATUS_CODE_ERROR"}:
+            error = status.get("message") or status_code
+        if error or "error" in signals:
+            errors.append(
+                {
+                    "id": record.get("id") or record.get("span_id"),
+                    "name": record.get("name"),
+                    "error": error or "error signal observed",
+                }
+            )
+    return errors
+
+
+def _framework_record_event(record: Mapping[str, Any]) -> Dict[str, Any]:
+    event = _as_dict(record.get("framework_event"))
+    if event:
+        return event
+    attributes = _as_dict(record.get("attributes", {}))
+    event = _as_dict(attributes.get("framework_event"))
+    if event:
+        return event
+    params = _as_dict(record.get("params"))
+    data = _as_dict(params.get("data"))
+    return {
+        "method": record.get("method"),
+        "namespace": params.get("namespace") or record.get("namespace"),
+        "node": record.get("node") or data.get("node"),
+        "tool_name": data.get("tool_name") or data.get("name"),
+        "data": data,
+    }
+
+
+def _framework_record_tool_name(record: Mapping[str, Any]) -> str:
+    event = _framework_record_event(record)
+    attributes = _as_dict(record.get("attributes", {}))
+    data = _as_dict(event.get("data"))
+    for value in (
+        record.get("tool_name"),
+        event.get("tool_name"),
+        data.get("tool_name"),
+        data.get("name"),
+        attributes.get("tool_name"),
+        attributes.get("gen_ai.tool.name"),
+        attributes.get("mcp.tool.name"),
+    ):
+        if value:
+            return str(value)
+    signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+    name = str(record.get("name") or "")
+    if "tool" in signals and name:
+        for prefix in ("tool call", "mcp tool call", "function_span", "function span", "on_tool_start", "on_tool_end"):
+            lowered = name.lower()
+            if lowered.startswith(prefix):
+                return name[len(prefix):].strip(" :-_")
+        return name
+    return ""
+
+
+def _framework_expected_tool_name(item: Any) -> str:
+    if isinstance(item, str):
+        return _normalize_framework_name(item)
+    item_dict = _as_dict(item)
+    return _normalize_framework_name(item_dict.get("name") or item_dict.get("tool") or item_dict.get("tool_name"))
+
+
+def _framework_namespace_segments(value: Any) -> List[str]:
+    if isinstance(value, (list, tuple)):
+        raw_segments = [str(item) for item in value]
+    elif isinstance(value, str):
+        raw_segments = re.split(r"[/.>\s]+", value)
+    else:
+        return []
+    segments = []
+    for segment in raw_segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+        if ":" in segment:
+            segment = segment.split(":", 1)[0]
+        segments.append(segment)
+    return segments
+
+
+def _framework_name_candidates(value: Any) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    normalized = _normalize_framework_name(text)
+    candidates = {normalized} if normalized else set()
+    for marker in (" node ", " subgraph ", " graph ", " agent "):
+        lowered = f" {text.lower()} "
+        if marker in lowered:
+            suffix = lowered.split(marker, 1)[1].strip()
+            if suffix:
+                candidates.add(_normalize_framework_name(suffix.split()[0]))
+    return {candidate for candidate in candidates if candidate}
+
+
+def _normalize_framework_name(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    text = re.sub(r"[^a-z0-9_./:-]+", "_", text)
+    text = re.sub(r"[:/.]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text
+
+
+def _framework_name_observed(expected: str, observed: set[str]) -> bool:
+    normalized = _normalize_framework_name(expected)
+    if normalized in observed:
+        return True
+    return any(normalized and (normalized in item or item in normalized) for item in observed)
+
+
+def _append_framework_transcript_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    target: Any,
+    matched: bool,
+    finding_type: str,
+    observed: Any,
+) -> None:
+    record = {"check": check, "target": target, "matched": bool(matched)}
+    checks.append(record)
+    if not matched:
+        findings.append(
+            {
+                "type": finding_type,
+                "check": check,
+                "target": target,
+                "observed": observed,
+            }
+        )
 
 
 def _looks_like_framework_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
