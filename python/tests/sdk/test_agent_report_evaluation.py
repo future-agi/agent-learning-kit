@@ -5661,8 +5661,8 @@ def test_evaluate_agent_report_scores_framework_portability_matrix():
 def test_evaluate_agent_report_scores_agent_trust_boundary_model():
     trust_model = {
         "kind": "agent_trust_boundary_model",
-        "name": "futureagi-agent-trust-boundary",
-        "framework": "futureagi",
+        "name": "generic-agent-trust-boundary",
+        "framework": "generic_agent_runtime",
         "version": "2026-06",
         "signals": [
             "agent_trust_boundary",
@@ -5778,7 +5778,7 @@ def test_evaluate_agent_report_scores_agent_trust_boundary_model():
                 "artifacts": [
                     {
                         "type": "trace",
-                        "metadata": {"kind": "agent_trust_boundary_model", "framework": "futureagi"},
+                        "metadata": {"kind": "agent_trust_boundary_model", "framework": "generic_agent_runtime"},
                         "data": trust_model,
                     }
                 ],
@@ -5804,7 +5804,7 @@ def test_evaluate_agent_report_scores_agent_trust_boundary_model():
             "secret_exfiltration",
         ],
         "agent_trust_boundary_quality": {
-            "framework": "futureagi",
+            "framework": "generic_agent_runtime",
             "required_controls": ["agent_identity", "least_privilege_tools", "runtime_sandbox", "audit_log", "canary_tokens", "approval_gate", "tenant_memory_isolation", "network_egress_policy", "tool_allowlist", "data_boundary", "secret_handling"],
             "required_categories": ["identity", "permissions", "sandbox", "audit", "canaries", "human_approval", "memory_isolation", "network_egress", "tool_allowlist", "data_boundary", "secret_handling"],
             "required_assets": ["tenant_memory", "api_credentials"],
