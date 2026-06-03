@@ -28,6 +28,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 22 | [Score World Contract Quality](22_world_contract_quality.py) | Check actors, resources, transitions, invariants, policy gates, success conditions, and final state | No |
 | 23 | [Score Adversarial Resilience](23_adversarial_resilience.py) | Check attack cases, untrusted surfaces, canaries, blocked tools, and safe responses | No |
 | 24 | [Score Browser Mutation Resilience](24_browser_mutation_resilience.py) | Check stale selectors, storage drift, runtime faults, network latency, and fallback mitigation evidence | No |
+| 25 | [Score Voice Timing Distributions](25_voice_timing_distribution.py) | Check VAD, end-of-utterance, STT, LLM, TTS, and full-turn p95 timing samples | No |
 
 ## Quick Start
 

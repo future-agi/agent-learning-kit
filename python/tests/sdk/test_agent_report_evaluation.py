@@ -2229,6 +2229,115 @@ def test_evaluate_agent_report_scores_voice_interaction_quality():
     assert any(finding["metric"] == "voice_interaction_quality" for finding in failing_result.findings)
 
 
+def test_evaluate_agent_report_scores_voice_timing_distribution_quality():
+    timing_distribution = {
+        "kind": "voice_timing_distribution",
+        "stage_order": ["vad", "eou", "stt", "llm", "tts", "turn"],
+        "stages": {
+            "vad": {"samples_ms": [18, 20, 22], "source": "vad_metrics"},
+            "eou": {"samples_ms": [95, 105, 110], "source": "eou_metrics"},
+            "stt": {"samples_ms": [170, 190, 210], "source": "stt_metrics"},
+            "llm": {"samples_ms": [240, 260, 280], "source": "llm_metrics"},
+            "tts": {"samples_ms": [280, 300, 320], "source": "tts_metrics"},
+            "turn": {"samples_ms": [780, 820, 840, 860], "source": "session_metrics"},
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "I inspect timing and answer quickly.",
+                        "tool_calls": [
+                            {"id": "timing", "name": "voice_timing", "arguments": {}},
+                            {"id": "stt", "name": "transcribe_audio", "arguments": {"id": "caller_1"}},
+                            {"id": "tts", "name": "speak", "arguments": {"text": "I can help."}},
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "voice_trace"},
+                        "data": {
+                            "kind": "voice_trace",
+                            "utterances": [{"id": "caller_1", "transcript": "Billing issue."}],
+                            "timing_distribution": timing_distribution,
+                            "latency_profile": {"stt": [170, 190, 210], "tts": [280, 300, 320]},
+                        },
+                    }
+                ],
+                "events": [
+                    {
+                        "type": "voice_timing",
+                        "name": "voice_timing_distribution_ready",
+                        "payload": timing_distribution,
+                    }
+                ],
+                "metadata": {
+                    "environment_state": {
+                        "voice": {
+                            "timing_distribution": timing_distribution,
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    config = {
+        "required_voice_trace": [
+            "timing_distribution",
+            "timing_stage",
+            "vad",
+            "eou",
+            "stt",
+            "llm",
+            "tts",
+            "turn",
+        ],
+        "voice_timing_distribution": {
+            "required_stages": ["vad", "eou", "stt", "llm", "tts", "turn"],
+            "required_order": ["vad", "eou", "stt", "llm", "tts", "turn"],
+            "min_samples_per_stage": 3,
+            "max_stage_p95_ms": {
+                "vad": 24,
+                "eou": 112,
+                "stt": 212,
+                "llm": 282,
+                "tts": 322,
+                "turn": 870,
+            },
+            "max_turn_p95_ms": 870,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["voice_timing_distribution_quality"] == 1.0
+    assert scores["voice_trace_coverage"] == 1.0
+
+    failing_result = evaluate_agent_report(
+        report,
+        config={
+            **config,
+            "voice_timing_distribution": {
+                **config["voice_timing_distribution"],
+                "max_stage_p95_ms": {"stt": 180},
+            },
+        },
+    )
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+
+    assert failing_scores["voice_timing_distribution_quality"] < 1.0
+    assert any(
+        finding["metric"] == "voice_timing_distribution_quality"
+        and finding["type"] == "voice_timing_p95_exceeded"
+        for finding in failing_result.findings
+    )
+
+
 def test_evaluate_agent_report_scores_autonomy_loop_coverage():
     report = {
         "results": [
