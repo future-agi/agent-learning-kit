@@ -142,6 +142,10 @@ class AgentReportEvalConfig(BaseModel):
     expected_browser_dom_contains: List[str] = Field(default_factory=list)
     expected_browser_regions: List[Any] = Field(default_factory=list)
     expected_browser_screenshot_diffs: List[Any] = Field(default_factory=list)
+    expected_browser_storage: Dict[str, Any] = Field(default_factory=dict)
+    expected_browser_runtime_events: List[Any] = Field(default_factory=list)
+    forbidden_browser_runtime_events: List[Any] = Field(default_factory=list)
+    max_browser_performance_duration_ms: Optional[float] = None
     expected_browser_perturbations: List[Any] = Field(default_factory=list)
     allow_stale_browser_screenshot: bool = True
     max_browser_layout_shift_score: Optional[float] = None
@@ -2428,6 +2432,7 @@ def _browser_action_outcome_metric(
     if (
         not config.expected_browser_actions
         and not config.expected_browser_state
+        and not config.expected_browser_storage
         and not config.expected_browser_dom_contains
     ):
         return AgentReportMetricResult(
@@ -2477,6 +2482,18 @@ def _browser_action_outcome_metric(
             finding_type="browser_state_mismatch",
         )
 
+    if config.expected_browser_storage:
+        storage_state = _browser_storage_state_from_context(context)
+        _append_browser_outcome_check(
+            checks,
+            findings,
+            check="storage_state",
+            expected=config.expected_browser_storage,
+            actual=storage_state,
+            match=_browser_storage_matches(storage_state, config.expected_browser_storage),
+            finding_type="browser_storage_mismatch",
+        )
+
     for expected_text in config.expected_browser_dom_contains:
         expected = str(expected_text)
         _append_browser_outcome_check(
@@ -2517,9 +2534,12 @@ def _browser_grounding_quality_metric(
     if (
         not config.expected_browser_regions
         and not config.expected_browser_screenshot_diffs
+        and not config.expected_browser_runtime_events
+        and not config.forbidden_browser_runtime_events
         and not config.expected_browser_perturbations
         and config.allow_stale_browser_screenshot
         and config.max_browser_layout_shift_score is None
+        and config.max_browser_performance_duration_ms is None
         and not config.forbidden_browser_prompt_injection_targets
     ):
         return AgentReportMetricResult(
@@ -2530,6 +2550,8 @@ def _browser_grounding_quality_metric(
 
     action_records = _browser_action_records_from_context(context)
     screenshot_diffs = _browser_screenshot_diffs_from_context(context)
+    runtime_events = _browser_runtime_events_from_context(context)
+    performance_entries = _browser_performance_entries_from_context(context)
     perturbations = _browser_perturbations_from_context(context)
     checks: List[Dict[str, Any]] = []
     findings: List[Dict[str, Any]] = []
@@ -2568,6 +2590,34 @@ def _browser_grounding_quality_metric(
             actual=screenshot_diffs,
             match=match,
             finding_type="browser_screenshot_diff_missing",
+        )
+
+    for raw_spec in config.expected_browser_runtime_events:
+        spec = _normalize_browser_runtime_event_expectation(raw_spec)
+        match = any(_browser_runtime_event_matches(event, spec) for event in runtime_events)
+        _append_browser_grounding_check(
+            checks,
+            findings,
+            check="runtime_event",
+            expected=spec,
+            actual=runtime_events,
+            match=match,
+            finding_type="browser_runtime_event_missing",
+        )
+
+    for raw_spec in config.forbidden_browser_runtime_events:
+        spec = _normalize_browser_runtime_event_expectation(raw_spec)
+        violations = [
+            event for event in runtime_events if _browser_runtime_event_matches(event, spec)
+        ]
+        _append_browser_grounding_check(
+            checks,
+            findings,
+            check="runtime_event_forbidden",
+            expected=spec,
+            actual=violations,
+            match=not violations,
+            finding_type="browser_runtime_event_forbidden",
         )
 
     for raw_spec in config.expected_browser_perturbations:
@@ -2616,6 +2666,26 @@ def _browser_grounding_quality_metric(
             actual={"max_layout_shift_score": max_score, "handled_by_region_match": handled},
             match=max_score <= config.max_browser_layout_shift_score or handled,
             finding_type="browser_layout_shift_unhandled",
+        )
+
+    if config.max_browser_performance_duration_ms is not None:
+        durations = [
+            value
+            for value in (
+                _as_float(entry.get("duration_ms", entry.get("duration")))
+                for entry in performance_entries
+            )
+            if value is not None
+        ]
+        max_duration = max(durations) if durations else 0.0
+        _append_browser_grounding_check(
+            checks,
+            findings,
+            check="performance_duration",
+            expected={"max_browser_performance_duration_ms": config.max_browser_performance_duration_ms},
+            actual={"max_duration_ms": max_duration, "entries": performance_entries},
+            match=max_duration <= config.max_browser_performance_duration_ms,
+            finding_type="browser_performance_threshold_exceeded",
         )
 
     for raw_spec in config.forbidden_browser_prompt_injection_targets:
@@ -7656,6 +7726,257 @@ def _browser_screenshot_diffs_from_context(context: Mapping[str, Any]) -> List[D
     return diffs
 
 
+def _browser_storage_state_from_context(context: Mapping[str, Any]) -> Dict[str, Any]:
+    storage = {"cookies": [], "origins": []}
+
+    def append(raw: Any) -> None:
+        item = _as_dict(raw)
+        if not item:
+            return
+        storage["cookies"].extend(_as_list(item.get("cookies", [])))
+        storage["origins"].extend(_as_list(item.get("origins", [])))
+
+    final_state = _as_dict(context.get("final_state"))
+    browser_state = _as_dict(final_state.get("browser")) or final_state
+    append(browser_state.get("storage_state", browser_state.get("storageState")))
+    for payload in _browser_trace_payloads_from_context(context):
+        append(payload.get("storage_state", payload.get("storageState")))
+        final_browser = _as_dict(_as_dict(payload.get("final_state", {})).get("browser"))
+        append(final_browser.get("storage_state", final_browser.get("storageState")))
+        for record in _as_list(payload.get("action_replay", payload.get("actions", []))):
+            mutation = _as_dict(_as_dict(record).get("storage_mutation"))
+            append(mutation.get("storage_state"))
+            append(mutation.get("updated"))
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        if "browser_storage" not in event_type:
+            continue
+        payload = _as_dict(_get(event, "payload", {}))
+        append(payload.get("storage_state", payload))
+        append(_as_dict(payload.get("updated")))
+    return {
+        "cookies": _dedupe_simple_dicts(storage["cookies"]),
+        "origins": _merge_browser_storage_origins(storage["origins"]),
+    }
+
+
+def _browser_storage_matches(
+    storage_state: Mapping[str, Any],
+    spec: Mapping[str, Any],
+) -> bool:
+    if not spec:
+        return bool(storage_state)
+    cookie_specs = _browser_storage_cookie_specs(spec.get("cookies", spec.get("cookie", [])))
+    for cookie_spec in cookie_specs:
+        if not any(_browser_cookie_matches(cookie, cookie_spec) for cookie in _as_list(storage_state.get("cookies", []))):
+            return False
+    for key, storage_key in (("local_storage", "localStorage"), ("session_storage", "sessionStorage")):
+        expected = spec.get(key, spec.get(storage_key, {}))
+        if expected and not _browser_origin_storage_matches(storage_state, expected, storage_key=storage_key):
+            return False
+    forbidden = {str(value) for value in _as_list(spec.get("forbidden_keys", []))}
+    if forbidden:
+        for origin in _as_list(storage_state.get("origins", [])):
+            origin_dict = _as_dict(origin)
+            for storage_key in ("localStorage", "sessionStorage"):
+                for entry in _as_list(origin_dict.get(storage_key, [])):
+                    if str(_as_dict(entry).get("name")) in forbidden:
+                        return False
+    return True
+
+
+def _browser_storage_cookie_specs(raw: Any) -> List[Dict[str, Any]]:
+    if not raw:
+        return []
+    if isinstance(raw, Mapping) and not {"name", "value", "domain"}.intersection(raw.keys()):
+        return [{"name": name, "value": value} for name, value in raw.items()]
+    return [_as_dict(item) if isinstance(item, Mapping) else {"name": str(item)} for item in _as_list(raw)]
+
+
+def _browser_cookie_matches(cookie: Any, spec: Mapping[str, Any]) -> bool:
+    cookie_dict = _as_dict(cookie)
+    for key in ("name", "value", "domain", "path"):
+        if key in spec and str(cookie_dict.get(key)) != str(spec[key]):
+            return False
+    return bool(cookie_dict)
+
+
+def _browser_origin_storage_matches(
+    storage_state: Mapping[str, Any],
+    expected: Any,
+    *,
+    storage_key: str,
+) -> bool:
+    if isinstance(expected, Mapping):
+        if expected.get("origin") or expected.get(storage_key):
+            expected = [expected]
+        else:
+            expected = [
+                {"origin": origin, storage_key: values}
+                for origin, values in expected.items()
+            ]
+    for origin_spec in _as_list(expected):
+        origin_dict = _as_dict(origin_spec)
+        origin_name = str(origin_dict.get("origin") or "")
+        values = origin_dict.get(storage_key, origin_dict.get("values", origin_dict.get("items", {})))
+        expected_entries = _browser_storage_entry_specs(values)
+        matching_origins = [
+            _as_dict(origin)
+            for origin in _as_list(storage_state.get("origins", []))
+            if not origin_name or str(_as_dict(origin).get("origin")) == origin_name
+        ]
+        if not matching_origins:
+            return False
+        for expected_entry in expected_entries:
+            if not any(
+                _browser_storage_entry_matches(entry, expected_entry)
+                for origin in matching_origins
+                for entry in _as_list(origin.get(storage_key, []))
+            ):
+                return False
+    return True
+
+
+def _browser_storage_entry_specs(raw: Any) -> List[Dict[str, Any]]:
+    if not raw:
+        return []
+    if isinstance(raw, Mapping) and not {"name", "value"}.intersection(raw.keys()):
+        return [{"name": name, "value": value} for name, value in raw.items()]
+    return [_as_dict(item) if isinstance(item, Mapping) else {"name": str(item)} for item in _as_list(raw)]
+
+
+def _browser_storage_entry_matches(entry: Any, spec: Mapping[str, Any]) -> bool:
+    entry_dict = _as_dict(entry)
+    for key in ("name", "value"):
+        if key in spec and str(entry_dict.get(key)) != str(spec[key]):
+            return False
+    return bool(entry_dict)
+
+
+def _merge_browser_storage_origins(origins: Iterable[Any]) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for origin in origins:
+        origin_dict = _as_dict(origin)
+        origin_name = str(origin_dict.get("origin") or "")
+        if not origin_name:
+            continue
+        target = merged.setdefault(origin_name, {"origin": origin_name})
+        for storage_key in ("localStorage", "sessionStorage", "indexedDB"):
+            values = _as_list(origin_dict.get(storage_key, []))
+            if not values:
+                continue
+            target[storage_key] = _dedupe_simple_dicts([*target.get(storage_key, []), *values])
+    return list(merged.values())
+
+
+def _browser_runtime_events_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+
+    def append(raw: Any) -> None:
+        event = _as_dict(raw)
+        if event:
+            events.append(event)
+
+    final_state = _as_dict(context.get("final_state"))
+    browser_state = _as_dict(final_state.get("browser")) or final_state
+    for event in _as_list(browser_state.get("runtime_events", [])):
+        append(event)
+    for payload in _browser_trace_payloads_from_context(context):
+        for event in _as_list(payload.get("runtime_events", [])):
+            append(event)
+        final_browser = _as_dict(_as_dict(payload.get("final_state", {})).get("browser"))
+        for event in _as_list(final_browser.get("runtime_events", [])):
+            append(event)
+        for record in _as_list(payload.get("action_replay", payload.get("actions", []))):
+            for event in _as_list(_as_dict(record).get("runtime_events", [])):
+                append(event)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        if "browser_runtime" not in event_type:
+            continue
+        payload = _as_dict(_get(event, "payload", {}))
+        for runtime_event in _as_list(payload.get("runtime_events", [])):
+            append(runtime_event)
+        if payload.get("type") or payload.get("message"):
+            append(payload)
+    return _dedupe_simple_dicts(events)
+
+
+def _browser_performance_entries_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+
+    def append(raw: Any) -> None:
+        entry = _as_dict(raw)
+        if entry:
+            entries.append(entry)
+
+    final_state = _as_dict(context.get("final_state"))
+    browser_state = _as_dict(final_state.get("browser")) or final_state
+    for entry in _as_list(browser_state.get("performance_entries", [])):
+        append(entry)
+    for payload in _browser_trace_payloads_from_context(context):
+        for entry in _as_list(payload.get("performance_entries", [])):
+            append(entry)
+        final_browser = _as_dict(_as_dict(payload.get("final_state", {})).get("browser"))
+        for entry in _as_list(final_browser.get("performance_entries", [])):
+            append(entry)
+        for record in _as_list(payload.get("action_replay", payload.get("actions", []))):
+            for entry in _as_list(_as_dict(record).get("performance_entries", [])):
+                append(entry)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        if "browser_runtime" not in event_type:
+            continue
+        payload = _as_dict(_get(event, "payload", {}))
+        for entry in _as_list(payload.get("performance_entries", [])):
+            append(entry)
+    return _dedupe_simple_dicts(entries)
+
+
+def _normalize_browser_runtime_event_expectation(raw_spec: Any) -> Dict[str, Any]:
+    if isinstance(raw_spec, str):
+        return {"message_contains": raw_spec}
+    spec = dict(_as_dict(raw_spec))
+    if "type" in spec:
+        spec["type"] = str(spec["type"]).lower().replace("-", "_").replace(" ", "_")
+    if "level" in spec:
+        spec["level"] = str(spec["level"]).lower()
+    return spec
+
+
+def _browser_runtime_event_matches(event: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
+    if not spec:
+        return bool(event)
+    event_type = str(event.get("type") or event.get("event") or event.get("kind") or "").lower().replace("-", "_").replace(" ", "_")
+    level = str(event.get("level") or event.get("severity") or "").lower()
+    for key in ("id", "name", "source"):
+        if key in spec and str(event.get(key)) != str(spec[key]):
+            return False
+    if "type" in spec and event_type != str(spec["type"]):
+        return False
+    if "level" in spec and level != str(spec["level"]):
+        return False
+    contains = spec.get("message_contains", spec.get("contains"))
+    if contains and str(contains).lower() not in _stringify(event).lower():
+        return False
+    return True
+
+
+def _dedupe_simple_dicts(items: Iterable[Any]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        data = _as_dict(item)
+        if not data:
+            continue
+        signature = json.dumps(data, sort_keys=True, default=str)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(data)
+    return deduped
+
+
 def _browser_perturbations_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
     perturbations: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -8185,6 +8506,12 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
         if "browser_network" in event_type or "network" in name:
             observed.add("network")
             _merge_browser_trace_payload(observed, payload)
+        if "browser_storage" in event_type or "storage" in name:
+            observed.add("storage_state")
+            _merge_browser_trace_payload(observed, payload)
+        if "browser_runtime" in event_type or "runtime" in name:
+            observed.add("runtime_event")
+            _merge_browser_trace_payload(observed, payload)
         if "browser_actionability" in event_type or "actionability" in name:
             observed.add("actionability")
             if "timeline" in name:
@@ -8214,6 +8541,11 @@ def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, An
             "network_log",
             "resource_bodies",
             "actionability_timeline",
+            "storage_state",
+            "storageState",
+            "runtime_events",
+            "performance_entries",
+            "runtime_summary",
             "video_artifacts",
             "perturbations",
             "layout_shift_distribution",
@@ -8264,6 +8596,12 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
                     observed.add("masked_screenshot_diff")
             if _as_dict(record_dict.get("actionability")):
                 observed.add("actionability")
+            if _as_dict(record_dict.get("storage_mutation")):
+                observed.add("storage_state")
+            if _as_list(record_dict.get("runtime_events", [])):
+                observed.add("runtime_event")
+            if _as_list(record_dict.get("performance_entries", [])):
+                observed.add("performance_entry")
     if _as_list(payload.get("dom_mutations", [])):
         observed.add("dom_mutation")
     if _as_list(payload.get("screenshot_diffs", [])) or payload.get("screenshot_diff"):
@@ -8301,6 +8639,34 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
         observed.add("network")
     if _as_list(payload.get("resource_bodies", [])):
         observed.add("resource_body")
+    storage_state = _as_dict(payload.get("storage_state", payload.get("storageState", {})))
+    if storage_state:
+        observed.add("storage_state")
+        if _as_list(storage_state.get("cookies", [])):
+            observed.add("cookie")
+            observed.add("cookies")
+        for origin in _as_list(storage_state.get("origins", [])):
+            origin_dict = _as_dict(origin)
+            if _as_list(origin_dict.get("localStorage", [])):
+                observed.add("local_storage")
+            if _as_list(origin_dict.get("sessionStorage", [])):
+                observed.add("session_storage")
+            if _as_list(origin_dict.get("indexedDB", [])):
+                observed.add("indexed_db")
+    if _as_list(payload.get("runtime_events", [])):
+        observed.add("runtime_event")
+        for event in _as_list(payload.get("runtime_events", [])):
+            event_type = str(_as_dict(event).get("type") or "").lower().replace("-", "_")
+            if event_type:
+                observed.add(_normalize_browser_trace_key(event_type))
+    if _as_list(payload.get("performance_entries", [])):
+        observed.add("performance_entry")
+        observed.add("performance_timing")
+    runtime_summary = _as_dict(payload.get("runtime_summary", {}))
+    if runtime_summary:
+        observed.add("runtime_summary")
+        if runtime_summary.get("error_count"):
+            observed.add("runtime_error")
     if _as_list(payload.get("actionability_timeline", [])):
         observed.add("actionability")
         observed.add("actionability_timeline")
@@ -8310,6 +8676,11 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
         observed.add("prompt_injection_surface")
     if _as_dict(payload.get("final_state", {})):
         observed.add("state")
+        final_browser = _as_dict(_as_dict(payload.get("final_state", {})).get("browser"))
+        if _as_dict(final_browser.get("storage_state", final_browser.get("storageState", {}))):
+            _merge_browser_trace_payload(observed, final_browser)
+        if _as_list(final_browser.get("runtime_events", [])) or _as_list(final_browser.get("performance_entries", [])):
+            _merge_browser_trace_payload(observed, final_browser)
 
 
 def _browser_trace_source_text(payload: Mapping[str, Any]) -> str:
@@ -8327,6 +8698,8 @@ def _browser_trace_source_text(payload: Mapping[str, Any]) -> str:
         "network_log",
         "resource_bodies",
         "actionability_timeline",
+        "runtime_events",
+        "performance_entries",
         "prompt_injections",
     ):
         for item in _as_list(payload.get(key, [])):
@@ -8422,6 +8795,38 @@ def _normalize_browser_trace_key(key: str) -> str:
         "resource_bodies": "resource_body",
         "response_body": "resource_body",
         "response_bodies": "resource_body",
+        "storage": "storage_state",
+        "storage_state": "storage_state",
+        "storage_states": "storage_state",
+        "storagestate": "storage_state",
+        "cookies": "cookie",
+        "cookie": "cookie",
+        "local_storage": "local_storage",
+        "localstorage": "local_storage",
+        "session_storage": "session_storage",
+        "sessionstorage": "session_storage",
+        "indexed_db": "indexed_db",
+        "indexeddb": "indexed_db",
+        "browser_runtime": "runtime_event",
+        "runtime": "runtime_event",
+        "runtime_event": "runtime_event",
+        "runtime_events": "runtime_event",
+        "runtime_error": "runtime_error",
+        "runtime_errors": "runtime_error",
+        "page_error": "runtime_error",
+        "pageerror": "runtime_error",
+        "web_error": "runtime_error",
+        "weberror": "runtime_error",
+        "console_error": "runtime_error",
+        "service_worker": "service_worker",
+        "serviceworker": "service_worker",
+        "performance": "performance_entry",
+        "performance_entry": "performance_entry",
+        "performance_entries": "performance_entry",
+        "performance_timing": "performance_timing",
+        "navigation_timing": "performance_timing",
+        "resource_timing": "performance_timing",
+        "runtime_summary": "runtime_summary",
         "actionability": "actionability",
         "actionability_timeline": "actionability_timeline",
         "actionability_check": "actionability",
