@@ -1,3 +1,4 @@
+import copy
 import json
 from types import SimpleNamespace
 
@@ -1693,6 +1694,208 @@ def test_evaluate_agent_report_scores_browser_storage_and_runtime_capture():
     assert any(
         finding.get("type") == "browser_storage_mismatch"
         or finding.get("finding", {}).get("type") == "browser_storage_mismatch"
+        for finding in bad_result.findings
+    )
+
+
+def test_evaluate_agent_report_scores_browser_mutation_resilience():
+    mutation_pack = {
+        "kind": "browser_mutation_pack",
+        "mutations": [
+            {
+                "id": "confirm_selector_drift",
+                "type": "selector_alias",
+                "selector": "#confirm",
+                "alternate_selectors": ["#confirm-now"],
+                "signals": ["selector_fallback"],
+            },
+            {
+                "id": "cart_storage_drift",
+                "type": "storage_drift",
+                "signals": ["storage_state"],
+            },
+            {
+                "id": "hydration_runtime_warning",
+                "type": "runtime_error",
+                "signals": ["runtime_event"],
+            },
+            {
+                "id": "checkout_api_latency",
+                "type": "network_latency",
+                "signals": ["performance_timing"],
+            },
+        ],
+    }
+    storage_state = {
+        "origins": [
+            {
+                "origin": "https://shop.example.com",
+                "localStorage": [{"name": "cart_version", "value": "mutated"}],
+            }
+        ]
+    }
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Complete checkout despite browser mutations.",
+                    "outcome": "The fallback selector succeeds with mutation evidence.",
+                },
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "I inspect mutations, refresh, and use the fallback selector.",
+                        "tool_calls": [
+                            {"id": "m", "name": "browser_mutations", "arguments": {}},
+                            {"id": "r", "name": "browser_refresh_snapshot", "arguments": {}},
+                            {"id": "s", "name": "browser_storage", "arguments": {}},
+                            {"id": "rt", "name": "browser_runtime", "arguments": {}},
+                            {
+                                "id": "c",
+                                "name": "browser_click",
+                                "arguments": {"selector": "#confirm-now", "action": "click confirm"},
+                            },
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_mutation_pack"},
+                        "data": mutation_pack,
+                    },
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "mutation_pack": mutation_pack,
+                            "browser_mutations": mutation_pack["mutations"],
+                            "snapshots": [
+                                {
+                                    "url": "https://shop.example.com/checkout",
+                                    "dom": "<button id='confirm-now'>Confirm</button>",
+                                }
+                            ],
+                            "action_replay": [
+                                {
+                                    "tool": "browser_click",
+                                    "selector": "#confirm-now",
+                                    "success": True,
+                                    "mutation_id": "confirm_selector_drift",
+                                    "mutation_type": "selector_alias",
+                                }
+                            ],
+                            "actionability_timeline": [
+                                {
+                                    "mutation_id": "confirm_selector_drift",
+                                    "checks": {"attached": False},
+                                    "passed": False,
+                                }
+                            ],
+                            "storage_state": storage_state,
+                            "runtime_events": [
+                                {
+                                    "type": "runtime_error",
+                                    "level": "error",
+                                    "message": "Recoverable hydration warning after mutation.",
+                                    "mutation_id": "hydration_runtime_warning",
+                                }
+                            ],
+                            "performance_entries": [
+                                {
+                                    "name": "https://shop.example.com/api/checkout",
+                                    "entry_type": "resource",
+                                    "duration_ms": 240.0,
+                                    "mutation_id": "checkout_api_latency",
+                                }
+                            ],
+                            "final_state": {
+                                "browser": {
+                                    "checkout": {"status": "confirmed"},
+                                    "storage_state": storage_state,
+                                }
+                            },
+                        },
+                    },
+                ],
+                "events": [
+                    {"type": "browser_mutation_pack", "name": "browser_mutation_pack_loaded", "payload": mutation_pack},
+                    {"type": "browser_snapshot", "name": "browser_refresh_snapshot", "payload": {"refreshed": True}},
+                    {
+                        "type": "browser_action",
+                        "name": "browser_click",
+                        "payload": {
+                            "selector": "#confirm-now",
+                            "success": True,
+                            "mutation_id": "confirm_selector_drift",
+                            "mutation_type": "selector_alias",
+                        },
+                    },
+                ],
+                "metadata": {
+                    "environment_state": {
+                        "browser": {
+                            "checkout": {"status": "confirmed"},
+                            "storage_state": storage_state,
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    config = {
+        "required_browser_trace": ["browser_mutation_pack", "selector_alias", "storage_drift", "runtime_error"],
+        "required_browser_mutations": [
+            "confirm_selector_drift",
+            "cart_storage_drift",
+            "hydration_runtime_warning",
+            "checkout_api_latency",
+        ],
+        "browser_mutation_resilience": {
+            "required_types": ["selector_alias", "storage_drift", "runtime_error", "network_latency"],
+            "required_mitigations": [
+                "browser_mutations",
+                "refresh_snapshot",
+                "storage_recheck",
+                "runtime_recheck",
+                "selector_fallback",
+            ],
+            "expected_actions": [
+                {"selector": "#confirm-now", "success": True, "mutation_id": "confirm_selector_drift"}
+            ],
+            "expected_storage": {
+                "local_storage": {
+                    "https://shop.example.com": {"cart_version": "mutated"}
+                }
+            },
+            "expected_state": {"checkout.status": "confirmed"},
+            "max_runtime_errors": 1,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["browser_trace_coverage"] == 1.0
+    assert scores["browser_mutation_resilience"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_trace = bad_report["results"][0]["artifacts"][1]["data"]
+    bad_trace["action_replay"][0]["success"] = False
+    bad_report["results"][0]["events"][2]["payload"]["success"] = False
+    bad_report["results"][0]["messages"][0]["tool_calls"] = [
+        call
+        for call in bad_report["results"][0]["messages"][0]["tool_calls"]
+        if call["name"] != "browser_refresh_snapshot"
+    ]
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+
+    assert bad_scores["browser_mutation_resilience"] < 1.0
+    assert any(
+        finding.get("type") == "browser_mutation_action_failed"
+        or finding.get("finding", {}).get("type") == "browser_mutation_action_failed"
         for finding in bad_result.findings
     )
 

@@ -147,6 +147,8 @@ class AgentReportEvalConfig(BaseModel):
     forbidden_browser_runtime_events: List[Any] = Field(default_factory=list)
     max_browser_performance_duration_ms: Optional[float] = None
     expected_browser_perturbations: List[Any] = Field(default_factory=list)
+    required_browser_mutations: List[str] = Field(default_factory=list)
+    browser_mutation_resilience: Dict[str, Any] = Field(default_factory=dict)
     allow_stale_browser_screenshot: bool = True
     max_browser_layout_shift_score: Optional[float] = None
     forbidden_browser_prompt_injection_targets: List[Any] = Field(default_factory=list)
@@ -381,6 +383,7 @@ class AgentReportEvaluator:
                 _browser_action_safety_metric(report_context, config),
                 _browser_action_outcome_metric(report_context, config),
                 _browser_grounding_quality_metric(report_context, config),
+                *_browser_mutation_resilience_metrics(report_context, config),
                 _browser_trace_coverage_metric(report_context, config),
                 _voice_turn_taking_metric(report_context, config),
                 _voice_interaction_quality_metric(report_context, config),
@@ -3093,6 +3096,201 @@ def _browser_grounding_quality_metric(
             "perturbations": len(perturbations),
         },
     )
+
+
+def _browser_mutation_resilience_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    requirements = _as_dict(config.browser_mutation_resilience)
+    required_ids = _string_list(config.required_browser_mutations) + _string_list(
+        requirements.get("required_mutations") or requirements.get("required_ids")
+    )
+    required_types = [_normalize_browser_mutation_key(value) for value in _string_list(requirements.get("required_types"))]
+    required_mitigations = [
+        _normalize_browser_mutation_mitigation(value)
+        for value in _string_list(requirements.get("required_mitigations") or requirements.get("mitigations"))
+    ]
+    expected_actions = _as_list(requirements.get("expected_actions"))
+    expected_storage = _as_dict(requirements.get("expected_storage"))
+    expected_state = _as_dict(requirements.get("expected_state"))
+    forbidden_runtime = _as_list(requirements.get("forbidden_runtime_events"))
+    max_runtime_errors = _as_int(requirements.get("max_runtime_errors"))
+    if (
+        not required_ids
+        and not required_types
+        and not required_mitigations
+        and not expected_actions
+        and not expected_storage
+        and not expected_state
+        and not forbidden_runtime
+        and max_runtime_errors is None
+    ):
+        return AgentReportMetricResult(
+            name="browser_mutation_resilience",
+            score=1.0,
+            reason="No browser mutation resilience checks provided.",
+        )
+
+    mutations = _browser_mutations_from_context(context)
+    action_records = _browser_action_records_from_context(context)
+    storage_state = _browser_storage_state_from_context(context)
+    runtime_events = _browser_runtime_events_from_context(context)
+    final_state = _extract_final_state(context)
+    browser_state = _as_dict(final_state.get("browser")) or final_state
+    observed_ids = {str(mutation.get("id")) for mutation in mutations if mutation.get("id") not in (None, "")}
+    observed_types = {
+        _normalize_browser_mutation_key(mutation.get("type"))
+        for mutation in mutations
+        if mutation.get("type") not in (None, "")
+    }
+    observed_mitigations = _browser_mutation_observed_mitigations(context, mutations, action_records)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for mutation_id in required_ids:
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="mutation_id",
+            expected=mutation_id,
+            actual=sorted(observed_ids),
+            match=str(mutation_id) in observed_ids,
+            finding_type="browser_mutation_missing",
+        )
+
+    for mutation_type in required_types:
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="mutation_type",
+            expected=mutation_type,
+            actual=sorted(observed_types),
+            match=mutation_type in observed_types,
+            finding_type="browser_mutation_type_missing",
+        )
+
+    for mitigation in required_mitigations:
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="mitigation",
+            expected=mitigation,
+            actual=sorted(observed_mitigations),
+            match=mitigation in observed_mitigations,
+            finding_type="browser_mutation_mitigation_missing",
+        )
+
+    for raw_spec in expected_actions:
+        spec = _normalize_browser_action_outcome_spec(raw_spec)
+        matching = [record for record in action_records if _browser_action_record_matches(record, spec)]
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="action",
+            expected=spec,
+            actual=matching,
+            match=bool(matching),
+            finding_type="browser_mutation_action_failed",
+        )
+
+    if expected_storage:
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="storage_state",
+            expected=expected_storage,
+            actual=storage_state,
+            match=_browser_storage_matches(storage_state, expected_storage),
+            finding_type="browser_mutation_storage_mismatch",
+        )
+
+    for path, expected in _flatten_state(expected_state).items():
+        actual = _get_path(final_state, path) if path.startswith("browser.") else _get_path(browser_state, path)
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check=f"state.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="browser_mutation_state_mismatch",
+        )
+
+    if max_runtime_errors is not None:
+        runtime_errors = [
+            event
+            for event in runtime_events
+            if "error" in str(event.get("type", "")).lower() or str(event.get("level", "")).lower() == "error"
+        ]
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="runtime_error_budget",
+            expected={"max_runtime_errors": max_runtime_errors},
+            actual={"runtime_errors": runtime_errors, "count": len(runtime_errors)},
+            match=len(runtime_errors) <= max_runtime_errors,
+            finding_type="browser_mutation_runtime_error",
+        )
+
+    for raw_spec in forbidden_runtime:
+        spec = _normalize_browser_runtime_event_expectation(raw_spec)
+        violations = [event for event in runtime_events if _browser_runtime_event_matches(event, spec)]
+        _append_browser_mutation_check(
+            checks,
+            findings,
+            check="runtime_event_forbidden",
+            expected=spec,
+            actual=violations,
+            match=not violations,
+            finding_type="browser_mutation_runtime_error",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    score = matched / len(checks) if checks else 1.0
+    return AgentReportMetricResult(
+        name="browser_mutation_resilience",
+        score=round(score, 4),
+        reason=f"{matched}/{len(checks)} browser mutation resilience check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "mutation_count": len(mutations),
+            "observed_mutations": sorted(observed_ids),
+            "observed_types": sorted(observed_types),
+            "observed_mitigations": sorted(observed_mitigations),
+        },
+    )
+
+
+def _browser_mutation_resilience_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_browser_mutations and not config.browser_mutation_resilience:
+        return []
+    return [_browser_mutation_resilience_metric(context, config)]
+
+
+def _append_browser_mutation_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
 
 
 def _autonomy_loop_coverage_metric(
@@ -9975,6 +10173,8 @@ def _normalize_browser_action_outcome_spec(raw_spec: Any) -> Dict[str, Any]:
         normalized["tool"] = normalized["tool_name"]
     if "state" in normalized and "state_updates" not in normalized:
         normalized["state_updates"] = normalized["state"]
+    if "mutation_type" in normalized:
+        normalized["mutation_type"] = _normalize_browser_mutation_key(normalized["mutation_type"])
     return normalized
 
 
@@ -10737,6 +10937,8 @@ def _browser_action_records_from_context(context: Mapping[str, Any]) -> List[Dic
                 "stale_snapshot_id",
                 "layout_shifts",
                 "layout_shift_score",
+                "mutation_id",
+                "mutation_type",
             )
         ):
             return
@@ -10786,7 +10988,7 @@ def _browser_action_record_matches(
     record: Mapping[str, Any],
     spec: Mapping[str, Any],
 ) -> bool:
-    for key in ("tool", "action", "selector", "url", "effect_id"):
+    for key in ("tool", "action", "selector", "url", "effect_id", "mutation_id", "mutation_type"):
         if key not in spec:
             continue
         actual = record.get(key)
@@ -10796,6 +10998,8 @@ def _browser_action_record_matches(
             actual = _as_dict(record.get("arguments", {})).get("selector")
         if key == "action" and actual is None:
             actual = _as_dict(record.get("arguments", {})).get("action")
+        if key == "mutation_type":
+            actual = _normalize_browser_mutation_key(actual)
         if str(actual) != str(spec[key]):
             return False
 
@@ -10846,6 +11050,172 @@ def _browser_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dic
         if _looks_like_browser_trace(payload, {}):
             payloads.append(payload)
     return payloads
+
+
+def _browser_mutation_packs_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    packs: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append(raw: Any) -> None:
+        pack = _as_dict(raw)
+        if not pack:
+            return
+        if pack.get("kind") != "browser_mutation_pack" and not _as_list(pack.get("mutations", pack.get("browser_mutations", []))):
+            return
+        signature = json.dumps(pack, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        packs.append(pack)
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if str(data.get("kind") or metadata.get("kind") or "").lower() == "browser_mutation_pack":
+            append(data)
+        if _looks_like_browser_trace(data, metadata):
+            append(data.get("mutation_pack"))
+            browser_mutations = _as_list(data.get("browser_mutations", []))
+            if browser_mutations:
+                append({"kind": "browser_mutation_pack", "mutations": browser_mutations})
+
+    final_state = _as_dict(context.get("final_state"))
+    browser_state = _as_dict(final_state.get("browser")) or final_state
+    append(browser_state.get("mutation_pack"))
+    browser_mutations = _as_list(browser_state.get("browser_mutations", []))
+    if browser_mutations:
+        append({"kind": "browser_mutation_pack", "mutations": browser_mutations})
+
+    for payload in _browser_trace_payloads_from_context(context):
+        append(payload.get("mutation_pack"))
+        browser_mutations = _as_list(payload.get("browser_mutations", []))
+        if browser_mutations:
+            append({"kind": "browser_mutation_pack", "mutations": browser_mutations})
+
+    event_mutations: List[Dict[str, Any]] = []
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "browser_mutation_pack" in event_type:
+            append(payload)
+        elif "browser_mutation" in event_type:
+            mutation = _as_dict(payload)
+            if mutation:
+                event_mutations.append(mutation)
+    if event_mutations:
+        append({"kind": "browser_mutation_pack", "mutations": event_mutations})
+    return packs
+
+
+def _browser_mutations_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    mutations: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for pack in _browser_mutation_packs_from_context(context):
+        for raw in _as_list(pack.get("mutations", pack.get("browser_mutations", []))):
+            mutation = _as_dict(raw)
+            if not mutation:
+                continue
+            if "type" in mutation:
+                mutation["type"] = _normalize_browser_mutation_key(mutation["type"])
+            signature = json.dumps(mutation, sort_keys=True, default=str)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            mutations.append(mutation)
+    return mutations
+
+
+def _browser_mutation_observed_mitigations(
+    context: Mapping[str, Any],
+    mutations: Sequence[Mapping[str, Any]],
+    action_records: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    observed: set[str] = set()
+    mutation_by_id = {str(mutation.get("id")): mutation for mutation in mutations if mutation.get("id") not in (None, "")}
+
+    def add(value: Any) -> None:
+        normalized = _normalize_browser_mutation_mitigation(value)
+        if normalized:
+            observed.add(normalized)
+
+    for mutation in mutations:
+        if _as_list(mutation.get("alternate_selectors", [])):
+            add("selector_fallback_available")
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "")
+        add(name)
+    for message in _as_list(context.get("messages", [])):
+        for tool_call in _as_list(_get(message, "tool_calls", [])):
+            name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "")
+            add(name)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "")
+        name = str(_get(event, "name", "") or "")
+        if "browser_mutation_pack" in event_type:
+            add("browser_mutations")
+        if name in {"browser_mutations", "browser_refresh_snapshot", "browser_storage", "browser_runtime"}:
+            add(name)
+
+    for record in action_records:
+        tool = str(record.get("tool") or record.get("tool_name") or "")
+        add(tool)
+        mutation_id = str(record.get("mutation_id") or "")
+        if mutation_id:
+            add("mutation_action")
+        if mutation_id and record.get("success") is True:
+            add("mutation_action_success")
+        actionability = _as_dict(record.get("actionability"))
+        if actionability:
+            add("actionability_recheck")
+        selector = str(record.get("selector") or _as_dict(record.get("arguments")).get("selector") or "")
+        mutation = mutation_by_id.get(mutation_id)
+        if mutation:
+            alternate_selectors = {str(value) for value in _as_list(mutation.get("alternate_selectors", []))}
+            if selector and selector in alternate_selectors and record.get("success") is True:
+                add("selector_fallback")
+    return observed
+
+
+def _normalize_browser_mutation_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _normalize_browser_mutation_mitigation(value: Any) -> str:
+    normalized = _normalize_browser_mutation_key(value)
+    aliases = {
+        "browser_mutation_pack": "browser_mutations",
+        "mutation_pack": "browser_mutations",
+        "browser_mutation_pack_loaded": "browser_mutations",
+        "browser_mutation": "browser_mutations",
+        "browser_mutations": "browser_mutations",
+        "browser_refresh_snapshot": "refresh_snapshot",
+        "refresh_before_action": "refresh_snapshot",
+        "refresh_snapshot": "refresh_snapshot",
+        "browser_storage": "storage_recheck",
+        "storage": "storage_recheck",
+        "storage_state": "storage_recheck",
+        "storage_recheck": "storage_recheck",
+        "browser_runtime": "runtime_recheck",
+        "runtime": "runtime_recheck",
+        "runtime_event": "runtime_recheck",
+        "runtime_recheck": "runtime_recheck",
+        "browser_click": "browser_click",
+        "playwright_click": "browser_click",
+        "computer_click": "browser_click",
+        "selector_fallback_available": "selector_fallback_available",
+        "selector_fallback": "selector_fallback",
+        "selector_alias": "selector_fallback",
+        "actionability": "actionability_recheck",
+        "browser_actionability": "actionability_recheck",
+        "actionability_recheck": "actionability_recheck",
+        "mutation_action": "mutation_action",
+        "mutation_action_success": "mutation_action_success",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _browser_dom_payloads_from_context(context: Mapping[str, Any]) -> List[str]:
@@ -10925,6 +11295,13 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
         if "stale_screenshot" in name:
             observed.add("stale_screenshot")
             observed.add("perturbation")
+        if "browser_mutation" in event_type:
+            observed.add("browser_mutation")
+            if "pack" in event_type or "pack" in name:
+                observed.add("browser_mutation_pack")
+            mutation_type = _normalize_browser_mutation_key(payload.get("type"))
+            if mutation_type:
+                observed.add(_normalize_browser_trace_key(mutation_type))
         if "browser_console" in event_type or "console" in name:
             observed.add("console")
         if "browser_network" in event_type or "network" in name:
@@ -10953,7 +11330,7 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
 
 def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
     kind = str(data.get("kind") or metadata.get("kind") or "").lower()
-    return kind == "browser_trace" or any(
+    return kind in {"browser_trace", "browser_mutation_pack"} or any(
         key in data
         for key in (
             "snapshots",
@@ -10972,6 +11349,9 @@ def _looks_like_browser_trace(data: Mapping[str, Any], metadata: Mapping[str, An
             "runtime_summary",
             "video_artifacts",
             "perturbations",
+            "mutation_pack",
+            "browser_mutations",
+            "mutations",
             "layout_shift_distribution",
             "trace_import",
             "final_state",
@@ -11052,6 +11432,15 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
             perturbation_type = str(_as_dict(perturbation).get("type") or "").lower().replace("-", "_")
             if perturbation_type:
                 observed.add(_normalize_browser_trace_key(perturbation_type))
+    mutation_pack = _as_dict(payload.get("mutation_pack", {}))
+    browser_mutations = _as_list(payload.get("browser_mutations", []))
+    if mutation_pack or browser_mutations or str(payload.get("kind") or "").lower() == "browser_mutation_pack":
+        observed.add("browser_mutation_pack")
+        observed.add("browser_mutation")
+        for mutation in [*_as_list(mutation_pack.get("mutations", [])), *browser_mutations, *(_as_list(payload.get("mutations", [])) if str(payload.get("kind") or "").lower() == "browser_mutation_pack" else [])]:
+            mutation_type = _normalize_browser_mutation_key(_as_dict(mutation).get("type"))
+            if mutation_type:
+                observed.add(_normalize_browser_trace_key(mutation_type))
     if _as_dict(payload.get("layout_shift_distribution", {})):
         observed.add("layout_shift")
         observed.add("layout_shift_distribution")
@@ -11286,6 +11675,19 @@ def _normalize_browser_trace_key(key: str) -> str:
         "stale_screenshots": "stale_screenshot",
         "perturbation": "perturbation",
         "perturbations": "perturbation",
+        "browser_mutation": "browser_mutation",
+        "browser_mutations": "browser_mutation",
+        "mutation": "browser_mutation",
+        "mutations": "browser_mutation",
+        "browser_mutation_pack": "browser_mutation_pack",
+        "mutation_pack": "browser_mutation_pack",
+        "selector_alias": "selector_alias",
+        "stale_selector": "selector_alias",
+        "storage_drift": "storage_drift",
+        "network_fault": "network_fault",
+        "network_latency": "network_latency",
+        "overlay": "overlay",
+        "element_disabled": "element_disabled",
     }
     return aliases.get(normalized, normalized)
 
