@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, semantic/masked browser visual diffs, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -219,8 +219,9 @@ regressions.
 Browser trace and grounding metrics also understand Playwright trace import
 evidence, HAR/resource-body replay, OpenAI Computer Use trace provenance,
 Browser Use history, imported actionability timelines, image-derived pixel
-screenshot diffs, layout-shift distributions, video artifacts, layout-shift
-perturbations, and stale-screenshot avoidance checks.
+screenshot diffs, semantic/masked visual-diff regions, layout-shift
+distributions, video artifacts, layout-shift perturbations, and
+stale-screenshot avoidance checks.
 Voice trace and interaction metrics understand LiveKit/Pipecat-style export
 replay evidence, waveform fixtures, decoded WAV/PCM media metadata,
 diarization segments, sample-rate/duration/RMS/peak checks,
@@ -327,7 +328,7 @@ result = evaluate_agent_report(
             {"reviewer": "qa_reviewer", "criteria": ["policy", "tone"]}
         ],
         "expected_multi_agent_reconciliation": {"accepted_source": "policy_specialist"},
-        "required_browser_trace": ["dom", "screenshot", "action", "coordinate_region", "screenshot_diff", "pixel_screenshot_diff", "layout_shift_distribution", "prompt_injection_surface", "dom_mutation", "state", "console", "network", "har", "resource_body", "actionability_timeline", "openai_cua_trace", "browser_use_trace"],
+        "required_browser_trace": ["dom", "screenshot", "action", "coordinate_region", "screenshot_diff", "pixel_screenshot_diff", "semantic_screenshot_diff", "masked_screenshot_diff", "layout_shift_distribution", "prompt_injection_surface", "dom_mutation", "state", "console", "network", "har", "resource_body", "actionability_timeline", "openai_cua_trace", "browser_use_trace"],
         "expected_browser_actions": [
             {"selector": "#confirm", "success": True, "matched": True}
         ],
@@ -337,6 +338,14 @@ result = evaluate_agent_report(
         "expected_browser_screenshot_diffs": [
             {"id": "confirm_visual_delta"},
             {"id": "confirm_pixel_delta", "min_changed_pixels": 4, "min_changed_ratio": 0.2},
+            {
+                "id": "confirm_semantic_delta",
+                "semantic_regions": ["status_banner"],
+                "allowed_regions": ["status_banner"],
+                "masked_regions": ["session_clock"],
+                "forbidden_regions": ["total_due"],
+                "only_allowed_regions_changed": True,
+            },
         ],
         "forbidden_browser_prompt_injection_targets": ["coupon_iframe"],
         "expected_browser_state": {"url": "https://shop.example.com/done"},

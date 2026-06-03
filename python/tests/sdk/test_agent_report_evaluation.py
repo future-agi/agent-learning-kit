@@ -1355,6 +1355,114 @@ def test_evaluate_agent_report_scores_pixel_diff_and_layout_distribution():
     )
 
 
+def test_evaluate_agent_report_scores_semantic_masked_screenshot_regions():
+    semantic_diff = {
+        "id": "confirm_semantic_delta",
+        "source": "pixel_diff",
+        "algorithm": "pixel_absdiff_v1",
+        "changed_pixels": 5,
+        "changed_ratio": 0.3125,
+        "changed_regions": ["session_clock", "status_banner"],
+        "semantic_regions": [
+            {"name": "session_clock", "role": "timer", "changed": True, "masked": True},
+            {"name": "status_banner", "role": "status", "changed": True, "allowed": True},
+            {"name": "total_due", "role": "amount", "changed": False, "forbidden": True},
+        ],
+        "semantic_summary": {
+            "changed_regions": ["session_clock", "status_banner"],
+            "changed_semantic_regions": ["session_clock", "status_banner"],
+            "masked_regions": ["session_clock"],
+            "masked_changed_regions": ["session_clock"],
+            "effective_changed_regions": ["status_banner"],
+            "required_regions": ["status_banner"],
+            "missing_required_regions": [],
+            "allowed_regions": ["status_banner"],
+            "unexpected_changed_regions": [],
+            "forbidden_regions": ["total_due"],
+            "forbidden_regions_changed": [],
+            "only_allowed_regions_changed": True,
+        },
+    }
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Confirm checkout while masking dynamic visual noise.",
+                    "outcome": "Only the allowed semantic status region changes.",
+                },
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "browser_trace"},
+                        "data": {
+                            "kind": "browser_trace",
+                            "action_replay": [
+                                {
+                                    "tool": "browser_click",
+                                    "selector": "#confirm",
+                                    "success": True,
+                                    "screenshot_diff": semantic_diff,
+                                }
+                            ],
+                            "screenshot_diffs": [semantic_diff],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "required_browser_trace": ["semantic_screenshot_diff", "masked_screenshot_diff"],
+        "expected_browser_screenshot_diffs": [
+            {
+                "id": "confirm_semantic_delta",
+                "semantic_regions": ["status_banner"],
+                "allowed_regions": ["status_banner"],
+                "masked_regions": ["session_clock"],
+                "forbidden_regions": ["total_due"],
+                "only_allowed_regions_changed": True,
+            }
+        ],
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["browser_trace_coverage"] == 1.0
+    assert scores["browser_grounding_quality"] == 1.0
+
+    bad_report = json.loads(json.dumps(report))
+    bad_trace = bad_report["results"][0]["artifacts"][0]["data"]
+    bad_diffs = [bad_trace["action_replay"][0]["screenshot_diff"], bad_trace["screenshot_diffs"][0]]
+    for diff in bad_diffs:
+        diff["changed_regions"] = ["session_clock", "status_banner", "total_due"]
+        diff["semantic_summary"]["masked_regions"] = []
+        diff["semantic_summary"]["masked_changed_regions"] = []
+        diff["semantic_summary"]["effective_changed_regions"] = [
+            "session_clock",
+            "status_banner",
+            "total_due",
+        ]
+        diff["semantic_summary"]["unexpected_changed_regions"] = ["session_clock", "total_due"]
+        diff["semantic_summary"]["forbidden_regions_changed"] = ["total_due"]
+        diff["semantic_summary"]["only_allowed_regions_changed"] = False
+        for region in diff["semantic_regions"]:
+            if region["name"] == "session_clock":
+                region["masked"] = False
+            if region["name"] == "total_due":
+                region["changed"] = True
+
+    bad_result = evaluate_agent_report(bad_report, config=config)
+    bad_scores = {metric.name: metric.score for metric in bad_result.cases[0].metrics}
+
+    assert bad_scores["browser_grounding_quality"] == 0.0
+    assert any(
+        finding.get("type") == "browser_screenshot_diff_missing"
+        or finding.get("finding", {}).get("type") == "browser_screenshot_diff_missing"
+        for finding in bad_result.findings
+    )
+
+
 def test_evaluate_agent_report_scores_voice_trace_coverage():
     report = {
         "results": [

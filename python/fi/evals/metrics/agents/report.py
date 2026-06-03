@@ -7720,6 +7720,51 @@ def _browser_screenshot_diff_matches(
         }
         if not set(expected_regions).issubset(actual_regions):
             return False
+    expected_semantic_regions = _browser_region_name_list(
+        spec.get("semantic_regions", spec.get("required_semantic_regions", spec.get("required_regions", [])))
+    )
+    if expected_semantic_regions:
+        actual_semantic_regions = set(_browser_screenshot_diff_semantic_changed_regions(diff))
+        if not set(expected_semantic_regions).issubset(actual_semantic_regions):
+            return False
+        missing_required = set(_browser_region_name_list(_as_dict(diff.get("semantic_summary")).get("missing_required_regions", [])))
+        if missing_required.intersection(expected_semantic_regions):
+            return False
+    masked_regions = _browser_region_name_list(
+        spec.get("masked_regions", spec.get("mask_regions", spec.get("ignore_regions", [])))
+    )
+    if masked_regions:
+        actual_masked = set(_browser_screenshot_diff_masked_regions(diff))
+        if not set(masked_regions).issubset(actual_masked):
+            return False
+        effective_changed = set(_browser_screenshot_diff_effective_changed_regions(diff))
+        if effective_changed.intersection(masked_regions):
+            return False
+    allowed_regions = _browser_region_name_list(
+        spec.get("allowed_regions", spec.get("allow_regions", spec.get("allowed_changed_regions", [])))
+    )
+    if allowed_regions or spec.get("only_allowed_regions_changed") is True:
+        effective_changed = set(_browser_screenshot_diff_effective_changed_regions(diff))
+        allowed_or_required = set(allowed_regions).union(expected_semantic_regions)
+        if allowed_or_required and not effective_changed.issubset(allowed_or_required):
+            return False
+        unexpected = set(_browser_region_name_list(_as_dict(diff.get("semantic_summary")).get("unexpected_changed_regions", [])))
+        if unexpected:
+            return False
+        if spec.get("only_allowed_regions_changed") is True:
+            summary = _as_dict(diff.get("semantic_summary"))
+            if summary.get("only_allowed_regions_changed") is False:
+                return False
+    forbidden_regions = _browser_region_name_list(
+        spec.get("forbidden_regions", spec.get("forbid_regions", spec.get("forbidden_changed_regions", [])))
+    )
+    if forbidden_regions:
+        forbidden_changed = set(
+            _browser_region_name_list(_as_dict(diff.get("semantic_summary")).get("forbidden_regions_changed", []))
+        )
+        effective_changed = set(_browser_screenshot_diff_effective_changed_regions(diff))
+        if forbidden_changed.intersection(forbidden_regions) or effective_changed.intersection(forbidden_regions):
+            return False
     contains = spec.get("contains") or spec.get("label_contains")
     if contains and str(contains).lower() not in _stringify(diff).lower():
         return False
@@ -7753,6 +7798,71 @@ def _browser_screenshot_diff_matches(
         expected = str(spec["id"])
         return expected in {str(diff.get("id")), str(diff.get("name")), str(diff.get("label")), str(diff.get("source_action"))} or expected in _stringify(diff)
     return True
+
+
+def _browser_screenshot_diff_semantic_changed_regions(diff: Mapping[str, Any]) -> List[str]:
+    summary = _as_dict(diff.get("semantic_summary"))
+    names = _browser_region_name_list(
+        summary.get(
+            "effective_changed_regions",
+            summary.get("changed_semantic_regions", summary.get("changed_regions", [])),
+        )
+    )
+    if not names:
+        names = _browser_region_name_list(diff.get("changed_regions", diff.get("regions", [])))
+    for region in _as_list(diff.get("semantic_regions", [])):
+        region_dict = _as_dict(region)
+        if region_dict.get("changed") and not region_dict.get("masked"):
+            name = _browser_region_name(region_dict)
+            if name:
+                names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _browser_screenshot_diff_effective_changed_regions(diff: Mapping[str, Any]) -> List[str]:
+    summary = _as_dict(diff.get("semantic_summary"))
+    effective = _browser_region_name_list(summary.get("effective_changed_regions", []))
+    if effective:
+        return effective
+    changed = _browser_region_name_list(
+        summary.get("changed_regions", diff.get("changed_regions", diff.get("regions", [])))
+    )
+    masked = set(_browser_screenshot_diff_masked_regions(diff))
+    return [name for name in changed if name not in masked]
+
+
+def _browser_screenshot_diff_masked_regions(diff: Mapping[str, Any]) -> List[str]:
+    summary = _as_dict(diff.get("semantic_summary"))
+    names = _browser_region_name_list(
+        summary.get("masked_regions", diff.get("masked_regions", diff.get("mask_regions", [])))
+    )
+    for region in _as_list(diff.get("semantic_regions", [])):
+        region_dict = _as_dict(region)
+        if region_dict.get("masked"):
+            name = _browser_region_name(region_dict)
+            if name:
+                names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _browser_region_name_list(values: Any) -> List[str]:
+    names: List[str] = []
+    for value in _as_list(values):
+        name = _browser_region_name(value)
+        if name:
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _browser_region_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        for key in ("name", "id", "region", "target_region", "selector", "label"):
+            if value.get(key):
+                return str(value[key])
+        return None
+    return str(value)
 
 
 def _normalize_browser_perturbation_expectation(raw_spec: Any) -> Dict[str, Any]:
@@ -8053,8 +8163,17 @@ def _browser_trace_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("coordinate_region")
             if payload.get("screenshot_diff"):
                 observed.add("screenshot_diff")
+                screenshot_diff = _as_dict(payload.get("screenshot_diff"))
+                if _browser_screenshot_diff_has_semantic_evidence(screenshot_diff):
+                    observed.add("semantic_screenshot_diff")
+                if _browser_screenshot_diff_has_masked_evidence(screenshot_diff):
+                    observed.add("masked_screenshot_diff")
         if "browser_screenshot_diff" in event_type or "screenshot_diff" in name:
             observed.add("screenshot_diff")
+            if _browser_screenshot_diff_has_semantic_evidence(payload):
+                observed.add("semantic_screenshot_diff")
+            if _browser_screenshot_diff_has_masked_evidence(payload):
+                observed.add("masked_screenshot_diff")
         if "browser_perturbation" in event_type or "layout_shift" in name:
             observed.add("layout_shift")
             observed.add("perturbation")
@@ -8138,6 +8257,11 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
                 observed.add("coordinate_region")
             if record_dict.get("screenshot_diff"):
                 observed.add("screenshot_diff")
+                screenshot_diff = _as_dict(record_dict.get("screenshot_diff"))
+                if _browser_screenshot_diff_has_semantic_evidence(screenshot_diff):
+                    observed.add("semantic_screenshot_diff")
+                if _browser_screenshot_diff_has_masked_evidence(screenshot_diff):
+                    observed.add("masked_screenshot_diff")
             if _as_dict(record_dict.get("actionability")):
                 observed.add("actionability")
     if _as_list(payload.get("dom_mutations", [])):
@@ -8145,8 +8269,13 @@ def _merge_browser_trace_payload(observed: set[str], payload: Mapping[str, Any])
     if _as_list(payload.get("screenshot_diffs", [])) or payload.get("screenshot_diff"):
         observed.add("screenshot_diff")
         for diff in _as_list(payload.get("screenshot_diffs", payload.get("screenshot_diff", []))):
-            if _browser_screenshot_diff_has_pixel_evidence(_as_dict(diff)):
+            diff_dict = _as_dict(diff)
+            if _browser_screenshot_diff_has_pixel_evidence(diff_dict):
                 observed.add("pixel_screenshot_diff")
+            if _browser_screenshot_diff_has_semantic_evidence(diff_dict):
+                observed.add("semantic_screenshot_diff")
+            if _browser_screenshot_diff_has_masked_evidence(diff_dict):
+                observed.add("masked_screenshot_diff")
     if _as_list(payload.get("video_artifacts", [])):
         observed.add("video")
     trace_import = _as_dict(payload.get("trace_import", {}))
@@ -8222,6 +8351,24 @@ def _browser_screenshot_diff_has_pixel_evidence(diff: Mapping[str, Any]) -> bool
     return any(key in diff for key in ("changed_pixels", "changed_ratio", "changed_percent", "pixel_diff", "bounding_box"))
 
 
+def _browser_screenshot_diff_has_semantic_evidence(diff: Mapping[str, Any]) -> bool:
+    if not diff:
+        return False
+    summary = _as_dict(diff.get("semantic_summary"))
+    return bool(summary or _as_list(diff.get("semantic_regions", [])))
+
+
+def _browser_screenshot_diff_has_masked_evidence(diff: Mapping[str, Any]) -> bool:
+    if not diff:
+        return False
+    summary = _as_dict(diff.get("semantic_summary"))
+    if _as_list(summary.get("masked_regions", [])) or _as_list(summary.get("masked_changed_regions", [])):
+        return True
+    if _as_list(diff.get("masked_regions", diff.get("mask_regions", []))):
+        return True
+    return any(_as_dict(region).get("masked") for region in _as_list(diff.get("semantic_regions", [])))
+
+
 def _normalize_browser_trace_key(key: str) -> str:
     normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
@@ -8244,6 +8391,18 @@ def _normalize_browser_trace_key(key: str) -> str:
         "pixel_screenshot_diff": "pixel_screenshot_diff",
         "screenshot_pixel_diff": "pixel_screenshot_diff",
         "real_screenshot_diff": "pixel_screenshot_diff",
+        "semantic_diff": "semantic_screenshot_diff",
+        "semantic_visual_diff": "semantic_screenshot_diff",
+        "semantic_screenshot_diff": "semantic_screenshot_diff",
+        "semantic_screenshot_diffs": "semantic_screenshot_diff",
+        "screenshot_diff_semantic": "semantic_screenshot_diff",
+        "masked_diff": "masked_screenshot_diff",
+        "masked_visual_diff": "masked_screenshot_diff",
+        "masked_screenshot_diff": "masked_screenshot_diff",
+        "masked_screenshot_diffs": "masked_screenshot_diff",
+        "screenshot_mask": "masked_screenshot_diff",
+        "screenshot_masks": "masked_screenshot_diff",
+        "masked_regions": "masked_screenshot_diff",
         "coordinate": "coordinate_region",
         "coordinates": "coordinate_region",
         "coordinate_region": "coordinate_region",
