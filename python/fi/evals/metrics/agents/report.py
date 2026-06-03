@@ -197,6 +197,8 @@ class AgentReportEvalConfig(BaseModel):
     agent_control_plane_quality: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_agent_integrations: List[str] = Field(default_factory=list)
+    agent_integration_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
     optimizer_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
@@ -410,6 +412,8 @@ class AgentReportEvaluator:
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
+                *_agent_integration_coverage_metrics(report_context, config),
+                *_agent_integration_quality_metrics(report_context, config),
                 *_optimizer_trace_coverage_metrics(report_context, config),
                 *_optimizer_trace_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -7001,6 +7005,211 @@ def _observability_replay_quality_metric(
         name="observability_replay_quality",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} observability replay quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": summary,
+        },
+    )
+
+
+def _agent_integration_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_agent_integrations and not _agent_integration_payloads_from_context(context):
+        return []
+    return [_agent_integration_coverage_metric(context, config)]
+
+
+def _agent_integration_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_agent_integration_key(key) for key in config.required_agent_integrations]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="agent_integration_coverage",
+            score=1.0,
+            reason="No required agent integration keys provided.",
+        )
+    observed = _agent_integration_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="agent_integration_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required agent integration evidence observed."
+            if not missing
+            else f"Missing agent integration evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_agent_integration_key", "metric": "agent_integration_coverage", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _agent_integration_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.agent_integration_quality:
+        return []
+    return [_agent_integration_quality_metric(context, config.agent_integration_quality)]
+
+
+def _agent_integration_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    summary = _merge_agent_integration_summaries(_agent_integration_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for field, summary_key, finding_type in [
+        ("min_provider_count", "provider_count", "agent_integration_provider_count_low"),
+        ("min_session_count", "session_count", "agent_integration_session_count_low"),
+        ("min_simulation_count", "simulation_count", "agent_integration_simulation_count_low"),
+        ("min_persona_count", "persona_count", "agent_integration_persona_count_low"),
+        ("min_observability_hooks", "observability_hook_count", "agent_integration_observability_low"),
+        ("min_eval_metric_count", "eval_metric_count", "agent_integration_eval_metric_count_low"),
+        ("min_verified_providers", "verified_provider_count", "agent_integration_verified_provider_count_low"),
+        ("min_passed_simulations", "passed_simulation_count", "agent_integration_passed_simulation_count_low"),
+        ("min_trace_sessions", "trace_session_count", "agent_integration_trace_session_count_low"),
+        ("min_transcript_sessions", "transcript_session_count", "agent_integration_transcript_session_count_low"),
+    ]:
+        minimum = _as_int(requirements.get(field))
+        if minimum is not None:
+            _append_agent_integration_check(
+                checks,
+                findings,
+                check=field,
+                expected=minimum,
+                actual=summary.get(summary_key, 0),
+                match=(summary.get(summary_key, 0) or 0) >= minimum,
+                finding_type=finding_type,
+            )
+
+    max_missing_credentials = _as_int(requirements.get("max_missing_credentials"))
+    if max_missing_credentials is not None:
+        missing_credentials = len(summary.get("providers_without_verified_credentials", []))
+        _append_agent_integration_check(
+            checks,
+            findings,
+            check="max_missing_credentials",
+            expected=max_missing_credentials,
+            actual=missing_credentials,
+            match=missing_credentials <= max_missing_credentials,
+            finding_type="agent_integration_missing_credentials_high",
+        )
+
+    max_failed_sessions = _as_int(requirements.get("max_failed_sessions"))
+    if max_failed_sessions is not None:
+        failed_sessions = summary.get("failed_session_count", 0)
+        _append_agent_integration_check(
+            checks,
+            findings,
+            check="max_failed_sessions",
+            expected=max_failed_sessions,
+            actual=failed_sessions,
+            match=failed_sessions <= max_failed_sessions,
+            finding_type="agent_integration_failed_session_count_high",
+        )
+
+    for provider in _string_list(requirements.get("required_providers") or requirements.get("providers")):
+        normalized = _normalize_agent_integration_provider(provider)
+        _append_agent_integration_check(
+            checks,
+            findings,
+            check="required_provider",
+            expected=normalized,
+            actual=summary["observed_providers"],
+            match=normalized in set(summary["observed_providers"]),
+            finding_type="agent_integration_provider_missing",
+        )
+
+    for channel in _string_list(requirements.get("required_channels") or requirements.get("channels")):
+        normalized = _normalize_agent_integration_channel(channel)
+        _append_agent_integration_check(
+            checks,
+            findings,
+            check="required_channel",
+            expected=normalized,
+            actual=summary["observed_channels"],
+            match=normalized in set(summary["observed_channels"]),
+            finding_type="agent_integration_channel_missing",
+        )
+
+    for framework in _string_list(requirements.get("required_trace_frameworks") or requirements.get("trace_frameworks")):
+        normalized = _normalize_agent_integration_provider(framework)
+        _append_agent_integration_check(
+            checks,
+            findings,
+            check="required_trace_framework",
+            expected=normalized,
+            actual=summary["trace_frameworks"],
+            match=normalized in set(summary["trace_frameworks"]),
+            finding_type="agent_integration_trace_framework_missing",
+        )
+
+    provider_channels = _as_dict(requirements.get("required_provider_channels"))
+    for provider, channels in provider_channels.items():
+        normalized_provider = _normalize_agent_integration_provider(provider)
+        observed_channels = set(summary["provider_channels"].get(normalized_provider, []))
+        for channel in _string_list(channels):
+            normalized_channel = _normalize_agent_integration_channel(channel)
+            _append_agent_integration_check(
+                checks,
+                findings,
+                check="required_provider_channel",
+                expected={"provider": normalized_provider, "channel": normalized_channel},
+                actual=sorted(observed_channels),
+                match=normalized_channel in observed_channels,
+                finding_type="agent_integration_provider_channel_missing",
+            )
+
+    for field, summary_key, finding_type in [
+        ("require_agent_definition", "has_agent_definition", "agent_integration_agent_definition_missing"),
+        ("require_persona", "has_persona", "agent_integration_persona_missing"),
+        ("require_simulation", "has_simulation", "agent_integration_simulation_missing"),
+        ("require_observability", "has_observability", "agent_integration_observability_missing"),
+        ("require_evals", "has_evals", "agent_integration_evals_missing"),
+        ("require_verified_credentials", "has_verified_credentials", "agent_integration_verified_credentials_missing"),
+    ]:
+        if requirements.get(field) is not None:
+            required = bool(requirements.get(field))
+            actual = bool(summary.get(summary_key))
+            _append_agent_integration_check(
+                checks,
+                findings,
+                check=field,
+                expected=required,
+                actual=actual,
+                match=actual is required,
+                finding_type=finding_type,
+            )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="agent_integration_quality",
+            score=1.0,
+            reason="No agent integration quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="agent_integration_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} agent integration quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -15748,6 +15957,293 @@ def _append_observability_replay_check(
                 "actual": actual,
             }
         )
+
+
+def _agent_integration_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_agent_integration(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_agent_integration(payload, metadata):
+            payloads.append(payload)
+        elif "agent_integration" in event_type:
+            payloads.append({"kind": "agent_integration_manifest", "events": [_as_dict(event)]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("agent_integration_manifest"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _agent_integration_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _agent_integration_payloads_from_context(context):
+        observed.update({"agent_integration", "provider", "channel"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_agent_integration_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        observed.update(_normalize_agent_integration_provider(item) for item in _as_list(summary.get("observed_providers", [])))
+        observed.update(_normalize_agent_integration_channel(item) for item in _as_list(summary.get("observed_channels", [])))
+        observed.update(_normalize_agent_integration_provider(item) for item in _as_list(summary.get("trace_frameworks", [])))
+        if _as_dict(payload.get("agent_definition")):
+            observed.add("agent_definition")
+        if _as_list(payload.get("personas", [])):
+            observed.add("persona")
+        if _as_list(payload.get("sessions", [])):
+            observed.add("session")
+        if _as_list(payload.get("simulations", [])):
+            observed.add("simulation")
+        if _as_dict(payload.get("observability")):
+            observed.add("observability")
+        if _as_dict(payload.get("evals")):
+            observed.add("eval")
+        if (_as_int(summary.get("verified_provider_count")) or 0) > 0:
+            observed.add("credential")
+        platform = _normalize_agent_integration_key(payload.get("platform"))
+        if platform:
+            observed.update({"platform", platform})
+        if platform == "futureagi":
+            observed.add("futureagi_platform")
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "agent_integration_status",
+            "list_agent_integration_providers",
+            "inspect_agent_integration_provider",
+            "list_agent_integration_sessions",
+            "list_agent_integration_gaps",
+        }:
+            observed.update({"agent_integration", "provider", "session"})
+    return {item for item in observed if item}
+
+
+def _looks_like_agent_integration(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "agent_integration_manifest" or (
+        "providers" in data and ("agent_definition" in data or "sessions" in data or "simulations" in data)
+    )
+
+
+def _merge_agent_integration_summaries(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    observed_providers: set[str] = set()
+    observed_channels: set[str] = set()
+    trace_frameworks: set[str] = set()
+    eval_metrics: set[str] = set()
+    provider_channels: Dict[str, set[str]] = {}
+    failed_sessions: set[str] = set()
+    providers_without_verified_credentials: set[str] = set()
+    provider_count = 0
+    session_count = 0
+    simulation_count = 0
+    passed_simulation_count = 0
+    persona_count = 0
+    observability_hook_count = 0
+    verified_provider_count = 0
+    transcript_session_count = 0
+    trace_session_count = 0
+    has_agent_definition = False
+    has_observability = False
+    has_evals = False
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        summary = _as_dict(payload_dict.get("summary"))
+        observed_providers.update(
+            _normalize_agent_integration_provider(item)
+            for item in _as_list(summary.get("observed_providers", []))
+        )
+        observed_channels.update(
+            _normalize_agent_integration_channel(item)
+            for item in _as_list(summary.get("observed_channels", []))
+        )
+        trace_frameworks.update(
+            _normalize_agent_integration_provider(item)
+            for item in _as_list(summary.get("trace_frameworks", []))
+        )
+        eval_metrics.update(str(item) for item in _as_list(summary.get("eval_metrics", [])))
+        failed_sessions.update(str(item) for item in _as_list(summary.get("failed_sessions", [])))
+        providers_without_verified_credentials.update(
+            _normalize_agent_integration_provider(item)
+            for item in _as_list(summary.get("providers_without_verified_credentials", []))
+        )
+        provider_count += _as_int(summary.get("provider_count")) or 0
+        session_count += _as_int(summary.get("session_count")) or 0
+        simulation_count += _as_int(summary.get("simulation_count")) or 0
+        passed_simulation_count += _as_int(summary.get("passed_simulation_count")) or 0
+        persona_count += _as_int(summary.get("persona_count")) or 0
+        observability_hook_count += _as_int(summary.get("observability_hook_count")) or 0
+        verified_provider_count += _as_int(summary.get("verified_provider_count")) or 0
+        transcript_session_count += _as_int(summary.get("transcript_session_count")) or 0
+        trace_session_count += _as_int(summary.get("trace_session_count")) or 0
+        has_agent_definition = has_agent_definition or bool(summary.get("has_agent_definition"))
+
+        providers = [_as_dict(item) for item in _as_list(payload_dict.get("providers", []))]
+        sessions = [_as_dict(item) for item in _as_list(payload_dict.get("sessions", []))]
+        simulations = [_as_dict(item) for item in _as_list(payload_dict.get("simulations", []))]
+        personas = _as_list(payload_dict.get("personas", []))
+        if not provider_count:
+            provider_count += len(providers)
+        if not session_count:
+            session_count += len(sessions)
+        if not simulation_count:
+            simulation_count += len(simulations)
+        if not persona_count:
+            persona_count += len(personas)
+        has_agent_definition = has_agent_definition or bool(_as_dict(payload_dict.get("agent_definition")))
+        has_observability = has_observability or bool(_as_dict(payload_dict.get("observability"))) or observability_hook_count > 0
+        has_evals = has_evals or bool(_as_dict(payload_dict.get("evals"))) or bool(eval_metrics)
+
+        for provider in providers:
+            provider_key = _normalize_agent_integration_provider(provider.get("provider") or provider.get("name"))
+            if provider_key:
+                observed_providers.add(provider_key)
+                provider_channels.setdefault(provider_key, set()).update(
+                    _normalize_agent_integration_channel(channel)
+                    for channel in _as_list(provider.get("channels", []))
+                    if _normalize_agent_integration_channel(channel)
+                )
+            trace_framework = _normalize_agent_integration_provider(provider.get("trace_framework") or provider.get("framework"))
+            if trace_framework:
+                trace_frameworks.add(trace_framework)
+            if provider.get("credential_status") in {"verified", "live_verified"}:
+                verified_provider_count += 1 if not summary else 0
+            elif provider_key:
+                providers_without_verified_credentials.add(provider_key)
+        for session in sessions:
+            provider_key = _normalize_agent_integration_provider(session.get("provider") or session.get("framework"))
+            channel = _normalize_agent_integration_channel(session.get("channel") or session.get("modality"))
+            if provider_key:
+                observed_providers.add(provider_key)
+            if channel:
+                observed_channels.add(channel)
+                provider_channels.setdefault(provider_key, set()).add(channel)
+            signals = {_normalize_agent_integration_key(signal) for signal in _as_list(session.get("signals", []))}
+            if "trace" in signals:
+                trace_session_count += 1 if not summary else 0
+            if "transcript" in signals:
+                transcript_session_count += 1 if not summary else 0
+            if str(session.get("status")) in {"failed", "error", "timeout", "dial_failed", "cancelled"}:
+                failed_sessions.add(str(session.get("id")))
+        for simulation in simulations:
+            provider_key = _normalize_agent_integration_provider(simulation.get("provider") or simulation.get("framework"))
+            channel = _normalize_agent_integration_channel(simulation.get("channel") or simulation.get("modality"))
+            if provider_key:
+                observed_providers.add(provider_key)
+            if channel:
+                observed_channels.add(channel)
+                provider_channels.setdefault(provider_key, set()).add(channel)
+            if simulation.get("passed"):
+                passed_simulation_count += 1 if not summary else 0
+
+    if not provider_count:
+        provider_count = len(observed_providers)
+    return {
+        "has_agent_definition": has_agent_definition,
+        "has_persona": persona_count > 0,
+        "has_simulation": simulation_count > 0,
+        "has_observability": has_observability,
+        "has_evals": has_evals,
+        "has_verified_credentials": verified_provider_count > 0,
+        "persona_count": persona_count,
+        "provider_count": provider_count,
+        "session_count": session_count,
+        "simulation_count": simulation_count,
+        "passed_simulation_count": passed_simulation_count,
+        "failed_session_count": len(failed_sessions),
+        "observability_hook_count": observability_hook_count,
+        "eval_metric_count": len(eval_metrics),
+        "verified_provider_count": verified_provider_count,
+        "providers_without_verified_credentials": sorted(item for item in providers_without_verified_credentials if item),
+        "failed_sessions": sorted(item for item in failed_sessions if item),
+        "transcript_session_count": transcript_session_count,
+        "trace_session_count": trace_session_count,
+        "observed_providers": sorted(item for item in observed_providers if item),
+        "observed_channels": sorted(item for item in observed_channels if item),
+        "trace_frameworks": sorted(item for item in trace_frameworks if item),
+        "provider_channels": {
+            provider: sorted(channel for channel in channels if channel)
+            for provider, channels in sorted(provider_channels.items())
+            if provider
+        },
+        "eval_metrics": sorted(item for item in eval_metrics if item),
+    }
+
+
+def _append_agent_integration_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "agent_integration_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_agent_integration_channel(value: Any) -> str:
+    normalized = _normalize_agent_integration_key(value)
+    aliases = {
+        "audio": "voice",
+        "conversation": "chat",
+        "media_streams": "media_stream",
+        "media_streaming": "media_stream",
+        "pstn": "phone",
+        "rtc": "webrtc",
+        "telephony": "phone",
+        "text": "chat",
+        "web": "webrtc",
+        "web_call": "webrtc",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_agent_integration_provider(value: Any) -> str:
+    normalized = _normalize_agent_integration_key(value)
+    aliases = {
+        "11labs": "elevenlabs",
+        "eleven_labs": "elevenlabs",
+        "google_adk": "google_adk",
+        "google_genai": "google_genai",
+        "llama_index": "llamaindex",
+        "openai_agents_sdk": "openai_agents",
+        "pydantic_ai": "pydantic_ai",
+        "retell_ai": "retell",
+        "trace_ai": "traceai",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_agent_integration_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
 def _normalize_replay_key(value: Any) -> str:

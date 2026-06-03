@@ -6316,6 +6316,297 @@ def test_evaluate_agent_report_scores_observability_replay_pack_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_agent_integration_manifest_quality():
+    manifest = {
+        "kind": "agent_integration_manifest",
+        "name": "futureagi-provider-integration",
+        "platform": "futureagi",
+        "agent_definition": {
+            "id": "support-agent-v3",
+            "name": "Support Agent",
+            "instructions": "Resolve billing and refund issues across chat and voice.",
+        },
+        "personas": [
+            {"id": "phone_billing", "name": "Asha", "channel": "phone"},
+            {"id": "chat_refund", "name": "Ravi", "channel": "chat"},
+        ],
+        "providers": [
+            {
+                "provider": "livekit_bridge",
+                "channels": ["chat", "voice", "webrtc", "phone", "sip"],
+                "trace_framework": "livekit",
+                "credential_status": "verified",
+            },
+            {"provider": "retell", "channels": ["chat", "voice", "phone"], "credential_status": "verified"},
+            {"provider": "elevenlabs", "channels": ["voice", "phone", "sip"], "credential_status": "verified"},
+            {"provider": "deepgram", "channels": ["voice", "webrtc"], "credential_status": "verified"},
+            {"provider": "agora", "channels": ["voice", "webrtc"], "credential_status": "verified"},
+            {
+                "provider": "pipecat",
+                "channels": ["voice", "webrtc", "phone", "sip"],
+                "trace_framework": "pipecat",
+                "credential_status": "verified",
+            },
+            {"provider": "twilio", "channels": ["phone", "sip", "media_stream"], "credential_status": "verified"},
+            {"provider": "langchain", "channels": ["chat"], "trace_framework": "langchain", "credential_status": "verified"},
+            {"provider": "openai_agents", "channels": ["chat"], "trace_framework": "openai_agents", "credential_status": "verified"},
+        ],
+        "sessions": [
+            {
+                "id": "lk_webrtc_1",
+                "provider": "livekit_bridge",
+                "channel": "webrtc",
+                "status": "passed",
+                "trace_id": "trace_lk",
+                "transcript": "Billing issue for order 123.",
+                "signals": ["trace", "transcript", "webrtc"],
+            },
+            {
+                "id": "twilio_sip_1",
+                "provider": "twilio",
+                "channel": "sip",
+                "status": "passed",
+                "transcript": "Refund call transferred to specialist.",
+                "signals": ["transcript", "sip", "phone"],
+            },
+            {
+                "id": "retell_chat_1",
+                "provider": "retell",
+                "channel": "chat",
+                "status": "passed",
+                "trace_id": "trace_retell",
+                "signals": ["trace", "transcript"],
+            },
+        ],
+        "simulations": [
+            {"id": "sim_phone", "provider": "livekit_bridge", "channel": "phone", "passed": True},
+            {"id": "sim_chat", "provider": "retell", "channel": "chat", "passed": True},
+        ],
+        "observability": {"platform": "futureagi", "traces": ["trace_lk", "trace_retell"], "webhooks": ["eval_run.completed"]},
+        "evals": {
+            "metrics": {
+                "agent_goal_accuracy": 0.94,
+                "voice_interaction_quality": 0.96,
+                "agent_integration_quality": 1.0,
+            }
+        },
+        "summary": {
+            "has_agent_definition": True,
+            "persona_count": 2,
+            "provider_count": 9,
+            "session_count": 3,
+            "simulation_count": 2,
+            "passed_simulation_count": 2,
+            "failed_session_count": 0,
+            "observability_hook_count": 3,
+            "eval_metric_count": 3,
+            "observed_providers": [
+                "agora",
+                "deepgram",
+                "elevenlabs",
+                "langchain",
+                "livekit_bridge",
+                "openai_agents",
+                "pipecat",
+                "retell",
+                "twilio",
+            ],
+            "observed_channels": ["chat", "media_stream", "phone", "sip", "voice", "webrtc"],
+            "trace_frameworks": ["langchain", "livekit", "openai_agents", "pipecat"],
+            "verified_provider_count": 9,
+            "providers_without_verified_credentials": [],
+            "failed_sessions": [],
+            "transcript_session_count": 3,
+            "trace_session_count": 2,
+            "eval_metrics": ["agent_goal_accuracy", "agent_integration_quality", "voice_interaction_quality"],
+        },
+        "signals": [
+            "agent_integration",
+            "agent_definition",
+            "persona",
+            "provider",
+            "channel",
+            "session",
+            "simulation",
+            "observability",
+            "eval",
+            "credential",
+            "livekit_bridge",
+            "retell",
+            "elevenlabs",
+            "deepgram",
+            "agora",
+            "pipecat",
+            "twilio",
+            "chat",
+            "voice",
+            "webrtc",
+            "phone",
+            "sip",
+            "traceai_framework",
+            "futureagi_platform",
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "transcript": "Agent integration manifest inspected.",
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "data": manifest,
+                        "metadata": {"kind": "agent_integration_manifest", "platform": "futureagi"},
+                    }
+                ],
+                "tool_calls": [
+                    {"id": "status", "name": "agent_integration_status", "arguments": {}},
+                    {"id": "providers", "name": "list_agent_integration_providers", "arguments": {"channel": "voice"}},
+                    {"id": "sessions", "name": "list_agent_integration_sessions", "arguments": {"channel": "sip"}},
+                    {"id": "gaps", "name": "list_agent_integration_gaps", "arguments": {}},
+                ],
+                "metadata": {"environment_state": {"agent_integration_manifest": manifest}},
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_agent_integrations": [
+                "agent_integration",
+                "agent_definition",
+                "persona",
+                "provider",
+                "channel",
+                "simulation",
+                "observability",
+                "eval",
+                "credential",
+                "livekit_bridge",
+                "retell",
+                "elevenlabs",
+                "deepgram",
+                "agora",
+                "pipecat",
+                "twilio",
+                "webrtc",
+                "phone",
+                "sip",
+                "chat",
+                "voice",
+                "traceai_framework",
+                "futureagi_platform",
+            ],
+            "agent_integration_quality": {
+                "required_providers": ["livekit_bridge", "retell", "elevenlabs", "deepgram", "agora", "pipecat", "twilio"],
+                "required_channels": ["chat", "voice", "webrtc", "phone", "sip"],
+                "required_trace_frameworks": ["livekit", "pipecat", "langchain", "openai_agents"],
+                "required_provider_channels": {
+                    "livekit_bridge": ["chat", "voice", "webrtc", "phone", "sip"],
+                    "retell": ["chat", "voice", "phone"],
+                    "twilio": ["phone", "sip"],
+                },
+                "require_agent_definition": True,
+                "require_persona": True,
+                "require_simulation": True,
+                "require_observability": True,
+                "require_evals": True,
+                "require_verified_credentials": True,
+                "min_provider_count": 7,
+                "min_session_count": 3,
+                "min_simulation_count": 2,
+                "min_persona_count": 2,
+                "min_observability_hooks": 2,
+                "min_eval_metric_count": 3,
+                "min_verified_providers": 7,
+                "min_passed_simulations": 2,
+                "min_trace_sessions": 2,
+                "min_transcript_sessions": 2,
+                "max_missing_credentials": 0,
+                "max_failed_sessions": 0,
+            },
+        },
+    )
+    scores = result.summary["metric_averages"]
+    assert scores["agent_integration_coverage"] == 1.0
+    assert scores["agent_integration_quality"] == 1.0
+
+    bad_report = copy.deepcopy(report)
+    bad_manifest = copy.deepcopy(manifest)
+    bad_manifest["signals"] = ["agent_integration", "provider", "channel"]
+    bad_manifest["providers"] = [
+        {
+            "provider": "livekit_bridge",
+            "channels": ["voice"],
+            "credential_status": "missing",
+        }
+    ]
+    bad_manifest["sessions"] = [
+        {
+            "id": "lk_webrtc_1",
+            "provider": "livekit_bridge",
+            "channel": "voice",
+            "status": "failed",
+            "signals": [],
+        }
+    ]
+    bad_manifest["simulations"] = []
+    bad_manifest["summary"]["observed_providers"] = ["livekit_bridge"]
+    bad_manifest["summary"]["observed_channels"] = ["voice"]
+    bad_manifest["summary"]["trace_frameworks"] = []
+    bad_manifest["summary"]["verified_provider_count"] = 0
+    bad_manifest["summary"]["providers_without_verified_credentials"] = ["livekit_bridge"]
+    bad_manifest["summary"]["failed_sessions"] = ["lk_webrtc_1"]
+    bad_manifest["summary"]["failed_session_count"] = 1
+    bad_manifest["summary"]["eval_metric_count"] = 0
+    bad_manifest["summary"]["has_agent_definition"] = False
+    bad_manifest["summary"]["persona_count"] = 0
+    bad_manifest["summary"]["simulation_count"] = 0
+    bad_manifest["summary"]["observability_hook_count"] = 0
+    bad_manifest["agent_definition"] = {}
+    bad_manifest["personas"] = []
+    bad_manifest["observability"] = {}
+    bad_manifest["evals"] = {}
+    bad_report["results"][0]["artifacts"][0]["data"] = bad_manifest
+    bad_report["results"][0]["metadata"]["environment_state"]["agent_integration_manifest"] = bad_manifest
+
+    bad_result = evaluate_agent_report(
+        bad_report,
+        config={
+            "required_agent_integrations": ["agent_definition", "persona", "retell", "sip", "futureagi_platform"],
+            "agent_integration_quality": {
+                "required_providers": ["livekit_bridge", "retell"],
+                "required_channels": ["voice", "sip"],
+                "required_trace_frameworks": ["livekit"],
+                "required_provider_channels": {"livekit_bridge": ["sip"]},
+                "require_agent_definition": True,
+                "require_persona": True,
+                "require_observability": True,
+                "require_evals": True,
+                "require_verified_credentials": True,
+                "min_eval_metric_count": 1,
+                "max_missing_credentials": 0,
+                "max_failed_sessions": 0,
+            },
+        },
+    )
+    bad_scores = bad_result.summary["metric_averages"]
+    finding_types = {finding["type"] for finding in bad_result.findings if "type" in finding}
+    assert bad_scores["agent_integration_coverage"] < 1.0
+    assert bad_scores["agent_integration_quality"] < 1.0
+    assert {
+        "missing_agent_integration_key",
+        "agent_integration_provider_missing",
+        "agent_integration_channel_missing",
+        "agent_integration_trace_framework_missing",
+        "agent_integration_provider_channel_missing",
+        "agent_integration_agent_definition_missing",
+        "agent_integration_verified_credentials_missing",
+        "agent_integration_missing_credentials_high",
+        "agent_integration_failed_session_count_high",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_raw_traceai_framework_events():
     report = {
         "results": [
