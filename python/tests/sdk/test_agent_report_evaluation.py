@@ -3435,6 +3435,82 @@ def test_evaluate_agent_report_scores_streaming_trace_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_generic_framework_stream_events():
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Stream the refund workflow result."},
+                    {"role": "assistant", "content": "Submit the refund form."},
+                ],
+                "events": [
+                    {
+                        "type": "on_chat_model_stream",
+                        "name": "langgraph_chunk_1",
+                        "payload": {
+                            "event": "on_chat_model_stream",
+                            "data": {"chunk": {"content": "Submit "}},
+                        },
+                        "metadata": {"framework": "langgraph", "stream_index": 1},
+                    },
+                    {
+                        "type": "response.output_text.delta",
+                        "name": "openai_delta_2",
+                        "payload": {
+                            "type": "response.output_text.delta",
+                            "delta": "the refund form.",
+                            "tool_call_chunks": [
+                                {
+                                    "id": "call_1",
+                                    "name": "lookup_policy",
+                                    "args": {"topic": "refund"},
+                                }
+                            ],
+                        },
+                        "metadata": {"framework": "openai_agents", "stream_index": 2},
+                    },
+                    {
+                        "type": "response.completed",
+                        "name": "openai_final",
+                        "payload": {
+                            "event": "response.completed",
+                            "status": "completed",
+                            "usage": {"output_tokens": 5},
+                        },
+                        "metadata": {"framework": "openai_agents", "stream_index": 3},
+                    },
+                ],
+            }
+        ]
+    }
+    config = {
+        "required_streaming_trace": ["trace", "event", "chunk", "tool_delta", "final"],
+        "streaming_trace_quality": {
+            "expected_output_contains": ["Submit the refund form."],
+            "required_chunks": ["Submit ", "the refund form."],
+            "expected_chunk_sequence": ["Submit ", "the refund form."],
+            "expected_tool_deltas": [
+                {"name": "lookup_policy", "arguments": {"topic": "refund"}}
+            ],
+            "min_chunk_count": 2,
+            "min_tool_delta_count": 1,
+            "require_completion": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    quality = next(
+        metric for metric in result.cases[0].metrics if metric.name == "streaming_interaction_quality"
+    )
+
+    assert scores["streaming_trace_coverage"] == 1.0
+    assert scores["streaming_interaction_quality"] == 1.0
+    assert quality.details["observed"]["chunks"] == ["Submit ", "the refund form."]
+    assert quality.details["observed"]["summary"]["assembled_text"] == "Submit the refund form."
+    assert quality.details["observed"]["summary"]["tool_delta_count"] == 1
+
+
 def test_evaluate_agent_report_scores_world_contract_quality():
     world = {
         "kind": "world_contract",

@@ -12270,10 +12270,18 @@ def _streaming_trace_observed(context: Mapping[str, Any]) -> set[str]:
         event_type = str(_get(event, "type", "") or "").lower()
         name = str(_get(event, "name", "") or "").lower()
         payload = _as_dict(_get(event, "payload", {}))
-        if "stream" in event_type or "chunk" in event_type or "session" in event_type:
+        event_signals = _streaming_event_signals(_as_dict(event))
+        if (
+            "stream" in event_type
+            or "chunk" in event_type
+            or "session" in event_type
+            or event_signals
+        ):
             observed.add("trace")
             _add_streaming_trace_key(observed, event_type)
             _add_streaming_trace_key(observed, name)
+            for signal in event_signals:
+                _add_streaming_trace_key(observed, signal)
             _merge_streaming_trace_payload(observed, payload)
 
     for tool_call in _as_list(context.get("tool_calls", [])):
@@ -12313,8 +12321,17 @@ def _streaming_trace_payloads_from_context(context: Mapping[str, Any]) -> List[D
             payloads.append(payload)
         elif "streaming_trace_event" in event_type:
             payloads.append({"kind": "streaming_trace", "events": [payload], "signals": [event_type, name]})
-        elif "stream" in event_type or "chunk" in event_type or "session" in event_type:
-            wrapped = {"kind": "streaming_trace", "events": [payload], "signals": [event_type, name]}
+        elif (
+            "stream" in event_type
+            or "chunk" in event_type
+            or "session" in event_type
+            or _streaming_event_signals(_as_dict(event))
+        ):
+            wrapped = {
+                "kind": "streaming_trace",
+                "events": [_streaming_event_payload_for_trace(_as_dict(event))],
+                "signals": [event_type, name],
+            }
             payloads.append(wrapped)
     return [payload for payload in payloads if payload]
 
@@ -12347,13 +12364,20 @@ def _merge_streaming_trace_payload(observed: set[str], payload: Mapping[str, Any
     for collection_name in ("events", "chunks", "tool_deltas", "interruptions"):
         for item in _as_list(payload.get(collection_name, [])):
             item_dict = _as_dict(item)
+            item_signals = _streaming_event_signals(item_dict)
             for key in ("type", "name", "source", "role", "status", "event", "method"):
                 _add_streaming_trace_key(observed, str(item_dict.get(key, "")))
+            for signal in item_signals:
+                _add_streaming_trace_key(observed, signal)
             for signal in _as_list(item_dict.get("signals", [])):
                 _add_streaming_trace_key(observed, str(signal))
-            if item_dict.get("delta") not in (None, "", [], {}):
+            if "chunk" in item_signals or item_dict.get("delta") not in (None, "", [], {}):
                 observed.add("chunk")
-            if item_dict.get("tool_call") not in (None, "", [], {}):
+            if (
+                "tool_delta" in item_signals
+                or item_dict.get("tool_call") not in (None, "", [], {})
+                or item_dict.get("tool_call_chunks") not in (None, "", [], {})
+            ):
                 observed.add("tool_delta")
             if item_dict.get("latency_ms") is not None:
                 observed.add("latency")
@@ -12508,7 +12532,7 @@ def _streaming_chunks_from_events(
             if text:
                 chunks.append(text)
     for event in events:
-        signals = {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        signals = _streaming_event_signals(event)
         event_type = _normalize_streaming_trace_key(event.get("type"))
         if "chunk" in signals or event_type == "chunk":
             text = _streaming_event_text(event)
@@ -12528,9 +12552,14 @@ def _streaming_tool_deltas_from_events(
             if item_dict:
                 deltas.append(item_dict)
     for event in events:
-        signals = {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        signals = _streaming_event_signals(event)
         event_type = _normalize_streaming_trace_key(event.get("type"))
-        if "tool_delta" in signals or event_type == "tool_delta" or event.get("tool_call") not in (None, "", [], {}):
+        if (
+            "tool_delta" in signals
+            or event_type == "tool_delta"
+            or event.get("tool_call") not in (None, "", [], {})
+            or event.get("tool_call_chunks") not in (None, "", [], {})
+        ):
             event_dict = _as_dict(event)
             if event_dict:
                 deltas.append(event_dict)
@@ -12554,31 +12583,32 @@ def _streaming_summary_from_payloads(
     chunk_events = [
         event
         for event in events
-        if "chunk" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        if "chunk" in _streaming_event_signals(event)
         or _normalize_streaming_trace_key(event.get("type")) == "chunk"
     ]
     tool_delta_events = [
         event
         for event in events
-        if "tool_delta" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        if "tool_delta" in _streaming_event_signals(event)
         or _normalize_streaming_trace_key(event.get("type")) == "tool_delta"
         or event.get("tool_call") not in (None, "", [], {})
+        or event.get("tool_call_chunks") not in (None, "", [], {})
     ]
     interruption_events = [
         event
         for event in events
-        if "interruption" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        if "interruption" in _streaming_event_signals(event)
     ]
     dropped_events = [
         event
         for event in events
-        if "drop" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        if "drop" in _streaming_event_signals(event)
         or event.get("dropped") not in (None, "", [], {}, False, 0)
     ]
     error_events = [
         event
         for event in events
-        if "error" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        if "error" in _streaming_event_signals(event)
         or event.get("error") not in (None, "", [], {})
     ]
     if "chunk_count" not in summary:
@@ -12597,7 +12627,7 @@ def _streaming_summary_from_payloads(
         summary["recovered_interruption_count"] = sum(
             1
             for event in events
-            if "recovered" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+            if "recovered" in _streaming_event_signals(event)
         )
     if "completion_status" not in summary:
         summary["completion_status"] = _streaming_completion_status(events)
@@ -12607,15 +12637,210 @@ def _streaming_summary_from_payloads(
 def _streaming_completion_status(events: Sequence[Mapping[str, Any]]) -> str:
     for event in reversed(events):
         status = str(event.get("status") or "").strip()
-        signals = {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))}
+        signals = _streaming_event_signals(event)
         event_type = _normalize_streaming_trace_key(event.get("type"))
         if "final" in signals or event_type == "final":
             return status or "completed"
         if status.lower() in {"complete", "completed", "success", "succeeded", "done", "closed"}:
             return status
-    if any("error" in {_normalize_streaming_trace_key(signal) for signal in _as_list(event.get("signals", []))} for event in events):
+    if any("error" in _streaming_event_signals(event) for event in events):
         return "error"
     return "unknown"
+
+
+def _streaming_event_payload_for_trace(event: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = dict(_as_dict(event.get("payload")))
+    if not payload:
+        payload = {
+            key: value
+            for key, value in _as_dict(event).items()
+            if key not in {"metadata", "timestamp_ms"}
+        }
+    event_type = event.get("type")
+    name = event.get("name")
+    if event_type is not None:
+        payload.setdefault("type", event_type)
+    if name is not None:
+        payload.setdefault("name", name)
+    metadata = _as_dict(event.get("metadata"))
+    if metadata:
+        payload.setdefault("metadata", metadata)
+    signals = _streaming_event_signals(payload)
+    if signals:
+        payload["signals"] = sorted(signals)
+    timestamp = event.get("timestamp_ms")
+    if timestamp is not None:
+        payload.setdefault("timestamp_ms", timestamp)
+    return payload
+
+
+def _streaming_event_signals(event: Mapping[str, Any]) -> set[str]:
+    signals: set[str] = set()
+    for signal in _as_list(event.get("signals", [])):
+        _add_streaming_event_signal(signals, signal, allow_framework=True)
+    for key in ("type", "event", "frame_type"):
+        _add_streaming_event_signal(signals, event.get(key))
+    for key in ("name", "method", "source"):
+        value = event.get(key)
+        if _streaming_signal_value_has_stream_marker(value):
+            _add_streaming_event_signal(signals, value, allow_framework=True)
+    payload = _as_dict(event.get("payload"))
+    data = _as_dict(event.get("data"))
+    raw = _as_dict(event.get("raw"))
+    for nested in (payload, data, raw):
+        if nested:
+            signals.update(_streaming_event_signals(nested))
+    chunk = _as_dict(event.get("chunk")) or _as_dict(data.get("chunk")) or _as_dict(payload.get("chunk"))
+    if chunk:
+        signals.add("chunk")
+        for key in ("content", "delta", "text", "transcript", "output_text"):
+            if chunk.get(key) not in (None, "", [], {}):
+                signals.add("chunk")
+    has_stream_marker = bool(signals & {"stream", "chunk", "tool_delta", "final", "start", "session"})
+    if (
+        event.get("delta") not in (None, "", [], {})
+        or data.get("delta") not in (None, "", [], {})
+        or payload.get("delta") not in (None, "", [], {})
+    ):
+        signals.add("chunk")
+    if has_stream_marker and (
+        event.get("text") not in (None, "", [], {})
+        or event.get("content") not in (None, "", [], {})
+        or data.get("text") not in (None, "", [], {})
+        or data.get("content") not in (None, "", [], {})
+        or payload.get("text") not in (None, "", [], {})
+        or payload.get("content") not in (None, "", [], {})
+    ):
+        signals.add("chunk")
+    if (
+        event.get("tool_call_chunks") not in (None, "", [], {})
+        or data.get("tool_call_chunks") not in (None, "", [], {})
+        or payload.get("tool_call_chunks") not in (None, "", [], {})
+    ):
+        signals.add("tool_delta")
+    if has_stream_marker and (
+        event.get("tool_call") not in (None, "", [], {})
+        or data.get("tool_call") not in (None, "", [], {})
+        or payload.get("tool_call") not in (None, "", [], {})
+    ):
+        signals.add("tool_delta")
+    if has_stream_marker and event.get("usage") not in (None, "", [], {}):
+        signals.add("usage")
+    if has_stream_marker and event.get("error") not in (None, "", [], {}):
+        signals.add("error")
+    if has_stream_marker and event.get("dropped") not in (None, "", [], {}, False, 0):
+        signals.add("drop")
+    if has_stream_marker and str(event.get("status") or "").strip().lower() in {
+        "complete",
+        "completed",
+        "success",
+        "succeeded",
+        "done",
+        "closed",
+    }:
+        signals.add("final")
+    return {signal for signal in signals if signal}
+
+
+def _add_streaming_event_signal(signals: set[str], value: Any, *, allow_framework: bool = False) -> None:
+    if value in (None, "", [], {}):
+        return
+    normalized = _normalize_streaming_trace_key(value)
+    canonical = {
+        "trace",
+        "event",
+        "stream",
+        "chunk",
+        "tool_delta",
+        "final",
+        "start",
+        "usage",
+        "latency",
+        "gap",
+        "drop",
+        "interruption",
+        "recovered",
+        "error",
+        "backpressure",
+        "state",
+        "session",
+        "message",
+        "livekit",
+        "pipecat",
+        "langchain",
+        "langgraph",
+        "openai_agents",
+        "otel",
+    }
+    if normalized in canonical:
+        signals.add(normalized)
+    lowered = str(value).lower()
+    substring_aliases = {
+        "stream": "stream",
+        "chunk": "chunk",
+        "delta": "chunk",
+        "token": "chunk",
+        "tool_delta": "tool_delta",
+        "tool_call_chunk": "tool_delta",
+        "tool_call_chunks": "tool_delta",
+        "function_call_arguments_delta": "tool_delta",
+        "run_item_stream_event": "tool_delta",
+        "final": "final",
+        "complete": "final",
+        "finish": "final",
+        "usage": "usage",
+        "latency": "latency",
+        "duration": "latency",
+        "first_token": "latency",
+        "time_to_first_chunk": "latency",
+        "gap": "gap",
+        "drop": "drop",
+        "discard": "drop",
+        "interrupt": "interruption",
+        "cancel": "interruption",
+        "recover": "recovered",
+        "resume": "recovered",
+        "error": "error",
+        "buffer": "backpressure",
+        "queue": "backpressure",
+        "backpressure": "backpressure",
+        "state": "state",
+        "session": "session",
+        "message": "message",
+    }
+    for token, alias in substring_aliases.items():
+        if token in lowered:
+            signals.add(alias)
+    if allow_framework:
+        framework_aliases = {
+            "livekit": "livekit",
+            "pipecat": "pipecat",
+            "langchain": "langchain",
+            "langgraph": "langgraph",
+            "openai": "openai_agents",
+            "otel": "otel",
+        }
+        for token, alias in framework_aliases.items():
+            if token in lowered:
+                signals.add(alias)
+
+
+def _streaming_signal_value_has_stream_marker(value: Any) -> bool:
+    lowered = str(value or "").lower()
+    return any(
+        token in lowered
+        for token in (
+            "stream",
+            "chunk",
+            "delta",
+            "session",
+            "response.",
+            "output_text",
+            "llmfullresponse",
+            "textframe",
+            "transcriptionframe",
+        )
+    )
 
 
 def _streaming_tool_delta_matches(delta: Mapping[str, Any], expected: Any) -> bool:
@@ -12640,20 +12865,27 @@ def _streaming_tool_delta_matches(delta: Mapping[str, Any], expected: Any) -> bo
 
 
 def _streaming_event_text(event: Mapping[str, Any]) -> str:
-    for key in ("delta", "text", "content", "transcript", "output_text"):
-        value = event.get(key)
-        if value not in (None, "", [], {}):
-            return _streaming_text_from_value(value)
-    raw = _as_dict(event.get("raw"))
-    for key in ("delta", "text", "content", "transcript", "output_text"):
-        value = raw.get(key)
-        if value not in (None, "", [], {}):
-            return _streaming_text_from_value(value)
-    data = _as_dict(raw.get("data"))
-    for key in ("delta", "text", "content", "transcript", "output_text"):
-        value = data.get(key)
-        if value not in (None, "", [], {}):
-            return _streaming_text_from_value(value)
+    containers: List[Dict[str, Any]] = []
+    seen: set[int] = set()
+
+    def collect(value: Any, depth: int = 0) -> None:
+        item = _as_dict(value)
+        if not item or depth > 5:
+            return
+        marker = id(item)
+        if marker in seen:
+            return
+        seen.add(marker)
+        containers.append(item)
+        for nested_key in ("payload", "data", "raw", "chunk"):
+            collect(item.get(nested_key), depth + 1)
+
+    collect(event)
+    for container in containers:
+        for key in ("delta", "text", "content", "transcript", "output_text"):
+            value = container.get(key)
+            if value not in (None, "", [], {}):
+                return _streaming_text_from_value(value)
     return ""
 
 
