@@ -885,6 +885,260 @@ def test_evaluate_agent_report_scores_red_team_campaign_coverage_and_quality():
     assert "red_team_open_high_findings_high" in finding_types
 
 
+def test_evaluate_agent_report_scores_framework_import_manifest_coverage_and_quality():
+    manifest = {
+        "kind": "framework_import_manifest",
+        "name": "support-agent-framework-import",
+        "framework": "langgraph",
+        "target": {"name": "support-agent"},
+        "adapter": {"name": "futureagi-import"},
+        "sources": [
+            {
+                "id": "langgraph_events",
+                "framework": "langgraph",
+                "export_type": "event_stream",
+                "status": "passed",
+                "passed": True,
+                "signals": ["model", "tool", "state", "checkpoint", "session"],
+            },
+            {
+                "id": "openai_responses",
+                "framework": "openai_agents",
+                "export_type": "trace_export",
+                "status": "passed",
+                "passed": True,
+                "signals": ["model", "tool", "cost"],
+            },
+            {
+                "id": "autogen_transcript",
+                "framework": "autogen",
+                "export_type": "transcript",
+                "status": "passed",
+                "passed": True,
+                "signals": ["agent", "tool", "handoff"],
+            },
+            {
+                "id": "capabilities",
+                "framework": "langgraph",
+                "export_type": "capability_matrix",
+                "status": "passed",
+                "passed": True,
+                "signals": ["memory", "streaming", "tools", "security", "observability"],
+            },
+            {
+                "id": "probes",
+                "framework": "langgraph",
+                "export_type": "probe_suite",
+                "status": "passed",
+                "passed": True,
+                "signals": ["invoke", "tools", "memory", "observability"],
+            },
+            {
+                "id": "portability",
+                "framework": "langgraph",
+                "export_type": "portability_matrix",
+                "status": "passed",
+                "passed": True,
+                "signals": ["tools", "memory", "streaming", "runtime"],
+            },
+            {
+                "id": "lifecycle",
+                "framework": "langgraph",
+                "export_type": "lifecycle",
+                "status": "passed",
+                "passed": True,
+                "signals": ["setup", "checkpoint", "cleanup"],
+            },
+        ],
+        "observability": {"traces": ["trace"], "logs": ["log"], "webhooks": ["done"]},
+        "artifacts": [{"id": "manifest", "type": "json"}, {"id": "trace", "type": "trace"}],
+        "summary": {
+            "has_target": True,
+            "has_adapter": True,
+            "source_count": 7,
+            "passed_source_count": 7,
+            "failed_source_count": 0,
+            "artifact_count": 2,
+            "observability_hook_count": 3,
+            "has_trace_export": True,
+            "has_event_stream": True,
+            "has_lifecycle": True,
+            "has_capability_matrix": True,
+            "has_probe_suite": True,
+            "has_portability_matrix": True,
+            "has_observability": True,
+            "has_artifacts": True,
+            "observed_frameworks": ["langgraph", "openai_agents", "autogen"],
+            "observed_export_types": [
+                "event_stream",
+                "trace_export",
+                "transcript",
+                "capability_matrix",
+                "probe_suite",
+                "portability_matrix",
+                "lifecycle",
+            ],
+            "observed_signals": [
+                "model",
+                "tool",
+                "state",
+                "checkpoint",
+                "handoff",
+                "observability",
+                "artifact",
+            ],
+        },
+        "signals": [
+            "framework_import",
+            "target",
+            "adapter",
+            "source",
+            "trace_export",
+            "event_stream",
+            "lifecycle",
+            "capability_matrix",
+            "probe_suite",
+            "portability_matrix",
+            "artifact",
+            "observability",
+            "langgraph",
+            "openai_agents",
+            "autogen",
+            "model",
+            "tool",
+            "state",
+            "handoff",
+        ],
+    }
+    config = {
+        "required_framework_import": [
+            "framework_import",
+            "target",
+            "adapter",
+            "source",
+            "trace_export",
+            "event_stream",
+            "lifecycle",
+            "capability_matrix",
+            "probe_suite",
+            "portability_matrix",
+            "artifact",
+            "observability",
+            "langgraph",
+            "openai_agents",
+            "autogen",
+            "model",
+            "tool",
+            "state",
+            "handoff",
+        ],
+        "framework_import_quality": {
+            "required_frameworks": ["langgraph", "openai_agents", "autogen"],
+            "required_export_types": [
+                "event_stream",
+                "trace_export",
+                "transcript",
+                "capability_matrix",
+                "probe_suite",
+                "portability_matrix",
+                "lifecycle",
+            ],
+            "required_signals": ["model", "tool", "state", "handoff", "observability"],
+            "require_target": True,
+            "require_adapter": True,
+            "require_trace_export": True,
+            "require_event_stream": True,
+            "require_lifecycle": True,
+            "require_capability_matrix": True,
+            "require_probe_suite": True,
+            "require_portability_matrix": True,
+            "require_observability": True,
+            "require_artifacts": True,
+            "min_source_count": 7,
+            "min_passed_sources": 7,
+            "min_artifact_count": 2,
+            "min_observability_hooks": 3,
+            "max_failed_sources": 0,
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Framework import evidence is complete."}],
+                "tool_calls": [
+                    {"id": "status", "name": "framework_import_status", "arguments": {}},
+                    {"id": "exports", "name": "list_framework_import_exports", "arguments": {}},
+                ],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "framework_import_manifest"}, "data": manifest}],
+                "metadata": {"environment_state": {"framework_import_manifest": manifest}},
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config, threshold=0.9)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert result.passed is True
+    assert scores["framework_import_coverage"] == 1.0
+    assert scores["framework_import_quality"] == 1.0
+
+    weak_manifest = copy.deepcopy(manifest)
+    weak_manifest["signals"] = ["framework_import", "source", "langgraph"]
+    weak_manifest["target"] = {}
+    weak_manifest["adapter"] = {}
+    weak_manifest["sources"] = weak_manifest["sources"][:2]
+    weak_manifest["sources"][1] = {
+        **weak_manifest["sources"][1],
+        "status": "failed",
+        "passed": False,
+        "signals": ["model"],
+    }
+    weak_manifest["observability"] = {}
+    weak_manifest["artifacts"] = []
+    weak_manifest["summary"] = {
+        **weak_manifest["summary"],
+        "has_target": False,
+        "has_adapter": False,
+        "source_count": 2,
+        "passed_source_count": 1,
+        "failed_source_count": 1,
+        "failed_sources": ["openai_responses"],
+        "artifact_count": 0,
+        "observability_hook_count": 0,
+        "has_lifecycle": False,
+        "has_capability_matrix": False,
+        "has_probe_suite": False,
+        "has_portability_matrix": False,
+        "has_observability": False,
+        "has_artifacts": False,
+        "observed_frameworks": ["langgraph", "openai_agents"],
+        "observed_export_types": ["event_stream", "trace_export"],
+        "observed_signals": ["model", "tool", "state"],
+    }
+    weak_report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Only partial framework import evidence is present."}],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "framework_import_manifest"}, "data": weak_manifest}],
+                "metadata": {"environment_state": {"framework_import_manifest": weak_manifest}},
+            }
+        ]
+    }
+
+    failing_result = evaluate_agent_report(weak_report, config=config, threshold=0.95)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_result.passed is False
+    assert failing_scores["framework_import_coverage"] < 1.0
+    assert failing_scores["framework_import_quality"] < 1.0
+    assert "missing_framework_import_key" in finding_types
+    assert "framework_import_adapter_missing" in finding_types
+    assert "framework_import_source_count_low" in finding_types
+    assert "framework_import_failed_source_count_high" in finding_types
+    assert "framework_import_export_type_missing" in finding_types
+
+
 def test_evaluate_agent_report_scores_world_attack_replay_artifact():
     world = {
         "kind": "world_contract",

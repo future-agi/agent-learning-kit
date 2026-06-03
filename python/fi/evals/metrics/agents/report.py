@@ -182,6 +182,8 @@ class AgentReportEvalConfig(BaseModel):
     required_red_team_campaign: List[str] = Field(default_factory=list)
     red_team_campaign_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
+    required_framework_import: List[str] = Field(default_factory=list)
+    framework_import_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_runtime: List[str] = Field(default_factory=list)
     framework_runtime_contract: Dict[str, Any] = Field(default_factory=dict)
     required_framework_lifecycle: List[str] = Field(default_factory=list)
@@ -400,6 +402,8 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                *_framework_import_coverage_metrics(report_context, config),
+                *_framework_import_quality_metrics(report_context, config),
                 *_framework_runtime_coverage_metrics(report_context, config),
                 *_framework_runtime_contract_metrics(report_context, config),
                 *_framework_lifecycle_coverage_metrics(report_context, config),
@@ -2684,6 +2688,462 @@ def _append_red_team_campaign_check(
                 "actual": actual,
             }
         )
+
+
+def _framework_import_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_framework_import and not _framework_import_payloads_from_context(context):
+        return []
+    return [_framework_import_coverage_metric(context, config)]
+
+
+def _framework_import_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_framework_import_key(key) for key in config.required_framework_import]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="framework_import_coverage",
+            score=1.0,
+            reason="No required framework import keys provided.",
+        )
+    observed = _framework_import_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="framework_import_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required framework import evidence observed."
+            if not missing
+            else f"Missing framework import evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_framework_import_key", "metric": "framework_import_coverage", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _framework_import_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_import_quality:
+        return []
+    return [_framework_import_quality_metric(context, config.framework_import_quality)]
+
+
+def _framework_import_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    summary = _merge_framework_import_summaries(_framework_import_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for field, summary_key, finding_type in [
+        ("min_source_count", "source_count", "framework_import_source_count_low"),
+        ("min_passed_sources", "passed_source_count", "framework_import_passed_source_count_low"),
+        ("min_artifact_count", "artifact_count", "framework_import_artifact_count_low"),
+        ("min_observability_hooks", "observability_hook_count", "framework_import_observability_low"),
+    ]:
+        minimum = _as_int(requirements.get(field))
+        if minimum is not None:
+            _append_framework_import_check(
+                checks,
+                findings,
+                check=field,
+                expected=minimum,
+                actual=summary.get(summary_key, 0),
+                match=(summary.get(summary_key, 0) or 0) >= minimum,
+                finding_type=finding_type,
+            )
+
+    maximum = _as_int(requirements.get("max_failed_sources"))
+    if maximum is not None:
+        _append_framework_import_check(
+            checks,
+            findings,
+            check="max_failed_sources",
+            expected=maximum,
+            actual=summary.get("failed_source_count", 0),
+            match=(summary.get("failed_source_count", 0) or 0) <= maximum,
+            finding_type="framework_import_failed_source_count_high",
+        )
+
+    for field, summary_key, finding_type in [
+        ("require_target", "has_target", "framework_import_target_missing"),
+        ("require_adapter", "has_adapter", "framework_import_adapter_missing"),
+        ("require_trace_export", "has_trace_export", "framework_import_trace_export_missing"),
+        ("require_event_stream", "has_event_stream", "framework_import_event_stream_missing"),
+        ("require_lifecycle", "has_lifecycle", "framework_import_lifecycle_missing"),
+        ("require_capability_matrix", "has_capability_matrix", "framework_import_capability_matrix_missing"),
+        ("require_probe_suite", "has_probe_suite", "framework_import_probe_suite_missing"),
+        ("require_portability_matrix", "has_portability_matrix", "framework_import_portability_matrix_missing"),
+        ("require_observability", "has_observability", "framework_import_observability_missing"),
+        ("require_artifacts", "has_artifacts", "framework_import_artifacts_missing"),
+    ]:
+        if requirements.get(field) is not None:
+            required = bool(requirements.get(field))
+            actual = bool(summary.get(summary_key))
+            _append_framework_import_check(
+                checks,
+                findings,
+                check=field,
+                expected=required,
+                actual=actual,
+                match=actual is required,
+                finding_type=finding_type,
+            )
+
+    for item in _string_list(requirements.get("required_sources") or requirements.get("sources")):
+        normalized = _normalize_framework_import_key(item)
+        _append_framework_import_check(
+            checks,
+            findings,
+            check="required_source",
+            expected=normalized,
+            actual=summary["source_keys"],
+            match=normalized in set(summary["source_keys"]),
+            finding_type="framework_import_source_missing",
+        )
+
+    for item in _string_list(requirements.get("required_frameworks") or requirements.get("frameworks")):
+        normalized = _normalize_framework_import_framework(item)
+        _append_framework_import_check(
+            checks,
+            findings,
+            check="required_framework",
+            expected=normalized,
+            actual=summary["observed_frameworks"],
+            match=normalized in set(summary["observed_frameworks"]),
+            finding_type="framework_import_framework_missing",
+        )
+
+    for item in _string_list(requirements.get("required_export_types") or requirements.get("export_types")):
+        normalized = _normalize_framework_import_export_type(item)
+        _append_framework_import_check(
+            checks,
+            findings,
+            check="required_export_type",
+            expected=normalized,
+            actual=summary["observed_export_types"],
+            match=normalized in set(summary["observed_export_types"]),
+            finding_type="framework_import_export_type_missing",
+        )
+
+    for item in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_framework_import_key(item)
+        _append_framework_import_check(
+            checks,
+            findings,
+            check="required_signal",
+            expected=normalized,
+            actual=summary["observed_signals"],
+            match=normalized in set(summary["observed_signals"]),
+            finding_type="framework_import_signal_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_import_quality",
+            score=1.0,
+            reason="No framework import quality checks were configured.",
+        )
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_import_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework import quality check(s) matched.",
+        details={"checks": checks, "findings": findings, "observed": summary},
+    )
+
+
+def _framework_import_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("framework_import_manifest"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("framework_import_manifest"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_framework_import(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_framework_import(payload, metadata):
+            payloads.append(payload)
+        elif "framework_import" in event_type:
+            payloads.append({"kind": "framework_import_manifest", "events": [_as_dict(event)]})
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        key = json.dumps(payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload)
+    return deduped
+
+
+def _framework_import_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _framework_import_payloads_from_context(context):
+        observed.update({"framework_import", "framework_import_manifest"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_framework_import_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for summary_key, signal in [
+            ("has_target", "target"),
+            ("has_adapter", "adapter"),
+            ("source_count", "source"),
+            ("passed_source_count", "passed_source"),
+            ("artifact_count", "artifact"),
+            ("observability_hook_count", "observability"),
+            ("has_trace_export", "trace_export"),
+            ("has_event_stream", "event_stream"),
+            ("has_lifecycle", "lifecycle"),
+            ("has_capability_matrix", "capability_matrix"),
+            ("has_probe_suite", "probe_suite"),
+            ("has_portability_matrix", "portability_matrix"),
+        ]:
+            if summary.get(summary_key):
+                observed.add(signal)
+        for key in ("observed_frameworks", "observed_export_types", "observed_signals", "source_keys"):
+            observed.update(_normalize_framework_import_key(item) for item in _as_list(summary.get(key)) if _normalize_framework_import_key(item))
+        for source in _as_list(payload.get("sources", [])):
+            source_dict = _as_dict(source)
+            for value in [
+                source_dict.get("id"),
+                source_dict.get("name"),
+                _normalize_framework_import_framework(source_dict.get("framework")),
+                _normalize_framework_import_export_type(source_dict.get("export_type")),
+                *_as_list(source_dict.get("signals")),
+            ]:
+                normalized = _normalize_framework_import_key(value)
+                if normalized:
+                    observed.add(normalized)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "framework_import_status",
+            "list_framework_import_sources",
+            "list_framework_import_exports",
+            "list_framework_import_gaps",
+        }:
+            observed.add("framework_import")
+        if "sources" in name:
+            observed.add("source")
+        if "exports" in name:
+            observed.add("export")
+        if "gaps" in name:
+            observed.add("gap")
+    return observed
+
+
+def _looks_like_framework_import(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "framework_import_manifest" or (
+        "sources" in data
+        and ("required_frameworks" in data or "required_export_types" in data or "summary" in data)
+    )
+
+
+def _merge_framework_import_summaries(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    observed_frameworks: set[str] = set()
+    observed_export_types: set[str] = set()
+    observed_signals: set[str] = set()
+    source_keys: set[str] = set()
+    failed_sources: set[str] = set()
+    summary: Dict[str, Any] = {
+        "has_target": False,
+        "has_adapter": False,
+        "source_count": 0,
+        "passed_source_count": 0,
+        "failed_source_count": 0,
+        "artifact_count": 0,
+        "observability_hook_count": 0,
+        "has_trace_export": False,
+        "has_event_stream": False,
+        "has_lifecycle": False,
+        "has_capability_matrix": False,
+        "has_probe_suite": False,
+        "has_portability_matrix": False,
+        "has_observability": False,
+        "has_artifacts": False,
+    }
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_summary = _as_dict(payload_dict.get("summary"))
+        if payload_summary:
+            for key in ["source_count", "passed_source_count", "failed_source_count", "artifact_count", "observability_hook_count"]:
+                summary[key] += _as_int(payload_summary.get(key)) or 0
+            for key in [
+                "has_target",
+                "has_adapter",
+                "has_trace_export",
+                "has_event_stream",
+                "has_lifecycle",
+                "has_capability_matrix",
+                "has_probe_suite",
+                "has_portability_matrix",
+                "has_observability",
+                "has_artifacts",
+            ]:
+                summary[key] = summary[key] or bool(payload_summary.get(key))
+            observed_frameworks.update(_normalize_framework_import_framework(item) for item in _as_list(payload_summary.get("observed_frameworks")) if _normalize_framework_import_framework(item))
+            observed_export_types.update(_normalize_framework_import_export_type(item) for item in _as_list(payload_summary.get("observed_export_types")) if _normalize_framework_import_export_type(item))
+            observed_signals.update(_normalize_framework_import_key(item) for item in _as_list(payload_summary.get("observed_signals")) if _normalize_framework_import_key(item))
+            source_keys.update(_normalize_framework_import_key(item) for item in _as_list(payload_summary.get("source_keys")) if _normalize_framework_import_key(item))
+            failed_sources.update(str(item) for item in _as_list(payload_summary.get("failed_sources")) if item)
+            if source_keys:
+                continue
+
+        if payload_dict.get("framework"):
+            observed_frameworks.add(_normalize_framework_import_framework(payload_dict.get("framework")))
+        if payload_dict.get("target"):
+            summary["has_target"] = True
+            observed_signals.add("target")
+        if payload_dict.get("adapter"):
+            summary["has_adapter"] = True
+            observed_signals.add("adapter")
+        sources = [_as_dict(item) for item in _as_list(payload_dict.get("sources", []))]
+        artifacts = [_as_dict(item) for item in _as_list(payload_dict.get("artifacts", []))]
+        observability = _as_dict(payload_dict.get("observability"))
+        summary["source_count"] += len(sources)
+        summary["artifact_count"] += len(artifacts)
+        summary["observability_hook_count"] += sum(len(_as_list(observability.get(key))) for key in ("traces", "logs", "metrics", "dashboards", "webhooks", "events", "runs"))
+        for source in sources:
+            status = _normalize_framework_import_key(source.get("status"))
+            passed = bool(source.get("passed")) or status in {"passed", "success", "completed", "available", "verified"}
+            if passed:
+                summary["passed_source_count"] += 1
+            if status in {"failed", "error", "timeout", "cancelled", "canceled"}:
+                source_id = str(source.get("id") or source.get("name") or "")
+                if source_id:
+                    failed_sources.add(source_id)
+            framework = _normalize_framework_import_framework(source.get("framework"))
+            export_type = _normalize_framework_import_export_type(source.get("export_type") or source.get("type"))
+            if framework:
+                observed_frameworks.add(framework)
+            if export_type:
+                observed_export_types.add(export_type)
+            for value in [source.get("id"), source.get("name"), framework, export_type, *_as_list(source.get("signals"))]:
+                normalized = _normalize_framework_import_key(value)
+                if normalized:
+                    source_keys.add(normalized)
+                    observed_signals.add(normalized)
+        for artifact in artifacts:
+            for signal in _as_list(artifact.get("signals")):
+                normalized = _normalize_framework_import_key(signal)
+                if normalized:
+                    observed_signals.add(normalized)
+
+    summary["failed_sources"] = sorted(failed_sources)
+    summary["failed_source_count"] = max(summary["failed_source_count"], len(failed_sources))
+    summary["has_observability"] = summary["has_observability"] or summary["observability_hook_count"] > 0
+    summary["has_artifacts"] = summary["has_artifacts"] or summary["artifact_count"] > 0
+    summary["has_trace_export"] = summary["has_trace_export"] or "trace_export" in observed_export_types
+    summary["has_event_stream"] = summary["has_event_stream"] or "event_stream" in observed_export_types
+    summary["has_lifecycle"] = summary["has_lifecycle"] or "lifecycle" in observed_export_types
+    summary["has_capability_matrix"] = summary["has_capability_matrix"] or "capability_matrix" in observed_export_types
+    summary["has_probe_suite"] = summary["has_probe_suite"] or "probe_suite" in observed_export_types
+    summary["has_portability_matrix"] = summary["has_portability_matrix"] or "portability_matrix" in observed_export_types
+    summary["observed_frameworks"] = sorted(item for item in observed_frameworks if item)
+    summary["observed_export_types"] = sorted(item for item in observed_export_types if item)
+    summary["observed_signals"] = sorted(item for item in observed_signals if item)
+    summary["source_keys"] = sorted(item for item in source_keys if item)
+    return summary
+
+
+def _append_framework_import_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_import_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_import_framework(value: Any) -> str:
+    normalized = _normalize_framework_import_key(value)
+    aliases = {
+        "openai": "openai_agents",
+        "openai_responses": "openai_agents",
+        "openai_agent": "openai_agents",
+        "openai_agents_sdk": "openai_agents",
+        "auto_gen": "autogen",
+        "llama_index": "llamaindex",
+        "pydanticai": "pydantic_ai",
+        "trace_ai": "traceai",
+        "opentelemetry": "otel",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_import_export_type(value: Any) -> str:
+    normalized = _normalize_framework_import_key(value)
+    aliases = {
+        "trace": "trace_export",
+        "traces": "trace_export",
+        "framework_trace": "trace_export",
+        "span": "trace_export",
+        "spans": "trace_export",
+        "otlp": "trace_export",
+        "otel": "trace_export",
+        "event": "event_stream",
+        "events": "event_stream",
+        "stream": "event_stream",
+        "stream_event": "event_stream",
+        "stream_events": "event_stream",
+        "capability": "capability_matrix",
+        "capabilities": "capability_matrix",
+        "probe": "probe_suite",
+        "probes": "probe_suite",
+        "portability": "portability_matrix",
+        "transcripts": "transcript",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_framework_import_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
 def _normalize_red_team_campaign_key(value: Any) -> str:
