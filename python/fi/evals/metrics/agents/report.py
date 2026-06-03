@@ -174,6 +174,8 @@ class AgentReportEvalConfig(BaseModel):
     expected_tool_outcomes: Dict[str, Any] = Field(default_factory=dict)
     trajectory_templates: List[Any] = Field(default_factory=list)
     framework_transcript_quality: Dict[str, Any] = Field(default_factory=dict)
+    expected_cross_trial_memory: Dict[str, Any] = Field(default_factory=dict)
+    expected_cross_trial_skills: List[Any] = Field(default_factory=list)
     required_tool_fault_recovery: List[str] = Field(default_factory=list)
     min_trial_pass_rate: Optional[float] = None
     max_trial_score_spread: Optional[float] = None
@@ -289,10 +291,18 @@ class AgentReportEvaluator:
         reliability = _trial_reliability_summary(case_results)
         reliability_findings = _trial_reliability_findings(reliability, cfg)
         all_findings.extend(reliability_findings)
-        score = _aggregate_score_with_reliability(aggregate, reliability, cfg)
+        cross_trial = _cross_trial_memory_skill_summary(case_results, cfg)
+        cross_trial_findings = _cross_trial_memory_skill_findings(cross_trial, cfg)
+        all_findings.extend(cross_trial_findings)
+        score = _aggregate_score_with_reliability_and_cross_trial(
+            aggregate,
+            reliability,
+            cross_trial,
+            cfg,
+        )
         return AgentReportEvaluation(
             score=score,
-            passed=score >= self.threshold and not reliability_findings,
+            passed=score >= self.threshold and not reliability_findings and not cross_trial_findings,
             threshold=self.threshold,
             cases=case_results,
             summary={
@@ -300,6 +310,7 @@ class AgentReportEvaluator:
                 "passed_cases": sum(1 for case in case_results if case.passed),
                 "metric_averages": _metric_averages(case_results),
                 "trial_reliability": reliability,
+                "cross_trial_memory_skill": cross_trial,
             },
             findings=all_findings,
         )
@@ -4680,6 +4691,628 @@ def _aggregate_score_with_reliability(
     return round(min(candidates), 4)
 
 
+def _aggregate_score_with_reliability_and_cross_trial(
+    aggregate: float,
+    reliability: Mapping[str, Any],
+    cross_trial: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> float:
+    score = _aggregate_score_with_reliability(aggregate, reliability, config)
+    if _cross_trial_memory_skill_configured(config):
+        score = min(score, float(cross_trial.get("score", 0.0)))
+    return round(score, 4)
+
+
+def _cross_trial_memory_skill_configured(config: AgentReportEvalConfig) -> bool:
+    return bool(config.expected_cross_trial_memory or config.expected_cross_trial_skills)
+
+
+def _cross_trial_memory_skill_summary(
+    cases: Sequence[AgentReportCaseResult],
+    config: AgentReportEvalConfig,
+) -> Dict[str, Any]:
+    if not _cross_trial_memory_skill_configured(config):
+        return {
+            "configured": False,
+            "score": 1.0,
+            "memory_records": [],
+            "skill_records": [],
+            "checks": [],
+        }
+
+    memory_records: List[Dict[str, Any]] = []
+    skill_records: List[Dict[str, Any]] = []
+    for case in cases:
+        context = _report_context_from_trajectory(case.trajectory)
+        memory_records.extend(_cross_trial_memory_records_from_context(context, trial=case.index))
+        skill_records.extend(_cross_trial_skill_records_from_context(context, trial=case.index))
+
+    checks = [
+        *_cross_trial_memory_checks(memory_records, len(cases), config.expected_cross_trial_memory),
+        *_cross_trial_skill_checks(skill_records, len(cases), config.expected_cross_trial_skills),
+    ]
+    matched = sum(1 for check in checks if check.get("match"))
+    score = matched / len(checks) if checks else 1.0
+    return {
+        "configured": True,
+        "score": round(score, 4),
+        "trial_count": len(cases),
+        "memory_records": memory_records,
+        "skill_records": skill_records,
+        "checks": checks,
+        "matched_checks": matched,
+        "check_count": len(checks),
+    }
+
+
+def _cross_trial_memory_skill_findings(
+    cross_trial: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[Dict[str, Any]]:
+    if not _cross_trial_memory_skill_configured(config):
+        return []
+    findings: List[Dict[str, Any]] = []
+    score = float(cross_trial.get("score", 0.0))
+    for check in _as_list(cross_trial.get("checks", [])):
+        check_dict = _as_dict(check)
+        if check_dict.get("match"):
+            continue
+        check_name = str(check_dict.get("check") or "cross_trial_memory_skill")
+        findings.append(
+            {
+                "metric": "cross_trial_memory_skill",
+                "type": "cross_trial_memory_skill_mismatch",
+                "score": round(score, 4),
+                "reason": f"Cross-trial memory/skill check failed: {check_name}.",
+                **check_dict,
+            }
+        )
+    return findings
+
+
+def _cross_trial_memory_checks(
+    records: Sequence[Mapping[str, Any]],
+    trial_count: int,
+    expected_memory: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    if not expected_memory:
+        return []
+    required_keys = set(_string_list(expected_memory.get("required_keys") or expected_memory.get("keys")))
+    forbidden_keys = set(_string_list(expected_memory.get("forbidden_keys")))
+    required_recall_keys = set(
+        _string_list(expected_memory.get("required_recall_keys") or expected_memory.get("recall_keys"))
+    )
+    min_precision = _as_float(expected_memory.get("min_precision"))
+    min_recall = _as_float(expected_memory.get("min_recall"))
+    min_trials_present = _as_int(expected_memory.get("min_trials_present")) or 0
+    require_persistence = bool(expected_memory.get("require_persistence"))
+    checks: List[Dict[str, Any]] = []
+
+    keyed_records = [record for record in records if record.get("key") not in (None, "")]
+    observed_keys = {str(record.get("key")) for record in keyed_records}
+    write_records = [
+        record for record in keyed_records
+        if _cross_trial_memory_operation(record.get("operation")) in _CROSS_TRIAL_MEMORY_WRITE_OPS
+    ]
+    write_keys = {str(record.get("key")) for record in write_records}
+
+    if required_keys or min_recall is not None:
+        required = required_keys or observed_keys
+        recall = len(required & observed_keys) / len(required) if required else 1.0
+        threshold = 1.0 if min_recall is None else min_recall
+        checks.append(
+            {
+                "check": "memory_recall",
+                "expected": sorted(required),
+                "actual": sorted(observed_keys),
+                "score": round(recall, 4),
+                "threshold": threshold,
+                "match": recall >= threshold,
+                "missing": sorted(required - observed_keys),
+            }
+        )
+
+    if required_keys or forbidden_keys or min_precision is not None:
+        relevant_write_keys = (write_keys & required_keys) if required_keys else (write_keys - forbidden_keys)
+        precision = len(relevant_write_keys) / len(write_keys) if write_keys else (0.0 if required_keys else 1.0)
+        threshold = 1.0 if min_precision is None else min_precision
+        checks.append(
+            {
+                "check": "memory_precision",
+                "expected": sorted(required_keys) if required_keys else "no forbidden keys",
+                "actual": sorted(write_keys),
+                "score": round(precision, 4),
+                "threshold": threshold,
+                "match": precision >= threshold,
+            }
+        )
+
+    if forbidden_keys:
+        present = sorted(forbidden_keys & observed_keys)
+        checks.append(
+            {
+                "check": "memory_forbidden_keys",
+                "expected": [],
+                "actual": present,
+                "match": not present,
+            }
+        )
+
+    if min_trials_present:
+        trial_keys = _cross_trial_memory_keys_by_trial(keyed_records)
+        target_keys = required_keys or observed_keys
+        present_trials = [
+            trial for trial, keys in trial_keys.items()
+            if target_keys and target_keys <= keys
+        ]
+        checks.append(
+            {
+                "check": "memory_trials_present",
+                "expected": min_trials_present,
+                "actual": len(present_trials),
+                "trials": sorted(present_trials),
+                "keys": sorted(target_keys),
+                "match": len(present_trials) >= min_trials_present,
+            }
+        )
+
+    if require_persistence and required_keys:
+        missing_after_first = _cross_trial_missing_persistent_keys(keyed_records, required_keys, trial_count)
+        checks.append(
+            {
+                "check": "memory_persistence",
+                "expected": "required keys persist after first observation",
+                "actual": missing_after_first,
+                "match": not missing_after_first,
+            }
+        )
+
+    if required_recall_keys:
+        recall_failures = _cross_trial_recall_after_write_failures(keyed_records, required_recall_keys)
+        checks.append(
+            {
+                "check": "memory_recall_after_write",
+                "expected": sorted(required_recall_keys),
+                "actual": {
+                    key: sorted(
+                        {
+                            int(record.get("trial", 0))
+                            for record in keyed_records
+                            if str(record.get("key")) == key
+                            and _cross_trial_memory_operation(record.get("operation"))
+                            in _CROSS_TRIAL_MEMORY_READ_OPS
+                        }
+                    )
+                    for key in sorted(required_recall_keys)
+                },
+                "match": not recall_failures,
+                "missing": recall_failures,
+            }
+        )
+
+    return checks
+
+
+def _cross_trial_skill_checks(
+    records: Sequence[Mapping[str, Any]],
+    trial_count: int,
+    expected_skills: Sequence[Any],
+) -> List[Dict[str, Any]]:
+    checks: List[Dict[str, Any]] = []
+    for expected in _cross_trial_expected_skill_list(expected_skills):
+        name = str(expected.get("name") or expected.get("skill") or "")
+        if not name:
+            continue
+        required_steps = _string_list(expected.get("required_steps") or expected.get("steps"))
+        min_trials_present = _as_int(expected.get("min_trials_present")) or 0
+        require_persistent = bool(expected.get("require_persistent_after_first"))
+        matching_records = [
+            record for record in records
+            if _normalize_framework_name(record.get("name")) == _normalize_framework_name(name)
+        ]
+        records_with_steps = [
+            record for record in matching_records
+            if _cross_trial_skill_steps_match(record.get("steps"), required_steps)
+        ]
+        observed_trials = sorted({int(record.get("trial", 0)) for record in records_with_steps})
+        observed_steps = [
+            step for record in matching_records
+            for step in _string_list(record.get("steps"))
+        ]
+
+        checks.append(
+            {
+                "check": "skill_steps",
+                "expected": {"name": name, "steps": required_steps},
+                "actual": {"name": name, "steps": observed_steps},
+                "match": bool(records_with_steps),
+                "missing": [
+                    step for step in required_steps
+                    if not _cross_trial_term_present(observed_steps, step)
+                ],
+            }
+        )
+        if min_trials_present:
+            checks.append(
+                {
+                    "check": "skill_trials_present",
+                    "expected": min_trials_present,
+                    "actual": len(observed_trials),
+                    "trials": observed_trials,
+                    "skill": name,
+                    "match": len(observed_trials) >= min_trials_present,
+                }
+            )
+        if require_persistent:
+            missing_trials = _cross_trial_missing_skill_trials(observed_trials, trial_count)
+            checks.append(
+                {
+                    "check": "skill_persistence",
+                    "expected": "skill remains available after first observation",
+                    "actual": {"trials": observed_trials, "missing_after_first": missing_trials},
+                    "skill": name,
+                    "match": not missing_trials,
+                }
+            )
+    return checks
+
+
+_CROSS_TRIAL_MEMORY_WRITE_OPS = {"write", "store", "save", "update", "upsert", "checkpoint", "prior"}
+_CROSS_TRIAL_MEMORY_READ_OPS = {"read", "recall", "retrieve", "retrieval", "load", "get", "lookup", "prior"}
+
+
+def _cross_trial_memory_records_from_context(
+    context: Mapping[str, Any],
+    *,
+    trial: int,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in _autonomy_loop_payloads_from_context(context):
+        prior_memory = _as_dict(payload.get("prior_memory"))
+        for key, value in prior_memory.items():
+            records.append(
+                {
+                    "trial": trial,
+                    "operation": "prior",
+                    "key": str(key),
+                    "value": value,
+                    "source": "autonomy.prior_memory",
+                }
+            )
+        for item in _as_list(payload.get("memory_updates", [])):
+            records.extend(
+                _cross_trial_memory_records_from_mapping(
+                    _as_dict(item),
+                    trial=trial,
+                    default_operation="write",
+                    source="autonomy.memory_updates",
+                )
+            )
+        for entry in _as_list(payload.get("entries", [])):
+            entry_dict = _as_dict(entry)
+            stage = _normalize_autonomy_loop_key(entry_dict.get("stage") or entry_dict.get("name") or "")
+            if stage != "memory":
+                continue
+            records.extend(
+                _cross_trial_memory_records_from_mapping(
+                    _as_dict(entry_dict.get("arguments")) or entry_dict,
+                    trial=trial,
+                    default_operation="write",
+                    source="autonomy.entry.memory",
+                )
+            )
+
+    for record in _framework_trace_records_from_context(context):
+        records.extend(_cross_trial_memory_records_from_framework_record(record, trial=trial))
+    return _dedupe_dicts(records)
+
+
+def _cross_trial_skill_records_from_context(
+    context: Mapping[str, Any],
+    *,
+    trial: int,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in _autonomy_loop_payloads_from_context(context):
+        for name, value in _as_dict(payload.get("skills", {})).items():
+            value_dict = _as_dict(value)
+            records.append(
+                {
+                    "trial": trial,
+                    "name": str(name),
+                    "steps": _string_list(value_dict.get("steps")),
+                    "source": "autonomy.skills",
+                }
+            )
+        for entry in _as_list(payload.get("entries", [])):
+            entry_dict = _as_dict(entry)
+            stage = _normalize_autonomy_loop_key(entry_dict.get("stage") or entry_dict.get("name") or "")
+            if stage != "skill":
+                continue
+            arguments = _as_dict(entry_dict.get("arguments")) or entry_dict
+            skill = _cross_trial_skill_record_from_mapping(
+                arguments,
+                trial=trial,
+                source="autonomy.entry.skill",
+            )
+            if skill:
+                records.append(skill)
+
+    for record in _framework_trace_records_from_context(context):
+        skill = _cross_trial_skill_record_from_framework_record(record, trial=trial)
+        if skill:
+            records.append(skill)
+    return _dedupe_dicts(records)
+
+
+def _cross_trial_memory_records_from_framework_record(
+    record: Mapping[str, Any],
+    *,
+    trial: int,
+) -> List[Dict[str, Any]]:
+    event = _framework_record_event(record)
+    attributes = _as_dict(record.get("attributes", {}))
+    method = str(record.get("method") or event.get("method") or "").lower()
+    default_operation = "write" if method in {"updates", "checkpoints", "checkpoint", "state"} else ""
+    sources = [
+        _as_dict(record.get("memory")),
+        _as_dict(event.get("memory")),
+        _as_dict(record.get("data")),
+        _as_dict(event.get("data")),
+        attributes,
+        record,
+        event,
+    ]
+    records: List[Dict[str, Any]] = []
+    for source in sources:
+        if not source:
+            continue
+        if not _cross_trial_mapping_mentions_memory(source):
+            continue
+        records.extend(
+            _cross_trial_memory_records_from_mapping(
+                source,
+                trial=trial,
+                default_operation=default_operation,
+                source="framework_trace",
+            )
+        )
+    return records
+
+
+def _cross_trial_skill_record_from_framework_record(
+    record: Mapping[str, Any],
+    *,
+    trial: int,
+) -> Dict[str, Any]:
+    event = _framework_record_event(record)
+    attributes = _as_dict(record.get("attributes", {}))
+    signals = {_normalize_framework_trace_key(signal) for signal in _as_list(record.get("signals", []))}
+    sources = [
+        _as_dict(record.get("skill")),
+        _as_dict(event.get("skill")),
+        _as_dict(record.get("data")),
+        _as_dict(event.get("data")),
+        attributes,
+    ]
+    for source in sources:
+        if not source:
+            continue
+        if "skill" not in signals and not _cross_trial_mapping_mentions_skill(source):
+            continue
+        skill = _cross_trial_skill_record_from_mapping(source, trial=trial, source="framework_trace")
+        if skill:
+            return skill
+    return {}
+
+
+def _cross_trial_memory_records_from_mapping(
+    mapping: Mapping[str, Any],
+    *,
+    trial: int,
+    default_operation: str,
+    source: str,
+) -> List[Dict[str, Any]]:
+    item = _as_dict(mapping)
+    if not item:
+        return []
+    operation = _cross_trial_memory_operation(
+        _cross_trial_value_from_mapping(item, ("operation", "op", "memory_operation", "memory.operation"))
+        or default_operation
+    )
+    key = _cross_trial_value_from_mapping(item, ("key", "memory_key", "memory.key", "checkpoint_key", "session_key"))
+    value = _cross_trial_value_from_mapping(item, ("value", "memory_value", "memory.value", "checkpoint_value", "session_value"))
+    records: List[Dict[str, Any]] = []
+    if key not in (None, "", [], {}):
+        records.append(
+            {
+                "trial": trial,
+                "operation": operation,
+                "key": str(key),
+                "value": value,
+                "source": source,
+            }
+        )
+    values = _as_dict(
+        _cross_trial_value_from_mapping(item, ("values", "memory.values", "memory", "checkpoint", "session"))
+    )
+    if values and not {"key", "value", "operation", "op"}.intersection(values.keys()):
+        for nested_key, nested_value in values.items():
+            records.append(
+                {
+                    "trial": trial,
+                    "operation": operation,
+                    "key": str(nested_key),
+                    "value": nested_value,
+                    "source": source,
+                }
+            )
+    if not records and not {"key", "value", "operation", "op"}.intersection(item.keys()):
+        for raw_key, raw_value in item.items():
+            if isinstance(raw_value, (dict, list, tuple)):
+                continue
+            records.append(
+                {
+                    "trial": trial,
+                    "operation": operation,
+                    "key": str(raw_key),
+                    "value": raw_value,
+                    "source": source,
+                }
+            )
+    return [record for record in records if record.get("key")]
+
+
+def _cross_trial_skill_record_from_mapping(
+    mapping: Mapping[str, Any],
+    *,
+    trial: int,
+    source: str,
+) -> Dict[str, Any]:
+    item = _as_dict(mapping)
+    if not item:
+        return {}
+    name = _cross_trial_value_from_mapping(item, ("skill_name", "skill.name", "name", "skill"))
+    if isinstance(name, Mapping):
+        name = _cross_trial_value_from_mapping(_as_dict(name), ("name", "skill_name"))
+    steps = _cross_trial_value_from_mapping(item, ("skill_steps", "skill.steps", "steps"))
+    if steps in (None, "", [], {}):
+        skill_dict = _as_dict(_cross_trial_value_from_mapping(item, ("skill",)))
+        steps = skill_dict.get("steps")
+        if not name:
+            name = skill_dict.get("name")
+    if name in (None, "", [], {}):
+        return {}
+    return {
+        "trial": trial,
+        "name": str(name),
+        "steps": _string_list(steps),
+        "source": source,
+    }
+
+
+def _cross_trial_memory_operation(value: Any) -> str:
+    operation = str(value or "").strip().lower().replace("-", "_")
+    if any(token in operation for token in ("recall", "retrieve", "retrieval", "read", "lookup", "load", "get")):
+        return "recall" if "recall" in operation else "read"
+    if "prior" in operation:
+        return "prior"
+    if any(token in operation for token in ("checkpoint", "store", "write", "save", "update", "upsert")):
+        return "write"
+    return operation or "write"
+
+
+def _cross_trial_value_from_mapping(mapping: Mapping[str, Any], paths: Iterable[str]) -> Any:
+    for path in paths:
+        if path in mapping and mapping.get(path) not in (None, "", [], {}):
+            return mapping.get(path)
+        value = _get_path(mapping, path)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _cross_trial_mapping_mentions_memory(mapping: Mapping[str, Any]) -> bool:
+    text = " ".join([*(str(key) for key in mapping.keys()), *(_string_list(mapping.get("signals")))]).lower()
+    return any(token in text for token in ("memory", "checkpoint", "session")) or any(
+        key in mapping for key in ("key", "memory_key", "memory.key")
+    )
+
+
+def _cross_trial_mapping_mentions_skill(mapping: Mapping[str, Any]) -> bool:
+    text = " ".join(str(key) for key in mapping.keys()).lower()
+    return "skill" in text
+
+
+def _cross_trial_memory_keys_by_trial(
+    records: Sequence[Mapping[str, Any]],
+) -> Dict[int, set[str]]:
+    trials: Dict[int, set[str]] = {}
+    for record in records:
+        key = record.get("key")
+        if key in (None, ""):
+            continue
+        trials.setdefault(int(record.get("trial", 0)), set()).add(str(key))
+    return trials
+
+
+def _cross_trial_missing_persistent_keys(
+    records: Sequence[Mapping[str, Any]],
+    required_keys: set[str],
+    trial_count: int,
+) -> Dict[str, List[int]]:
+    missing: Dict[str, List[int]] = {}
+    for key in required_keys:
+        trials = sorted(
+            {
+                int(record.get("trial", 0))
+                for record in records
+                if str(record.get("key")) == key
+            }
+        )
+        if not trials:
+            missing[key] = list(range(trial_count))
+            continue
+        expected_trials = set(range(trials[0], trial_count))
+        absent = sorted(expected_trials - set(trials))
+        if absent:
+            missing[key] = absent
+    return missing
+
+
+def _cross_trial_recall_after_write_failures(
+    records: Sequence[Mapping[str, Any]],
+    required_keys: set[str],
+) -> List[str]:
+    failures: List[str] = []
+    for key in sorted(required_keys):
+        write_trials = [
+            int(record.get("trial", 0))
+            for record in records
+            if str(record.get("key")) == key
+            and _cross_trial_memory_operation(record.get("operation")) in _CROSS_TRIAL_MEMORY_WRITE_OPS
+        ]
+        read_trials = [
+            int(record.get("trial", 0))
+            for record in records
+            if str(record.get("key")) == key
+            and _cross_trial_memory_operation(record.get("operation")) in _CROSS_TRIAL_MEMORY_READ_OPS
+        ]
+        if not write_trials or not any(trial > min(write_trials) for trial in read_trials):
+            failures.append(key)
+    return failures
+
+
+def _cross_trial_expected_skill_list(values: Sequence[Any]) -> List[Dict[str, Any]]:
+    expected: List[Dict[str, Any]] = []
+    for value in values:
+        value_dict = _as_dict(value)
+        if value_dict:
+            expected.append(value_dict)
+        elif value not in (None, "", [], {}):
+            expected.append({"name": str(value)})
+    return expected
+
+
+def _cross_trial_skill_steps_match(steps: Any, required_steps: Sequence[str]) -> bool:
+    observed_steps = _string_list(steps)
+    if not required_steps:
+        return True
+    return all(_cross_trial_term_present(observed_steps, step) for step in required_steps)
+
+
+def _cross_trial_term_present(values: Sequence[str], term: str) -> bool:
+    expected = str(term).lower()
+    return any(expected in str(value).lower() for value in values)
+
+
+def _cross_trial_missing_skill_trials(observed_trials: Sequence[int], trial_count: int) -> List[int]:
+    if not observed_trials:
+        return list(range(trial_count))
+    expected_trials = set(range(min(observed_trials), trial_count))
+    return sorted(expected_trials - set(observed_trials))
+
+
 def _regex_findings(patterns: Iterable[str], text: str) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     for pattern in patterns:
@@ -5995,6 +6628,9 @@ def _add_framework_trace_key(observed: set[str], value: str) -> None:
         "rag": "retrieval",
         "vector": "retrieval",
         "memory": "memory",
+        "skill": "skill",
+        "skill_library": "skill",
+        "skill_update": "skill",
         "browser": "browser",
         "computer": "browser",
         "cua": "browser",
@@ -6060,6 +6696,8 @@ def _normalize_framework_trace_key(key: str) -> str:
         "llama_index": "retrieval",
         "memory_update": "memory",
         "memory_retrieval": "memory",
+        "skill_update": "skill",
+        "skill_library": "skill",
         "autogen": "agent",
         "dspy": "agent",
         "predict": "model",

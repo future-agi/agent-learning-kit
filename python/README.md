@@ -196,7 +196,7 @@ The following metrics can run locally without API access:
 | **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
 | **JSON** | `contains_json`, `is_json`, `json_schema` |
 | **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
-| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
+| **Agents** | `AgentReportEvaluator`, `evaluate_agent_report`, trajectory score, trajectory templates, agent goal accuracy, tool-call accuracy, Tool Call F1, policy adherence, trajectory browser action safety, memory correctness, multimodal faithfulness, repeated-trial reliability, cross-trial memory/skill quality, tool fault tolerance, tool selection, tool argument schema validation, tool execution outcome/state validation, action safety, prompt-injection resistance, environment-injection resistance, memory integrity, autonomy-loop coverage, autonomy-loop quality, framework trace coverage, framework transcript quality, multi-agent framework transcript quality, retrieval/memory attribution, retrieval context quality, source grounding, source contradiction, artifact grounding quality, artifact semantics quality, multi-agent trace coverage, multi-agent coordination quality, browser/CUA safety, browser action outcome/state validation, browser grounding quality, browser trace coverage, voice turn-taking, voice interaction quality, voice trace coverage, artifact coverage, state goal accuracy |
 
 ### Agent Simulation Reports
 
@@ -212,6 +212,10 @@ final state, final output, and framework errors. Multi-agent framework
 transcript checks also score exported speakers, speaker order, handoffs,
 tool-owner evidence, turn count, required messages, and termination markers
 from AutoGen, CrewAI, OpenAI Agents, or similar orchestration logs.
+Cross-trial memory/skill checks score normalized framework traces and autonomy
+payloads for required memory keys, forbidden writes, precision, recall,
+recall-after-write, persistence across trials, and reusable skill-step
+regressions.
 Browser trace and grounding metrics also understand Playwright trace import
 evidence, HAR/resource-body replay, OpenAI Computer Use trace provenance,
 Browser Use history, imported actionability timelines, image-derived pixel
@@ -234,6 +238,7 @@ See [`examples/12_framework_transcript_quality.py`](examples/12_framework_transc
 See [`examples/13_evidence_contradiction_artifact_grounding.py`](examples/13_evidence_contradiction_artifact_grounding.py).
 See [`examples/14_multi_agent_framework_transcript.py`](examples/14_multi_agent_framework_transcript.py).
 See [`examples/15_structured_artifact_semantics.py`](examples/15_structured_artifact_semantics.py).
+See [`examples/16_cross_trial_memory_skill.py`](examples/16_cross_trial_memory_skill.py).
 
 ```python
 from fi.evals.metrics.agents import evaluate_agent_report
@@ -364,6 +369,23 @@ result = evaluate_agent_report(
                 "final_state": {"case": {"resolved": True}},
             }
         },
+        "expected_cross_trial_memory": {
+            "required_keys": ["order_id", "policy_version"],
+            "required_recall_keys": ["order_id", "policy_version"],
+            "forbidden_keys": ["raw_user_secret"],
+            "min_precision": 1.0,
+            "min_recall": 1.0,
+            "min_trials_present": 2,
+            "require_persistence": True,
+        },
+        "expected_cross_trial_skills": [
+            {
+                "name": "refund_policy_check",
+                "required_steps": ["lookup", "verify", "respond"],
+                "min_trials_present": 2,
+                "require_persistent_after_first": True,
+            }
+        ],
         "required_tool_fault_recovery": ["search_order"],
     },
 )
@@ -371,6 +393,7 @@ result = evaluate_agent_report(
 print(result.score)
 print(result.summary["metric_averages"])
 print(result.summary["trial_reliability"])
+print(result.summary["cross_trial_memory_skill"])
 ```
 
 ### Using the Local Evaluator

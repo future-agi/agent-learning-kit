@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from fi.evals.metrics.agents import (
@@ -2483,6 +2484,150 @@ def test_evaluate_agent_report_scores_framework_transcript_quality():
         "framework_output_missing",
         "framework_error_observed",
     } <= finding_types
+
+
+def test_evaluate_agent_report_scores_cross_trial_memory_and_skill_regression():
+    config = {
+        "expected_cross_trial_memory": {
+            "required_keys": ["order_id", "policy_version"],
+            "required_recall_keys": ["order_id", "policy_version"],
+            "forbidden_keys": ["raw_user_secret"],
+            "min_precision": 1.0,
+            "min_recall": 1.0,
+            "min_trials_present": 2,
+            "require_persistence": True,
+        },
+        "expected_cross_trial_skills": [
+            {
+                "name": "refund_policy_check",
+                "required_steps": ["lookup", "verify", "respond"],
+                "min_trials_present": 2,
+                "require_persistent_after_first": True,
+            }
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Refund order ord_123."},
+                    {"role": "assistant", "content": "I saved the refund context."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "langgraph"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "langgraph",
+                            "events": [
+                                {
+                                    "method": "updates",
+                                    "memory": {
+                                        "operation": "write",
+                                        "key": "order_id",
+                                        "value": "ord_123",
+                                    },
+                                    "signals": ["memory"],
+                                },
+                                {
+                                    "method": "updates",
+                                    "memory": {
+                                        "operation": "write",
+                                        "key": "policy_version",
+                                        "value": "2026-05",
+                                    },
+                                    "signals": ["memory"],
+                                },
+                                {
+                                    "method": "updates",
+                                    "skill": {
+                                        "name": "refund_policy_check",
+                                        "steps": ["lookup", "verify", "respond"],
+                                    },
+                                    "signals": ["skill"],
+                                },
+                            ],
+                        },
+                    }
+                ],
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "Continue the refund workflow."},
+                    {"role": "assistant", "content": "I recalled the refund context."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "framework_trace", "framework": "langgraph"},
+                        "data": {
+                            "kind": "framework_trace",
+                            "framework": "langgraph",
+                            "events": [
+                                {
+                                    "method": "values",
+                                    "memory": {"operation": "recall", "key": "order_id"},
+                                    "signals": ["memory"],
+                                },
+                                {
+                                    "method": "values",
+                                    "memory": {"operation": "recall", "key": "policy_version"},
+                                    "signals": ["memory"],
+                                },
+                                {
+                                    "method": "updates",
+                                    "skill": {
+                                        "name": "refund_policy_check",
+                                        "steps": ["lookup", "verify", "respond"],
+                                    },
+                                    "signals": ["skill"],
+                                },
+                            ],
+                        },
+                    }
+                ],
+            },
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    cross_trial = result.summary["cross_trial_memory_skill"]
+
+    assert cross_trial["score"] == 1.0
+    assert result.passed is True
+    assert not [finding for finding in result.findings if finding["metric"] == "cross_trial_memory_skill"]
+
+    failing_report = json.loads(json.dumps(report))
+    failing_report["results"][0]["artifacts"][0]["data"]["events"].append(
+        {
+            "method": "updates",
+            "memory": {"operation": "write", "key": "raw_user_secret", "value": "do-not-store"},
+            "signals": ["memory"],
+        }
+    )
+    failing_report["results"][1]["artifacts"][0]["data"]["events"] = [
+        {
+            "method": "values",
+            "memory": {"operation": "recall", "key": "order_id"},
+            "signals": ["memory"],
+        },
+        {
+            "method": "updates",
+            "skill": {"name": "refund_policy_check", "steps": ["lookup"]},
+            "signals": ["skill"],
+        },
+    ]
+
+    failing_result = evaluate_agent_report(failing_report, config=config)
+    failing_cross_trial = failing_result.summary["cross_trial_memory_skill"]
+
+    assert failing_cross_trial["score"] < 1.0
+    assert failing_result.passed is False
+    assert any(
+        finding.get("type") == "cross_trial_memory_skill_mismatch"
+        for finding in failing_result.findings
+    )
 
 
 def test_evaluate_agent_report_scores_multi_agent_framework_transcript_quality():

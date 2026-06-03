@@ -19,6 +19,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 13 | [Catch Evidence Contradictions and Artifact Grounding Gaps](13_evidence_contradiction_artifact_grounding.py) | Detect answer claims contradicted by cited source text and verify artifact-backed claims against OCR/transcript/metadata evidence | No |
 | 14 | [Score Multi-Agent Framework Transcripts](14_multi_agent_framework_transcript.py) | Check exported AutoGen/CrewAI/OpenAI Agents-style speakers, handoffs, tool owners, turns, and termination evidence | No |
 | 15 | [Score Structured Artifact Semantics](15_structured_artifact_semantics.py) | Validate receipt/form/table/log fields, rows, event sequences, and answer claims against structured artifacts | No |
+| 16 | [Score Cross-Trial Memory and Skill Quality](16_cross_trial_memory_skill.py) | Catch missing recall-after-write, forbidden memory keys, persistence gaps, and skill-step regressions across trials | No |
 
 ## Quick Start
 
@@ -50,3 +51,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 13**: Catch source-supported contradictions and artifact grounding failures from local report dictionaries before reaching for an LLM judge
 - **Cookbook 14**: Score multi-agent framework transcript quality from exported speaker, handoff, tool-owner, and termination records without installing the source framework
 - **Cookbook 15**: Score domain-specific structured artifact semantics such as receipt totals, line-item rows, event sequences, and answer claims without a model judge
+- **Cookbook 16**: Score cross-trial memory precision/recall, recall-after-write, persistence, and reusable skill regressions from local framework trace dictionaries
