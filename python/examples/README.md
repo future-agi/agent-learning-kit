@@ -37,6 +37,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 31 | [Score Domain-Package Registry](31_domain_package_registry.py) | Override preset aliases, required fields, statuses, required values, and tolerances with a versioned local registry | No |
 | 32 | [Gate Domain-Package Registry Changes](32_domain_package_registry_gate.py) | Lint registries, diff preset migrations, and replay historical package rows before promotion | No |
 | 33 | [Measure Domain-Package Registry Coverage](33_domain_package_registry_coverage.py) | Generate minimal preset fixtures, measure replay coverage by invariant family, and recommend missing regression rows | No |
+| 34 | [Generate Domain-Package Registry Mutation Packs](34_domain_package_registry_mutation_pack.py) | Create negative package fixtures for required fields, statuses, dates, limits, collections, row status, and totals | No |
 
 ## Quick Start
 
@@ -86,3 +87,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 31**: Extend domain-package presets with versioned local registries for customer aliases, required evidence, allowed statuses, required values, and tolerances
 - **Cookbook 32**: Gate registry migrations with schema linting, preset diffs, breaking-change detection, and replay over preserved regression rows
 - **Cookbook 33**: Generate deterministic registry fixtures, measure replay coverage across preset invariant families, and recommend missing regression rows before using LLM-as-judge
+- **Cookbook 34**: Generate negative registry mutation packs that deliberately break required fields, statuses, dates, numeric limits, collections, row status, and totals for local boundary regression testing

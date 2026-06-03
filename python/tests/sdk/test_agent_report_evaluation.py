@@ -8,6 +8,7 @@ from fi.evals.metrics.agents import (
     diff_domain_package_registries,
     evaluate_agent_report,
     generate_domain_package_registry_fixtures,
+    generate_domain_package_registry_mutation_pack,
     normalize_agent_report,
     replay_domain_package_registry,
     validate_domain_package_registry,
@@ -5606,6 +5607,55 @@ def test_domain_package_registry_generates_fixtures_and_coverage_recommendations
         item["preset"] == "contract_review" and item["suggested_fixture"]
         for item in coverage["recommendations"]
     )
+
+
+def test_domain_package_registry_generates_negative_mutation_pack():
+    registry = {
+        "version": "futureagi.domain-packages.acme.v1",
+        "presets": {
+            "claim_file": {
+                "version": "acme-claims-2026-06",
+                "aliases": ["enterprise_claim"],
+                "required_fields": ["adjuster.id"],
+            },
+            "contract_review": {
+                "version": "acme-contracts-2026-06",
+                "aliases": ["enterprise_contract"],
+                "required_fields": ["counterparty.id"],
+            },
+        },
+    }
+
+    mutation_pack = generate_domain_package_registry_mutation_pack(
+        registry,
+        preset_names=["claim_file", "contract_review", "procurement"],
+    )
+    families = {
+        (mutant["preset"], mutant["invariant_family"])
+        for mutant in mutation_pack["mutants"]
+    }
+
+    assert mutation_pack["fixture_count"] == 3
+    assert mutation_pack["mutant_count"] == len(mutation_pack["cases"])
+    assert ("claim_file", "numeric_lte") in families
+    assert ("contract_review", "date_order") in families
+    assert ("contract_review", "all_rows_field_in") in families
+    assert ("procurement", "sum_equals") in families
+
+    for mutant in mutation_pack["mutants"]:
+        result = evaluate_agent_report(
+            mutant["report"],
+            config=mutant["config"],
+            threshold=1.0,
+        )
+        metric = next(
+            metric
+            for metric in result.cases[0].metrics
+            if metric.name == "domain_package_quality"
+        )
+        finding_types = {finding["type"] for finding in metric.details["findings"]}
+        assert metric.score < 1.0
+        assert mutant["mutation"]["expected_finding_type"] in finding_types
 
 
 def test_evaluate_agent_report_scores_tool_argument_schema():

@@ -6361,17 +6361,7 @@ def generate_domain_package_registry_fixtures(
                 "invariant_families": sorted(_domain_package_preset_families(preset)),
             }
         )
-    report = {
-        "results": [
-            {
-                "messages": [
-                    {"role": "user", "content": "Validate generated domain package fixtures."},
-                    {"role": "assistant", "content": "Generated package fixtures are ready for registry validation."},
-                ],
-                "artifacts": artifacts,
-            }
-        ]
-    }
+    report = _domain_package_fixture_report(artifacts)
     return {
         "registry_version": active_registry.get("version") or active_registry.get("schema_version"),
         "preset_count": len(fixtures),
@@ -6382,6 +6372,90 @@ def generate_domain_package_registry_fixtures(
             "domain_package_checks": checks,
             "metric_weights": {"domain_package_quality": 1.0},
         },
+    }
+
+
+def generate_domain_package_registry_mutation_pack(
+    registry: Mapping[str, Any],
+    *,
+    preset_names: Optional[Sequence[str]] = None,
+    include_defaults: bool = True,
+) -> Dict[str, Any]:
+    """
+    Generate deterministic negative package fixtures for registry presets.
+
+    Each mutant starts from a passing generated fixture and breaks one required
+    field or invariant family. The returned cases can be replayed locally or
+    written into Future AGI regression datasets by downstream tooling.
+    """
+
+    active_registry = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, registry)
+        if include_defaults
+        else copy.deepcopy(_as_dict(registry))
+    )
+    fixture_pack = generate_domain_package_registry_fixtures(
+        registry,
+        preset_names=preset_names,
+        include_defaults=include_defaults,
+    )
+    registry_config = copy.deepcopy(_as_dict(registry) or active_registry)
+    mutants: List[Dict[str, Any]] = []
+    cases: List[Dict[str, Any]] = []
+    for fixture in fixture_pack["fixtures"]:
+        preset_name = str(fixture.get("preset") or "")
+        preset = _domain_package_preset_definition(active_registry, preset_name)
+        check = copy.deepcopy(_as_dict(fixture.get("check")))
+        package = _as_dict(fixture.get("package"))
+        for invariant in _domain_package_mutation_invariants(preset, check):
+            family = str(invariant.get("type") or "").lower()
+            mutated_package = copy.deepcopy(package)
+            data = _as_dict(mutated_package.get("data"))
+            mutation = _mutate_domain_package_fixture(data, invariant)
+            if not mutation:
+                continue
+            mutated_package["data"] = data
+            path_token = _domain_registry_token(mutation.get("path") or len(mutants))
+            mutation_id = f"{preset_name}_{family}_{path_token}_negative"
+            report = _domain_package_fixture_report([mutated_package])
+            config = {
+                "domain_package_registry": copy.deepcopy(registry_config),
+                "domain_package_checks": [copy.deepcopy(check)],
+                "metric_weights": {"domain_package_quality": 1.0},
+            }
+            case = {
+                "id": mutation_id,
+                "input": {
+                    "observability": {
+                        "raw": {
+                            "agent_report": report,
+                            "agent_report_config": config,
+                        }
+                    }
+                },
+                "expected": {"required_metrics": {"domain_package_quality": 1.0}},
+            }
+            mutant = {
+                "id": mutation_id,
+                "preset": preset_name,
+                "package_id": fixture.get("package_id"),
+                "invariant_family": family,
+                "mutation": mutation,
+                "package": mutated_package,
+                "check": check,
+                "report": report,
+                "config": config,
+                "case": case,
+            }
+            mutants.append(mutant)
+            cases.append(case)
+    return {
+        "registry_version": active_registry.get("version") or active_registry.get("schema_version"),
+        "fixture_count": len(fixture_pack["fixtures"]),
+        "mutant_count": len(mutants),
+        "fixtures": fixture_pack["fixtures"],
+        "mutants": mutants,
+        "cases": cases,
     }
 
 
@@ -6573,6 +6647,22 @@ def _domain_package_preset_families(preset: Mapping[str, Any]) -> set[str]:
     return families
 
 
+def _domain_package_mutation_invariants(
+    preset: Mapping[str, Any],
+    check: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    invariants = [
+        {"type": "field_present", "path": path}
+        for path in _string_list(preset.get("required_fields"))
+    ]
+    invariants.extend(
+        _normalize_domain_package_invariant(_resolve_domain_package_invariant_template(check, invariant))
+        for invariant in _as_list(preset.get("invariants"))
+        if _as_dict(invariant)
+    )
+    return [invariant for invariant in invariants if invariant]
+
+
 def _set_domain_package_path(data: Dict[str, Any], path: str, value: Any) -> None:
     parts = [part for part in str(path).split(".") if part]
     if not parts:
@@ -6584,6 +6674,21 @@ def _set_domain_package_path(data: Dict[str, Any], path: str, value: Any) -> Non
         current = current.setdefault(part, {})
     if isinstance(current, dict):
         current[parts[-1]] = value
+
+
+def _delete_domain_package_path(data: Dict[str, Any], path: str) -> bool:
+    parts = [part for part in str(path).split(".") if part]
+    if not parts:
+        return False
+    current: Any = data
+    for part in parts[:-1]:
+        if not isinstance(current, dict):
+            return False
+        current = current.get(part)
+    if isinstance(current, dict) and parts[-1] in current:
+        del current[parts[-1]]
+        return True
+    return False
 
 
 def _domain_package_sample_value(path: str) -> Any:
@@ -6672,6 +6777,172 @@ def _apply_domain_package_fixture_invariant(
     elif invariant_type == "required_participants":
         participants = _string_list(invariant.get("participants") or invariant.get("required")) or ["fixture@example.com"]
         _set_domain_package_path(data, str(invariant.get("participants_path") or "participants"), participants)
+
+
+def _mutate_domain_package_fixture(
+    data: Dict[str, Any],
+    invariant: Mapping[str, Any],
+) -> Dict[str, Any]:
+    invariant_type = str(invariant.get("type") or "").lower()
+    if invariant_type in {"field_present", "required_field", "present"}:
+        path = str(invariant.get("path") or "")
+        if _delete_domain_package_path(data, path):
+            return {
+                "type": "missing_required_field",
+                "path": path,
+                "expected_finding_type": "domain_package_required_field_missing",
+            }
+        return {}
+    if invariant_type in {"field_equals", "equals"}:
+        path = str(invariant.get("path") or "")
+        _set_domain_package_path(data, path, "__wrong_fixture_value__")
+        return {
+            "type": "field_value_mismatch",
+            "path": path,
+            "expected_finding_type": "domain_package_invariant_mismatch",
+        }
+    if invariant_type == "status_in":
+        path = str(invariant.get("path") or "status")
+        value = "__invalid_status__" if _as_list(invariant.get("allowed") or invariant.get("values")) else None
+        _set_domain_package_path(data, path, value)
+        return {
+            "type": "invalid_status",
+            "path": path,
+            "expected_finding_type": "domain_package_status_invalid",
+        }
+    if invariant_type in {"numeric_lte", "amount_lte"}:
+        limit_path = str(invariant.get("limit_path") or invariant.get("max_path") or "")
+        amount_path = str(invariant.get("path") or invariant.get("amount_path") or "amount")
+        limit = _as_float(invariant.get("limit") or invariant.get("max"))
+        if limit is None:
+            limit = _as_float(_get_path(data, limit_path)) if limit_path else 100.0
+        tolerance = _as_float(invariant.get("tolerance")) or 0.0
+        if limit_path:
+            _set_domain_package_path(data, limit_path, limit)
+        _set_domain_package_path(data, amount_path, limit + tolerance + 10.0)
+        return {
+            "type": "numeric_limit_exceeded",
+            "path": amount_path,
+            "expected_finding_type": "domain_package_numeric_limit_exceeded",
+        }
+    if invariant_type in {"date_order", "before"}:
+        start_path = str(invariant.get("start_path") or invariant.get("before_path") or "start")
+        end_path = str(invariant.get("end_path") or invariant.get("after_path") or "end")
+        _set_domain_package_path(data, start_path, "2026-06-03T12:00:00")
+        _set_domain_package_path(data, end_path, "2026-06-03T11:00:00")
+        return {
+            "type": "date_order_reversed",
+            "path": start_path,
+            "expected_finding_type": "domain_package_date_order_invalid",
+        }
+    if invariant_type in {"collection_contains", "required_items"}:
+        items_path = str(invariant.get("items_path") or invariant.get("rows_path") or "items")
+        field = str(invariant.get("field") or invariant.get("value_field") or "id")
+        rows = _ensure_domain_package_rows(data, items_path, 1)
+        for row in rows:
+            if isinstance(row, dict):
+                _set_domain_package_path(row, field, "__missing_required_item__")
+        _set_domain_package_path(data, items_path, rows)
+        return {
+            "type": "collection_required_item_missing",
+            "path": items_path,
+            "expected_finding_type": "domain_package_collection_item_missing",
+        }
+    if invariant_type in {"collection_min_count", "min_count"}:
+        items_path = str(invariant.get("items_path") or invariant.get("rows_path") or "items")
+        min_count = _as_int(invariant.get("min_count") or invariant.get("min") or 1) or 1
+        _set_domain_package_path(data, items_path, [{} for _ in range(max(0, min_count - 1))])
+        return {
+            "type": "collection_count_low",
+            "path": items_path,
+            "expected_finding_type": "domain_package_collection_count_low",
+        }
+    if invariant_type in {"all_rows_field_in", "row_status_in"}:
+        rows_path = str(invariant.get("rows_path") or invariant.get("items_path") or "items")
+        field = str(invariant.get("field") or "status")
+        rows = _ensure_domain_package_rows(data, rows_path, 1)
+        if isinstance(rows[0], dict):
+            _set_domain_package_path(rows[0], field, "__invalid_row_value__")
+        _set_domain_package_path(data, rows_path, rows)
+        return {
+            "type": "row_field_invalid",
+            "path": f"{rows_path}.{field}",
+            "expected_finding_type": "domain_package_row_field_invalid",
+        }
+    if invariant_type in {"sum_equals", "line_items_total"}:
+        total_path = str(invariant.get("total_path") or "total")
+        _set_domain_package_path(data, total_path, 999999.0)
+        return {
+            "type": "total_mismatch",
+            "path": total_path,
+            "expected_finding_type": "domain_package_total_mismatch",
+        }
+    if invariant_type == "ledger_balanced":
+        entries_path = str(invariant.get("entries_path") or "entries")
+        debit_field = str(invariant.get("debit_field") or "debit")
+        credit_field = str(invariant.get("credit_field") or "credit")
+        _set_domain_package_path(
+            data,
+            entries_path,
+            [{debit_field: 10.0, credit_field: 0.0}, {debit_field: 0.0, credit_field: 1.0}],
+        )
+        return {
+            "type": "ledger_unbalanced",
+            "path": entries_path,
+            "expected_finding_type": "domain_package_ledger_unbalanced",
+        }
+    if invariant_type == "calendar_no_overlap":
+        events_path = str(invariant.get("events_path") or "events")
+        participants_field = str(invariant.get("participants_field") or "participants")
+        _set_domain_package_path(
+            data,
+            events_path,
+            [
+                {"id": "first", "start": "2026-06-03T10:00:00", "end": "2026-06-03T11:00:00", participants_field: ["fixture"]},
+                {"id": "second", "start": "2026-06-03T10:30:00", "end": "2026-06-03T11:30:00", participants_field: ["fixture"]},
+            ],
+        )
+        return {
+            "type": "calendar_overlap",
+            "path": events_path,
+            "expected_finding_type": "domain_package_calendar_overlap",
+        }
+    if invariant_type == "chronological":
+        items_path = str(invariant.get("items_path") or invariant.get("messages_path") or "messages")
+        time_field = str(invariant.get("time_field") or "timestamp")
+        _set_domain_package_path(
+            data,
+            items_path,
+            [{time_field: "2026-06-03T10:05:00"}, {time_field: "2026-06-03T10:00:00"}],
+        )
+        return {
+            "type": "chronology_reversed",
+            "path": items_path,
+            "expected_finding_type": "domain_package_chronology_invalid",
+        }
+    if invariant_type == "required_participants":
+        participants_path = str(invariant.get("participants_path") or "participants")
+        _set_domain_package_path(data, participants_path, [])
+        return {
+            "type": "participant_missing",
+            "path": participants_path,
+            "expected_finding_type": "domain_package_participant_missing",
+        }
+    return {}
+
+
+def _domain_package_fixture_report(artifacts: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    return {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Validate generated domain package fixtures."},
+                    {"role": "assistant", "content": "Generated package fixtures are ready for registry validation."},
+                ],
+                "artifacts": [copy.deepcopy(_as_dict(artifact)) for artifact in artifacts],
+            }
+        ]
+    }
 
 
 def _apply_collection_contains_fixture(
