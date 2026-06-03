@@ -36,6 +36,7 @@ Each cookbook solves a **real problem** you'll face when building AI application
 | 30 | [Score Domain-Package Presets](30_domain_package_presets.py) | Check claims, contracts, CRM account plans, procurement, clinical intake, and incident response packages from preset invariants | No |
 | 31 | [Score Domain-Package Registry](31_domain_package_registry.py) | Override preset aliases, required fields, statuses, required values, and tolerances with a versioned local registry | No |
 | 32 | [Gate Domain-Package Registry Changes](32_domain_package_registry_gate.py) | Lint registries, diff preset migrations, and replay historical package rows before promotion | No |
+| 33 | [Measure Domain-Package Registry Coverage](33_domain_package_registry_coverage.py) | Generate minimal preset fixtures, measure replay coverage by invariant family, and recommend missing regression rows | No |
 
 ## Quick Start
 
@@ -84,3 +85,4 @@ uv run python -m examples.02_llm_as_judge
 - **Cookbook 30**: Score claim, contract, CRM account-plan, procurement, clinical-intake, and incident-response packages by naming the preset package type
 - **Cookbook 31**: Extend domain-package presets with versioned local registries for customer aliases, required evidence, allowed statuses, required values, and tolerances
 - **Cookbook 32**: Gate registry migrations with schema linting, preset diffs, breaking-change detection, and replay over preserved regression rows
+- **Cookbook 33**: Generate deterministic registry fixtures, measure replay coverage across preset invariant families, and recommend missing regression rows before using LLM-as-judge

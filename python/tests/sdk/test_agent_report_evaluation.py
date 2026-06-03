@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 from fi.evals.metrics.agents import (
     AgentReportEvaluator,
+    analyze_domain_package_registry_coverage,
     diff_domain_package_registries,
     evaluate_agent_report,
+    generate_domain_package_registry_fixtures,
     normalize_agent_report,
     replay_domain_package_registry,
     validate_domain_package_registry,
@@ -5503,6 +5505,107 @@ def test_domain_package_registry_validation_diff_and_replay_gate():
     assert passing_replay["cases"][0]["score"] == 1.0
     assert failing_replay["passed"] is False
     assert failing_replay["cases"][0]["score"] < 1.0
+
+
+def test_domain_package_registry_generates_fixtures_and_coverage_recommendations():
+    registry = {
+        "version": "futureagi.domain-packages.acme.v1",
+        "presets": {
+            "claim_file": {
+                "version": "acme-claims-2026-06",
+                "aliases": ["enterprise_claim"],
+                "required_fields": ["adjuster.id"],
+            },
+            "contract_review": {
+                "version": "acme-contracts-2026-06",
+                "aliases": ["enterprise_contract"],
+                "required_fields": ["counterparty.id"],
+            },
+        },
+    }
+    fixture_pack = generate_domain_package_registry_fixtures(
+        registry,
+        preset_names=["claim_file", "contract_review"],
+    )
+    fixture_result = evaluate_agent_report(
+        fixture_pack["report"],
+        config=fixture_pack["config"],
+    )
+    fixture_scores = {metric.name: metric.score for metric in fixture_result.cases[0].metrics}
+
+    claim_case = {
+        "id": "enterprise_claim_fixture",
+        "input": {
+            "observability": {
+                "raw": {
+                    "agent_report": {
+                        "results": [
+                            {
+                                "messages": [
+                                    {"role": "user", "content": "Review the enterprise claim packet."},
+                                    {
+                                        "role": "assistant",
+                                        "content": "Enterprise claim ECLM-9 is review complete.",
+                                    },
+                                ],
+                                "artifacts": [
+                                    {
+                                        "type": "json",
+                                        "metadata": {
+                                            "id": "enterprise_claim_9",
+                                            "kind": "domain_package",
+                                            "package_type": "enterprise_claim",
+                                        },
+                                        "data": {
+                                            "claim_id": "ECLM-9",
+                                            "status": "review_complete",
+                                            "claimant": {"id": "cust_9"},
+                                            "adjuster": {"id": "adj_1"},
+                                            "loss": {"date": "2026-06-01"},
+                                            "coverage": {"limit": 1000.0},
+                                            "amount": 1020.0,
+                                            "documents": [
+                                                {"type": "loss_notice"},
+                                                {"type": "policy"},
+                                            ],
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "agent_report_config": {
+                        "domain_package_checks": [
+                            {
+                                "id": "enterprise_claim_preset",
+                                "package_id": "enterprise_claim_9",
+                                "package_type": "enterprise_claim",
+                                "allowed_statuses": ["review_complete"],
+                                "amount_tolerance": 25.0,
+                            }
+                        ]
+                    },
+                }
+            }
+        },
+        "expected": {"required_metrics": {"domain_package_quality": 0.85}},
+    }
+    coverage = analyze_domain_package_registry_coverage(
+        registry,
+        [claim_case],
+        preset_names=["claim_file", "contract_review"],
+    )
+
+    assert fixture_pack["preset_count"] == 2
+    assert fixture_scores["domain_package_quality"] == 1.0
+    assert coverage["passed"] is False
+    assert coverage["coverage_score"] < 1.0
+    assert {"preset": "claim_file", "invariant_family": "field_present"} in coverage["covered"]
+    assert {"preset": "contract_review", "invariant_family": "field_present"} in coverage["missing"]
+    assert any(
+        item["preset"] == "contract_review" and item["suggested_fixture"]
+        for item in coverage["recommendations"]
+    )
 
 
 def test_evaluate_agent_report_scores_tool_argument_schema():

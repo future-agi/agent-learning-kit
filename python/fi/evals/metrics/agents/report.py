@@ -6306,6 +6306,176 @@ def replay_domain_package_registry(
     }
 
 
+def generate_domain_package_registry_fixtures(
+    registry: Mapping[str, Any],
+    *,
+    preset_names: Optional[Sequence[str]] = None,
+    include_defaults: bool = True,
+) -> Dict[str, Any]:
+    """
+    Generate minimal passing package fixtures for registry presets.
+
+    The generated report/config pair can be fed directly to
+    `evaluate_agent_report()` or converted into regression rows. Fixtures are
+    deterministic and local; no model judge or hosted service is required.
+    """
+
+    active_registry = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, registry)
+        if include_defaults
+        else copy.deepcopy(_as_dict(registry))
+    )
+    names = _domain_package_registry_preset_names(active_registry, preset_names)
+    artifacts: List[Dict[str, Any]] = []
+    checks: List[Dict[str, Any]] = []
+    fixtures: List[Dict[str, Any]] = []
+    for preset_name in names:
+        preset = _domain_package_preset_definition(active_registry, preset_name)
+        if not preset:
+            continue
+        package_id = f"{preset_name}_fixture"
+        data: Dict[str, Any] = {}
+        check = {"id": f"{preset_name}_fixture", "package_id": package_id, "package_type": preset_name}
+        for path in _string_list(preset.get("required_fields")):
+            _set_domain_package_path(data, path, _domain_package_sample_value(path))
+        for invariant in _as_list(preset.get("invariants")):
+            resolved = _resolve_domain_package_invariant_template(check, invariant)
+            _apply_domain_package_fixture_invariant(data, resolved)
+        artifact = {
+            "type": "json",
+            "metadata": {
+                "id": package_id,
+                "kind": "domain_package",
+                "package_type": preset_name,
+            },
+            "data": data,
+        }
+        artifacts.append(artifact)
+        checks.append(check)
+        fixtures.append(
+            {
+                "preset": preset_name,
+                "package_id": package_id,
+                "package": artifact,
+                "check": check,
+                "invariant_families": sorted(_domain_package_preset_families(preset)),
+            }
+        )
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Validate generated domain package fixtures."},
+                    {"role": "assistant", "content": "Generated package fixtures are ready for registry validation."},
+                ],
+                "artifacts": artifacts,
+            }
+        ]
+    }
+    return {
+        "registry_version": active_registry.get("version") or active_registry.get("schema_version"),
+        "preset_count": len(fixtures),
+        "fixtures": fixtures,
+        "report": report,
+        "config": {
+            "domain_package_registry": copy.deepcopy(_as_dict(registry) or active_registry),
+            "domain_package_checks": checks,
+            "metric_weights": {"domain_package_quality": 1.0},
+        },
+    }
+
+
+def analyze_domain_package_registry_coverage(
+    registry: Mapping[str, Any],
+    cases: Sequence[Any],
+    *,
+    preset_names: Optional[Sequence[str]] = None,
+    threshold: float = 0.85,
+    include_defaults: bool = True,
+) -> Dict[str, Any]:
+    """
+    Measure which registry invariant families are covered by replay rows.
+
+    Rows may be regression records, Future AGI-ready rows, or dictionaries with
+    raw agent report/config evidence. Missing preset/family coverage returns a
+    generated fixture recommendation.
+    """
+
+    active_registry = (
+        _merge_domain_package_registry(DEFAULT_DOMAIN_PACKAGE_REGISTRY, registry)
+        if include_defaults
+        else copy.deepcopy(_as_dict(registry))
+    )
+    validation = validate_domain_package_registry(registry, include_defaults=include_defaults)
+    requirements = _domain_package_registry_requirements(active_registry, preset_names=preset_names)
+    required_keys = {
+        (item["preset"], item["invariant_family"])
+        for item in requirements
+    }
+    covered_keys: set[tuple[str, str]] = set()
+    replay_results: List[Dict[str, Any]] = []
+    for index, raw_case in enumerate(_as_list(cases), start=1):
+        case = _as_dict(raw_case)
+        case_id = str(case.get("id") or case.get("case_id") or f"case_{index}")
+        raw_evidence = _domain_registry_case_raw_evidence(case)
+        report = raw_evidence.get("agent_report") or raw_evidence.get("report")
+        config = _as_dict(raw_evidence.get("agent_report_config") or raw_evidence.get("config"))
+        if isinstance(report, Mapping):
+            replay_config = copy.deepcopy(config)
+            replay_config["domain_package_registry"] = copy.deepcopy(_as_dict(registry))
+            evaluation = evaluate_agent_report(report, config=replay_config, threshold=threshold)
+            case_coverage = _domain_package_coverage_from_evaluation(evaluation.model_dump())
+            replay_results.append(
+                {
+                    "case_id": case_id,
+                    "score": evaluation.score,
+                    "passed": evaluation.passed,
+                    "covered": _coverage_key_records(case_coverage),
+                }
+            )
+        else:
+            evaluation_payload = raw_evidence.get("agent_report_evaluation") or case.get("agent_report_evaluation")
+            case_coverage = _domain_package_coverage_from_evaluation(evaluation_payload)
+            replay_results.append(
+                {
+                    "case_id": case_id,
+                    "score": None,
+                    "passed": None,
+                    "covered": _coverage_key_records(case_coverage),
+                }
+            )
+        covered_keys.update(case_coverage)
+    covered_required = required_keys & covered_keys
+    missing = sorted(required_keys - covered_keys)
+    fixture_pack = generate_domain_package_registry_fixtures(
+        registry,
+        preset_names=sorted({preset for preset, _ in missing}),
+        include_defaults=include_defaults,
+    ) if missing else {"fixtures": []}
+    recommendations = [
+        {
+            "type": "missing_regression_case",
+            "preset": preset,
+            "invariant_family": family,
+            "suggested_fixture": _fixture_for_preset(fixture_pack["fixtures"], preset),
+        }
+        for preset, family in missing
+    ]
+    coverage_score = len(covered_required) / len(required_keys) if required_keys else 1.0
+    return {
+        "passed": validation["valid"] and not missing,
+        "registry_valid": validation["valid"],
+        "validation": validation,
+        "required": _coverage_key_records(required_keys),
+        "covered": _coverage_key_records(covered_required),
+        "missing": _coverage_key_records(missing),
+        "coverage_score": round(coverage_score, 4),
+        "case_count": len(_as_list(cases)),
+        "cases": replay_results,
+        "recommendations": recommendations,
+    }
+
+
 def _domain_package_registry_invariant_errors(
     invariant: Mapping[str, Any],
     *,
@@ -6362,6 +6532,230 @@ def _domain_package_registry_invariant_errors(
         if not (invariant.get("items_path") or invariant.get("rows_path")):
             errors.append({"type": "invariant_collection_path_missing", "preset": preset, "index": index})
     return errors
+
+
+def _domain_package_registry_preset_names(
+    registry: Mapping[str, Any],
+    preset_names: Optional[Sequence[str]],
+) -> List[str]:
+    presets = _as_dict(registry.get("presets"))
+    if preset_names:
+        names = [
+            _normalize_domain_package_preset(name, registry)
+            for name in preset_names
+            if _normalize_domain_package_preset(name, registry)
+        ]
+    else:
+        names = [_domain_registry_token(name) for name in presets]
+    return [name for name in list(dict.fromkeys(names)) if name in presets]
+
+
+def _domain_package_registry_requirements(
+    registry: Mapping[str, Any],
+    *,
+    preset_names: Optional[Sequence[str]],
+) -> List[Dict[str, Any]]:
+    requirements: List[Dict[str, Any]] = []
+    for preset_name in _domain_package_registry_preset_names(registry, preset_names):
+        preset = _domain_package_preset_definition(registry, preset_name)
+        for family in sorted(_domain_package_preset_families(preset)):
+            requirements.append({"preset": preset_name, "invariant_family": family})
+    return requirements
+
+
+def _domain_package_preset_families(preset: Mapping[str, Any]) -> set[str]:
+    families = {"field_present"} if _string_list(preset.get("required_fields")) else set()
+    for raw_invariant in _as_list(preset.get("invariants")):
+        invariant = _as_dict(raw_invariant)
+        family = str(invariant.get("type") or invariant.get("check") or invariant.get("kind") or "").strip().lower()
+        if family:
+            families.add(family)
+    return families
+
+
+def _set_domain_package_path(data: Dict[str, Any], path: str, value: Any) -> None:
+    parts = [part for part in str(path).split(".") if part]
+    if not parts:
+        return
+    current: Any = data
+    for part in parts[:-1]:
+        if not isinstance(current, dict):
+            return
+        current = current.setdefault(part, {})
+    if isinstance(current, dict):
+        current[parts[-1]] = value
+
+
+def _domain_package_sample_value(path: str) -> Any:
+    normalized = path.lower()
+    if any(token in normalized for token in ("amount", "limit", "total", "price")):
+        return 100.0
+    if "quantity" in normalized or normalized.endswith("count"):
+        return 1
+    if "date" in normalized or normalized.endswith("_at") or normalized.endswith(".at"):
+        return "2026-06-03T10:00:00"
+    if normalized.endswith("id") or normalized.endswith(".id") or "_id" in normalized:
+        return "fixture_id"
+    if "status" in normalized:
+        return "approved"
+    if "level" in normalized:
+        return "routine"
+    return "fixture"
+
+
+def _apply_domain_package_fixture_invariant(
+    data: Dict[str, Any],
+    invariant: Mapping[str, Any],
+) -> None:
+    invariant_type = str(invariant.get("type") or "").lower()
+    if invariant_type in {"field_present", "required_field", "present"}:
+        path = str(invariant.get("path") or "")
+        _set_domain_package_path(data, path, _domain_package_sample_value(path))
+    elif invariant_type in {"field_equals", "equals"}:
+        _set_domain_package_path(data, str(invariant.get("path") or ""), invariant.get("value", invariant.get("expected")))
+    elif invariant_type == "status_in":
+        allowed = _as_list(invariant.get("allowed") or invariant.get("values"))
+        _set_domain_package_path(data, str(invariant.get("path") or "status"), allowed[0] if allowed else "approved")
+    elif invariant_type in {"numeric_lte", "amount_lte"}:
+        limit_path = str(invariant.get("limit_path") or invariant.get("max_path") or "limit")
+        amount_path = str(invariant.get("path") or invariant.get("amount_path") or "amount")
+        _set_domain_package_path(data, limit_path, 100.0)
+        _set_domain_package_path(data, amount_path, 90.0)
+    elif invariant_type in {"date_order", "before"}:
+        _set_domain_package_path(data, str(invariant.get("start_path") or invariant.get("before_path") or "start"), "2026-06-03T10:00:00")
+        _set_domain_package_path(data, str(invariant.get("end_path") or invariant.get("after_path") or "end"), "2026-06-03T11:00:00")
+    elif invariant_type in {"collection_contains", "required_items"}:
+        _apply_collection_contains_fixture(data, invariant)
+    elif invariant_type in {"collection_min_count", "min_count"}:
+        rows_path = str(invariant.get("items_path") or invariant.get("rows_path") or "items")
+        min_count = _as_int(invariant.get("min_count") or invariant.get("min")) or 1
+        _ensure_domain_package_rows(data, rows_path, min_count)
+    elif invariant_type in {"all_rows_field_in", "row_status_in"}:
+        rows_path = str(invariant.get("rows_path") or invariant.get("items_path") or "items")
+        field = str(invariant.get("field") or "status")
+        allowed = _as_list(invariant.get("allowed") or invariant.get("values")) or ["approved"]
+        rows = _ensure_domain_package_rows(data, rows_path, 1)
+        for row in rows:
+            if isinstance(row, dict):
+                _set_domain_package_path(row, field, allowed[0])
+    elif invariant_type in {"sum_equals", "line_items_total"}:
+        rows_path = str(invariant.get("rows_path") or "line_items")
+        amount_field = str(invariant.get("amount_field") or "amount")
+        quantity_field = str(invariant.get("quantity_field") or "")
+        total_path = str(invariant.get("total_path") or "total")
+        row = {amount_field: 50.0}
+        if quantity_field:
+            row[quantity_field] = 2
+        _set_domain_package_path(data, rows_path, [row])
+        _set_domain_package_path(data, total_path, 100.0)
+    elif invariant_type == "ledger_balanced":
+        _set_domain_package_path(
+            data,
+            str(invariant.get("entries_path") or "entries"),
+            [{"debit": 10.0, "credit": 0.0}, {"debit": 0.0, "credit": 10.0}],
+        )
+    elif invariant_type == "calendar_no_overlap":
+        _set_domain_package_path(
+            data,
+            str(invariant.get("events_path") or "events"),
+            [
+                {"id": "first", "start": "2026-06-03T10:00:00", "end": "2026-06-03T10:30:00", "participants": ["fixture"]},
+                {"id": "second", "start": "2026-06-03T10:30:00", "end": "2026-06-03T11:00:00", "participants": ["fixture"]},
+            ],
+        )
+    elif invariant_type == "chronological":
+        _set_domain_package_path(
+            data,
+            str(invariant.get("items_path") or invariant.get("messages_path") or "messages"),
+            [{"timestamp": "2026-06-03T10:00:00"}, {"timestamp": "2026-06-03T10:05:00"}],
+        )
+    elif invariant_type == "required_participants":
+        participants = _string_list(invariant.get("participants") or invariant.get("required")) or ["fixture@example.com"]
+        _set_domain_package_path(data, str(invariant.get("participants_path") or "participants"), participants)
+
+
+def _apply_collection_contains_fixture(
+    data: Dict[str, Any],
+    invariant: Mapping[str, Any],
+) -> None:
+    items_path = str(invariant.get("items_path") or invariant.get("rows_path") or "items")
+    field = str(invariant.get("field") or invariant.get("value_field") or "id")
+    values_path = str(invariant.get("values_path") or invariant.get("required_path") or "")
+    value_field = str(invariant.get("value_field") or "id")
+    required = _string_list(invariant.get("values") or invariant.get("required") or invariant.get("default_values"))
+    if values_path:
+        required = required or ["fixture_a", "fixture_b"]
+        _set_domain_package_path(data, values_path, [{value_field: value} for value in required])
+    required = required or _domain_invariant_required_values(data, invariant) or ["required"]
+    _set_domain_package_path(data, items_path, [{field: value} for value in required])
+
+
+def _ensure_domain_package_rows(
+    data: Dict[str, Any],
+    path: str,
+    min_count: int,
+) -> List[Dict[str, Any]]:
+    existing = _get_path(data, path)
+    rows = [dict(row) if isinstance(row, Mapping) else {} for row in _as_list(existing)]
+    while len(rows) < min_count:
+        rows.append({})
+    _set_domain_package_path(data, path, rows)
+    return rows
+
+
+def _domain_package_coverage_from_evaluation(evaluation: Any) -> set[tuple[str, str]]:
+    payload = _as_dict(evaluation)
+    if not isinstance(payload, Mapping):
+        return set()
+    covered: set[tuple[str, str]] = set()
+    for case in _as_list(payload.get("cases")):
+        for metric in _as_list(_as_dict(case).get("metrics")):
+            metric = _as_dict(metric)
+            if metric.get("name") != "domain_package_quality":
+                continue
+            for check in _as_list(_as_dict(metric.get("details")).get("checks")):
+                check = _as_dict(check)
+                presets = _string_list(_as_dict(check.get("registry")).get("presets"))
+                for subcheck in _as_list(check.get("subchecks")):
+                    family = _domain_package_subcheck_family(_as_dict(subcheck))
+                    if not family:
+                        continue
+                    for preset in presets:
+                        covered.add((preset, family))
+    return covered
+
+
+def _domain_package_subcheck_family(subcheck: Mapping[str, Any]) -> str:
+    if subcheck.get("check") == "invariant":
+        return str(_as_dict(subcheck.get("invariant")).get("type") or "").lower()
+    if subcheck.get("check") == "field":
+        return "expected_field"
+    if subcheck.get("check") == "answer_field":
+        return "answer_field"
+    if subcheck.get("check") == "forbidden_answer_terms":
+        return "forbidden_answer_terms"
+    return ""
+
+
+def _coverage_key_record(item: tuple[str, str]) -> Dict[str, str]:
+    return {"preset": item[0], "invariant_family": item[1]}
+
+
+def _coverage_key_records(items: Iterable[tuple[str, str]]) -> List[Dict[str, str]]:
+    return sorted(
+        (_coverage_key_record(item) for item in items),
+        key=lambda record: (record["preset"], record["invariant_family"]),
+    )
+
+
+def _fixture_for_preset(
+    fixtures: Sequence[Mapping[str, Any]],
+    preset: str,
+) -> Dict[str, Any]:
+    for fixture in fixtures:
+        if fixture.get("preset") == preset:
+            return copy.deepcopy(dict(fixture))
+    return {}
 
 
 def _domain_package_registry_extension_errors(
