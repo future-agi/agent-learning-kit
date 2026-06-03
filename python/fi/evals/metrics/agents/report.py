@@ -2185,10 +2185,18 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
     state_payload = _as_dict(_as_dict(final_state.get("adversarial")).get("attack_pack"))
     if state_payload:
         payloads.append(state_payload)
+    replay_state_payload = _as_dict(_as_dict(final_state.get("world_attack_replay")).get("attack_pack"))
+    if replay_state_payload:
+        payloads.append(replay_state_payload)
     metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
     metadata_payload = _as_dict(_as_dict(metadata_state.get("adversarial")).get("attack_pack"))
     if metadata_payload:
         payloads.append(metadata_payload)
+    replay_metadata_payload = _as_dict(
+        _as_dict(metadata_state.get("world_attack_replay")).get("attack_pack")
+    )
+    if replay_metadata_payload:
+        payloads.append(replay_metadata_payload)
 
     for artifact in _as_list(context.get("artifacts", [])):
         data = _as_dict(_get(artifact, "data", {}))
@@ -2197,6 +2205,10 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
         kind = str(data.get("kind") or metadata.get("kind") or "").lower()
         if kind == "adversarial_attack_pack":
             payloads.append(data)
+        elif kind == "world_attack_replay":
+            replay_attack_pack = _as_dict(data.get("attack_pack"))
+            if replay_attack_pack:
+                payloads.append(replay_attack_pack)
         elif data.get("attack_cases"):
             payloads.append(
                 {
@@ -2218,6 +2230,10 @@ def _adversarial_attack_payloads_from_context(context: Mapping[str, Any]) -> Lis
         kind = str(payload.get("kind") or "").lower()
         if kind == "adversarial_attack_pack" or "adversarial_attack_pack" in event_type:
             payloads.append(payload)
+        elif kind == "world_attack_replay":
+            replay_attack_pack = _as_dict(payload.get("attack_pack"))
+            if replay_attack_pack:
+                payloads.append(replay_attack_pack)
         elif "adversarial_attack" in event_type:
             event_attacks.append(payload)
         elif "environment_injection" in event_type and _as_list(payload.get("attack_cases", [])):
@@ -12975,10 +12991,20 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
     state_payload = _as_dict(final_state.get("world_contract"))
     if state_payload:
         payloads.append(state_payload)
+    replay_state_payload = _as_dict(
+        _as_dict(final_state.get("world_attack_replay")).get("world_contract")
+    )
+    if replay_state_payload:
+        payloads.append(replay_state_payload)
     metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
     metadata_payload = _as_dict(metadata_state.get("world_contract"))
     if metadata_payload:
         payloads.append(metadata_payload)
+    replay_metadata_payload = _as_dict(
+        _as_dict(metadata_state.get("world_attack_replay")).get("world_contract")
+    )
+    if replay_metadata_payload:
+        payloads.append(replay_metadata_payload)
 
     for artifact in _as_list(context.get("artifacts", [])):
         artifact_type = str(_get(artifact, "type", "") or "").lower()
@@ -12988,6 +13014,10 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
         metadata = _as_dict(_get(artifact, "metadata", {}))
         if _looks_like_world_contract(data, metadata):
             payloads.append(data)
+        elif str(data.get("kind") or metadata.get("kind") or "").lower() == "world_attack_replay":
+            replay_world = _as_dict(data.get("world_contract"))
+            if replay_world:
+                payloads.append(replay_world)
 
     for event in _as_list(context.get("events", [])):
         event_type = str(_get(event, "type", "") or "").lower()
@@ -12996,6 +13026,10 @@ def _world_contract_payloads_from_context(context: Mapping[str, Any]) -> List[Di
         metadata = _as_dict(_get(event, "metadata", {}))
         if _looks_like_world_contract(payload, metadata):
             payloads.append(payload)
+        elif str(payload.get("kind") or "").lower() == "world_attack_replay":
+            replay_world = _as_dict(payload.get("world_contract"))
+            if replay_world:
+                payloads.append(replay_world)
         elif "world" in event_type or "contract" in event_type:
             if (
                 ("transition_applied" in name or "transition_applied" in event_type)
