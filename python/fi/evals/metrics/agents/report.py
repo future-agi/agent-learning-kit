@@ -191,6 +191,8 @@ class AgentReportEvalConfig(BaseModel):
     artifact_grounding_checks: List[Any] = Field(default_factory=list)
     artifact_semantic_checks: List[Any] = Field(default_factory=list)
     domain_package_checks: List[Any] = Field(default_factory=list)
+    domain_package_registry: Dict[str, Any] = Field(default_factory=dict)
+    domain_package_preset_registry: Dict[str, Any] = Field(default_factory=dict)
     tool_argument_schemas: Dict[str, Any] = Field(default_factory=dict)
     validate_tool_args_from_metadata: bool = True
     allow_extra_tool_arguments: bool = False
@@ -5912,6 +5914,177 @@ def _artifact_semantic_metric(
     )
 
 
+DEFAULT_DOMAIN_PACKAGE_REGISTRY: Dict[str, Any] = {
+    "version": "futureagi.domain-packages.v1",
+    "presets": {
+        "claim_file": {
+            "version": "2026-06-03",
+            "aliases": ["claim", "claims", "insurance_claim"],
+            "required_fields": [
+                "claim_id",
+                "claimant.id",
+                "loss.date",
+                "coverage.limit",
+                "amount",
+            ],
+            "invariants": [
+                {
+                    "type": "status_in",
+                    "path": "status",
+                    "allowed": ["open", "approved", "denied", "settled", "paid"],
+                    "allowed_key": "allowed_statuses",
+                },
+                {
+                    "type": "numeric_lte",
+                    "path": "amount",
+                    "limit_path": "coverage.limit",
+                    "tolerance_key": "amount_tolerance",
+                },
+                {
+                    "type": "collection_contains",
+                    "items_path": "documents",
+                    "field": "type",
+                    "values_key": "required_documents",
+                    "default_values": ["loss_notice", "policy"],
+                },
+            ],
+        },
+        "contract_review": {
+            "version": "2026-06-03",
+            "aliases": ["contract", "contract_packet"],
+            "required_fields": ["contract_id", "parties", "effective_date", "expiration_date"],
+            "invariants": [
+                {
+                    "type": "date_order",
+                    "start_path": "effective_date",
+                    "end_path": "expiration_date",
+                    "allow_equal": False,
+                },
+                {
+                    "type": "collection_contains",
+                    "items_path": "signatures",
+                    "field": "party_id",
+                    "values_path": "parties",
+                    "value_field": "id",
+                },
+                {
+                    "type": "all_rows_field_in",
+                    "rows_path": "signatures",
+                    "field": "status",
+                    "allowed": ["signed", "executed"],
+                    "allowed_key": "allowed_signature_statuses",
+                },
+            ],
+        },
+        "crm_account_plan": {
+            "version": "2026-06-03",
+            "aliases": ["account_plan", "crm"],
+            "required_fields": [
+                "account_id",
+                "owner.id",
+                "next_step.action",
+                "next_step.due_at",
+            ],
+            "invariants": [
+                {"type": "collection_min_count", "items_path": "contacts", "min_count": 1},
+                {
+                    "type": "collection_contains",
+                    "items_path": "contacts",
+                    "field": "role",
+                    "values_key": "required_contact_roles",
+                    "default_values": ["economic_buyer"],
+                },
+                {
+                    "type": "date_order",
+                    "start_path": "last_touch_at",
+                    "end_path": "next_step.due_at",
+                },
+            ],
+        },
+        "procurement": {
+            "version": "2026-06-03",
+            "aliases": ["purchase_order", "procurement_packet"],
+            "required_fields": ["po_id", "vendor.id"],
+            "invariants": [
+                {
+                    "type": "status_in",
+                    "path": "status",
+                    "allowed": ["approved", "issued", "fulfilled"],
+                    "allowed_key": "allowed_statuses",
+                },
+                {
+                    "type": "sum_equals",
+                    "rows_path": "line_items",
+                    "total_path": "total",
+                    "amount_field": "unit_price",
+                    "quantity_field": "quantity",
+                    "tolerance_key": "total_tolerance",
+                },
+                {
+                    "type": "collection_contains",
+                    "items_path": "approvals",
+                    "field": "role",
+                    "values_key": "required_approval_roles",
+                    "default_values": ["requester", "finance"],
+                },
+                {
+                    "type": "all_rows_field_in",
+                    "rows_path": "approvals",
+                    "field": "status",
+                    "allowed": ["approved"],
+                    "allowed_key": "allowed_approval_statuses",
+                },
+            ],
+        },
+        "clinical_intake": {
+            "version": "2026-06-03",
+            "aliases": ["clinical", "patient_intake"],
+            "required_fields": ["patient.id", "encounter.reason", "consent.signed_at"],
+            "invariants": [
+                {
+                    "type": "status_in",
+                    "path": "triage.level",
+                    "allowed": ["routine", "urgent", "emergent"],
+                    "allowed_key": "allowed_triage_levels",
+                },
+                {
+                    "type": "collection_contains",
+                    "items_path": "sections",
+                    "field": "name",
+                    "values_key": "required_sections",
+                    "default_values": ["allergies", "medications", "consent"],
+                },
+            ],
+        },
+        "incident_response": {
+            "version": "2026-06-03",
+            "aliases": ["incident", "security_incident"],
+            "required_fields": ["incident_id", "severity", "detected_at", "owner.id"],
+            "invariants": [
+                {
+                    "type": "status_in",
+                    "path": "status",
+                    "allowed": ["triaged", "contained", "mitigated", "resolved"],
+                    "allowed_key": "allowed_statuses",
+                },
+                {
+                    "type": "date_order",
+                    "start_path": "detected_at",
+                    "end_path": "contained_at",
+                },
+                {
+                    "type": "collection_contains",
+                    "items_path": "actions",
+                    "field": "type",
+                    "values_key": "required_actions",
+                    "default_values": ["containment", "customer_update"],
+                },
+            ],
+        },
+    },
+}
+
+
 def _domain_package_checks(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -5924,14 +6097,122 @@ def _domain_package_checks(
     return checks
 
 
-def _normalize_domain_package_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
+def _domain_package_registry(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> Dict[str, Any]:
+    registry = copy.deepcopy(DEFAULT_DOMAIN_PACKAGE_REGISTRY)
+    metadata = _as_dict(context.get("metadata", {}))
+    for raw_registry in (
+        metadata.get("domain_package_registry"),
+        metadata.get("domain_package_preset_registry"),
+        config.domain_package_registry,
+        config.domain_package_preset_registry,
+    ):
+        registry = _merge_domain_package_registry(registry, raw_registry)
+    return registry
+
+
+def _merge_domain_package_registry(
+    base: Mapping[str, Any],
+    raw_overlay: Any,
+) -> Dict[str, Any]:
+    overlay = _as_dict(raw_overlay)
+    if not overlay:
+        return copy.deepcopy(dict(base))
+    merged = copy.deepcopy(dict(base))
+    for key in ("name", "version", "schema_version", "description"):
+        if overlay.get(key) is not None:
+            merged[key] = overlay.get(key)
+
+    aliases = _as_dict(merged.get("aliases"))
+    for alias, target in _as_dict(overlay.get("aliases")).items():
+        aliases[_domain_registry_token(alias)] = _domain_registry_token(target)
+    if aliases:
+        merged["aliases"] = aliases
+
+    presets = _as_dict(merged.get("presets"))
+    for name, raw_preset in _domain_registry_preset_items(overlay.get("presets")):
+        preset_name = _domain_registry_token(
+            _as_dict(raw_preset).get("id")
+            or _as_dict(raw_preset).get("name")
+            or name
+        )
+        presets[preset_name] = _merge_domain_package_preset(
+            _as_dict(presets.get(preset_name)),
+            raw_preset,
+        )
+    merged["presets"] = presets
+    return merged
+
+
+def _domain_registry_preset_items(raw_presets: Any) -> List[tuple[str, Any]]:
+    if isinstance(raw_presets, Mapping):
+        return [(str(name), preset) for name, preset in raw_presets.items()]
+    items = []
+    for index, raw_preset in enumerate(_as_list(raw_presets)):
+        preset = _as_dict(raw_preset)
+        if preset:
+            items.append((str(preset.get("id") or preset.get("name") or f"preset_{index + 1}"), preset))
+    return items
+
+
+def _merge_domain_package_preset(
+    base: Mapping[str, Any],
+    raw_overlay: Any,
+) -> Dict[str, Any]:
+    overlay = _as_dict(raw_overlay)
+    if not overlay:
+        return copy.deepcopy(dict(base))
+    merged = copy.deepcopy(dict(base))
+    for key in ("id", "name", "version", "description", "extends", "base"):
+        if overlay.get(key) is not None:
+            merged[key] = overlay.get(key)
+
+    for key in ("aliases", "required_fields"):
+        if overlay.get(key) is None:
+            continue
+        values = _string_list(overlay.get(key))
+        if _config_bool(overlay.get(f"replace_{key}"), False):
+            merged[key] = values
+        else:
+            merged[key] = list(dict.fromkeys([*_string_list(merged.get(key)), *values]))
+
+    if overlay.get("invariants") is not None:
+        invariants = [_as_dict(item) for item in _as_list(overlay.get("invariants")) if _as_dict(item)]
+        if _config_bool(overlay.get("replace_invariants"), False):
+            merged["invariants"] = invariants
+        else:
+            merged["invariants"] = [*_as_list(merged.get("invariants")), *invariants]
+
+    metadata = _as_dict(merged.get("metadata"))
+    metadata.update(_as_dict(overlay.get("metadata")))
+    if metadata:
+        merged["metadata"] = metadata
+    return merged
+
+
+def _normalize_domain_package_check(
+    raw: Mapping[str, Any],
+    *,
+    registry: Mapping[str, Any],
+) -> Dict[str, Any]:
     check = _as_dict(raw)
     if not check:
         return {}
     expected_fields = _as_dict(check.get("expected_fields") or check.get("fields"))
     answer_fields = check.get("answer_fields") or check.get("claim_fields")
-    preset_invariants = _domain_package_preset_invariants(check)
-    invariants = [*preset_invariants, *_as_list(check.get("invariants") or check.get("rules"))]
+    preset_names = _domain_package_preset_names(check, registry)
+    preset_invariants = _domain_package_preset_invariants(check, registry, preset_names=preset_names)
+    required_field_invariants = [
+        {"type": "field_present", "path": path}
+        for path in _string_list(check.get("required_fields") or check.get("required_paths"))
+    ]
+    invariants = [
+        *preset_invariants,
+        *required_field_invariants,
+        *_as_list(check.get("invariants") or check.get("rules")),
+    ]
     forbidden_terms = _string_list(check.get("forbidden_answer_terms") or check.get("wrong_terms"))
     if not any([expected_fields, answer_fields, invariants, forbidden_terms]):
         return {}
@@ -5962,201 +6243,142 @@ def _normalize_domain_package_check(raw: Mapping[str, Any]) -> Dict[str, Any]:
             if (normalized := _normalize_domain_package_invariant(item))
         ],
         "forbidden_answer_terms": forbidden_terms,
+        "registry": _domain_package_registry_metadata(registry, preset_names),
     }
 
 
-def _domain_package_preset_invariants(check: Mapping[str, Any]) -> List[Dict[str, Any]]:
+def _domain_package_preset_invariants(
+    check: Mapping[str, Any],
+    registry: Mapping[str, Any],
+    *,
+    preset_names: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
     invariants: List[Dict[str, Any]] = []
-    for preset in _domain_package_preset_names(check):
-        if preset in {"claim_file", "insurance_claim", "claims"}:
-            invariants.extend(
-                [
-                    {"type": "field_present", "path": "claim_id"},
-                    {"type": "field_present", "path": "claimant.id"},
-                    {"type": "field_present", "path": "loss.date"},
-                    {"type": "field_present", "path": "coverage.limit"},
-                    {"type": "field_present", "path": "amount"},
-                    {
-                        "type": "status_in",
-                        "path": "status",
-                        "allowed": ["open", "approved", "denied", "settled", "paid"],
-                    },
-                    {"type": "numeric_lte", "path": "amount", "limit_path": "coverage.limit"},
-                    {
-                        "type": "collection_contains",
-                        "items_path": "documents",
-                        "field": "type",
-                        "values": _domain_preset_values(
-                            check,
-                            "required_documents",
-                            ["loss_notice", "policy"],
-                        ),
-                    },
-                ]
-            )
-        elif preset in {"contract", "contract_review", "contract_packet"}:
-            invariants.extend(
-                [
-                    {"type": "field_present", "path": "contract_id"},
-                    {"type": "field_present", "path": "parties"},
-                    {"type": "field_present", "path": "effective_date"},
-                    {"type": "field_present", "path": "expiration_date"},
-                    {
-                        "type": "date_order",
-                        "start_path": "effective_date",
-                        "end_path": "expiration_date",
-                        "allow_equal": False,
-                    },
-                    {
-                        "type": "collection_contains",
-                        "items_path": "signatures",
-                        "field": "party_id",
-                        "values_path": "parties",
-                        "value_field": "id",
-                    },
-                    {
-                        "type": "all_rows_field_in",
-                        "rows_path": "signatures",
-                        "field": "status",
-                        "allowed": ["signed", "executed"],
-                    },
-                ]
-            )
-        elif preset in {"crm_account_plan", "account_plan", "crm"}:
-            invariants.extend(
-                [
-                    {"type": "field_present", "path": "account_id"},
-                    {"type": "field_present", "path": "owner.id"},
-                    {"type": "field_present", "path": "next_step.action"},
-                    {"type": "field_present", "path": "next_step.due_at"},
-                    {"type": "collection_min_count", "items_path": "contacts", "min_count": 1},
-                    {
-                        "type": "collection_contains",
-                        "items_path": "contacts",
-                        "field": "role",
-                        "values": _domain_preset_values(check, "required_contact_roles", ["economic_buyer"]),
-                    },
-                    {
-                        "type": "date_order",
-                        "start_path": "last_touch_at",
-                        "end_path": "next_step.due_at",
-                    },
-                ]
-            )
-        elif preset in {"purchase_order", "procurement", "procurement_packet"}:
-            invariants.extend(
-                [
-                    {"type": "field_present", "path": "po_id"},
-                    {"type": "field_present", "path": "vendor.id"},
-                    {
-                        "type": "status_in",
-                        "path": "status",
-                        "allowed": ["approved", "issued", "fulfilled"],
-                    },
-                    {
-                        "type": "sum_equals",
-                        "rows_path": "line_items",
-                        "total_path": "total",
-                        "amount_field": "unit_price",
-                        "quantity_field": "quantity",
-                    },
-                    {
-                        "type": "collection_contains",
-                        "items_path": "approvals",
-                        "field": "role",
-                        "values": _domain_preset_values(check, "required_approval_roles", ["requester", "finance"]),
-                    },
-                    {
-                        "type": "all_rows_field_in",
-                        "rows_path": "approvals",
-                        "field": "status",
-                        "allowed": ["approved"],
-                    },
-                ]
-            )
-        elif preset in {"clinical_intake", "clinical", "patient_intake"}:
-            invariants.extend(
-                [
-                    {"type": "field_present", "path": "patient.id"},
-                    {"type": "field_present", "path": "encounter.reason"},
-                    {"type": "field_present", "path": "consent.signed_at"},
-                    {
-                        "type": "status_in",
-                        "path": "triage.level",
-                        "allowed": ["routine", "urgent", "emergent"],
-                    },
-                    {
-                        "type": "collection_contains",
-                        "items_path": "sections",
-                        "field": "name",
-                        "values": _domain_preset_values(
-                            check,
-                            "required_sections",
-                            ["allergies", "medications", "consent"],
-                        ),
-                    },
-                ]
-            )
-        elif preset in {"incident_response", "incident", "security_incident"}:
-            invariants.extend(
-                [
-                    {"type": "field_present", "path": "incident_id"},
-                    {"type": "field_present", "path": "severity"},
-                    {"type": "field_present", "path": "detected_at"},
-                    {"type": "field_present", "path": "owner.id"},
-                    {
-                        "type": "status_in",
-                        "path": "status",
-                        "allowed": ["triaged", "contained", "mitigated", "resolved"],
-                    },
-                    {
-                        "type": "date_order",
-                        "start_path": "detected_at",
-                        "end_path": "contained_at",
-                    },
-                    {
-                        "type": "collection_contains",
-                        "items_path": "actions",
-                        "field": "type",
-                        "values": _domain_preset_values(
-                            check,
-                            "required_actions",
-                            ["containment", "customer_update"],
-                        ),
-                    },
-                ]
-            )
+    for preset_name in preset_names or _domain_package_preset_names(check, registry):
+        preset = _domain_package_preset_definition(registry, preset_name)
+        if not preset:
+            continue
+        invariants.extend(
+            {"type": "field_present", "path": path}
+            for path in _string_list(preset.get("required_fields"))
+        )
+        invariants.extend(
+            _resolve_domain_package_invariant_template(check, invariant)
+            for invariant in _as_list(preset.get("invariants"))
+            if _as_dict(invariant)
+        )
     return invariants
 
 
-def _domain_package_preset_names(check: Mapping[str, Any]) -> List[str]:
+def _domain_package_preset_names(
+    check: Mapping[str, Any],
+    registry: Mapping[str, Any],
+) -> List[str]:
     names: List[str] = []
     for key in ("preset", "presets", "package_family", "package_type", "domain"):
         for value in _string_list(check.get(key)):
-            normalized = _normalize_domain_package_preset(value)
+            normalized = _normalize_domain_package_preset(value, registry)
             if normalized:
                 names.append(normalized)
     return list(dict.fromkeys(names))
 
 
-def _normalize_domain_package_preset(value: Any) -> str:
-    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "claim": "claim_file",
-        "claims": "claim_file",
-        "insurance_claim": "claim_file",
-        "contract": "contract_review",
-        "contract_packet": "contract_review",
-        "account_plan": "crm_account_plan",
-        "crm": "crm_account_plan",
-        "purchase_order": "procurement",
-        "procurement_packet": "procurement",
-        "patient_intake": "clinical_intake",
-        "clinical": "clinical_intake",
-        "incident": "incident_response",
-        "security_incident": "incident_response",
+def _normalize_domain_package_preset(
+    value: Any,
+    registry: Optional[Mapping[str, Any]] = None,
+) -> str:
+    normalized = _domain_registry_token(value)
+    if not normalized:
+        return ""
+    return _domain_package_registry_aliases(registry or DEFAULT_DOMAIN_PACKAGE_REGISTRY).get(
+        normalized,
+        normalized,
+    )
+
+
+def _domain_package_registry_aliases(registry: Mapping[str, Any]) -> Dict[str, str]:
+    aliases: Dict[str, str] = {}
+    for name, raw_preset in _as_dict(registry.get("presets")).items():
+        canonical = _domain_registry_token(name)
+        if not canonical:
+            continue
+        aliases[canonical] = canonical
+        preset = _as_dict(raw_preset)
+        for alias in _string_list(preset.get("aliases")):
+            aliases[_domain_registry_token(alias)] = canonical
+    for alias, target in _as_dict(registry.get("aliases")).items():
+        aliases[_domain_registry_token(alias)] = _normalize_domain_package_preset(target, {"presets": registry.get("presets", {})})
+    return aliases
+
+
+def _domain_package_preset_definition(
+    registry: Mapping[str, Any],
+    preset_name: str,
+    *,
+    seen: Optional[set[str]] = None,
+) -> Dict[str, Any]:
+    canonical = _normalize_domain_package_preset(preset_name, registry)
+    presets = _as_dict(registry.get("presets"))
+    preset = _as_dict(presets.get(canonical))
+    if not preset:
+        return {}
+    base_name = str(preset.get("extends") or preset.get("base") or "")
+    if not base_name:
+        return copy.deepcopy(preset)
+    seen = set(seen or set())
+    if canonical in seen:
+        return copy.deepcopy(preset)
+    seen.add(canonical)
+    base_preset = _domain_package_preset_definition(
+        registry,
+        _normalize_domain_package_preset(base_name, registry),
+        seen=seen,
+    )
+    overlay = {
+        key: value
+        for key, value in preset.items()
+        if key not in {"extends", "base"}
     }
-    return aliases.get(normalized, normalized)
+    return _merge_domain_package_preset(base_preset, overlay)
+
+
+def _resolve_domain_package_invariant_template(
+    check: Mapping[str, Any],
+    invariant: Any,
+) -> Dict[str, Any]:
+    resolved = copy.deepcopy(_as_dict(invariant))
+    values_key = str(resolved.pop("values_key", "") or "")
+    if values_key:
+        default_values = _as_list(resolved.pop("default_values", resolved.get("values")))
+        values = _domain_preset_values(check, values_key, default_values)
+        if values:
+            resolved["values"] = values
+
+    allowed_key = str(resolved.pop("allowed_key", "") or "")
+    if allowed_key:
+        default_allowed = _as_list(resolved.pop("default_allowed", resolved.get("allowed")))
+        allowed = _domain_preset_values(check, allowed_key, default_allowed)
+        if allowed:
+            resolved["allowed"] = allowed
+
+    tolerance_key = str(resolved.pop("tolerance_key", "") or "")
+    if tolerance_key:
+        tolerance = _domain_preset_float(check, tolerance_key)
+        if tolerance is not None:
+            resolved["tolerance"] = tolerance
+
+    limit_key = str(resolved.pop("limit_key", "") or "")
+    if limit_key:
+        limit = _domain_preset_float(check, limit_key)
+        if limit is not None:
+            resolved["limit"] = limit
+
+    min_count_key = str(resolved.pop("min_count_key", "") or "")
+    if min_count_key:
+        min_count = _domain_preset_int(check, min_count_key)
+        if min_count is not None:
+            resolved["min_count"] = min_count
+    return resolved
 
 
 def _domain_preset_values(
@@ -6164,8 +6386,57 @@ def _domain_preset_values(
     key: str,
     default: Sequence[str],
 ) -> List[str]:
+    overrides = _as_dict(check.get("required_values") or check.get("preset_values") or check.get("values"))
     values = _string_list(check.get(key))
+    if not values:
+        values = _string_list(overrides.get(key))
     return values or list(default)
+
+
+def _domain_preset_float(
+    check: Mapping[str, Any],
+    key: str,
+) -> Optional[float]:
+    tolerances = _as_dict(check.get("tolerances"))
+    limits = _as_dict(check.get("limits"))
+    for value in (check.get(key), tolerances.get(key), limits.get(key)):
+        if (number := _as_float(value)) is not None:
+            return number
+    return None
+
+
+def _domain_preset_int(
+    check: Mapping[str, Any],
+    key: str,
+) -> Optional[int]:
+    counts = _as_dict(check.get("counts"))
+    for value in (check.get(key), counts.get(key)):
+        if (number := _as_int(value)) is not None:
+            return number
+    return None
+
+
+def _domain_package_registry_metadata(
+    registry: Mapping[str, Any],
+    preset_names: Sequence[str],
+) -> Dict[str, Any]:
+    presets = _as_dict(registry.get("presets"))
+    preset_versions = {
+        name: _as_dict(presets.get(name)).get("version")
+        for name in preset_names
+        if _as_dict(presets.get(name)).get("version") is not None
+    }
+    metadata = {
+        "version": registry.get("version") or registry.get("schema_version"),
+        "presets": list(preset_names),
+    }
+    if preset_versions:
+        metadata["preset_versions"] = preset_versions
+    return metadata
+
+
+def _domain_registry_token(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _normalize_domain_package_invariant(raw: Any) -> Dict[str, Any]:
@@ -6195,10 +6466,11 @@ def _domain_package_quality_metric(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
 ) -> AgentReportMetricResult:
+    registry = _domain_package_registry(context, config)
     checks = [
         normalized
         for raw in _domain_package_checks(context, config)
-        if (normalized := _normalize_domain_package_check(raw))
+        if (normalized := _normalize_domain_package_check(raw, registry=registry))
     ]
     artifacts = _artifact_records_from_context(context)
     answer = _messages_text(_as_list(context.get("messages", [])), roles={"assistant"})
@@ -6216,6 +6488,7 @@ def _domain_package_quality_metric(
         check_record = {
             "id": check["id"],
             "package": check["package"],
+            "registry": check["registry"],
             "subchecks": [],
         }
         normalized_checks.append(check_record)

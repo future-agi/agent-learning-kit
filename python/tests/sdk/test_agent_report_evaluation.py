@@ -5298,6 +5298,96 @@ def test_evaluate_agent_report_scores_domain_package_presets():
     assert "domain_package_collection_item_missing" in finding_types
 
 
+def test_evaluate_agent_report_scores_domain_package_registry_overrides():
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Review the enterprise claim packet."},
+                    {"role": "assistant", "content": "Enterprise claim ECLM-9 is review complete."},
+                ],
+                "artifacts": [
+                    {
+                        "type": "json",
+                        "metadata": {
+                            "id": "enterprise_claim_9",
+                            "kind": "domain_package",
+                            "package_type": "enterprise_claim",
+                        },
+                        "data": {
+                            "claim_id": "ECLM-9",
+                            "status": "review_complete",
+                            "claimant": {"id": "cust_9"},
+                            "adjuster": {"id": "adj_1"},
+                            "loss": {"date": "2026-06-01"},
+                            "coverage": {"limit": 1000.0},
+                            "amount": 1020.0,
+                            "documents": [
+                                {"type": "loss_notice"},
+                                {"type": "policy"},
+                                {"type": "audit_trail"},
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    config = {
+        "domain_package_registry": {
+            "version": "futureagi.domain-packages.acme.v1",
+            "presets": {
+                "claim_file": {
+                    "version": "acme-claims-2026-06",
+                    "aliases": ["enterprise_claim"],
+                    "required_fields": ["adjuster.id"],
+                    "invariants": [
+                        {
+                            "type": "collection_contains",
+                            "items_path": "documents",
+                            "field": "type",
+                            "values_key": "claim_audit_documents",
+                            "default_values": ["audit_trail"],
+                        }
+                    ],
+                }
+            },
+        },
+        "domain_package_checks": [
+            {
+                "id": "enterprise_claim_preset",
+                "package_id": "enterprise_claim_9",
+                "package_type": "enterprise_claim",
+                "allowed_statuses": ["review_complete"],
+                "amount_tolerance": 25.0,
+                "claim_audit_documents": ["audit_trail"],
+            }
+        ],
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    metric = next(metric for metric in result.cases[0].metrics if metric.name == "domain_package_quality")
+
+    assert metric.score == 1.0
+    assert metric.details["checks"][0]["registry"]["version"] == "futureagi.domain-packages.acme.v1"
+    assert metric.details["checks"][0]["registry"]["presets"] == ["claim_file"]
+    assert metric.details["checks"][0]["registry"]["preset_versions"]["claim_file"] == "acme-claims-2026-06"
+
+    artifact = report["results"][0]["artifacts"][0]
+    artifact["data"]["amount"] = 1030.0
+    artifact["data"]["adjuster"] = {}
+    artifact["data"]["documents"] = [{"type": "loss_notice"}, {"type": "policy"}]
+
+    failing_result = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_scores["domain_package_quality"] < 1.0
+    assert "domain_package_numeric_limit_exceeded" in finding_types
+    assert "domain_package_required_field_missing" in finding_types
+    assert "domain_package_collection_item_missing" in finding_types
+
+
 def test_evaluate_agent_report_scores_tool_argument_schema():
     report = {
         "results": [
