@@ -6,7 +6,7 @@
 
 **Your LLM passed every eval. Then it hallucinated in production.**
 
-86 local metrics, guardrail scanners, streaming assessment, and cloud scoring — one `evaluate()` call.
+88 local metrics, guardrail scanners, streaming assessment, and cloud scoring — one `evaluate()` call.
 
 [Docs](https://docs.futureagi.com) · [Platform](https://app.futureagi.com) · [Cookbooks](https://docs.futureagi.com/cookbook) · [Discord](https://discord.gg/UjZ2gRT5p)
 
@@ -28,7 +28,7 @@
 
 ## What's New in 1.1
 
-- **Unified `evaluate()` API** — one function, 86 local metrics, local or cloud
+- **Unified `evaluate()` API** — one function, 88 local metrics, local or cloud
 - **LLM-as-Judge** — augment local heuristics with Gemini/GPT/Claude via `augment=True`
 - **Guardrail Scanners** — jailbreak, code injection, PII, secrets detection in <10ms
 - **Streaming Assessment** — monitor token-by-token, early-stop on safety violations
@@ -44,7 +44,7 @@
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Local Metrics](#local-metrics--86-metrics-zero-network-calls)
+- [Local Metrics](#local-metrics--88-metrics-zero-network-calls)
 - [LLM-as-Judge](#llm-as-judge--when-heuristics-arent-enough)
 - [Guardrails](#guardrails--block-attacks-in-10ms)
 - [Streaming Assessment](#streaming-assessment--cut-the-stream-before-damage-is-done)
@@ -118,7 +118,7 @@ for r in batch:
 
 ---
 
-## Local Metrics — 86 metrics, zero network calls
+## Local Metrics — 88 metrics, zero network calls
 
 Run entirely on your machine. No API keys, no latency, no data leaving your box. See the full list with `fi list templates`.
 
@@ -452,7 +452,7 @@ This SDK is one piece of the [Future AGI platform](https://futureagi.com). Here'
 
 ## Roadmap
 
-- [x] Unified `evaluate()` API with 86 local metrics
+- [x] Unified `evaluate()` API with 88 local metrics
 - [x] LLM-as-Judge augmentation (Gemini, GPT, Claude, Ollama)
 - [x] Guardrail scanner pipeline (<10ms, zero-dep)
 - [x] Streaming with early stopping

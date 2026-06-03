@@ -191,6 +191,8 @@ class AgentReportEvalConfig(BaseModel):
     framework_probe_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_portability: List[str] = Field(default_factory=list)
     framework_portability_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_agent_trust_boundary: List[str] = Field(default_factory=list)
+    agent_trust_boundary_quality: Dict[str, Any] = Field(default_factory=dict)
     required_observability_replay: List[str] = Field(default_factory=list)
     observability_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
@@ -399,6 +401,8 @@ class AgentReportEvaluator:
                 *_framework_probe_quality_metrics(report_context, config),
                 *_framework_portability_coverage_metrics(report_context, config),
                 *_framework_portability_quality_metrics(report_context, config),
+                *_agent_trust_boundary_coverage_metrics(report_context, config),
+                *_agent_trust_boundary_quality_metrics(report_context, config),
                 *_framework_transcript_quality_metrics(report_context, config),
                 *_observability_replay_coverage_metrics(report_context, config),
                 *_observability_replay_quality_metrics(report_context, config),
@@ -5745,6 +5749,341 @@ def _framework_portability_quality_metric(
         name="framework_portability_quality",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} framework portability quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _agent_trust_boundary_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_agent_trust_boundary and not _agent_trust_boundary_payloads_from_context(context):
+        return []
+    return [_agent_trust_boundary_coverage_metric(context, config)]
+
+
+def _agent_trust_boundary_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_agent_trust_boundary_key(key) for key in config.required_agent_trust_boundary]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="agent_trust_boundary_coverage",
+            score=1.0,
+            reason="No required agent trust-boundary keys provided.",
+        )
+    observed = _agent_trust_boundary_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="agent_trust_boundary_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required agent trust-boundary evidence observed."
+            if not missing
+            else f"Missing agent trust-boundary evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_agent_trust_boundary_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _agent_trust_boundary_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.agent_trust_boundary_quality:
+        return []
+    return [_agent_trust_boundary_quality_metric(context, config.agent_trust_boundary_quality)]
+
+
+def _agent_trust_boundary_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _agent_trust_boundary_summary(_agent_trust_boundary_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    expected_framework = requirements.get("framework") or requirements.get("runtime")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_agent_trust_boundary_key(expected_framework)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="agent_trust_boundary_framework_mismatch",
+        )
+
+    for control in _string_list(requirements.get("required_controls") or requirements.get("controls")):
+        normalized = _normalize_agent_trust_boundary_key(control)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="required_control",
+            expected=normalized,
+            actual=observed["present_controls"],
+            match=normalized in observed["present_controls"],
+            finding_type="agent_trust_boundary_required_control_missing",
+        )
+
+    for category in _string_list(requirements.get("required_categories") or requirements.get("categories")):
+        normalized = _normalize_agent_trust_boundary_category(category)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="required_category",
+            expected=normalized,
+            actual=observed["present_categories"],
+            match=normalized in observed["present_categories"],
+            finding_type="agent_trust_boundary_category_missing",
+        )
+
+    for asset in _string_list(requirements.get("required_assets") or requirements.get("assets")):
+        normalized = _normalize_agent_trust_boundary_key(asset)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="required_asset",
+            expected=normalized,
+            actual=observed["assets"],
+            match=normalized in observed["assets"],
+            finding_type="agent_trust_boundary_asset_missing",
+        )
+
+    for tool in _string_list(requirements.get("required_tools") or requirements.get("tools")):
+        normalized = _normalize_agent_trust_boundary_key(tool)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="required_tool",
+            expected=normalized,
+            actual=observed["tools"],
+            match=normalized in observed["tools"],
+            finding_type="agent_trust_boundary_tool_missing",
+        )
+
+    for surface in _string_list(requirements.get("required_surfaces") or requirements.get("surfaces")):
+        normalized = _normalize_agent_trust_boundary_key(surface)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="required_surface",
+            expected=normalized,
+            actual=observed["surfaces"],
+            match=normalized in observed["surfaces"],
+            finding_type="agent_trust_boundary_surface_missing",
+        )
+
+    for threat in _string_list(requirements.get("required_threats") or requirements.get("threats")):
+        normalized = _normalize_agent_trust_boundary_key(threat)
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="required_threat",
+            expected=normalized,
+            actual=observed["threats"],
+            match=normalized in observed["threats"],
+            finding_type="agent_trust_boundary_threat_missing",
+        )
+
+    min_present = _as_int(
+        requirements.get("min_present_controls")
+        or requirements.get("min_present_count")
+        or requirements.get("min_controls")
+    )
+    if min_present is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="min_present_controls",
+            expected=min_present,
+            actual=observed["present_control_count"],
+            match=observed["present_control_count"] >= min_present,
+            finding_type="agent_trust_boundary_present_control_count_low",
+        )
+
+    min_control_rate = _as_float(requirements.get("min_control_rate"))
+    if min_control_rate is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="min_control_rate",
+            expected=min_control_rate,
+            actual=observed["control_rate"],
+            match=observed["control_rate"] >= min_control_rate,
+            finding_type="agent_trust_boundary_control_rate_low",
+        )
+
+    min_required_control_rate = _as_float(
+        requirements.get("min_required_control_rate")
+        if requirements.get("min_required_control_rate") is not None
+        else requirements.get("min_required_rate")
+    )
+    if min_required_control_rate is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="min_required_control_rate",
+            expected=min_required_control_rate,
+            actual=observed["required_control_rate"],
+            match=observed["required_control_rate"] >= min_required_control_rate,
+            finding_type="agent_trust_boundary_required_control_rate_low",
+        )
+
+    max_missing = _as_int(requirements.get("max_missing_controls"))
+    if max_missing is None:
+        max_missing = _as_int(requirements.get("max_missing_count"))
+    if max_missing is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="max_missing_controls",
+            expected=max_missing,
+            actual=observed["missing_control_count"],
+            match=observed["missing_control_count"] <= max_missing,
+            finding_type="agent_trust_boundary_missing_control_count_high",
+        )
+
+    max_blocked = _as_int(requirements.get("max_blocked_controls"))
+    if max_blocked is None:
+        max_blocked = _as_int(requirements.get("max_blocked_count"))
+    if max_blocked is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="max_blocked_controls",
+            expected=max_blocked,
+            actual=observed["blocked_control_count"],
+            match=observed["blocked_control_count"] <= max_blocked,
+            finding_type="agent_trust_boundary_blocked_control_count_high",
+        )
+
+    max_unmitigated = _as_int(requirements.get("max_unmitigated_threats"))
+    if max_unmitigated is None:
+        max_unmitigated = _as_int(requirements.get("max_unmitigated_count"))
+    if max_unmitigated is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="max_unmitigated_threats",
+            expected=max_unmitigated,
+            actual=observed["unmitigated_threat_count"],
+            match=observed["unmitigated_threat_count"] <= max_unmitigated,
+            finding_type="agent_trust_boundary_unmitigated_threat_count_high",
+        )
+
+    max_high_risk_unmitigated = _as_int(requirements.get("max_high_risk_unmitigated_threats"))
+    if max_high_risk_unmitigated is None:
+        max_high_risk_unmitigated = _as_int(requirements.get("max_high_risk_unmitigated_count"))
+    if max_high_risk_unmitigated is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="max_high_risk_unmitigated_threats",
+            expected=max_high_risk_unmitigated,
+            actual=observed["high_risk_unmitigated_count"],
+            match=observed["high_risk_unmitigated_count"] <= max_high_risk_unmitigated,
+            finding_type="agent_trust_boundary_high_risk_unmitigated_count_high",
+        )
+
+    min_canaries = _as_int(requirements.get("min_canaries") or requirements.get("min_canary_count"))
+    if min_canaries is not None:
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="min_canaries",
+            expected=min_canaries,
+            actual=observed["canary_count"],
+            match=observed["canary_count"] >= min_canaries,
+            finding_type="agent_trust_boundary_canary_count_low",
+        )
+
+    if requirements.get("require_evidence") is not None:
+        required = bool(requirements.get("require_evidence"))
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="require_evidence",
+            expected=required,
+            actual=observed["evidence_count"] > 0,
+            match=(observed["evidence_count"] > 0) is required,
+            finding_type="agent_trust_boundary_evidence_missing",
+        )
+
+    forbidden_missing = [
+        _normalize_agent_trust_boundary_key(control)
+        for control in _string_list(requirements.get("forbidden_missing_controls"))
+        if _normalize_agent_trust_boundary_key(control)
+    ]
+    for control in forbidden_missing:
+        actual_missing = sorted(set(observed["missing_controls"]) | set(observed["blocked_controls"]))
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check="forbidden_missing_control",
+            expected=control,
+            actual=actual_missing,
+            match=control not in actual_missing,
+            finding_type="agent_trust_boundary_forbidden_missing_control",
+        )
+
+    bool_checks = (
+        ("require_identity", "has_identity", "agent_trust_boundary_identity_missing"),
+        ("require_permissions", "has_permissions", "agent_trust_boundary_permissions_missing"),
+        ("require_sandbox", "has_sandbox", "agent_trust_boundary_sandbox_missing"),
+        ("require_audit", "has_audit", "agent_trust_boundary_audit_missing"),
+        ("require_canaries", "has_canaries", "agent_trust_boundary_canaries_missing"),
+        ("require_human_approval", "has_human_approval", "agent_trust_boundary_human_approval_missing"),
+        ("require_memory_isolation", "has_memory_isolation", "agent_trust_boundary_memory_isolation_missing"),
+        ("require_network_egress_controls", "has_network_egress_controls", "agent_trust_boundary_network_egress_missing"),
+        ("require_tool_allowlist", "has_tool_allowlist", "agent_trust_boundary_tool_allowlist_missing"),
+        ("require_data_boundary", "has_data_boundary", "agent_trust_boundary_data_boundary_missing"),
+        ("require_secret_handling", "has_secret_handling", "agent_trust_boundary_secret_handling_missing"),
+    )
+    for key, observed_key, finding_type in bool_checks:
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_agent_trust_boundary_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[observed_key],
+            match=observed[observed_key] is required,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="agent_trust_boundary_quality",
+            score=1.0,
+            reason="No agent trust-boundary quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="agent_trust_boundary_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} agent trust-boundary quality check(s) matched.",
         details={
             "checks": checks,
             "findings": findings,
@@ -13574,6 +13913,672 @@ def _normalize_framework_portability_key(value: Any) -> str:
         "graph": "orchestration",
         "policy": "security",
         "guardrails": "security",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _agent_trust_boundary_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_type = str(_get(artifact, "type", "") or "").lower()
+        if artifact_type not in {"trace", "json", "config", "security", "trust_boundary"}:
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_agent_trust_boundary(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        event_name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_agent_trust_boundary(payload, metadata):
+            payloads.append(payload)
+        elif "agent_trust_boundary" in event_type or "agent_trust" in event_name:
+            if _as_list(payload.get("controls", [])) or _as_list(payload.get("threats", [])):
+                payloads.append({"kind": "agent_trust_boundary_model", **payload})
+            elif "control" in event_name and {"id", "category", "status"} & set(payload):
+                payloads.append({"kind": "agent_trust_boundary_model", "controls": [payload]})
+            elif "threat" in event_name and {"id", "severity", "status"} & set(payload):
+                payloads.append({"kind": "agent_trust_boundary_model", "threats": [payload]})
+    state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    state_payload = _as_dict(state.get("agent_trust_boundary_model"))
+    if state_payload:
+        payloads.append(state_payload)
+    return payloads
+
+
+def _agent_trust_boundary_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _agent_trust_boundary_payloads_from_context(context):
+        observed.update({"agent_trust_boundary", "trust_boundary", "threat_model", "security"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_agent_trust_boundary_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for collection_key in (
+            "categories",
+            "present_categories",
+            "missing_categories",
+            "controls",
+            "present_controls",
+            "partial_controls",
+            "missing_controls",
+            "blocked_controls",
+            "threats",
+            "mitigated_threats",
+            "unmitigated_threats",
+            "gaps",
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = (
+                    _normalize_agent_trust_boundary_category(item)
+                    if "categories" in collection_key
+                    else _normalize_agent_trust_boundary_key(item)
+                )
+                if normalized:
+                    observed.add(normalized)
+        for key in ("actors", "assets", "tools", "surfaces", "controls", "canaries", "threats"):
+            for record in _agent_trust_boundary_records([payload], key):
+                _add_agent_trust_record_observed(observed, record)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = _normalize_agent_trust_boundary_key(_get(tool_call, "name", _get(tool_call, "tool", "")))
+        if name in {
+            "agent_trust_boundary_status",
+            "list_agent_trust_assets",
+            "list_agent_trust_tools",
+            "list_agent_trust_surfaces",
+            "list_agent_trust_controls",
+            "inspect_agent_trust_control",
+            "list_agent_trust_gaps",
+        }:
+            observed.update({"agent_trust_boundary", "trust_boundary", "threat_model", "security"})
+        if name:
+            observed.add(name)
+    return observed
+
+
+def _add_agent_trust_record_observed(observed: set[str], record: Mapping[str, Any]) -> None:
+    record_dict = _as_dict(record)
+    for key in (
+        "id",
+        "name",
+        "type",
+        "category",
+        "status",
+        "severity",
+        "trust_level",
+        "permission_scope",
+        "sensitivity",
+        "surface",
+        "tool",
+        "asset",
+    ):
+        normalized = (
+            _normalize_agent_trust_boundary_category(record_dict.get(key))
+            if key == "category"
+            else _normalize_agent_trust_boundary_key(record_dict.get(key))
+        )
+        if normalized:
+            observed.add(normalized)
+    for signal in _as_list(record_dict.get("signals", [])):
+        normalized = _normalize_agent_trust_boundary_key(signal)
+        if normalized:
+            observed.add(normalized)
+    for collection_key in ("privileges", "permissions", "controls", "threats"):
+        for item in _as_list(record_dict.get(collection_key, [])):
+            normalized = (
+                _normalize_agent_trust_boundary_category(item)
+                if collection_key == "controls"
+                else _normalize_agent_trust_boundary_key(item)
+            )
+            if normalized:
+                observed.add(normalized)
+
+
+def _looks_like_agent_trust_boundary(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "agent_trust_boundary_model" or (
+        "controls" in data and ("summary" in data or "threats" in data or "surfaces" in data)
+    )
+
+
+def _agent_trust_boundary_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    actors: set[str] = set()
+    assets: set[str] = set()
+    tools: set[str] = set()
+    surfaces: set[str] = set()
+    canaries: set[str] = set()
+    threats: set[str] = set()
+    mitigated_threats: set[str] = set()
+    unmitigated_threats: set[str] = set()
+    categories: set[str] = set()
+    present_categories: set[str] = set()
+    missing_categories: set[str] = set()
+    controls: set[str] = set()
+    present_controls: set[str] = set()
+    partial_controls: set[str] = set()
+    missing_controls: set[str] = set()
+    blocked_controls: set[str] = set()
+    signals: set[str] = set()
+    actor_records: List[Dict[str, Any]] = []
+    asset_records: List[Dict[str, Any]] = []
+    tool_records: List[Dict[str, Any]] = []
+    surface_records: List[Dict[str, Any]] = []
+    control_records: List[Dict[str, Any]] = []
+    canary_records: List[Dict[str, Any]] = []
+    threat_records: List[Dict[str, Any]] = []
+    seen: Dict[str, set[str]] = {
+        "actors": set(),
+        "assets": set(),
+        "tools": set(),
+        "surfaces": set(),
+        "controls": set(),
+        "canaries": set(),
+        "threats": set(),
+    }
+    present_control_count = 0
+    partial_control_count = 0
+    missing_control_count = 0
+    blocked_control_count = 0
+    required_control_count = 0
+    required_present_control_count = 0
+    mitigated_threat_count = 0
+    unmitigated_threat_count = 0
+    high_risk_threat_count = 0
+    high_risk_unmitigated_count = 0
+    evidence_count = 0
+    privileged_tool_count = 0
+    external_tool_count = 0
+    sensitive_asset_count = 0
+    untrusted_surface_count = 0
+    summary_counts = {
+        "actor_count": 0,
+        "asset_count": 0,
+        "tool_count": 0,
+        "surface_count": 0,
+        "control_count": 0,
+        "canary_count": 0,
+        "threat_count": 0,
+        "present_control_count": 0,
+        "partial_control_count": 0,
+        "missing_control_count": 0,
+        "blocked_control_count": 0,
+        "required_control_count": 0,
+        "required_present_control_count": 0,
+        "evidence_count": 0,
+        "untrusted_surface_count": 0,
+        "privileged_tool_count": 0,
+        "external_tool_count": 0,
+        "sensitive_asset_count": 0,
+        "high_risk_threat_count": 0,
+        "mitigated_threat_count": 0,
+        "unmitigated_threat_count": 0,
+        "high_risk_unmitigated_count": 0,
+    }
+    summary_flags = {
+        "has_identity": False,
+        "has_permissions": False,
+        "has_sandbox": False,
+        "has_audit": False,
+        "has_canaries": False,
+        "has_human_approval": False,
+        "has_memory_isolation": False,
+        "has_network_egress_controls": False,
+        "has_tool_allowlist": False,
+        "has_data_boundary": False,
+        "has_secret_handling": False,
+    }
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        framework = _normalize_agent_trust_boundary_key(payload_dict.get("framework") or payload_dict.get("runtime"))
+        if framework:
+            frameworks.add(framework)
+        for signal in _as_list(payload_dict.get("signals", [])):
+            normalized = _normalize_agent_trust_boundary_key(signal)
+            if normalized:
+                signals.add(normalized)
+        summary = _as_dict(payload_dict.get("summary"))
+        for key in summary_counts:
+            summary_counts[key] = max(summary_counts[key], _as_int(summary.get(key)) or 0)
+        for key in summary_flags:
+            summary_flags[key] = summary_flags[key] or bool(summary.get(key))
+        for collection_key, target in (
+            ("categories", categories),
+            ("present_categories", present_categories),
+            ("missing_categories", missing_categories),
+            ("controls", controls),
+            ("present_controls", present_controls),
+            ("partial_controls", partial_controls),
+            ("missing_controls", missing_controls),
+            ("blocked_controls", blocked_controls),
+            ("threats", threats),
+            ("mitigated_threats", mitigated_threats),
+            ("unmitigated_threats", unmitigated_threats),
+        ):
+            for item in _as_list(summary.get(collection_key, [])):
+                normalized = (
+                    _normalize_agent_trust_boundary_category(item)
+                    if "categories" in collection_key
+                    else _normalize_agent_trust_boundary_key(item)
+                )
+                if normalized:
+                    target.add(normalized)
+        for actor in _agent_trust_boundary_records([payload_dict], "actors"):
+            actor_id = _agent_trust_record_id(actor)
+            if not actor_id or actor_id in seen["actors"]:
+                continue
+            seen["actors"].add(actor_id)
+            actors.add(actor_id)
+            actor_records.append(actor)
+            evidence_count += len(_as_list(actor.get("evidence", [])))
+        for asset in _agent_trust_boundary_records([payload_dict], "assets"):
+            asset_id = _agent_trust_record_id(asset)
+            if not asset_id or asset_id in seen["assets"]:
+                continue
+            seen["assets"].add(asset_id)
+            assets.add(asset_id)
+            asset_records.append(asset)
+            if _normalize_agent_trust_boundary_key(asset.get("sensitivity")) in {"high", "critical", "secret"}:
+                sensitive_asset_count += 1
+            evidence_count += len(_as_list(asset.get("evidence", [])))
+        for tool in _agent_trust_boundary_records([payload_dict], "tools"):
+            tool_id = _agent_trust_record_id(tool)
+            if not tool_id or tool_id in seen["tools"]:
+                continue
+            seen["tools"].add(tool_id)
+            tools.add(tool_id)
+            tool_records.append(tool)
+            if bool(tool.get("high_risk")):
+                privileged_tool_count += 1
+            if bool(tool.get("external")):
+                external_tool_count += 1
+            evidence_count += len(_as_list(tool.get("evidence", [])))
+        for surface in _agent_trust_boundary_records([payload_dict], "surfaces"):
+            surface_id = _agent_trust_record_id(surface)
+            if not surface_id or surface_id in seen["surfaces"]:
+                continue
+            seen["surfaces"].add(surface_id)
+            surfaces.add(surface_id)
+            surface_records.append(surface)
+            if _normalize_agent_trust_boundary_key(surface.get("trust_level")) in {"untrusted", "external", "unknown"}:
+                untrusted_surface_count += 1
+            evidence_count += len(_as_list(surface.get("evidence", [])))
+        for control in _agent_trust_boundary_records([payload_dict], "controls"):
+            control_id = _agent_trust_record_id(control)
+            if not control_id or control_id in seen["controls"]:
+                continue
+            seen["controls"].add(control_id)
+            controls.add(control_id)
+            control_records.append(control)
+            status = _normalize_agent_trust_boundary_status(control.get("status")) or "present"
+            category = _normalize_agent_trust_boundary_category(control.get("category") or control_id)
+            if category:
+                categories.add(category)
+            if bool(control.get("required", True)):
+                required_control_count += 1
+            if status == "present":
+                present_control_count += 1
+                present_controls.add(control_id)
+                if category:
+                    present_categories.add(category)
+                if bool(control.get("required", True)):
+                    required_present_control_count += 1
+            elif status == "partial":
+                partial_control_count += 1
+                partial_controls.add(control_id)
+                if category:
+                    missing_categories.add(category)
+            elif status == "blocked":
+                blocked_control_count += 1
+                blocked_controls.add(control_id)
+                if category:
+                    missing_categories.add(category)
+            else:
+                missing_control_count += 1
+                missing_controls.add(control_id)
+                if category:
+                    missing_categories.add(category)
+            evidence_count += len(_as_list(control.get("evidence", [])))
+        for canary in _agent_trust_boundary_records([payload_dict], "canaries"):
+            canary_id = _agent_trust_record_id(canary)
+            if not canary_id or canary_id in seen["canaries"]:
+                continue
+            seen["canaries"].add(canary_id)
+            canaries.add(canary_id)
+            canary_records.append(canary)
+            evidence_count += len(_as_list(canary.get("evidence", [])))
+        for threat in _agent_trust_boundary_records([payload_dict], "threats"):
+            threat_id = _agent_trust_record_id(threat)
+            if not threat_id or threat_id in seen["threats"]:
+                continue
+            seen["threats"].add(threat_id)
+            threats.add(threat_id)
+            threat_records.append(threat)
+            status = _normalize_agent_trust_threat_status(threat.get("status")) or "unmitigated"
+            severity = _normalize_agent_trust_severity(threat.get("severity"))
+            if status == "mitigated":
+                mitigated_threat_count += 1
+                mitigated_threats.add(threat_id)
+            else:
+                unmitigated_threat_count += 1
+                unmitigated_threats.add(threat_id)
+            if severity in {"high", "critical"}:
+                high_risk_threat_count += 1
+                if status != "mitigated":
+                    high_risk_unmitigated_count += 1
+            evidence_count += len(_as_list(threat.get("evidence", [])))
+            for category in _as_list(threat.get("controls", [])):
+                normalized = _normalize_agent_trust_boundary_category(category)
+                if normalized:
+                    categories.add(normalized)
+
+    present_control_count = max(present_control_count, summary_counts["present_control_count"])
+    partial_control_count = max(partial_control_count, summary_counts["partial_control_count"])
+    missing_control_count = max(missing_control_count, summary_counts["missing_control_count"])
+    blocked_control_count = max(blocked_control_count, summary_counts["blocked_control_count"])
+    required_control_count = max(required_control_count, summary_counts["required_control_count"])
+    required_present_control_count = max(required_present_control_count, summary_counts["required_present_control_count"])
+    evidence_count = max(evidence_count, summary_counts["evidence_count"])
+    untrusted_surface_count = max(untrusted_surface_count, summary_counts["untrusted_surface_count"])
+    privileged_tool_count = max(privileged_tool_count, summary_counts["privileged_tool_count"])
+    external_tool_count = max(external_tool_count, summary_counts["external_tool_count"])
+    sensitive_asset_count = max(sensitive_asset_count, summary_counts["sensitive_asset_count"])
+    high_risk_threat_count = max(high_risk_threat_count, summary_counts["high_risk_threat_count"])
+    mitigated_threat_count = max(mitigated_threat_count, summary_counts["mitigated_threat_count"])
+    unmitigated_threat_count = max(unmitigated_threat_count, summary_counts["unmitigated_threat_count"])
+    high_risk_unmitigated_count = max(high_risk_unmitigated_count, summary_counts["high_risk_unmitigated_count"])
+    actor_count = max(len(actor_records), summary_counts["actor_count"])
+    asset_count = max(len(asset_records), summary_counts["asset_count"])
+    tool_count = max(len(tool_records), summary_counts["tool_count"])
+    surface_count = max(len(surface_records), summary_counts["surface_count"])
+    control_count = max(
+        len(control_records),
+        summary_counts["control_count"],
+        present_control_count + partial_control_count + missing_control_count + blocked_control_count,
+    )
+    canary_count = max(len(canary_records), summary_counts["canary_count"])
+    threat_count = max(
+        len(threat_records),
+        summary_counts["threat_count"],
+        mitigated_threat_count + unmitigated_threat_count,
+    )
+    control_rate = round(present_control_count / control_count, 4) if control_count else 1.0
+    required_control_rate = round(required_present_control_count / required_control_count, 4) if required_control_count else 1.0
+    present_category_set = set(present_categories)
+    return {
+        "actor_count": actor_count,
+        "asset_count": asset_count,
+        "tool_count": tool_count,
+        "surface_count": surface_count,
+        "control_count": control_count,
+        "canary_count": canary_count,
+        "threat_count": threat_count,
+        "present_control_count": present_control_count,
+        "partial_control_count": partial_control_count,
+        "missing_control_count": missing_control_count,
+        "blocked_control_count": blocked_control_count,
+        "required_control_count": required_control_count,
+        "required_present_control_count": required_present_control_count,
+        "control_rate": control_rate,
+        "required_control_rate": required_control_rate,
+        "evidence_count": evidence_count,
+        "untrusted_surface_count": untrusted_surface_count,
+        "privileged_tool_count": privileged_tool_count,
+        "external_tool_count": external_tool_count,
+        "sensitive_asset_count": sensitive_asset_count,
+        "high_risk_threat_count": high_risk_threat_count,
+        "mitigated_threat_count": mitigated_threat_count,
+        "unmitigated_threat_count": unmitigated_threat_count,
+        "high_risk_unmitigated_count": high_risk_unmitigated_count,
+        "frameworks": sorted(frameworks),
+        "actors": sorted(actors),
+        "assets": sorted(assets),
+        "tools": sorted(tools),
+        "surfaces": sorted(surfaces),
+        "canaries": sorted(canaries),
+        "categories": sorted(categories),
+        "present_categories": sorted(present_categories),
+        "missing_categories": sorted(missing_categories),
+        "controls": sorted(controls),
+        "present_controls": sorted(present_controls),
+        "partial_controls": sorted(partial_controls),
+        "missing_controls": sorted(missing_controls),
+        "blocked_controls": sorted(blocked_controls),
+        "threats": sorted(threats),
+        "mitigated_threats": sorted(mitigated_threats),
+        "unmitigated_threats": sorted(unmitigated_threats),
+        "gaps": sorted(partial_controls | missing_controls | blocked_controls | unmitigated_threats),
+        "signals": sorted(signals),
+        "has_identity": summary_flags["has_identity"] or "identity" in present_category_set,
+        "has_permissions": summary_flags["has_permissions"] or "permissions" in present_category_set,
+        "has_sandbox": summary_flags["has_sandbox"] or "sandbox" in present_category_set,
+        "has_audit": summary_flags["has_audit"] or "audit" in present_category_set,
+        "has_canaries": summary_flags["has_canaries"] or "canaries" in present_category_set or canary_count > 0,
+        "has_human_approval": summary_flags["has_human_approval"] or "human_approval" in present_category_set,
+        "has_memory_isolation": summary_flags["has_memory_isolation"] or "memory_isolation" in present_category_set,
+        "has_network_egress_controls": summary_flags["has_network_egress_controls"] or "network_egress" in present_category_set,
+        "has_tool_allowlist": summary_flags["has_tool_allowlist"] or "tool_allowlist" in present_category_set,
+        "has_data_boundary": summary_flags["has_data_boundary"] or "data_boundary" in present_category_set,
+        "has_secret_handling": summary_flags["has_secret_handling"] or "secret_handling" in present_category_set,
+        "actor_records": actor_records,
+        "asset_records": asset_records,
+        "tool_records": tool_records,
+        "surface_records": surface_records,
+        "control_records": control_records,
+        "canary_records": canary_records,
+        "threat_records": threat_records,
+    }
+
+
+def _agent_trust_boundary_records(
+    payloads: Sequence[Mapping[str, Any]],
+    key: str,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_records: List[Dict[str, Any]] = []
+        for item in _as_list(payload_dict.get(key, [])):
+            item_dict = _as_dict(item)
+            if item_dict:
+                payload_records.append(item_dict)
+        if not payload_records and key == "controls" and {"id", "category", "status"} & set(payload_dict):
+            payload_records.append(payload_dict)
+        if not payload_records and key == "threats" and {"id", "severity", "status"} & set(payload_dict):
+            payload_records.append(payload_dict)
+        records.extend(payload_records)
+    return records
+
+
+def _agent_trust_record_id(record: Mapping[str, Any]) -> str:
+    return _normalize_agent_trust_boundary_key(
+        record.get("id")
+        or record.get("name")
+        or record.get("control")
+        or record.get("threat")
+        or record.get("tool")
+        or record.get("asset")
+        or record.get("surface")
+    )
+
+
+def _append_agent_trust_boundary_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "agent_trust_boundary_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_agent_trust_boundary_status(value: Any) -> str:
+    normalized = _normalize_agent_trust_boundary_key(value)
+    aliases = {
+        "yes": "present",
+        "true": "present",
+        "enabled": "present",
+        "implemented": "present",
+        "available": "present",
+        "pass": "present",
+        "passed": "present",
+        "success": "present",
+        "limited": "partial",
+        "degraded": "partial",
+        "planned": "partial",
+        "partial_mitigation": "partial",
+        "no": "missing",
+        "false": "missing",
+        "absent": "missing",
+        "unsupported": "missing",
+        "fail": "missing",
+        "failed": "missing",
+        "denied": "blocked",
+        "forbidden": "blocked",
+        "policy_blocked": "blocked",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"present", "partial", "missing", "blocked"} else ""
+
+
+def _normalize_agent_trust_threat_status(value: Any) -> str:
+    normalized = _normalize_agent_trust_boundary_key(value)
+    aliases = {
+        "yes": "mitigated",
+        "true": "mitigated",
+        "covered": "mitigated",
+        "controlled": "mitigated",
+        "resolved": "mitigated",
+        "closed": "mitigated",
+        "limited": "partial",
+        "partially_mitigated": "partial",
+        "open": "unmitigated",
+        "uncovered": "unmitigated",
+        "uncontrolled": "unmitigated",
+        "missing": "unmitigated",
+        "no": "unmitigated",
+        "false": "unmitigated",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"mitigated", "partial", "unmitigated"} else ""
+
+
+def _normalize_agent_trust_severity(value: Any) -> str:
+    normalized = _normalize_agent_trust_boundary_key(value)
+    aliases = {
+        "sev1": "critical",
+        "p0": "critical",
+        "blocker": "critical",
+        "severe": "critical",
+        "sev2": "high",
+        "p1": "high",
+        "important": "high",
+        "sev3": "medium",
+        "p2": "medium",
+        "moderate": "medium",
+        "sev4": "low",
+        "p3": "low",
+        "minor": "low",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"low", "medium", "high", "critical"} else "medium"
+
+
+def _normalize_agent_trust_boundary_category(value: Any) -> str:
+    normalized = _normalize_agent_trust_boundary_key(value)
+    aliases = {
+        "auth": "identity",
+        "authn": "identity",
+        "authentication": "identity",
+        "principal": "identity",
+        "principals": "identity",
+        "actor_identity": "identity",
+        "authorization": "permissions",
+        "access_control": "permissions",
+        "access_controls": "permissions",
+        "rbac": "permissions",
+        "abac": "permissions",
+        "least_privilege": "permissions",
+        "tool_permission": "permissions",
+        "tool_permissions": "permissions",
+        "runtime_isolation": "sandbox",
+        "container": "sandbox",
+        "containers": "sandbox",
+        "logs": "audit",
+        "logging": "audit",
+        "trace": "audit",
+        "tracing": "audit",
+        "telemetry": "audit",
+        "honeytoken": "canaries",
+        "honeytokens": "canaries",
+        "canary": "canaries",
+        "approval": "human_approval",
+        "approvals": "human_approval",
+        "hitl": "human_approval",
+        "human_in_the_loop": "human_approval",
+        "human_review": "human_approval",
+        "memory": "memory_isolation",
+        "session_memory": "memory_isolation",
+        "tenant_memory": "memory_isolation",
+        "network": "network_egress",
+        "egress": "network_egress",
+        "internet": "network_egress",
+        "allowlist": "tool_allowlist",
+        "tool_registry": "tool_allowlist",
+        "tool_allow_list": "tool_allowlist",
+        "data": "data_boundary",
+        "data_boundaries": "data_boundary",
+        "pii": "data_boundary",
+        "secret": "secret_handling",
+        "secrets": "secret_handling",
+        "credential": "secret_handling",
+        "credentials": "secret_handling",
+        "input_validation": "data_boundary",
+        "output_filtering": "data_boundary",
+    }
+    return aliases.get(normalized, normalized or "general")
+
+
+def _normalize_agent_trust_boundary_key(value: Any) -> str:
+    normalized = (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace(".", "_")
+        .replace("/", "_")
+        .replace(":", "_")
+    )
+    aliases = {
+        "tool_use": "tool_calling",
+        "function_call": "tool_calling",
+        "function_calling": "tool_calling",
+        "prompt_injection": "indirect_prompt_injection",
+        "indirect_prompt": "indirect_prompt_injection",
+        "credential_exfiltration": "secret_exfiltration",
+        "secrets_exfiltration": "secret_exfiltration",
+        "human_approval_gate": "human_approval",
+        "approval_gate": "human_approval",
+        "allow_list": "allowlist",
+        "deny_list": "denylist",
     }
     return aliases.get(normalized, normalized)
 
