@@ -11927,6 +11927,8 @@ def _optimizer_trace_payloads_from_context(context: Mapping[str, Any]) -> List[D
         metadata = _as_dict(_get(event, "metadata", {}))
         if _looks_like_optimizer_trace(payload, metadata):
             payloads.append(payload)
+        elif "optimizer_governance" in event_type:
+            payloads.append({"kind": "optimizer_society_trace", "governance": payload})
         elif "optimizer_trace" in event_type or "optimizer_proposal" in event_type:
             payloads.append({"kind": "optimizer_society_trace", "proposals": [payload]})
     state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
@@ -11960,6 +11962,19 @@ def _optimizer_trace_observed(context: Mapping[str, Any]) -> set[str]:
             observed.add("best_candidate")
         if payload.get("final_score") is not None:
             observed.add("score")
+        governance = _as_dict(payload.get("governance"))
+        if governance:
+            observed.add("governance")
+            for signal in _as_list(governance.get("signals", [])):
+                normalized = _normalize_optimizer_trace_key(signal)
+                if normalized:
+                    observed.add(normalized)
+            for check in _as_list(governance.get("checks", [])):
+                check_dict = _as_dict(check)
+                if check_dict.get("passed"):
+                    normalized = _normalize_optimizer_trace_key(check_dict.get("name") or check_dict.get("check"))
+                    if normalized:
+                        observed.add(normalized)
         summary = _as_dict(payload.get("summary"))
         if summary.get("has_role_graph"):
             observed.add("role_graph")
@@ -11976,8 +11991,11 @@ def _optimizer_trace_observed(context: Mapping[str, Any]) -> set[str]:
             "list_optimizer_proposals",
             "inspect_optimizer_role",
             "inspect_optimizer_candidate",
+            "inspect_optimizer_governance",
         }:
             observed.update({"optimizer_trace", "proposal", "role"})
+            if name == "inspect_optimizer_governance":
+                observed.add("governance")
     return observed
 
 
@@ -12005,6 +12023,18 @@ def _optimizer_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str,
     has_critique = False
     has_synthesis = False
     has_steward = False
+    governance_signals: set[str] = set()
+    governance_checks: List[Dict[str, Any]] = []
+    governance_check_names: set[str] = set()
+    governance_passed_names: set[str] = set()
+    governance_pass_rate = 0.0
+    has_governance = False
+    has_role_diversity = False
+    has_mediator = False
+    has_contract_gate = False
+    has_rollback = False
+    has_locality = False
+    has_dependency_audit = False
     seen_proposals: set[tuple[str, str, str]] = set()
 
     for payload in payloads:
@@ -12019,6 +12049,14 @@ def _optimizer_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str,
         has_critique = has_critique or bool(summary.get("has_critique"))
         has_synthesis = has_synthesis or bool(summary.get("has_synthesis"))
         has_steward = has_steward or bool(summary.get("has_steward"))
+        has_governance = has_governance or bool(summary.get("has_governance"))
+        has_role_diversity = has_role_diversity or bool(summary.get("has_role_diversity"))
+        has_mediator = has_mediator or bool(summary.get("has_mediator"))
+        has_contract_gate = has_contract_gate or bool(summary.get("has_contract_gate"))
+        has_rollback = has_rollback or bool(summary.get("has_rollback"))
+        has_locality = has_locality or bool(summary.get("has_locality"))
+        has_dependency_audit = has_dependency_audit or bool(summary.get("has_dependency_audit"))
+        governance_pass_rate = max(governance_pass_rate, _as_float(summary.get("governance_pass_rate")) or 0.0)
         best_candidate_id = best_candidate_id or str(summary.get("best_candidate_id") or payload_dict.get("best_candidate_id") or "")
         final_score = _as_float(payload_dict.get("final_score"))
         if final_score is not None and (best_score is None or final_score > best_score):
@@ -12054,6 +12092,34 @@ def _optimizer_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str,
             round_id = round_dict.get("round")
             if round_id not in (None, ""):
                 rounds.add(round_id)
+
+        governance = _as_dict(payload_dict.get("governance"))
+        if governance:
+            has_governance = True
+            governance_summary = _as_dict(governance.get("summary"))
+            has_role_diversity = has_role_diversity or bool(governance_summary.get("has_role_diversity"))
+            has_mediator = has_mediator or bool(governance_summary.get("has_mediator"))
+            has_contract_gate = has_contract_gate or bool(governance_summary.get("has_contract_gate"))
+            has_rollback = has_rollback or bool(governance_summary.get("has_rollback"))
+            has_locality = has_locality or bool(governance_summary.get("has_locality"))
+            has_dependency_audit = has_dependency_audit or bool(governance_summary.get("has_dependency_audit"))
+            governance_pass_rate = max(governance_pass_rate, _as_float(governance_summary.get("governance_pass_rate")) or 0.0)
+            for signal in _as_list(governance.get("signals", [])):
+                normalized = _normalize_optimizer_trace_key(signal)
+                if normalized:
+                    governance_signals.add(normalized)
+                    signals.add(normalized)
+            for check in _as_list(governance.get("checks", [])):
+                check_dict = _as_dict(check)
+                name = _normalize_optimizer_trace_key(check_dict.get("name") or check_dict.get("check"))
+                if not name or name in governance_check_names:
+                    continue
+                governance_check_names.add(name)
+                governance_checks.append(check_dict)
+                governance_signals.add(name)
+                if check_dict.get("passed"):
+                    governance_passed_names.add(name)
+                    signals.add(name)
 
         for proposal in _as_list(payload_dict.get("proposals", [])):
             proposal_dict = _as_dict(proposal)
@@ -12115,6 +12181,21 @@ def _optimizer_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str,
         "has_critique": has_critique,
         "has_synthesis": has_synthesis,
         "has_steward": has_steward,
+        "has_governance": has_governance or bool(governance_checks),
+        "governance_signals": sorted(governance_signals),
+        "governance_check_count": len(governance_checks),
+        "governance_passed_count": len(governance_passed_names),
+        "governance_pass_rate": max(
+            governance_pass_rate,
+            round(len(governance_passed_names) / len(governance_checks), 4) if governance_checks else 0.0,
+        ),
+        "has_role_diversity": has_role_diversity or "role_diversity" in governance_passed_names,
+        "has_mediator": has_mediator or "mediator_review" in governance_passed_names,
+        "has_contract_gate": has_contract_gate or "contract_gate" in governance_passed_names,
+        "has_rollback": has_rollback or "rollback_check" in governance_passed_names,
+        "has_locality": has_locality or "search_locality" in governance_passed_names,
+        "has_dependency_audit": has_dependency_audit or "dependency_audit" in governance_passed_names,
+        "governance_checks": governance_checks,
         "proposals": proposals,
     }
 
@@ -12311,6 +12392,42 @@ def _optimizer_trace_quality_metric(
             finding_type="optimizer_trace_search_path_missing",
         )
 
+    for signal in _string_list(requirements.get("required_governance_signals") or requirements.get("governance_signals")):
+        normalized = _normalize_optimizer_trace_key(signal)
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="governance_signal",
+            expected=normalized,
+            actual=observed["governance_signals"],
+            match=normalized in observed["governance_signals"],
+            finding_type="optimizer_trace_governance_signal_missing",
+        )
+
+    min_governance_checks = _as_int(requirements.get("min_governance_checks"))
+    if min_governance_checks is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_governance_checks",
+            expected=min_governance_checks,
+            actual=observed["governance_check_count"],
+            match=observed["governance_check_count"] >= min_governance_checks,
+            finding_type="optimizer_trace_governance_check_count_low",
+        )
+
+    min_governance_pass_rate = _as_float(requirements.get("min_governance_pass_rate"))
+    if min_governance_pass_rate is not None:
+        _append_optimizer_trace_check(
+            checks,
+            findings,
+            check="min_governance_pass_rate",
+            expected=min_governance_pass_rate,
+            actual=observed["governance_pass_rate"],
+            match=observed["governance_pass_rate"] >= min_governance_pass_rate,
+            finding_type="optimizer_trace_governance_pass_rate_low",
+        )
+
     min_best_score = _as_float(requirements.get("min_best_score") or requirements.get("required_best_score"))
     if min_best_score is not None:
         _append_optimizer_trace_check(
@@ -12342,6 +12459,13 @@ def _optimizer_trace_quality_metric(
         ("require_critique", "has_critique", "optimizer_trace_critique_missing"),
         ("require_synthesis", "has_synthesis", "optimizer_trace_synthesis_missing"),
         ("require_steward", "has_steward", "optimizer_trace_steward_missing"),
+        ("require_governance", "has_governance", "optimizer_trace_governance_missing"),
+        ("require_role_diversity", "has_role_diversity", "optimizer_trace_role_diversity_missing"),
+        ("require_mediator", "has_mediator", "optimizer_trace_mediator_missing"),
+        ("require_contract_gate", "has_contract_gate", "optimizer_trace_contract_gate_missing"),
+        ("require_rollback", "has_rollback", "optimizer_trace_rollback_missing"),
+        ("require_locality", "has_locality", "optimizer_trace_locality_missing"),
+        ("require_dependency_audit", "has_dependency_audit", "optimizer_trace_dependency_audit_missing"),
     ):
         if requirements.get(key) is not None:
             required = bool(requirements.get(key))
