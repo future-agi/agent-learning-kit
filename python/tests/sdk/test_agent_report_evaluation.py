@@ -885,6 +885,122 @@ def test_evaluate_agent_report_scores_red_team_campaign_coverage_and_quality():
     assert "red_team_open_high_findings_high" in finding_types
 
 
+def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
+    complete_cell = {
+        "id": "prompt_injection|tool|chat|local_cli",
+        "attack_type": "prompt_injection",
+        "surface": "tool",
+        "channel": "chat",
+        "provider": "local_cli",
+        "scenario_ids": ["scenario_prompt"],
+        "passed_run_ids": ["run_prompt"],
+        "artifact_ids": ["artifact_prompt"],
+        "mitigation_ids": ["mitigation_prompt"],
+        "has_scenario": True,
+        "has_passed_run": True,
+        "has_artifact": True,
+        "has_mitigation": True,
+    }
+    campaign = {
+        "kind": "red_team_campaign",
+        "summary": {
+            "has_target": True,
+            "attack_pack_count": 1,
+            "attack_count": 1,
+            "scenario_count": 1,
+            "multi_turn_scenario_count": 1,
+            "run_count": 1,
+            "passed_run_count": 1,
+            "failed_run_count": 0,
+            "finding_count": 0,
+            "open_high_finding_count": 0,
+            "artifact_count": 1,
+            "mitigation_count": 1,
+            "observability_hook_count": 1,
+            "observed_attack_types": ["prompt_injection"],
+            "observed_surfaces": ["tool"],
+            "observed_channels": ["chat"],
+            "observed_providers": ["local_cli"],
+            "frameworks": ["agent_simulate"],
+            "failed_runs": [],
+            "open_high_findings": [],
+            "coverage_cell_count": 1,
+            "covered_cell_count": 1,
+            "artifact_bound_cell_count": 1,
+            "mitigation_bound_cell_count": 1,
+            "coverage_matrix": [complete_cell],
+            "missing_coverage_cells": [],
+            "missing_run_artifact_cells": [],
+            "missing_mitigation_cells": [],
+        },
+    }
+    config = {
+        "red_team_campaign_quality": {
+            "require_attack_surface_matrix": True,
+            "require_run_artifacts": True,
+            "require_mitigation_mapping": True,
+            "required_attack_matrix_cells": [
+                {
+                    "attack_type": "prompt_injection",
+                    "surface": "tool",
+                    "channel": "chat",
+                    "provider": "local_cli",
+                }
+            ],
+        }
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Matrix evidence is complete."}],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "red_team_campaign"}, "data": campaign}],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config, threshold=0.9)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    assert result.passed is True
+    assert scores["red_team_campaign_quality"] == 1.0
+
+    broken_cell = {
+        "id": "prompt_injection|tool|chat|local_cli",
+        "attack_type": "prompt_injection",
+        "surface": "tool",
+        "channel": "chat",
+        "provider": "local_cli",
+        "missing": ["scenario", "passed_run"],
+    }
+    broken_campaign = copy.deepcopy(campaign)
+    broken_campaign["summary"] = {
+        **broken_campaign["summary"],
+        "covered_cell_count": 0,
+        "artifact_bound_cell_count": 0,
+        "mitigation_bound_cell_count": 0,
+        "coverage_matrix": [{**complete_cell, "has_scenario": False, "has_passed_run": False, "has_artifact": False, "has_mitigation": False}],
+        "missing_coverage_cells": [broken_cell],
+        "missing_run_artifact_cells": [{**broken_cell, "missing": ["artifact"]}],
+        "missing_mitigation_cells": [{**broken_cell, "missing": ["mitigation"]}],
+    }
+    broken_report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Aggregate counts exist but matrix links are missing."}],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "red_team_campaign"}, "data": broken_campaign}],
+            }
+        ]
+    }
+
+    failing_result = evaluate_agent_report(broken_report, config=config, threshold=0.99)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+    assert failing_result.passed is False
+    assert failing_scores["red_team_campaign_quality"] < 1.0
+    assert "red_team_attack_surface_cell_missing" in finding_types
+    assert "red_team_run_artifact_missing" in finding_types
+    assert "red_team_mitigation_mapping_missing" in finding_types
+
+
 def test_evaluate_agent_report_scores_red_team_readiness_gate():
     readiness = {
         "kind": "red_team_readiness",
@@ -1102,6 +1218,67 @@ def test_evaluate_agent_report_scores_red_team_readiness_gate():
     assert "red_team_readiness_workspace_run_not_ready" in finding_types
     assert "red_team_readiness_blocking_gap_count_high" in finding_types
     assert "red_team_readiness_signal_missing" in finding_types
+
+
+def test_evaluate_agent_report_downgrades_readiness_for_campaign_matrix_gaps():
+    readiness = {
+        "kind": "red_team_readiness",
+        "target": {"agent": "support-agent"},
+        "red_team_campaign": {
+            "kind": "red_team_campaign",
+            "summary": {
+                "missing_coverage_cells": [
+                    {
+                        "id": "prompt_injection|tool|chat|local_cli",
+                        "attack_type": "prompt_injection",
+                        "surface": "tool",
+                        "channel": "chat",
+                        "provider": "local_cli",
+                        "missing": ["passed_run"],
+                    }
+                ],
+                "missing_run_artifact_cells": [],
+                "missing_mitigation_cells": [],
+            },
+        },
+        "summary": {
+            "has_target": True,
+            "has_red_team_campaign": True,
+            "red_team_campaign_ready": True,
+            "ready_component_count": 1,
+            "ready_components": ["red_team_campaign"],
+            "failed_components": [],
+            "blocking_gap_count": 0,
+            "blocking_gaps": [],
+            "observed_evidence": ["target", "red_team_campaign", "red_team_campaign_ready"],
+            "observed_signals": ["red_team_readiness", "preflight"],
+        },
+    }
+    config = {
+        "red_team_readiness_quality": {
+            "require_target": True,
+            "require_red_team_campaign": True,
+            "require_red_team_campaign_ready": True,
+            "max_blocking_gaps": 0,
+        }
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Readiness summary claims green."}],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "red_team_readiness"}, "data": readiness}],
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config, threshold=0.95)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in result.findings}
+
+    assert result.passed is False
+    assert scores["red_team_readiness_quality"] < 1.0
+    assert "red_team_readiness_campaign_not_ready" in finding_types
+    assert "red_team_readiness_blocking_gap_count_high" in finding_types
 
 
 def test_evaluate_agent_report_scores_framework_import_manifest_coverage_and_quality():
