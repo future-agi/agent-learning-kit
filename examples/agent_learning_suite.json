@@ -23,6 +23,7 @@
       "run",
       "suite",
       "eval",
+      "eval_artifact",
       "redteam",
       "optimize_eval",
       "optimize"
@@ -31,6 +32,7 @@
       "agent-learning.run.v1",
       "agent-learning.suite.v1",
       "agent-learning.eval.v1",
+      "agent-learning.artifact-evaluation.v1",
       "agent-learning.redteam.v1",
       "agent-learning.eval-optimization.v1",
       "agent-learning.optimization.v1"
@@ -118,6 +120,13 @@
       "command": "eval",
       "path": "artifact_task_eval_suite.json",
       "name": "suite-artifact-task-eval"
+    },
+    {
+      "id": "direct-artifact-report-eval",
+      "command": "eval-artifact",
+      "path": "fixtures/task_artifacts/refund_task_run.json",
+      "config": "artifact_task_eval_config.json",
+      "name": "suite-direct-artifact-report-eval"
     },
     {
       "id": "agent-red-team",

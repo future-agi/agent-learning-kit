@@ -24,6 +24,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
         ("eval", "eval_suite.json", "agent-learning.eval.v1", None),
         ("eval", "artifact_task_eval_suite.json", "agent-learning.eval.v1", None),
         (
+            "eval-artifact",
+            "fixtures/task_artifacts/refund_task_run.json",
+            "agent-learning.artifact-evaluation.v1",
+            None,
+        ),
+        (
             "redteam",
             "redteam_manifest.json",
             "agent-learning.redteam.v1",
@@ -101,6 +107,8 @@ def test_shipped_examples_execute_through_unified_cli(
     ]
     if command == "run":
         args.append("--no-eval")
+    if command == "eval-artifact":
+        args.extend(["--config", str(EXAMPLES / "artifact_task_eval_config.json")])
 
     exit_code = main(args)
 
@@ -126,9 +134,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert '"task_completion": 1.0' in case["output"]
         assert '"verification_status": "approved"' in case["output"]
         assert '"canary_exfiltrated": false' in case["output"]
+    if command == "eval-artifact":
+        assert payload["summary"]["report_source"] == "report"
+        assert payload["summary"]["source_kind"] == "agent-learning.run.v1"
+        assert payload["summary"]["score"] >= 0.9
+        assert payload["summary"]["metric_averages"]["task_completion"] >= 0.9
+        assert payload["source"]["path"].endswith("refund_task_run.json")
     if command == "suite":
-        assert payload["summary"]["job_count"] == 18
-        assert payload["summary"]["passed_count"] == 18
+        assert payload["summary"]["job_count"] == 19
+        assert payload["summary"]["passed_count"] == 19
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -136,6 +150,7 @@ def test_shipped_examples_execute_through_unified_cli(
         required_capabilities = payload["summary"]["required_capabilities"]
         assert set(capabilities["commands"]) == {
             "eval",
+            "eval_artifact",
             "optimize",
             "optimize_eval",
             "redteam",
@@ -144,6 +159,7 @@ def test_shipped_examples_execute_through_unified_cli(
         }
         assert set(capabilities["result_kinds"]) == {
             "agent_learning.eval.v1",
+            "agent_learning.artifact_evaluation.v1",
             "agent_learning.eval_optimization.v1",
             "agent_learning.optimization.v1",
             "agent_learning.redteam.v1",
@@ -214,6 +230,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "suite",
             "eval",
             "eval",
+            "eval_artifact",
             "redteam",
             "optimize_eval",
             "optimize",
@@ -233,6 +250,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent-learning.run.v1",
             "agent-learning.suite.v1",
             "agent-learning.eval.v1",
+            "agent-learning.artifact-evaluation.v1",
             "agent-learning.redteam.v1",
             "agent-learning.eval-optimization.v1",
             "agent-learning.optimization.v1",

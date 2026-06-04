@@ -71,6 +71,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
     assert evals.evaluate is not None
+    assert evals.evaluate_artifact_file is not None
     assert suite.run_suite_file is not None
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
     assert simulate.AdversarialEnvironmentPack is not None

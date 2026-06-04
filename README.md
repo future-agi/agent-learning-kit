@@ -41,6 +41,9 @@ CLI entrypoint:
 agent-learn eval examples/eval_suite.json --output artifacts/eval.json
 agent-learn eval examples/artifact_task_eval_suite.json \
   --output artifacts/artifact-task-eval.json
+agent-learn eval-artifact examples/fixtures/task_artifacts/refund_task_run.json \
+  --config examples/artifact_task_eval_config.json \
+  --output artifacts/direct-artifact-eval.json
 agent-learn optimize-eval examples/eval_suite_optimization.json \
   --output artifacts/eval-optimization.json
 agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
@@ -119,8 +122,8 @@ lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, the nested multi-framework adapter suite, eval,
-artifact-task eval, red-team, eval-suite optimization, world/framework/memory
-optimization, voice/streaming optimization, red-team optimization,
+artifact-task eval, direct artifact-report eval, red-team, eval-suite
+optimization, world/framework/memory optimization, voice/streaming optimization, red-team optimization,
 workspace/observability optimization, agent-integration optimization,
 multi-agent framework handoff optimization, optimizer-governance optimization,
 agent control-plane
@@ -150,6 +153,10 @@ provider loads JSON/YAML artifacts, extracts named paths such as task
 completion, verification status, framework runtime, and world-contract metrics,
 then runs normal promptfoo-style assertions through `agent-learn eval`. This is
 the CI path for evaluating task/world artifacts without rerunning the agent.
+For direct agent-report metrics over an existing artifact, `agent-learn
+eval-artifact` consumes the same saved artifact plus
+`artifact_task_eval_config.json` and emits JSON, JUnit, SARIF, and Markdown
+without requiring an eval-suite wrapper.
 
 The `regression_artifact_suite.json` example runs the artifact lifecycle that
 teams usually script around promptfoo-style CI: create a compact baseline,

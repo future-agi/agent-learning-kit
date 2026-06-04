@@ -11,6 +11,7 @@ from .config import current_config
 
 
 AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
+AGENT_LEARNING_ARTIFACT_EVAL_KIND = "agent-learning.artifact-evaluation.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
@@ -39,6 +40,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _run(args[1:])
     if command == "eval":
         return _eval(args[1:])
+    if command in {"eval-artifact", "eval-report"}:
+        return _eval_artifact(args[1:])
     if command == "redteam":
         return _redteam(args[1:])
     if command == "optimize":
@@ -192,6 +195,56 @@ def _eval(args: Sequence[str]) -> int:
         suite,
         parsed,
         suite_path,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _eval_artifact(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn eval-artifact",
+        description=(
+            "Evaluate a saved simulation/red-team/optimization artifact with "
+            "local agent-report metrics."
+        ),
+    )
+    _add_eval_artifact_args(parser)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import evals, simulate
+    except Exception as exc:
+        print(
+            "agent-learn eval-artifact requires `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    try:
+        config = evals.load_artifact_file(parsed.config) if parsed.config else None
+        payload = evals.evaluate_artifact_file(
+            artifact_path,
+            config=config,
+            threshold=parsed.threshold,
+            name=parsed.name,
+        )
+    except Exception as exc:
+        print(f"agent-learn eval-artifact: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_ARTIFACT_EVAL_KIND
+    written = _write_result_outputs(
+        payload,
+        {},
+        parsed,
+        artifact_path,
         render_junit=simulate.render_junit,
         render_sarif=simulate.render_sarif,
         render_markdown=simulate.render_markdown,
@@ -644,6 +697,63 @@ def _add_eval_suite_args(parser: argparse.ArgumentParser, *, optimize: bool) -> 
             if optimize
             else "Validate suite shape without executing providers."
         ),
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+
+
+def _add_eval_artifact_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "artifact",
+        help="Path to a saved Agent Learning JSON/YAML artifact.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help=(
+            "Write JSON output to this path. .xml paths are treated as JUnit; "
+            ".sarif paths as SARIF."
+        ),
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write compact JUnit XML output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 findings output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown report output.",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional JSON/YAML AgentReportEvalConfig file.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.7,
+        help="Agent-report metric pass threshold.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the artifact evaluation run name.",
     )
     parser.add_argument(
         "--quiet",

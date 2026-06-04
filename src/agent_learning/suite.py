@@ -22,6 +22,7 @@ _CHILD_COMMANDS = {
     "run",
     "suite",
     "eval",
+    "eval_artifact",
     "redteam",
     "optimize",
     "optimize_eval",
@@ -432,6 +433,24 @@ def _execute_child_payload(
             dry_run=_job_dry_run(job, suite_options),
         )
         payload["kind"] = AGENT_LEARNING_EVAL_KIND
+        return payload
+    if command == "eval_artifact":
+        from agent_learning import evals
+        from agent_learning.cli import AGENT_LEARNING_ARTIFACT_EVAL_KIND
+
+        config_path = _job_optional_path(
+            job,
+            base_dir=base_dir,
+            keys=("config", "eval_config", "agent_report_config"),
+        )
+        config = evals.load_artifact_file(config_path) if config_path else None
+        payload = evals.evaluate_artifact_file(
+            path,
+            config=config,
+            name=_job_name(job),
+            threshold=float(_job_threshold(job, suite_options) or 0.7),
+        )
+        payload["kind"] = AGENT_LEARNING_ARTIFACT_EVAL_KIND
         return payload
     if command == "redteam":
         from agent_learning import redteam
@@ -931,6 +950,19 @@ def _job_replay_manifest_paths(job: Mapping[str, Any], *, base_dir: Path) -> lis
     return paths
 
 
+def _job_optional_path(
+    job: Mapping[str, Any],
+    *,
+    base_dir: Path,
+    keys: Sequence[str],
+) -> Optional[Path]:
+    for key in keys:
+        raw = job.get(key)
+        if raw not in (None, ""):
+            return _resolve_path(str(raw), base_dir)
+    return None
+
+
 def _job_output_paths(job: Mapping[str, Any], base_dir: Path) -> dict[str, list[Path]]:
     outputs: dict[str, list[Path]] = {
         "json": [],
@@ -968,6 +1000,12 @@ def _normalize_command(value: Any) -> str:
         "simulation": "run",
         "simulate": "run",
         "evaluation": "eval",
+        "evalartifact": "eval_artifact",
+        "eval_artifacts": "eval_artifact",
+        "eval_report": "eval_artifact",
+        "eval_reports": "eval_artifact",
+        "artifact_eval": "eval_artifact",
+        "artifact_evaluation": "eval_artifact",
         "red_team": "redteam",
         "optimization": "optimize",
         "optimizeeval": "optimize_eval",
