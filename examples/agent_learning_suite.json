@@ -4,6 +4,7 @@
   "required_env": [
     "AGENT_LEARNING_RUN_EXAMPLE_KEY",
     "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+    "AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
     "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
@@ -87,6 +88,7 @@
       "browser_action_outcome",
       "eval_assertions",
       "framework_capability_quality",
+      "framework_runtime_contract",
       "framework_transcript_quality",
       "multi_agent_coordination_quality",
       "multimodal_faithfulness",
@@ -108,6 +110,13 @@
       "command": "suite",
       "path": "multi_framework_simulation_suite.json",
       "name": "suite-multi-framework-adapters"
+    },
+    {
+      "id": "custom-framework-adapter-optimizer",
+      "command": "optimize",
+      "path": "custom_framework_optimization.json",
+      "name": "suite-custom-framework-adapter-optimizer",
+      "max_candidates": 3
     },
     {
       "id": "promptfoo-style-eval",

@@ -54,6 +54,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
             [
                 "AGENT_LEARNING_RUN_EXAMPLE_KEY",
                 "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+                "AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
                 "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
@@ -141,8 +142,8 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["metric_averages"]["task_completion"] >= 0.9
         assert payload["source"]["path"].endswith("refund_task_run.json")
     if command == "suite":
-        assert payload["summary"]["job_count"] == 19
-        assert payload["summary"]["passed_count"] == 19
+        assert payload["summary"]["job_count"] == 20
+        assert payload["summary"]["passed_count"] == 20
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -216,6 +217,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "browser_action_outcome",
             "eval_assertions",
             "framework_capability_quality",
+            "framework_runtime_contract",
             "framework_transcript_quality",
             "multi_agent_coordination_quality",
             "multimodal_faithfulness",
@@ -228,6 +230,7 @@ def test_shipped_examples_execute_through_unified_cli(
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "suite",
+            "optimize",
             "eval",
             "eval",
             "eval_artifact",
@@ -269,6 +272,24 @@ def test_shipped_examples_execute_through_unified_cli(
             "livekit-realtime-agent",
             "custom-refund-orchestrator",
         ]
+        custom_framework_optimizer = next(
+            child
+            for child in payload["children"]
+            if child["id"] == "custom-framework-adapter-optimizer"
+        )
+        assert custom_framework_optimizer["kind"] == "agent-learning.optimization.v1"
+        assert (
+            custom_framework_optimizer["result"]["optimization"]["best_config"]["agent"][
+                "method"
+            ]
+            == "execute_task"
+        )
+        assert (
+            custom_framework_optimizer["result"]["optimization"]["best_config"]["agent"][
+                "input_mode"
+            ]
+            == "dict"
+        )
     if command in {"run", "eval", "redteam"}:
         assert payload["summary"]["case_count"] >= 1
 
@@ -500,6 +521,79 @@ def test_multi_framework_simulation_suite_runs_framework_adapters(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "multi-framework-simulation-suite" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_custom_framework_optimization_example_runs_adapter_search(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY",
+        "real-local-custom-framework-opt-key",
+    )
+
+    output_path = tmp_path / "custom-framework-optimization.json"
+    junit_path = tmp_path / "custom-framework-optimization.junit.xml"
+    sarif_path = tmp_path / "custom-framework-optimization.sarif.json"
+    markdown_path = tmp_path / "custom-framework-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "custom_framework_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.95
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "agent" in payload["summary"]["search_paths"]
+
+    best_agent = payload["optimization"]["best_config"]["agent"]
+    assert best_agent["framework"] == "custom_refund_orchestrator"
+    assert best_agent["method"] == "execute_task"
+    assert best_agent["input_mode"] == "dict"
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"agent"}
+    assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_runtime_coverage"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
+
+    weakest_history = min(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert weakest_history["metrics"]["framework_runtime_contract"] < 1.0
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["framework"] == "custom_refund_orchestrator"
+    assert runtime["summary"]["methods"] == ["execute_task"]
+    assert runtime["summary"]["input_modes"] == ["dict"]
+    assert runtime["summary"]["tool_call_count"] == 1
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "custom-framework-adapter-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 

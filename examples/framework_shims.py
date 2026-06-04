@@ -67,13 +67,25 @@ class LocalLiveKitAgent:
 
 
 class LocalCustomRefundOrchestrator:
+    def run(self, text: str) -> dict:
+        assert text
+        return {
+            "content": (
+                "Custom refund orchestrator queued the task, but it did not "
+                "complete policy verification or emit framework tool evidence."
+            ),
+            "tool_calls": [],
+            "metadata": {"framework_conformance": "incomplete"},
+        }
+
     def execute_task(self, payload: dict) -> dict:
         assert payload["metadata"]["framework"] == "custom_refund_orchestrator"
         assert payload["metadata"]["cookbook"] == "multi-framework-simulation"
         return {
             "content": (
-                "Custom refund orchestrator approved the task through a "
-                "bring-your-own framework adapter."
+                "Custom refund orchestrator approved the task through the "
+                "execute_task custom framework adapter with dict input and "
+                "framework_trace_status tool evidence."
             ),
             "tool_calls": _tool_calls(),
             "metadata": {"framework_conformance": "custom_refund_orchestrator"},

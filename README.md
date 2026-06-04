@@ -80,6 +80,8 @@ agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
 agent-learn run examples/framework_custom_manifest.json --no-eval \
   --output artifacts/framework-custom.json
+agent-learn optimize examples/custom_framework_optimization.json \
+  --output artifacts/custom-framework-optimization.json
 agent-learn suite examples/regression_artifact_suite.json \
   --output artifacts/regression-artifact-suite.json
 agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
@@ -146,6 +148,12 @@ same manifest framework adapter path, proving text and voice framework shims can
 be simulated without adding framework-specific runtime dependencies. Unknown
 framework names are accepted as custom adapters when the manifest supplies the
 target method/input mode, as shown in `framework_custom_manifest.json`.
+
+The `custom_framework_optimization.json` example runs the same bring-your-own
+framework path through `agent-learn optimize`. It starts with a runnable but weak
+`run`/`text` adapter and deterministically selects the `execute_task`/`dict`
+adapter because only that candidate emits tool evidence and passes the framework
+runtime contract.
 
 The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
