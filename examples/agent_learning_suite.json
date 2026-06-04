@@ -13,7 +13,8 @@
     "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
-    "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -110,6 +111,13 @@
       "command": "optimize",
       "path": "autonomous_redteam_task_world_optimization.json",
       "name": "suite-autonomous-redteam-task-world-optimizer",
+      "max_candidates": 3
+    },
+    {
+      "id": "multimodal-image-optimizer",
+      "command": "optimize",
+      "path": "multimodal_image_optimization.json",
+      "name": "suite-multimodal-image-optimizer",
       "max_candidates": 3
     }
   ]

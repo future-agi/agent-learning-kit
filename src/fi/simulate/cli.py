@@ -32,6 +32,7 @@ from fi.simulate import (
     FrameworkPortabilityEnvironment,
     FrameworkProbeEnvironment,
     FrameworkTraceEnvironment,
+    ImageEnvironment,
     MultiAgentRoomEnvironment,
     ObservabilityReplayEnvironment,
     OptimizerPortfolioEnvironment,
@@ -206,7 +207,10 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "framework_probe",
         "framework_probe_suite",
         "framework_trace",
+        "image",
+        "images",
         "mock_tools",
+        "multimodal_image",
         "multi_agent_room",
         "observability_replay",
         "optimizer_backend_portfolio",
@@ -227,6 +231,7 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "trust_boundary",
         "voice",
         "voice_replay",
+        "vision",
         "workspace_run_manifest",
         "world_attack_replay",
         "world_contract",
@@ -650,6 +655,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_browser_environment(payload, base_dir))
         elif env_type in {"file", "files"}:
             environments.append(_build_file_environment(payload))
+        elif env_type in {"image", "images", "vision", "multimodal_image"}:
+            environments.append(_build_image_environment(payload, base_dir))
         elif env_type in {"structured_artifact", "structured_artifacts"}:
             environments.append(_build_structured_artifact_environment(payload))
         elif env_type in {"domain_package", "domain_packages"}:
@@ -810,6 +817,59 @@ def _build_file_environment(payload: Mapping[str, Any]) -> FileEnvironment:
     if not isinstance(files, Mapping):
         raise ManifestError("files environment requires data.files")
     return FileEnvironment({str(path): str(content) for path, content in files.items()})
+
+
+def _build_image_environment(
+    payload: Mapping[str, Any],
+    base_dir: Path,
+) -> ImageEnvironment:
+    source = dict(payload)
+    images = source.get("images") or source.get("fixtures") or source.get("items")
+    if images is None:
+        images = {
+            key: value
+            for key, value in source.items()
+            if key
+            not in {
+                "default_mime_type",
+                "mime_type",
+                "state",
+                "metadata",
+                "description",
+            }
+        }
+    if not images:
+        raise ManifestError("image environment requires data.images")
+    return ImageEnvironment(
+        _resolve_image_fixtures(images, base_dir),
+        default_mime_type=str(
+            source.get("default_mime_type") or source.get("mime_type") or "image/png"
+        ),
+        state=dict(source.get("state") or {}),
+    )
+
+
+def _resolve_image_fixtures(images: Any, base_dir: Path) -> Any:
+    if isinstance(images, Mapping):
+        return {
+            str(image_id): _resolve_image_fixture(value, base_dir)
+            for image_id, value in images.items()
+        }
+    return [_resolve_image_fixture(value, base_dir) for value in _coerce_list(images)]
+
+
+def _resolve_image_fixture(value: Any, base_dir: Path) -> Any:
+    if isinstance(value, str):
+        parsed = urlparse(value)
+        if parsed.scheme:
+            return value
+        return _resolve_manifest_source(value, base_dir)
+    if not isinstance(value, Mapping):
+        return value
+    fixture = copy.deepcopy(dict(value))
+    if fixture.get("path") not in (None, ""):
+        fixture["path"] = _resolve_manifest_source(str(fixture["path"]), base_dir)
+    return fixture
 
 
 def _build_structured_artifact_environment(

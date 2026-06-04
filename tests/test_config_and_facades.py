@@ -61,6 +61,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.FrameworkCapabilityEnvironment is not None
     assert simulate.FrameworkProbeEnvironment is not None
     assert simulate.FrameworkPortabilityEnvironment is not None
+    assert simulate.ImageEnvironment is not None
     assert simulate.normalize_browser_trace_export is not None
     assert simulate.normalize_playwright_trace_export is not None
     assert simulate.normalize_browser_mutation_pack is not None
@@ -80,6 +81,8 @@ def test_facades_expose_unified_agent_learning_modules():
         "domain_package",
         "world_attack_replay",
         "autonomy_loop",
+        "image",
+        "vision",
         "framework_lifecycle",
         "framework_capability",
         "framework_probe",

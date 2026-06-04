@@ -247,6 +247,8 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
         "domain_package",
         "world_attack_replay",
         "autonomy_loop",
+        "image",
+        "vision",
         "framework_lifecycle",
         "framework_capability",
         "framework_probe",
@@ -336,6 +338,18 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
                     "expected_plan": {"required_steps": ["inspect"]},
                 },
             },
+            {
+                "type": "image",
+                "data": {
+                    "images": {
+                        "receipt": {
+                            "uri": "data:image/png;base64,iVBORw0KGgo=",
+                            "description": "Refund receipt image fixture.",
+                            "labels": ["receipt", "total_42"],
+                        }
+                    }
+                },
+            },
         ],
         base_dir=tmp_path,
     )
@@ -344,6 +358,7 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
         "domain_packages",
         "world_attack_replay",
         "autonomy_loop",
+        "image",
     ]
 
     result = asyncio.run(simulate.run_manifest_file(manifest_path, no_eval=True))

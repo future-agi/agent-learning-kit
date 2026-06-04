@@ -23,6 +23,7 @@ _SIMULATE_EXPORTS = {
     "FrameworkPortabilityEnvironment": "fi.simulate",
     "FrameworkProbeEnvironment": "fi.simulate",
     "FrameworkTraceEnvironment": "fi.simulate",
+    "ImageEnvironment": "fi.simulate",
     "LocalTextEngine": "fi.simulate.simulation.engines",
     "MultiAgentRoomEnvironment": "fi.simulate",
     "OrchestrationTraceEnvironment": "fi.simulate",
