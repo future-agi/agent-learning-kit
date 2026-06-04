@@ -73,6 +73,8 @@ agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
 agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
   --output artifacts/voice-streaming-realtime.json
+agent-learn eval-cli list categories --format json
+agent-learn eval-cli init ./eval-project --template basic --force
 agent-learn doctor
 ```
 
@@ -83,6 +85,9 @@ write Agent Learning Kit artifact kinds
 `agent-learning.redteam.v1`, `agent-learning.optimization.v1`, and
 `agent-learning.eval-optimization.v1`, plus `agent-learning.suite.v1`) plus
 optional JUnit, SARIF, and Markdown outputs for CI.
+`agent-learn eval-cli ...` bridges the vendored ai-evaluation management CLI
+under the unified command for template listing, project scaffolding,
+configuration validation, history viewing, export, and config management.
 
 This package now contains the actual `fi.simulate`, `fi.evals`, and `fi.opt`
 engine code while keeping `agent_learning.*` as the public API.

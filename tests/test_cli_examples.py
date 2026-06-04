@@ -148,6 +148,33 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["case_count"] >= 1
 
 
+def test_eval_cli_bridge_exposes_vendored_evaluation_management_cli(
+    tmp_path,
+    capsys,
+):
+    exit_code = main(["eval-cli", "list", "categories", "--format", "json"])
+
+    assert exit_code == 0
+    categories = json.loads(capsys.readouterr().out)
+    assert {"name": "safety", "count": 7} in categories
+    assert {"name": "rag", "count": 6} in categories
+
+    project_dir = tmp_path / "eval-project"
+    exit_code = main([
+        "eval-cli",
+        "init",
+        str(project_dir),
+        "--template",
+        "basic",
+        "--force",
+    ])
+
+    assert exit_code == 0
+    assert (project_dir / "fi-evaluation.yaml").exists()
+    assert (project_dir / "data" / "test_cases.json").exists()
+    assert (project_dir / "results" / ".gitignore").exists()
+
+
 def test_world_framework_memory_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,

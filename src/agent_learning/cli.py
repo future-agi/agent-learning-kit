@@ -47,6 +47,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _optimize_eval(args[1:])
     if command == "suite":
         return _suite(args[1:])
+    if command in {"eval-cli", "fi"}:
+        return _eval_cli(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -66,6 +68,39 @@ def _simulate(args: Sequence[str]) -> int:
         print(f"agent-learn: import failed: {exc}", file=sys.stderr)
         return 2
     return int(cli.main(list(args)))
+
+
+def _eval_cli(args: Sequence[str]) -> int:
+    try:
+        from typer.main import get_command
+
+        app = importlib.import_module("fi.cli.main").app
+    except Exception as exc:
+        print(
+            "agent-learn eval-cli requires `agent-learning-kit[evaluation]` "
+            "or `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        command = get_command(app)
+        command.main(
+            args=list(args),
+            prog_name="agent-learn eval-cli",
+            standalone_mode=False,
+        )
+    except SystemExit as exc:
+        code = exc.code
+        return int(code) if isinstance(code, int) else 1
+    except Exception as exc:
+        if exc.__class__.__name__ == "Exit":
+            exit_code = getattr(exc, "exit_code", 0)
+            return int(exit_code) if isinstance(exit_code, int) else 1
+        print(f"agent-learn eval-cli: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _run(args: Sequence[str]) -> int:
@@ -834,7 +869,8 @@ def _help(error: Optional[str] = None) -> int:
         nargs="?",
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
-            "compare, baseline, promote-to-regression, optimize-eval, suite, init"
+            "compare, baseline, promote-to-regression, optimize-eval, suite, "
+            "eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)
