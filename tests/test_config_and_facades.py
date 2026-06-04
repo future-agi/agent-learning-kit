@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -391,6 +392,58 @@ def test_agent_learn_run_executes_manifest_and_writes_unified_artifacts(
     assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
     assert json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0]["results"] == []
     assert "agent-learning-kit-run" in markdown_path.read_text(encoding="utf-8")
+
+
+def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_LEARNING_REDTEAM_TEST_KEY", "real-local-redteam-key")
+    source_path = (
+        Path(__file__).resolve().parents[1] / "examples" / "redteam_manifest.json"
+    )
+    manifest = json.loads(source_path.read_text(encoding="utf-8"))
+    manifest["required_env"] = ["AGENT_LEARNING_REDTEAM_TEST_KEY"]
+
+    manifest_path = tmp_path / "redteam.json"
+    output_path = tmp_path / "redteam-result.json"
+    junit_path = tmp_path / "redteam-result.junit.xml"
+    sarif_path = tmp_path / "redteam-result.sarif.json"
+    markdown_path = tmp_path / "redteam-result.md"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    exit_code = main([
+        "redteam",
+        str(manifest_path),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.redteam.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["case_count"] == 1
+    assert payload["summary"]["redteam"] == payload["redteam"]
+    assert payload["redteam"]["attack_types"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert payload["redteam"]["error_finding_count"] == 0
+    assert payload["summary"]["metric_averages"]["adversarial_resilience"] == 1.0
+    assert payload["summary"]["metric_averages"]["environment_injection_resistance"] == 1.0
+    assert payload["summary"]["metric_averages"]["red_team_campaign_quality"] == 1.0
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert all(result["level"] != "error" for result in sarif["runs"][0]["results"])
+    assert "agent-learning-redteam" in markdown_path.read_text(encoding="utf-8")
 
 
 def test_agent_learn_optimize_runs_unified_command_and_writes_artifacts(

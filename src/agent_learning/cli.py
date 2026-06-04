@@ -13,6 +13,7 @@ from .config import current_config
 AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
+AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
 
 
@@ -21,7 +22,6 @@ SIMULATE_COMMANDS = {
     "compare",
     "init",
     "promote-to-regression",
-    "redteam",
     "replay",
     "report",
 }
@@ -38,6 +38,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _run(args[1:])
     if command == "eval":
         return _eval(args[1:])
+    if command == "redteam":
+        return _redteam(args[1:])
     if command == "optimize":
         return _optimize(args[1:])
     if command == "optimize-eval":
@@ -159,6 +161,62 @@ def _eval(args: Sequence[str]) -> int:
         suite,
         parsed,
         suite_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _redteam(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn redteam",
+        description="Run a red-team simulation manifest with Agent Learning Kit.",
+    )
+    _add_redteam_args(parser)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from fi.simulate.manifest import (
+            load_manifest_file,
+            redteam_manifest_file,
+            render_junit,
+            render_markdown,
+            render_sarif,
+        )
+    except Exception as exc:
+        print(
+            "agent-learn redteam requires `agent-learning-kit[simulate]` "
+            "or `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    manifest_path = Path(parsed.manifest).expanduser().resolve()
+    try:
+        manifest = load_manifest_file(manifest_path)
+        payload = _run_async(
+            redteam_manifest_file(
+                manifest_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                dry_run=bool(parsed.dry_run),
+            )
+        )
+    except Exception as exc:
+        print(f"agent-learn redteam: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_REDTEAM_KIND
+    written = _write_result_outputs(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
         render_junit=render_junit,
         render_sarif=render_sarif,
         render_markdown=render_markdown,
@@ -393,6 +451,60 @@ def _add_manifest_run_args(parser: argparse.ArgumentParser) -> None:
         "--dry-run",
         action="store_true",
         help="Validate manifest/env without executing.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+
+
+def _add_redteam_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("manifest", help="Path to a JSON/YAML red-team manifest.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help=(
+            "Write JSON output to this path. .xml paths are treated as JUnit; "
+            ".sarif paths as SARIF."
+        ),
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write compact JUnit XML output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 findings output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown report output.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Override evaluation.agent_report.threshold.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the red-team run name.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate red-team manifest/env without executing.",
     )
     parser.add_argument(
         "--quiet",
