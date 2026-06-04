@@ -55,6 +55,7 @@
       "framework_runtime"
     ],
     "providers": [
+      "artifact",
       "vapi",
       "bland",
       "livekit",
@@ -81,6 +82,7 @@
     "metrics": [
       "agent_integration_quality",
       "browser_action_outcome",
+      "eval_assertions",
       "framework_capability_quality",
       "framework_transcript_quality",
       "multi_agent_coordination_quality",
@@ -109,6 +111,12 @@
       "command": "eval",
       "path": "eval_suite.json",
       "name": "suite-promptfoo-eval"
+    },
+    {
+      "id": "artifact-task-eval",
+      "command": "eval",
+      "path": "artifact_task_eval_suite.json",
+      "name": "suite-artifact-task-eval"
     },
     {
       "id": "agent-red-team",

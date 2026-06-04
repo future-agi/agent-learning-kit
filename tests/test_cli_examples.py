@@ -22,6 +22,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_RUN_EXAMPLE_KEY",
         ),
         ("eval", "eval_suite.json", "agent-learning.eval.v1", None),
+        ("eval", "artifact_task_eval_suite.json", "agent-learning.eval.v1", None),
         (
             "redteam",
             "redteam_manifest.json",
@@ -118,9 +119,16 @@ def test_shipped_examples_execute_through_unified_cli(
     if command == "optimize-eval":
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
+    if command == "eval" and example == "artifact_task_eval_suite.json":
+        assert payload["summary"]["assertion_count"] == 8
+        case = payload["eval_suite"]["cases"][0]
+        assert case["provider_type"] == "artifact"
+        assert '"task_completion": 1.0' in case["output"]
+        assert '"verification_status": "approved"' in case["output"]
+        assert '"canary_exfiltrated": false' in case["output"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 17
-        assert payload["summary"]["passed_count"] == 17
+        assert payload["summary"]["job_count"] == 18
+        assert payload["summary"]["passed_count"] == 18
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -169,7 +177,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "voice",
             "world_contract",
         } <= set(capabilities["environment_state_keys"])
-        assert {"bland", "livekit", "retell", "twilio", "vapi"} <= set(
+        assert {"artifact", "bland", "livekit", "retell", "twilio", "vapi"} <= set(
             capabilities["providers"]
         )
         assert {
@@ -189,6 +197,7 @@ def test_shipped_examples_execute_through_unified_cli(
         assert {
             "agent_integration_quality",
             "browser_action_outcome",
+            "eval_assertions",
             "framework_capability_quality",
             "framework_transcript_quality",
             "multi_agent_coordination_quality",
@@ -202,6 +211,7 @@ def test_shipped_examples_execute_through_unified_cli(
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "suite",
+            "eval",
             "eval",
             "redteam",
             "optimize_eval",

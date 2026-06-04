@@ -397,6 +397,13 @@ def _provider_output(
             responses = _as_list(provider.get("responses"))
             template = str(responses[0]) if responses else prompt
         return _render_template(template, {**variables, "prompt": prompt, "input": prompt})
+    if provider_type in {"artifact", "artifact_json", "artifact_file"}:
+        return _artifact_provider_output(
+            provider=provider,
+            prompt=prompt,
+            variables=variables,
+            base_dir=base_dir,
+        )
     if provider_type in {"python", "python_callable", "callable"}:
         target = str(provider.get("target") or provider.get("callable") or "")
         if not target:
@@ -407,6 +414,121 @@ def _provider_output(
             value = asyncio.run(value)
         return str(value)
     raise ManifestError(f"unsupported eval suite provider type: {provider_type}")
+
+
+def _artifact_provider_output(
+    *,
+    provider: Mapping[str, Any],
+    prompt: str,
+    variables: Mapping[str, Any],
+    base_dir: Path,
+) -> str:
+    raw_path = (
+        provider.get("path")
+        or provider.get("source")
+        or provider.get("artifact")
+        or variables.get("artifact_path")
+        or variables.get("artifact")
+    )
+    if not raw_path:
+        raise ManifestError(f"provider `{provider.get('id')}` requires artifact path")
+    rendered_path = _render_template(
+        str(raw_path),
+        {**variables, "prompt": prompt, "input": prompt},
+    )
+    artifact_path = Path(rendered_path).expanduser()
+    if not artifact_path.is_absolute():
+        artifact_path = base_dir / artifact_path
+    artifact_path = artifact_path.resolve()
+    artifact = _load_json_or_yaml(artifact_path)
+    fields = _artifact_fields(provider)
+    if not fields:
+        return json.dumps(artifact, indent=2, sort_keys=True, default=str)
+    extracted = {
+        label: _extract_artifact_path(artifact, path)
+        for label, path in fields
+    }
+    return json.dumps(
+        {
+            "artifact_path": str(artifact_path),
+            "fields": extracted,
+        },
+        indent=2,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _artifact_fields(provider: Mapping[str, Any]) -> List[tuple[str, str]]:
+    raw_fields = (
+        provider.get("fields")
+        or provider.get("extract")
+        or provider.get("paths")
+        or provider.get("json_paths")
+    )
+    fields: List[tuple[str, str]] = []
+    for index, raw_field in enumerate(_as_list(raw_fields), start=1):
+        if isinstance(raw_field, str):
+            fields.append((raw_field, raw_field))
+            continue
+        item = _as_dict(raw_field)
+        path = str(item.get("path") or item.get("json_path") or item.get("field") or "")
+        if not path:
+            raise ManifestError(f"artifact field {index} requires path")
+        label = str(item.get("id") or item.get("name") or item.get("as") or path)
+        fields.append((label, path))
+    return fields
+
+
+def _extract_artifact_path(value: Any, path: str) -> Any:
+    current = value
+    for token in _artifact_path_tokens(path):
+        if isinstance(current, Mapping):
+            if token not in current:
+                raise ManifestError(f"artifact path `{path}` missing key `{token}`")
+            current = current[token]
+        elif isinstance(current, list):
+            try:
+                index = int(token)
+            except ValueError as exc:
+                raise ManifestError(
+                    f"artifact path `{path}` expected list index, got `{token}`"
+                ) from exc
+            try:
+                current = current[index]
+            except IndexError as exc:
+                raise ManifestError(
+                    f"artifact path `{path}` index out of range: {index}"
+                ) from exc
+        else:
+            raise ManifestError(f"artifact path `{path}` cannot traverse `{token}`")
+    return current
+
+
+def _artifact_path_tokens(path: str) -> List[str]:
+    normalized = path.strip()
+    if not normalized:
+        raise ManifestError("artifact path cannot be empty")
+    if normalized.startswith("$."):
+        normalized = normalized[2:]
+    elif normalized == "$":
+        return []
+    tokens: List[str] = []
+    for segment in normalized.split("."):
+        if not segment:
+            continue
+        while "[" in segment:
+            before, _, rest = segment.partition("[")
+            if before:
+                tokens.append(before)
+            index, marker, tail = rest.partition("]")
+            if not marker:
+                raise ManifestError(f"invalid artifact path segment `{segment}`")
+            tokens.append(index)
+            segment = tail
+        if segment:
+            tokens.append(segment)
+    return tokens
 
 
 def _evaluate_assertion(assertion: Mapping[str, Any], output: str) -> Dict[str, Any]:

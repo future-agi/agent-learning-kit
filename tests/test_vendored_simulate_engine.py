@@ -416,3 +416,98 @@ def test_public_eval_suite_api_runs_local_prompt_provider(tmp_path: Path) -> Non
     assert result["eval_suite"]["cases"][0]["output"] == (
         "Policy answer: refund policy is approved locally."
     )
+
+
+def test_public_eval_suite_api_evaluates_saved_artifact_provider(
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "summary": {"score": 1.0},
+                "report": {
+                    "results": [
+                        {
+                            "metadata": {
+                                "environment_state": {
+                                    "task_evidence": {
+                                        "verification_status": "approved",
+                                    }
+                                }
+                            },
+                            "evaluation": {
+                                "agent_report": {
+                                    "summary": {
+                                        "metric_averages": {
+                                            "task_completion": 1.0,
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite_path = tmp_path / "artifact-suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-simulate.eval.v1",
+                "name": "artifact-provider-eval",
+                "providers": [
+                    {
+                        "id": "artifact",
+                        "type": "artifact",
+                        "path": "{{artifact_path}}",
+                        "fields": [
+                            {"name": "status", "path": "status"},
+                            {
+                                "name": "task_completion",
+                                "path": (
+                                    "report.results[0].evaluation.agent_report"
+                                    ".summary.metric_averages.task_completion"
+                                ),
+                            },
+                            {
+                                "name": "verification_status",
+                                "path": (
+                                    "report.results[0].metadata.environment_state"
+                                    ".task_evidence.verification_status"
+                                ),
+                            },
+                        ],
+                    }
+                ],
+                "prompts": [{"id": "task", "template": "{{artifact_path}}"}],
+                "tests": [
+                    {
+                        "id": "task_artifact",
+                        "vars": {"artifact_path": str(artifact_path)},
+                        "assert": [
+                            {"type": "contains", "value": '"status": "passed"'},
+                            {"type": "contains", "value": '"task_completion": 1.0'},
+                            {
+                                "type": "contains",
+                                "value": '"verification_status": "approved"',
+                            },
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = simulate.run_eval_suite_file(suite_path)
+
+    assert result["status"] == "passed"
+    assert result["summary"]["assertion_count"] == 3
+    case = result["eval_suite"]["cases"][0]
+    assert case["provider_type"] == "artifact"
+    assert '"task_completion": 1.0' in case["output"]
+    assert '"verification_status": "approved"' in case["output"]

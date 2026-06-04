@@ -779,6 +779,8 @@ def _collect_payload_capabilities(
         _collect_summary_capabilities(_as_mapping(item.get("summary")), caps)
         _add_capability(caps, "frameworks", item.get("framework"))
         _add_capability(caps, "providers", item.get("provider"))
+        _add_capability(caps, "providers", item.get("provider_id"))
+        _add_capability(caps, "providers", item.get("provider_type"))
         _add_capability(caps, "channels", item.get("channel"))
         _add_capability(caps, "channels", item.get("modality"))
         _add_capability(caps, "modalities", item.get("modality"))

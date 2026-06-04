@@ -39,6 +39,8 @@ CLI entrypoint:
 
 ```bash
 agent-learn eval examples/eval_suite.json --output artifacts/eval.json
+agent-learn eval examples/artifact_task_eval_suite.json \
+  --output artifacts/artifact-task-eval.json
 agent-learn optimize-eval examples/eval_suite_optimization.json \
   --output artifacts/eval-optimization.json
 agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
@@ -115,10 +117,11 @@ lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, the nested multi-framework adapter suite, eval,
-red-team, eval-suite optimization, world/framework/memory optimization,
-voice/streaming optimization, red-team optimization, workspace/observability
-optimization, agent-integration optimization, multi-agent framework handoff
-optimization, optimizer-governance optimization, agent control-plane
+artifact-task eval, red-team, eval-suite optimization, world/framework/memory
+optimization, voice/streaming optimization, red-team optimization,
+workspace/observability optimization, agent-integration optimization,
+multi-agent framework handoff optimization, optimizer-governance optimization,
+agent control-plane
 optimization, browser/CUA red-team optimization, framework-certification
 optimization, autonomous task/world red-team optimization, and multimodal image
 optimization jobs, then emits aggregate artifacts plus a capability summary of
@@ -136,6 +139,13 @@ The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
 adapter path, proving text and voice framework shims can be simulated without
 adding framework-specific runtime dependencies.
+
+The `artifact_task_eval_suite.json` example evaluates a saved
+`agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
+provider loads JSON/YAML artifacts, extracts named paths such as task
+completion, verification status, framework runtime, and world-contract metrics,
+then runs normal promptfoo-style assertions through `agent-learn eval`. This is
+the CI path for evaluating task/world artifacts without rerunning the agent.
 
 The `regression_artifact_suite.json` example runs the artifact lifecycle that
 teams usually script around promptfoo-style CI: create a compact baseline,
