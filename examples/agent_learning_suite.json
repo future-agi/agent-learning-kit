@@ -5,6 +5,7 @@
     "AGENT_LEARNING_RUN_EXAMPLE_KEY",
     "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
     "AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_SOCIAL_MEMORY_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
     "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
@@ -92,6 +93,7 @@
       "framework_transcript_quality",
       "multi_agent_coordination_quality",
       "multimodal_faithfulness",
+      "optimizer_trace_quality",
       "red_team_campaign_quality",
       "voice_trace_coverage",
       "world_contract_quality"
@@ -117,6 +119,12 @@
       "path": "custom_framework_optimization.json",
       "name": "suite-custom-framework-adapter-optimizer",
       "max_candidates": 3
+    },
+    {
+      "id": "social-memory-framework-optimizer",
+      "command": "optimize",
+      "path": "social_memory_framework_optimization.json",
+      "name": "suite-social-memory-framework-optimizer"
     },
     {
       "id": "promptfoo-style-eval",

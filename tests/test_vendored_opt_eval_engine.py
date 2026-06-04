@@ -427,6 +427,69 @@ def test_manifest_problem_selects_evolution_optimizer_from_manifest_config():
     )
 
 
+def test_manifest_problem_selects_social_memory_optimizer_from_manifest_config():
+    manifest = _manifest()
+    manifest["optimization"]["optimizer"] = {
+        "algorithm": "social_memory",
+        "max_rounds": 2,
+        "beam_width": 2,
+        "max_proposals_per_round": 4,
+        "target_score": 0.9,
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+    original = copy.deepcopy(manifest)
+    evaluated_strategies = []
+
+    def evaluate_manifest(candidate_manifest, candidate):
+        strategy = candidate_manifest["simulation"]["environments"][0]["data"][
+            "selected_strategy"
+        ]
+        evaluation, metric_scores = _score_agent_report(strategy)
+        evaluated_strategies.append((strategy, evaluation.score))
+        return {
+            "score": evaluation.score,
+            "reason": f"strategy={strategy}; passed={evaluation.passed}",
+            "metadata": {
+                "candidate_id": candidate.id,
+                "metric_scores": metric_scores,
+                "selected_strategy": strategy,
+            },
+        }
+
+    problem = agent_optimize.ManifestOptimizationProblem.from_manifest(
+        manifest,
+        evaluate_manifest=evaluate_manifest,
+    )
+
+    result = problem.optimize()
+
+    assert manifest == original
+    assert problem.optimizer_cls is agent_optimize.AgentSocialMemoryOptimizer
+    assert result.metadata["optimizer"] == "AgentSocialMemoryOptimizer"
+    assert result.metadata["strategy"] == "futureagi_social_memory"
+    assert result.metadata["roles"] == [
+        "smriti",
+        "arjuna",
+        "vidura",
+        "sangha",
+        "dharma_steward",
+    ]
+    assert result.final_score >= 0.9
+    assert result.best_candidate.get_path(
+        "simulation.environments.0.data.selected_strategy"
+    ) == "tool_grounded"
+    assert [strategy for strategy, _ in evaluated_strategies] == [
+        "seed",
+        "tool_grounded",
+    ]
+    best_history = max(result.history, key=lambda item: item.average_score)
+    assert best_history.metadata["proposal_role"] in {"smriti", "arjuna"}
+    assert best_history.metadata["candidate_patch"] == {
+        "simulation.environments.0.data.selected_strategy": "tool_grounded"
+    }
+
+
 def test_eval_suite_optimizer_runs_local_agent_report_eval_without_services():
     suite = _eval_suite()
     original = copy.deepcopy(suite)

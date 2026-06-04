@@ -3893,6 +3893,7 @@ def _optimization_result(
         report_summary = metadata.get("report_summary", {})
         if not report_summary and isinstance(report, Mapping):
             report_summary = dict(report.get("summary") or {})
+        proposal_metadata = dict(metadata.get("proposal_metadata") or {})
         history.append(
             {
                 "candidate_id": getattr(item, "candidate_id", None),
@@ -3900,6 +3901,10 @@ def _optimization_result(
                 "patch": patch,
                 "candidate_patch": patch,
                 "search_paths": list(metadata.get("search_paths") or []),
+                "proposal_role": metadata.get("proposal_role"),
+                "proposal_round": metadata.get("proposal_round"),
+                "proposal_reason": metadata.get("proposal_reason"),
+                "proposal_metadata": proposal_metadata,
                 "metrics": dict(agent_eval.get("summary", {}).get("metric_averages", {})),
                 "findings": _optimization_history_findings(agent_eval),
                 "evaluation_score": agent_eval.get("score"),
@@ -4087,26 +4092,42 @@ def _optimizer_trace_artifact(
     search_paths: Sequence[str],
     history: Sequence[Mapping[str, Any]],
 ) -> Dict[str, Any]:
+    result_metadata = _to_plain(getattr(optimization_result, "metadata", {}) or {})
     proposals = []
     for index, item in enumerate(history):
         candidate_id = str(item.get("candidate_id") or f"candidate_{index}")
         patch = dict(item.get("patch") or {})
         is_best = bool(best_candidate_id and candidate_id == str(best_candidate_id))
-        role = (
-            "selection_steward"
-            if is_best
-            else ("manifest_seed" if not patch else "deterministic_search")
-        )
-        role_kind = (
-            "steward"
-            if is_best
-            else ("baseline" if not patch else "candidate_search")
-        )
-        role_archetype = (
-            "metric_gate"
-            if is_best
-            else ("baseline" if not patch else "deterministic_candidate_search")
-        )
+        proposal_metadata = dict(item.get("proposal_metadata") or {})
+        if item.get("proposal_role"):
+            role = str(item["proposal_role"])
+            role_kind = str(
+                proposal_metadata.get("role_kind")
+                or ("baseline" if role == "seed" else "candidate_search")
+            )
+            role_archetype = str(
+                proposal_metadata.get("role_archetype")
+                or ("baseline" if role == "seed" else "optimizer_proposal")
+            )
+        else:
+            role = (
+                "selection_steward"
+                if is_best
+                else ("manifest_seed" if not patch else "deterministic_search")
+            )
+            role_kind = (
+                "steward"
+                if is_best
+                else ("baseline" if not patch else "candidate_search")
+            )
+            role_archetype = (
+                "metric_gate"
+                if is_best
+                else ("baseline" if not patch else "deterministic_candidate_search")
+            )
+        round_number = item.get("proposal_round")
+        if round_number is None:
+            round_number = index
         proposals.append(
             {
                 "id": f"proposal_{index}",
@@ -4114,7 +4135,7 @@ def _optimizer_trace_artifact(
                 "role": role,
                 "role_kind": role_kind,
                 "role_archetype": role_archetype,
-                "round": index,
+                "round": round_number,
                 "score": item.get("score"),
                 "patch": patch,
                 "search_paths": list(item.get("search_paths") or []),
@@ -4122,10 +4143,41 @@ def _optimizer_trace_artifact(
                     "evaluation_passed": item.get("evaluation_passed"),
                     "evaluation_score": item.get("evaluation_score"),
                     "metric_names": sorted(dict(item.get("metrics") or {}).keys()),
+                    "proposal_reason": item.get("proposal_reason"),
+                    "proposal_metadata": proposal_metadata,
                 },
             }
         )
 
+    roles = []
+    seen_roles: set[str] = set()
+    for proposal in proposals:
+        role_name = str(proposal["role"])
+        if role_name in seen_roles:
+            continue
+        seen_roles.add(role_name)
+        roles.append(
+            {
+                "name": role_name,
+                "proposal_kind": proposal["role_kind"],
+                "archetype": proposal["role_archetype"],
+            }
+        )
+    for role in _social_memory_role_definitions(result_metadata.get("roles")):
+        role_name = str(role["name"])
+        if role_name in seen_roles:
+            continue
+        seen_roles.add(role_name)
+        roles.append(role)
+    if not result_metadata.get("roles"):
+        for role in _default_optimizer_role_definitions():
+            role_name = str(role["name"])
+            if role_name in seen_roles:
+                continue
+            seen_roles.add(role_name)
+            roles.append(role)
+    if not roles:
+        roles = _default_optimizer_role_definitions()
     diagnostics = _optimization_trace_diagnostics(optimization_result)
     governance_checks = [
         {
@@ -4152,21 +4204,18 @@ def _optimizer_trace_artifact(
     return normalize_optimizer_society_trace(
         name=f"{name}-optimizer-trace",
         optimizer=str(
-            _to_plain(getattr(optimization_result, "metadata", {}) or {}).get("optimizer")
+            result_metadata.get("optimizer")
             or "AgentOptimizer"
         ),
-        roles=[
-            {"name": "manifest_seed", "proposal_kind": "baseline", "archetype": "baseline"},
-            {
-                "name": "deterministic_search",
-                "proposal_kind": "candidate_search",
-                "archetype": "deterministic_candidate_search",
-            },
-            {"name": "selection_steward", "proposal_kind": "steward", "archetype": "metric_gate"},
-        ],
+        roles=roles,
         proposals=proposals,
         rounds=[
-            {"round": index, "candidate_id": item.get("candidate_id")}
+            {
+                "round": item.get("proposal_round")
+                if item.get("proposal_round") is not None
+                else index,
+                "candidate_id": item.get("candidate_id"),
+            }
             for index, item in enumerate(history)
         ],
         diagnostics=diagnostics,
@@ -4174,8 +4223,59 @@ def _optimizer_trace_artifact(
         governance={"checks": governance_checks},
         best_candidate_id=best_candidate_id,
         final_score=final_score,
-        metadata={"source": "agent-simulate optimize", "history_count": len(history)},
+        metadata={
+            "source": "agent-simulate optimize",
+            "history_count": len(history),
+            "optimizer_metadata": result_metadata,
+        },
     )
+
+
+def _social_memory_role_definitions(value: Any) -> List[Dict[str, str]]:
+    if not value:
+        return []
+    role_details = {
+        "smriti": ("specialist", "working_memory"),
+        "arjuna": ("explorer", "focused_action"),
+        "vidura": ("critic", "prudent_critic"),
+        "sangha": ("synthesizer", "collective_synthesis"),
+        "dharma_steward": ("steward", "minimal_process_guardian"),
+    }
+    roles: List[Dict[str, str]] = []
+    for item in _coerce_list(value):
+        name = str(item or "")
+        normalized = name.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized not in role_details:
+            continue
+        proposal_kind, archetype = role_details[normalized]
+        roles.append(
+            {
+                "name": normalized,
+                "proposal_kind": proposal_kind,
+                "archetype": archetype,
+            }
+        )
+    return roles
+
+
+def _default_optimizer_role_definitions() -> List[Dict[str, str]]:
+    return [
+        {
+            "name": "manifest_seed",
+            "proposal_kind": "baseline",
+            "archetype": "baseline",
+        },
+        {
+            "name": "deterministic_search",
+            "proposal_kind": "candidate_search",
+            "archetype": "deterministic_candidate_search",
+        },
+        {
+            "name": "selection_steward",
+            "proposal_kind": "steward",
+            "archetype": "metric_gate",
+        },
+    ]
 
 
 def _optimization_trace_diagnostics(optimization_result: Any) -> List[Dict[str, Any]]:
@@ -4205,6 +4305,77 @@ def _evaluate_manifest_optimization_artifact(
     search_paths = [str(path) for path in _coerce_list(artifact.get("search_paths")) if str(path)]
     metrics = list(dict(artifact.get("metrics") or {}).keys())
     optimizer_trace_payload = copy.deepcopy(dict(optimizer_trace or {}))
+    optimizer_name = str(optimizer_trace_payload.get("optimizer") or "")
+    is_social_memory = optimizer_name == "AgentSocialMemoryOptimizer"
+    required_optimizer_trace = [
+        "optimizer_trace",
+        "role",
+        "role_graph",
+        "proposal",
+        "evaluation",
+        "score",
+        "credit",
+        "diagnostic",
+        "search_path",
+        "governance",
+        "role_diversity",
+        "contract_gate",
+        "rollback_check",
+        "search_locality",
+        "best_candidate",
+    ]
+    optimizer_trace_quality = {
+        "min_role_count": 3,
+        "min_proposal_count": 1,
+        "min_round_count": 1,
+        "min_credit_entries": 1,
+        "required_roles": [
+            "seed",
+            "smriti",
+            "sangha",
+        ]
+        if is_social_memory
+        else [
+            "manifest_seed",
+            "deterministic_search",
+            "selection_steward",
+        ],
+        "required_archetypes": [
+            "baseline",
+            "working_memory",
+            "collective_synthesis",
+        ]
+        if is_social_memory
+        else [],
+        "required_search_paths": search_paths,
+        "required_governance_signals": [
+            "role_diversity",
+            "contract_gate",
+            "rollback_check",
+            "search_locality",
+        ],
+        "min_governance_checks": 4,
+        "min_governance_pass_rate": 1.0,
+        "min_best_score": threshold,
+        "required_best_role": "sangha" if is_social_memory else "selection_steward",
+        "require_role_graph": True,
+        "require_diagnostics": True,
+        "require_synthesis": True if is_social_memory else None,
+        "require_steward": None if is_social_memory else True,
+        "require_governance": True,
+        "require_role_diversity": True,
+        "require_contract_gate": True,
+        "require_rollback": True,
+        "require_locality": True,
+        "max_duplicate_candidate_count": 0,
+    }
+    optimizer_trace_quality = {
+        key: value
+        for key, value in optimizer_trace_quality.items()
+        if value is not None
+    }
+    if not is_social_memory:
+        required_optimizer_trace.append("steward")
     report = {
         "results": [
             {
@@ -4290,24 +4461,7 @@ def _evaluate_manifest_optimization_artifact(
             "metric",
             "search_path",
         ],
-        "required_optimizer_trace": [
-            "optimizer_trace",
-            "role",
-            "role_graph",
-            "proposal",
-            "evaluation",
-            "score",
-            "credit",
-            "diagnostic",
-            "search_path",
-            "steward",
-            "governance",
-            "role_diversity",
-            "contract_gate",
-            "rollback_check",
-            "search_locality",
-            "best_candidate",
-        ],
+        "required_optimizer_trace": required_optimizer_trace,
         "manifest_optimization_quality": {
             "min_final_score": threshold,
             "min_history_count": 1,
@@ -4324,37 +4478,7 @@ def _evaluate_manifest_optimization_artifact(
             "require_metrics": True,
             "require_search_paths": bool(search_paths),
         },
-        "optimizer_trace_quality": {
-            "min_role_count": 3,
-            "min_proposal_count": 1,
-            "min_round_count": 1,
-            "min_credit_entries": 1,
-            "required_roles": [
-                "manifest_seed",
-                "deterministic_search",
-                "selection_steward",
-            ],
-            "required_search_paths": search_paths,
-            "required_governance_signals": [
-                "role_diversity",
-                "contract_gate",
-                "rollback_check",
-                "search_locality",
-            ],
-            "min_governance_checks": 4,
-            "min_governance_pass_rate": 1.0,
-            "min_best_score": threshold,
-            "required_best_role": "selection_steward",
-            "require_role_graph": True,
-            "require_diagnostics": True,
-            "require_steward": True,
-            "require_governance": True,
-            "require_role_diversity": True,
-            "require_contract_gate": True,
-            "require_rollback": True,
-            "require_locality": True,
-            "max_duplicate_candidate_count": 0,
-        },
+        "optimizer_trace_quality": optimizer_trace_quality,
         "metric_weights": {
             "manifest_optimization_coverage": 4.0,
             "manifest_optimization_quality": 6.0,

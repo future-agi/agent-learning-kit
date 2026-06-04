@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Type
 
 from ..optimizers.agent import AgentOptimizer
 from ..optimizers.agent_evolution import AgentEvolutionOptimizer
+from ..optimizers.agent_social_memory import AgentSocialMemoryOptimizer
 from ..simulation import _coerce_score, _iter_report_scores, _run_sync
 from ..targets import (
     AgentCandidate,
@@ -536,6 +537,9 @@ def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         return {}
     allowed = {
         "max_candidates",
+        "max_rounds",
+        "beam_width",
+        "max_proposals_per_round",
         "include_seed",
         "auto_diagnose",
         "diagnostic_score_threshold",
@@ -588,14 +592,28 @@ def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
         "mutation_library",
     }:
         return AgentEvolutionOptimizer
+    if normalized in {
+        "social_memory",
+        "society",
+        "agent_social_memory",
+        "agent_social_memory_optimizer",
+        "futureagi_social_memory",
+        "futureagi_social_memory_optimizer",
+        "multi_interaction",
+        "multi_interaction_social_memory",
+    }:
+        return AgentSocialMemoryOptimizer
     raise ValueError(
-        "optimization.optimizer.algorithm must be one of: agent, evolution"
+        "optimization.optimizer.algorithm must be one of: agent, evolution, "
+        "social_memory"
     )
 
 
 def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
     if optimizer_cls is AgentEvolutionOptimizer:
         return "evolution"
+    if optimizer_cls is AgentSocialMemoryOptimizer:
+        return "social_memory"
     return "agent"
 
 

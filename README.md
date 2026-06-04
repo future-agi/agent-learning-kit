@@ -82,6 +82,8 @@ agent-learn run examples/framework_custom_manifest.json --no-eval \
   --output artifacts/framework-custom.json
 agent-learn optimize examples/custom_framework_optimization.json \
   --output artifacts/custom-framework-optimization.json
+agent-learn optimize examples/social_memory_framework_optimization.json \
+  --output artifacts/social-memory-framework-optimization.json
 agent-learn suite examples/regression_artifact_suite.json \
   --output artifacts/regression-artifact-suite.json
 agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
@@ -128,6 +130,7 @@ artifact-task eval, direct artifact-report eval, red-team, eval-suite
 optimization, world/framework/memory optimization, voice/streaming optimization, red-team optimization,
 workspace/observability optimization, agent-integration optimization,
 multi-agent framework handoff optimization, optimizer-governance optimization,
+social-memory framework optimization,
 agent control-plane
 optimization, browser/CUA red-team optimization, framework-certification
 optimization, autonomous task/world red-team optimization, and multimodal image
@@ -154,6 +157,14 @@ framework path through `agent-learn optimize`. It starts with a runnable but wea
 `run`/`text` adapter and deterministically selects the `execute_task`/`dict`
 adapter because only that candidate emits tool evidence and passes the framework
 runtime contract.
+
+The `social_memory_framework_optimization.json` example selects
+`optimization.optimizer.algorithm: "social_memory"`, a multi-round optimizer
+with metric-bound role memory. It starts with both a weak adapter and weak trace,
+then synthesizes the high-credit adapter patch and framework-trace patch into a
+`sangha` best candidate. The emitted optimizer society trace records the social
+roles (`smriti`, `arjuna`, `vidura`, `sangha`, `dharma_steward`), proposal
+rounds, role credit, governance checks, and the final synthesized patch.
 
 The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
@@ -225,6 +236,11 @@ Optimization manifests can select the mutation-aware evolutionary optimizer with
 `agent-learn optimize` command, but searches coherent framework/world/memory/
 multi-agent patches from the Agent Mutation Library instead of only enumerating
 flat candidate values.
+They can also select the social-memory optimizer with
+`optimization.optimizer.algorithm: "social_memory"`, then tune `max_rounds`,
+`beam_width`, `max_proposals_per_round`, `target_score`, `include_seed`, and
+`auto_diagnose` for multi-round role/credit-ledger search over framework,
+world, memory, and evaluator patches.
 
 The `agent_learning.optimize` SDK facade exposes the advanced optimizer,
 deployment, replay, research, and governance APIs from the vendored engine:
