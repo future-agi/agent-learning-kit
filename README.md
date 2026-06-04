@@ -97,6 +97,10 @@ normalizers, manifest helpers, eval-suite helpers, and artifact renderers.
 `agent_learning.evals` mirrors the vendored `fi.evals` public SDK surface:
 cloud/client evals, built-in templates, streaming evals, framework evaluators,
 Protect helpers, execution handles, and the unified `evaluate` API.
+`agent_learning.redteam` exposes the red-team runtime directly: manifest
+execution, adversarial/campaign/readiness environments, local guardrail scanner
+pipelines, Protect/guardrail config types, code-security metrics, CWE detector
+helpers, and agent trajectory safety metrics.
 
 The `world_framework_memory_optimization.json` example optimizes a
 LangGraph-style world orchestration across framework trace, retrieval, memory
