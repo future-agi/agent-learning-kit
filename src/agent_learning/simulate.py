@@ -356,6 +356,19 @@ def create_baseline_file(path: str | Path, *, name: Optional[str] = None) -> dic
     return _manifest().create_baseline_file(path, name=name)
 
 
+def create_baseline(
+    source: Mapping[str, Any],
+    *,
+    source_path: str | Path = ".",
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    return _manifest().create_baseline(
+        source,
+        source_path=source_path,
+        name=name,
+    )
+
+
 def compare_result_files(
     baseline_path: str | Path,
     current_path: str | Path,
@@ -374,6 +387,80 @@ def compare_result_files(
         max_new_error_findings=max_new_error_findings,
         min_metric_delta=min_metric_delta,
         name=name,
+    )
+
+
+def compare_results(
+    baseline: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    baseline_path: str | Path = "baseline.json",
+    current_path: str | Path = "current.json",
+    min_score_delta: float = 0.0,
+    max_new_findings: int = 0,
+    max_new_error_findings: int = 0,
+    min_metric_delta: Optional[float] = None,
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    return _manifest().compare_results(
+        baseline,
+        current,
+        baseline_path=baseline_path,
+        current_path=current_path,
+        min_score_delta=min_score_delta,
+        max_new_findings=max_new_findings,
+        max_new_error_findings=max_new_error_findings,
+        min_metric_delta=min_metric_delta,
+        name=name,
+    )
+
+
+def render_report_file(path: str | Path, *, name: Optional[str] = None) -> dict[str, Any]:
+    return _manifest().render_report_file(path, name=name)
+
+
+def render_report(
+    source: Mapping[str, Any],
+    *,
+    source_path: str | Path = ".",
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    return _manifest().render_report(source, source_path=source_path, name=name)
+
+
+def promote_to_regression_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+    min_level: str = "warning",
+    max_findings: int = 25,
+    required_env: Sequence[str] = (),
+) -> dict[str, Any]:
+    return _manifest().promote_to_regression_file(
+        path,
+        name=name,
+        min_level=min_level,
+        max_findings=max_findings,
+        required_env=required_env,
+    )
+
+
+def promote_to_regression(
+    source: Mapping[str, Any],
+    *,
+    source_path: str | Path = ".",
+    name: Optional[str] = None,
+    min_level: str = "warning",
+    max_findings: int = 25,
+    required_env: Sequence[str] = (),
+) -> dict[str, Any]:
+    return _manifest().promote_to_regression(
+        source,
+        source_path=source_path,
+        name=name,
+        min_level=min_level,
+        max_findings=max_findings,
+        required_env=required_env,
     )
 
 
@@ -451,6 +538,8 @@ __all__ = [
     "build_manifest_agent_callback",
     "build_manifest_environments",
     "compare_result_files",
+    "compare_results",
+    "create_baseline",
     "create_baseline_file",
     "detect_manifest_command",
     "evaluate_manifest_report",
@@ -459,9 +548,13 @@ __all__ = [
     "load_manifest_file",
     "missing_manifest_env",
     "optimize_manifest_file",
+    "promote_to_regression",
+    "promote_to_regression_file",
     "public_result",
     "render_junit",
     "render_markdown",
+    "render_report",
+    "render_report_file",
     "render_sarif",
     "replay_manifests",
     "required_manifest_env",

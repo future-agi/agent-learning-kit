@@ -211,6 +211,56 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["case_count"] >= 1
 
 
+def test_regression_artifact_suite_example_runs_artifact_lifecycle(tmp_path):
+    output_path = tmp_path / "regression-artifact-suite.json"
+    junit_path = tmp_path / "regression-artifact-suite.junit.xml"
+    sarif_path = tmp_path / "regression-artifact-suite.sarif.json"
+    markdown_path = tmp_path / "regression-artifact-suite.md"
+
+    exit_code = main([
+        "suite",
+        str(EXAMPLES / "regression_artifact_suite.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.suite.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["job_count"] == 5
+    assert payload["summary"]["passed_count"] == 5
+    assert payload["summary"]["capability_gate_passed"] is True
+    assert payload["summary"]["missing_required_capabilities"] == {}
+    assert [child["command"] for child in payload["children"]] == [
+        "baseline",
+        "compare",
+        "report",
+        "promote_to_regression",
+        "replay",
+    ]
+    assert {child["kind"] for child in payload["children"]} == {
+        "agent-simulate.baseline.v1",
+        "agent-simulate.compare.v1",
+        "agent-simulate.report.v1",
+        "agent-simulate.regression_promotion.v1",
+        "agent-simulate.replay.v1",
+    }
+    assert payload["children"][3]["result"]["summary"]["promoted_finding_count"] == 1
+    assert payload["children"][4]["result"]["summary"]["replay_pass_rate"] == 1.0
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    assert json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0]["results"] == []
+    assert "agent-learning-regression-artifact-suite" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_eval_cli_bridge_exposes_vendored_evaluation_management_cli(
     tmp_path,
     capsys,

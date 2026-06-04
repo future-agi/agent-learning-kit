@@ -71,6 +71,8 @@ agent-learn optimize examples/multimodal_image_optimization.json \
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
+agent-learn suite examples/regression_artifact_suite.json \
+  --output artifacts/regression-artifact-suite.json
 agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
   --output artifacts/voice-streaming-realtime.json
 agent-learn eval-cli list categories --format json
@@ -128,6 +130,12 @@ The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
 adapter path, proving text and voice framework shims can be simulated without
 adding framework-specific runtime dependencies.
+
+The `regression_artifact_suite.json` example runs the artifact lifecycle that
+teams usually script around promptfoo-style CI: create a compact baseline,
+compare current vs baseline, render a report, promote a red-team finding into a
+runnable regression manifest, and replay that manifest, all as first-class
+`agent-learn suite` jobs with a capability gate.
 
 The `voice_streaming_realtime_manifest.json` example makes `voice` and
 `streaming_trace` first-class manifest environments. It replays voice timing,

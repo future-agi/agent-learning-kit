@@ -14,6 +14,11 @@ from xml.sax.saxutils import escape
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
 
 _CHILD_COMMANDS = {
+    "baseline",
+    "compare",
+    "promote_to_regression",
+    "replay",
+    "report",
     "run",
     "eval",
     "redteam",
@@ -315,6 +320,7 @@ def _execute_job(
         payload = _execute_child_payload(
             command,
             path=path,
+            base_dir=base_dir,
             job=job,
             suite_options=suite_options,
         )
@@ -370,6 +376,7 @@ def _execute_child_payload(
     command: str,
     *,
     path: Path,
+    base_dir: Path,
     job: Mapping[str, Any],
     suite_options: SuiteRunOptions,
 ) -> dict[str, Any]:
@@ -438,6 +445,60 @@ def _execute_child_payload(
         )
         payload["kind"] = AGENT_LEARNING_EVAL_OPTIMIZATION_KIND
         return payload
+    if command == "baseline":
+        from agent_learning import simulate
+
+        return simulate.create_baseline_file(
+            path,
+            name=_job_name(job),
+        )
+    if command == "compare":
+        from agent_learning import simulate
+
+        return simulate.compare_result_files(
+            _job_compare_baseline_path(job, base_dir=base_dir),
+            path,
+            min_score_delta=_job_float(job, "min_score_delta", "min-score-delta", default=0.0),
+            max_new_findings=_job_int(job, "max_new_findings", "max-new-findings", default=0),
+            max_new_error_findings=_job_int(
+                job,
+                "max_new_error_findings",
+                "max-new-error-findings",
+                default=0,
+            ),
+            min_metric_delta=_job_optional_float(
+                job,
+                "min_metric_delta",
+                "min-metric-delta",
+            ),
+            name=_job_name(job),
+        )
+    if command == "report":
+        from agent_learning import simulate
+
+        return simulate.render_report_file(
+            path,
+            name=_job_name(job),
+        )
+    if command == "promote_to_regression":
+        from agent_learning import simulate
+
+        return simulate.promote_to_regression_file(
+            path,
+            name=_job_name(job),
+            min_level=str(job.get("min_level") or job.get("min-level") or "warning"),
+            max_findings=_job_int(job, "max_findings", "max-findings", default=25),
+            required_env=_as_string_list(job.get("required_env")),
+        )
+    if command == "replay":
+        from agent_learning import simulate
+
+        return simulate.replay_manifests(
+            _job_replay_manifest_paths(job, base_dir=base_dir),
+            name=_job_name(job),
+            dry_run=_job_dry_run(job, suite_options),
+            fail_fast=bool(suite_options.fail_fast or job.get("fail_fast") or job.get("fail-fast")),
+        )
     raise SuiteError(f"unsupported suite job command: {command}")
 
 
@@ -800,13 +861,36 @@ def _job_path(job: Mapping[str, Any], *, base_dir: Path) -> Path:
         or job.get("manifest")
         or job.get("suite")
         or job.get("file")
+        or job.get("current")
+        or job.get("result")
     )
     if not raw:
+        replay_paths = _as_list(job.get("manifests") or job.get("paths"))
+        if replay_paths:
+            raw = replay_paths[0]
+    if not raw:
         raise SuiteError(f"suite job {job.get('id') or ''} requires path")
-    path = Path(str(raw)).expanduser()
-    if not path.is_absolute():
-        path = base_dir / path
-    return path.resolve()
+    return _resolve_path(str(raw), base_dir)
+
+
+def _job_compare_baseline_path(job: Mapping[str, Any], *, base_dir: Path) -> Path:
+    raw = job.get("baseline") or job.get("baseline_path") or job.get("baseline-path")
+    if not raw:
+        raise SuiteError(f"suite compare job {job.get('id') or ''} requires baseline")
+    return _resolve_path(str(raw), base_dir)
+
+
+def _job_replay_manifest_paths(job: Mapping[str, Any], *, base_dir: Path) -> list[Path]:
+    raw_values = _as_list(
+        job.get("manifests")
+        or job.get("paths")
+        or job.get("path")
+        or job.get("manifest")
+    )
+    paths = [_resolve_path(str(value), base_dir) for value in raw_values if str(value)]
+    if not paths:
+        raise SuiteError(f"suite replay job {job.get('id') or ''} requires manifests")
+    return paths
 
 
 def _job_output_paths(job: Mapping[str, Any], base_dir: Path) -> dict[str, list[Path]]:
@@ -849,6 +933,9 @@ def _normalize_command(value: Any) -> str:
         "red_team": "redteam",
         "optimization": "optimize",
         "optimizeeval": "optimize_eval",
+        "promotion": "promote_to_regression",
+        "regression_promotion": "promote_to_regression",
+        "promote": "promote_to_regression",
     }
     command = aliases.get(command, command)
     if command not in _CHILD_COMMANDS:
@@ -886,6 +973,38 @@ def _job_max_candidates(
 
 def _job_dry_run(job: Mapping[str, Any], suite_options: SuiteRunOptions) -> bool:
     return bool(suite_options.dry_run or job.get("dry_run") or job.get("dry-run"))
+
+
+def _job_int(
+    job: Mapping[str, Any],
+    *keys: str,
+    default: int,
+) -> int:
+    for key in keys:
+        if job.get(key) is not None:
+            return int(job[key])
+    return default
+
+
+def _job_float(
+    job: Mapping[str, Any],
+    *keys: str,
+    default: float,
+) -> float:
+    for key in keys:
+        if job.get(key) is not None:
+            return float(job[key])
+    return default
+
+
+def _job_optional_float(
+    job: Mapping[str, Any],
+    *keys: str,
+) -> Optional[float]:
+    for key in keys:
+        if job.get(key) is not None:
+            return float(job[key])
+    return None
 
 
 def _merge_options(

@@ -3697,6 +3697,7 @@ def _compare_results(
     }
     return {
         "schema_version": CLI_SCHEMA_VERSION,
+        "kind": "agent-simulate.compare.v1",
         "name": name or f"compare-{baseline_path.stem}-to-{current_path.stem}",
         "status": "passed" if passed else "failed",
         "exit_code": 0 if passed else 1,
