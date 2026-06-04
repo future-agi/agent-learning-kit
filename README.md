@@ -9,7 +9,7 @@ so teams can install only the pieces they need.
 
 ```python
 from agent_learning import configure
-from agent_learning import simulate, evals, optimize
+from agent_learning import simulate, evals, redteam, optimize
 
 configure(api_key="...")
 ```

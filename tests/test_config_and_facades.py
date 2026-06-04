@@ -35,9 +35,11 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 
 def test_facades_expose_unified_agent_learning_modules():
-    from agent_learning import evals, optimize, simulate
+    from agent_learning import evals, optimize, redteam, simulate
 
     assert simulate.run_eval_suite_file is not None
+    assert redteam.redteam_manifest_file is not None
+    assert redteam.prepare_redteam_manifest is not None
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
     assert evals.evaluate is not None
