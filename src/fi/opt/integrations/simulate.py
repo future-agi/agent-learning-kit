@@ -1,0 +1,636 @@
+from __future__ import annotations
+
+import copy
+import inspect
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Sequence, Type
+
+from ..optimizers.agent import AgentOptimizer
+from ..simulation import _coerce_score, _iter_report_scores, _run_sync
+from ..targets import (
+    AgentCandidate,
+    CandidateEvaluation,
+    OptimizationLayer,
+    OptimizationTarget,
+)
+from ..types import EvaluationResult, OptimizationResult
+
+ManifestRunner = Callable[[Mapping[str, Any], AgentCandidate], Any]
+ManifestScorer = Callable[[Mapping[str, Any], Any, AgentCandidate], Any]
+
+
+@dataclass
+class SimulateManifestOptimizationProblem:
+    """
+    Bridge portable simulation manifests into AgentOptimizer-style config search.
+
+    `base_manifest` is the runnable manifest without its `optimization` block.
+    Candidate configs are deep-merged into it, then `evaluate_manifest` runs the
+    real simulator/world/eval stack. The returned report, or the optional
+    `score_manifest` result, is normalized into `CandidateEvaluation`.
+    """
+
+    base_manifest: Mapping[str, Any]
+    target: OptimizationTarget
+    evaluate_manifest: ManifestRunner
+    score_manifest: Optional[ManifestScorer] = None
+    threshold: float = 0.7
+    optimizer_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest: Mapping[str, Any],
+        *,
+        evaluate_manifest: ManifestRunner,
+        score_manifest: Optional[ManifestScorer] = None,
+        name: Optional[str] = None,
+        threshold: Optional[float] = None,
+    ) -> "SimulateManifestOptimizationProblem":
+        optimization = _require_mapping(
+            manifest.get("optimization"),
+            "manifest.optimization",
+        )
+        target_config = _target_config(optimization)
+        optimizer_kwargs = _optimizer_kwargs(
+            _optional_mapping(optimization.get("optimizer"))
+        )
+
+        base_manifest = copy.deepcopy(dict(manifest))
+        base_manifest.pop("optimization", None)
+
+        manifest_name = str(name or manifest.get("name") or "agent-simulate-manifest")
+        target_metadata = copy.deepcopy(dict(target_config.get("metadata") or {}))
+        target_metadata.setdefault("source", "simulate_manifest")
+        target_metadata.setdefault("manifest_name", manifest_name)
+
+        target = OptimizationTarget(
+            name=str(target_config.get("name") or manifest_name),
+            layers=_layers(target_config.get("layers")),
+            base_config=copy.deepcopy(dict(target_config["base_config"])),
+            search_space=_search_space(target_config["search_space"]),
+            metadata=target_metadata,
+        )
+        return cls(
+            base_manifest=base_manifest,
+            target=target,
+            evaluate_manifest=evaluate_manifest,
+            score_manifest=score_manifest,
+            threshold=float(
+                threshold
+                if threshold is not None
+                else optimization.get("threshold", 0.7)
+            ),
+            optimizer_kwargs=optimizer_kwargs,
+            metadata={
+                "source": "simulate_manifest",
+                "manifest_name": manifest_name,
+            },
+        )
+
+    def candidate_manifest(self, candidate: AgentCandidate) -> dict[str, Any]:
+        return deep_merge(
+            copy.deepcopy(dict(self.base_manifest)),
+            copy.deepcopy(candidate.config),
+        )
+
+    def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
+        candidate_manifest = self.candidate_manifest(candidate)
+        report = _run_sync(self.evaluate_manifest(candidate_manifest, candidate))
+        score_source = report
+        if self.score_manifest is not None:
+            score_source = _run_sync(
+                self.score_manifest(candidate_manifest, report, candidate)
+            )
+
+        metadata = {
+            **dict(self.metadata),
+            "candidate_manifest": copy.deepcopy(candidate_manifest),
+            "candidate_patch": copy.deepcopy(candidate.patch),
+            "patch": copy.deepcopy(candidate.patch),
+            "search_paths": list(candidate.metadata.get("search_paths", [])),
+        }
+        evaluation = _candidate_evaluation_from_value(
+            score_source,
+            candidate,
+            report=report,
+            metadata=metadata,
+        )
+        return evaluation
+
+    def build_optimizer(
+        self,
+        optimizer_cls: Type[Any] = AgentOptimizer,
+        **optimizer_kwargs: Any,
+    ) -> Any:
+        kwargs = {**dict(self.optimizer_kwargs), **optimizer_kwargs}
+        kwargs = _filter_optimizer_kwargs(optimizer_cls, kwargs)
+        return optimizer_cls(
+            target=self.target,
+            evaluate_candidate=self.evaluate_candidate,
+            **kwargs,
+        )
+
+    def optimize(
+        self,
+        optimizer_cls: Type[Any] = AgentOptimizer,
+        **optimizer_kwargs: Any,
+    ) -> OptimizationResult:
+        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+
+
+ManifestOptimizationProblem = SimulateManifestOptimizationProblem
+
+
+@dataclass
+class SimulateEvalSuiteOptimizationProblem:
+    """
+    Bridge promptfoo-style simulate-sdk eval suites into AgentOptimizer search.
+
+    Candidate configs are deep-merged into the eval-suite JSON/YAML contract,
+    then scored by simulate-sdk's public `run_eval_suite` API. This gives
+    optimizer users a local prompt/provider/test/assertion loop without writing
+    adapter glue.
+    """
+
+    base_suite: Mapping[str, Any]
+    target: OptimizationTarget
+    run_suite: Callable[[Mapping[str, Any], AgentCandidate], Any]
+    threshold: float = 1.0
+    optimizer_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_suite(
+        cls,
+        suite: Mapping[str, Any],
+        *,
+        run_suite: Optional[Callable[[Mapping[str, Any], AgentCandidate], Any]] = None,
+        name: Optional[str] = None,
+        threshold: Optional[float] = None,
+    ) -> "SimulateEvalSuiteOptimizationProblem":
+        optimization = _require_mapping(
+            suite.get("optimization"),
+            "suite.optimization",
+        )
+        target_config = _target_config(optimization)
+        optimizer_kwargs = _optimizer_kwargs(
+            _optional_mapping(optimization.get("optimizer"))
+        )
+        base_suite = copy.deepcopy(dict(suite))
+        base_suite.pop("optimization", None)
+        suite_name = str(name or suite.get("name") or "agent-simulate-eval-suite")
+        target_metadata = copy.deepcopy(dict(target_config.get("metadata") or {}))
+        target_metadata.setdefault("source", "simulate_eval_suite")
+        target_metadata.setdefault("suite_name", suite_name)
+        return cls(
+            base_suite=base_suite,
+            target=OptimizationTarget(
+                name=str(target_config.get("name") or suite_name),
+                layers=_layers(target_config.get("layers")),
+                base_config=copy.deepcopy(dict(target_config["base_config"])),
+                search_space=_search_space(target_config["search_space"]),
+                metadata=target_metadata,
+            ),
+            run_suite=run_suite or _public_eval_suite_runner(),
+            threshold=float(
+                threshold
+                if threshold is not None
+                else optimization.get("threshold", 1.0)
+            ),
+            optimizer_kwargs=optimizer_kwargs,
+            metadata={"source": "simulate_eval_suite", "suite_name": suite_name},
+        )
+
+    def candidate_suite(self, candidate: AgentCandidate) -> dict[str, Any]:
+        return deep_merge(
+            copy.deepcopy(dict(self.base_suite)),
+            copy.deepcopy(candidate.config),
+        )
+
+    def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
+        candidate_suite = self.candidate_suite(candidate)
+        result = _run_sync(self.run_suite(candidate_suite, candidate))
+        metadata = {
+            **dict(self.metadata),
+            "candidate_suite": copy.deepcopy(candidate_suite),
+            "candidate_patch": copy.deepcopy(candidate.patch),
+            "patch": copy.deepcopy(candidate.patch),
+            "report": copy.deepcopy(result),
+            "search_paths": list(candidate.metadata.get("search_paths", [])),
+        }
+        return _candidate_evaluation_from_value(
+            result,
+            candidate,
+            report=result,
+            metadata=metadata,
+        )
+
+    def build_optimizer(
+        self,
+        optimizer_cls: Type[Any] = AgentOptimizer,
+        **optimizer_kwargs: Any,
+    ) -> Any:
+        kwargs = {**dict(self.optimizer_kwargs), **optimizer_kwargs}
+        kwargs = _filter_optimizer_kwargs(optimizer_cls, kwargs)
+        return optimizer_cls(
+            target=self.target,
+            evaluate_candidate=self.evaluate_candidate,
+            **kwargs,
+        )
+
+    def optimize(
+        self,
+        optimizer_cls: Type[Any] = AgentOptimizer,
+        **optimizer_kwargs: Any,
+    ) -> OptimizationResult:
+        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+
+
+EvalSuiteOptimizationProblem = SimulateEvalSuiteOptimizationProblem
+
+
+def problem_from_simulate_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_path: str | Path = ".",
+    name: Optional[str] = None,
+) -> SimulateManifestOptimizationProblem:
+    """Build a manifest optimization problem using simulate-sdk's public runtime."""
+
+    build_problem = _simulate_sdk_attr("build_manifest_optimization_problem")
+    return build_problem(
+        manifest,
+        manifest_path=Path(manifest_path).expanduser().resolve(),
+        name=name,
+    )
+
+
+def problem_from_simulate_manifest_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+) -> SimulateManifestOptimizationProblem:
+    """Load an agent-simulate manifest file and build an optimization problem."""
+
+    load_manifest = _simulate_sdk_attr("load_manifest")
+    manifest_path = Path(path).expanduser().resolve()
+    return problem_from_simulate_manifest(
+        load_manifest(manifest_path),
+        manifest_path=manifest_path,
+        name=name,
+    )
+
+
+def optimize_simulate_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_path: str | Path = ".",
+    name: Optional[str] = None,
+    optimizer_cls: Type[Any] = AgentOptimizer,
+    **optimizer_kwargs: Any,
+) -> OptimizationResult:
+    """Optimize an in-memory agent-simulate manifest through simulate-sdk."""
+
+    return problem_from_simulate_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        name=name,
+    ).optimize(optimizer_cls=optimizer_cls, **optimizer_kwargs)
+
+
+def optimize_simulate_manifest_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+    optimizer_cls: Type[Any] = AgentOptimizer,
+    **optimizer_kwargs: Any,
+) -> OptimizationResult:
+    """Optimize an agent-simulate manifest file through simulate-sdk."""
+
+    return problem_from_simulate_manifest_file(path, name=name).optimize(
+        optimizer_cls=optimizer_cls,
+        **optimizer_kwargs,
+    )
+
+
+def problem_from_eval_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    name: Optional[str] = None,
+) -> SimulateEvalSuiteOptimizationProblem:
+    """Build an eval-suite optimization problem using simulate-sdk's runtime."""
+
+    run_eval_suite = _simulate_sdk_attr("run_eval_suite")
+    suite_path = _suite_file_like_path(suite_path)
+
+    def run_suite(candidate_suite: Mapping[str, Any], candidate: AgentCandidate) -> Any:
+        return run_eval_suite(candidate_suite, suite_path=suite_path)
+
+    return SimulateEvalSuiteOptimizationProblem.from_suite(
+        suite,
+        run_suite=run_suite,
+        name=name,
+    )
+
+
+def problem_from_eval_suite_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+) -> SimulateEvalSuiteOptimizationProblem:
+    """Load a simulate-sdk eval suite file and build an optimization problem."""
+
+    load_eval_suite_file = _simulate_sdk_attr("load_eval_suite_file")
+    suite_path = Path(path).expanduser().resolve()
+    return problem_from_eval_suite(
+        load_eval_suite_file(suite_path),
+        suite_path=suite_path,
+        name=name,
+    )
+
+
+def optimize_eval_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    name: Optional[str] = None,
+    optimizer_cls: Type[Any] = AgentOptimizer,
+    **optimizer_kwargs: Any,
+) -> OptimizationResult:
+    """Optimize an in-memory simulate-sdk eval suite."""
+
+    return problem_from_eval_suite(
+        suite,
+        suite_path=suite_path,
+        name=name,
+    ).optimize(optimizer_cls=optimizer_cls, **optimizer_kwargs)
+
+
+def optimize_eval_suite_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+    optimizer_cls: Type[Any] = AgentOptimizer,
+    **optimizer_kwargs: Any,
+) -> OptimizationResult:
+    """Optimize a simulate-sdk eval suite file."""
+
+    return problem_from_eval_suite_file(path, name=name).optimize(
+        optimizer_cls=optimizer_cls,
+        **optimizer_kwargs,
+    )
+
+
+def deep_merge(base: Any, patch: Any) -> Any:
+    if isinstance(base, dict) and isinstance(patch, Mapping):
+        for key, value in patch.items():
+            base[key] = deep_merge(base.get(key), value)
+        return base
+    if isinstance(base, list) and isinstance(patch, list):
+        merged = list(base)
+        for index, value in enumerate(patch):
+            if index < len(merged):
+                merged[index] = deep_merge(merged[index], value)
+            else:
+                merged.append(copy.deepcopy(value))
+        return merged
+    return copy.deepcopy(patch)
+
+
+def _candidate_evaluation_from_value(
+    value: Any,
+    candidate: AgentCandidate,
+    *,
+    report: Any,
+    metadata: Mapping[str, Any],
+) -> CandidateEvaluation:
+    if isinstance(value, CandidateEvaluation):
+        return CandidateEvaluation(
+            candidate=candidate,
+            score=float(value.score),
+            reason=value.reason,
+            individual_results=list(value.individual_results or []),
+            report=value.report if value.report is not None else report,
+            metadata={**dict(metadata), **dict(value.metadata or {})},
+        )
+    if isinstance(value, EvaluationResult):
+        return CandidateEvaluation(
+            candidate=candidate,
+            score=float(value.score),
+            reason=value.reason,
+            individual_results=[value],
+            report=report,
+            metadata={**dict(metadata), **dict(value.metadata or {})},
+        )
+
+    score = _score_from_value(value)
+    reason = _reason_from_value(value)
+    individual_results = _individual_results_from_value(value)
+    report_value = _report_from_value(value, report)
+    extra_metadata = _metadata_from_value(value)
+    if score is None:
+        score = _score_from_value(report)
+    if score is None:
+        scores = list(_iter_report_scores(report))
+        if scores:
+            score = sum(scores) / len(scores)
+    if score is None:
+        raise ValueError(
+            "Manifest evaluation returned no score. Return a numeric score, "
+            "EvaluationResult, CandidateEvaluation, score-bearing mapping/object, "
+            "or provide score_manifest."
+        )
+    return CandidateEvaluation(
+        candidate=candidate,
+        score=score,
+        reason=reason,
+        individual_results=individual_results,
+        report=report_value,
+        metadata={**dict(metadata), **extra_metadata},
+    )
+
+
+def _score_from_value(value: Any) -> Optional[float]:
+    direct = _coerce_score(value)
+    if direct is not None:
+        return direct
+    if isinstance(value, Mapping):
+        for key in ("score", "final_score", "average_score", "optimization_score"):
+            score = _coerce_score(value.get(key))
+            if score is not None:
+                return score
+        summary = value.get("summary")
+        if isinstance(summary, Mapping):
+            for key in ("score", "final_score", "optimization_score"):
+                score = _coerce_score(summary.get(key))
+                if score is not None:
+                    return score
+    for key in ("score", "final_score", "average_score", "optimization_score"):
+        score = _coerce_score(getattr(value, key, None))
+        if score is not None:
+            return score
+    return None
+
+
+def _reason_from_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return str(value.get("reason") or value.get("status") or "")
+    return str(getattr(value, "reason", "") or "")
+
+
+def _individual_results_from_value(value: Any) -> list[Any]:
+    if isinstance(value, Mapping):
+        results = value.get("individual_results")
+        return list(results or [])
+    return list(getattr(value, "individual_results", []) or [])
+
+
+def _report_from_value(value: Any, fallback: Any) -> Any:
+    if isinstance(value, Mapping) and "report" in value:
+        return value["report"]
+    report = getattr(value, "report", None)
+    return fallback if report is None else report
+
+
+def _metadata_from_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return copy.deepcopy(dict(value.get("metadata") or {}))
+    metadata = getattr(value, "metadata", None)
+    if isinstance(metadata, Mapping):
+        return copy.deepcopy(dict(metadata))
+    return {}
+
+
+def _target_config(optimization: Mapping[str, Any]) -> Mapping[str, Any]:
+    target = _require_mapping(optimization.get("target"), "optimization.target")
+    _require_mapping(target.get("base_config"), "optimization.target.base_config")
+    search_space = _require_mapping(
+        target.get("search_space"),
+        "optimization.target.search_space",
+    )
+    if not search_space:
+        raise ValueError("optimization.target.search_space must not be empty.")
+    return target
+
+
+def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    if not config:
+        return {}
+    allowed = {
+        "max_candidates",
+        "include_seed",
+        "auto_diagnose",
+        "diagnostic_score_threshold",
+        "total_budget",
+        "min_pulls_per_candidate",
+        "exploration",
+        "target_score",
+        "selection",
+    }
+    return {key: copy.deepcopy(config[key]) for key in allowed if key in config}
+
+
+def _filter_optimizer_kwargs(
+    optimizer_cls: Type[Any],
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(optimizer_cls)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+    parameters = signature.parameters
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return dict(kwargs)
+    allowed = set(parameters)
+    return {key: value for key, value in kwargs.items() if key in allowed}
+
+
+def _layers(value: Any) -> list[OptimizationLayer]:
+    return list(value or ["harness", "evaluator"])
+
+
+def _search_space(value: Mapping[str, Any]) -> dict[str, list[Any]]:
+    search_space: dict[str, list[Any]] = {}
+    for path, choices in value.items():
+        if isinstance(choices, (str, bytes)) or not isinstance(choices, Sequence):
+            raise ValueError(
+                f"optimization.target.search_space.{path} must be a sequence."
+            )
+        if not choices:
+            raise ValueError(
+                f"optimization.target.search_space.{path} must not be empty."
+            )
+        search_space[str(path)] = copy.deepcopy(list(choices))
+    return search_space
+
+
+def _require_mapping(value: Any, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object.")
+    return value
+
+
+def _optional_mapping(value: Any) -> Optional[Mapping[str, Any]]:
+    if value is None:
+        return None
+    return _require_mapping(value, "optimization.optimizer")
+
+
+def _simulate_sdk_attr(name: str) -> Any:
+    try:
+        from fi import simulate as simulate_sdk
+    except Exception as exc:  # pragma: no cover - optional dependency clarity
+        raise RuntimeError(
+            "agent-simulate is required for simulate-sdk manifest helpers. "
+            "Install simulate-sdk or call ManifestOptimizationProblem.from_manifest "
+            "with explicit evaluate_manifest/score_manifest callbacks."
+        ) from exc
+    try:
+        return getattr(simulate_sdk, name)
+    except AttributeError as exc:  # pragma: no cover - version clarity
+        raise RuntimeError(
+            f"agent-simulate with `{name}` is required; upgrade simulate-sdk."
+        ) from exc
+
+
+def _suite_file_like_path(path: str | Path) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    if resolved.is_dir():
+        return resolved / "eval_suite.json"
+    return resolved
+
+
+def _public_eval_suite_runner() -> Callable[[Mapping[str, Any], AgentCandidate], Any]:
+    run_eval_suite = _simulate_sdk_attr("run_eval_suite")
+    suite_path = Path.cwd() / "eval_suite.json"
+
+    def run_suite(candidate_suite: Mapping[str, Any], candidate: AgentCandidate) -> Any:
+        return run_eval_suite(candidate_suite, suite_path=suite_path)
+
+    return run_suite
+
+
+__all__ = [
+    "EvalSuiteOptimizationProblem",
+    "ManifestOptimizationProblem",
+    "ManifestRunner",
+    "ManifestScorer",
+    "SimulateEvalSuiteOptimizationProblem",
+    "SimulateManifestOptimizationProblem",
+    "deep_merge",
+    "optimize_eval_suite",
+    "optimize_eval_suite_file",
+    "optimize_simulate_manifest",
+    "optimize_simulate_manifest_file",
+    "problem_from_eval_suite",
+    "problem_from_eval_suite_file",
+    "problem_from_simulate_manifest",
+    "problem_from_simulate_manifest_file",
+]

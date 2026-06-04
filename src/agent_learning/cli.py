@@ -74,13 +74,7 @@ def _run(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from fi.simulate.manifest import (
-            load_manifest_file,
-            render_junit,
-            render_markdown,
-            render_sarif,
-            run_manifest_file,
-        )
+        from agent_learning import simulate
     except Exception as exc:
         print(
             "agent-learn run requires `agent-learning-kit[simulate]` "
@@ -92,9 +86,9 @@ def _run(args: Sequence[str]) -> int:
 
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
-        manifest = load_manifest_file(manifest_path)
+        manifest = simulate.load_manifest_file(manifest_path)
         payload = _run_async(
-            run_manifest_file(
+            simulate.run_manifest_file(
                 manifest_path,
                 name=parsed.name,
                 threshold=parsed.threshold,
@@ -112,9 +106,9 @@ def _run(args: Sequence[str]) -> int:
         manifest,
         parsed,
         manifest_path,
-        render_junit=render_junit,
-        render_sarif=render_sarif,
-        render_markdown=render_markdown,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
     )
     payload["outputs_written"] = written
     if not written and not parsed.quiet:
@@ -131,8 +125,7 @@ def _eval(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from fi.simulate.manifest import render_junit, render_markdown, render_sarif
-        from fi.simulate.suite import load_eval_suite_file, run_eval_suite_file
+        from agent_learning import evals, simulate
     except Exception as exc:
         print(
             "agent-learn eval requires `agent-learning-kit[simulate]` "
@@ -144,8 +137,8 @@ def _eval(args: Sequence[str]) -> int:
 
     suite_path = Path(parsed.suite).expanduser().resolve()
     try:
-        suite = load_eval_suite_file(suite_path)
-        payload = run_eval_suite_file(
+        suite = evals.load_eval_suite_file(suite_path)
+        payload = evals.run_eval_suite_file(
             suite_path,
             name=parsed.name,
             threshold=parsed.threshold,
@@ -161,9 +154,9 @@ def _eval(args: Sequence[str]) -> int:
         suite,
         parsed,
         suite_path,
-        render_junit=render_junit,
-        render_sarif=render_sarif,
-        render_markdown=render_markdown,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
     )
     payload["outputs_written"] = written
     if not written and not parsed.quiet:
@@ -180,13 +173,7 @@ def _redteam(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from fi.simulate.manifest import (
-            load_manifest_file,
-            redteam_manifest_file,
-            render_junit,
-            render_markdown,
-            render_sarif,
-        )
+        from agent_learning import redteam
     except Exception as exc:
         print(
             "agent-learn redteam requires `agent-learning-kit[simulate]` "
@@ -198,9 +185,9 @@ def _redteam(args: Sequence[str]) -> int:
 
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
-        manifest = load_manifest_file(manifest_path)
+        manifest = redteam.load_manifest_file(manifest_path)
         payload = _run_async(
-            redteam_manifest_file(
+            redteam.redteam_manifest_file(
                 manifest_path,
                 name=parsed.name,
                 threshold=parsed.threshold,
@@ -217,9 +204,9 @@ def _redteam(args: Sequence[str]) -> int:
         manifest,
         parsed,
         manifest_path,
-        render_junit=render_junit,
-        render_sarif=render_sarif,
-        render_markdown=render_markdown,
+        render_junit=redteam.render_junit,
+        render_sarif=redteam.render_sarif,
+        render_markdown=redteam.render_markdown,
     )
     payload["outputs_written"] = written
     if not written and not parsed.quiet:
@@ -236,13 +223,7 @@ def _optimize(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from fi.simulate.manifest import (
-            load_manifest_file,
-            optimize_manifest_file,
-            render_junit,
-            render_markdown,
-            render_sarif,
-        )
+        from agent_learning import optimize, simulate
     except Exception as exc:
         print(
             "agent-learn optimize requires `agent-learning-kit[trinity]`.",
@@ -253,8 +234,8 @@ def _optimize(args: Sequence[str]) -> int:
 
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
-        manifest = load_manifest_file(manifest_path)
-        payload = optimize_manifest_file(
+        manifest = simulate.load_manifest_file(manifest_path)
+        payload = optimize.optimize_manifest_file(
             manifest_path,
             name=parsed.name,
             threshold=parsed.threshold,
@@ -271,9 +252,9 @@ def _optimize(args: Sequence[str]) -> int:
         manifest,
         parsed,
         manifest_path,
-        render_junit=render_junit,
-        render_sarif=render_sarif,
-        render_markdown=render_markdown,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
     )
     payload["outputs_written"] = written
     if not written and not parsed.quiet:
@@ -299,8 +280,7 @@ def _optimize_eval(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from fi.simulate.manifest import render_junit, render_markdown, render_sarif
-        from fi.simulate.suite import load_eval_suite_file, optimize_eval_suite_file
+        from agent_learning import evals, optimize, simulate
     except Exception as exc:
         print(
             "agent-learn optimize-eval requires "
@@ -312,8 +292,8 @@ def _optimize_eval(args: Sequence[str]) -> int:
 
     suite_path = Path(parsed.suite).expanduser().resolve()
     try:
-        suite = load_eval_suite_file(suite_path)
-        payload = optimize_eval_suite_file(
+        suite = evals.load_eval_suite_file(suite_path)
+        payload = optimize.optimize_eval_suite_file(
             suite_path,
             name=parsed.name,
             threshold=parsed.threshold,
@@ -330,9 +310,9 @@ def _optimize_eval(args: Sequence[str]) -> int:
         suite,
         parsed,
         suite_path,
-        render_junit=render_junit,
-        render_sarif=render_sarif,
-        render_markdown=render_markdown,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
     )
     payload["outputs_written"] = written
     if not written and not parsed.quiet:
@@ -686,9 +666,13 @@ def _run_async(awaitable: Any) -> Any:
 
 def _doctor() -> int:
     modules = {
-        "simulate": "fi.simulate",
-        "evaluation": "fi.evals",
-        "optimize": "fi.opt",
+        "simulate": "agent_learning.simulate",
+        "evaluation": "agent_learning.evals",
+        "redteam": "agent_learning.redteam",
+        "optimize": "agent_learning.optimize",
+        "engine.simulate": "fi.simulate",
+        "engine.evals": "fi.evals",
+        "engine.opt": "fi.opt",
     }
     payload = {
         "config": {

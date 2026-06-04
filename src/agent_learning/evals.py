@@ -1,17 +1,121 @@
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Mapping, Optional
 
-from ._facade import proxy_dir, proxy_getattr
+from ._facade import optional_module
 
-_MODULE = "fi.evals"
-_EXTRA = "evaluation"
+_EVAL_EXTRA = "evaluation"
+
+_EVAL_EXPORTS = {
+    "AgentReportEvaluator": "fi.evals.metrics.agents",
+    "BatchResult": "fi.evals",
+    "EvalResult": "fi.evals",
+    "Evaluator": "fi.evals",
+    "Execution": "fi.evals",
+    "ExecutionError": "fi.evals",
+    "FrameworkEvaluator": "fi.evals",
+    "Protect": "fi.evals",
+    "StreamingEvaluator": "fi.evals",
+    "Turing": "fi.evals",
+}
+
+
+def _evals() -> Any:
+    return optional_module("fi.evals", _EVAL_EXTRA)
+
+
+def _agent_metrics() -> Any:
+    return optional_module("fi.evals.metrics.agents", _EVAL_EXTRA)
+
+
+def _suite() -> Any:
+    return optional_module("fi.simulate.suite", "simulate")
+
+
+def evaluate(*args: Any, **kwargs: Any) -> Any:
+    return _evals().evaluate(*args, **kwargs)
+
+
+def evaluate_agent_report(
+    report: Any,
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    threshold: float = 0.7,
+) -> Any:
+    return _agent_metrics().evaluate_agent_report(
+        report,
+        config=config,
+        threshold=threshold,
+    )
+
+
+def load_eval_suite_file(path: str | Path) -> dict[str, Any]:
+    return _suite().load_eval_suite_file(path)
+
+
+def run_eval_suite_file(
+    path: str | Path,
+    *,
+    options: Optional[Any] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    return _suite().run_eval_suite_file(
+        path,
+        options=options,
+        name=name,
+        threshold=threshold,
+        dry_run=dry_run,
+    )
+
+
+def run_eval_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    options: Optional[Any] = None,
+) -> dict[str, Any]:
+    return _suite().run_eval_suite(suite, suite_path=suite_path, options=options)
+
+
+def optimize_eval_suite_file(
+    path: str | Path,
+    *,
+    options: Optional[Any] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    return _suite().optimize_eval_suite_file(
+        path,
+        options=options,
+        name=name,
+        threshold=threshold,
+        max_candidates=max_candidates,
+        dry_run=dry_run,
+    )
 
 
 def __getattr__(name: str) -> Any:
-    return proxy_getattr(_MODULE, _EXTRA, name)
+    module_name = _EVAL_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module `agent_learning.evals` has no attribute `{name}`")
+    return getattr(optional_module(module_name, _EVAL_EXTRA), name)
 
 
 def __dir__() -> list[str]:
-    return proxy_dir(_MODULE, _EXTRA)
+    return sorted(set(__all__))
 
+
+__all__ = [
+    *_EVAL_EXPORTS,
+    "evaluate",
+    "evaluate_agent_report",
+    "load_eval_suite_file",
+    "optimize_eval_suite_file",
+    "run_eval_suite",
+    "run_eval_suite_file",
+]
