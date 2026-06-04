@@ -17,9 +17,11 @@ from xml.etree import ElementTree
 
 from fi.simulate import (
     AdversarialEnvironmentPack,
+    AgentControlPlaneEnvironment,
     AgentIntegrationEnvironment,
     AgentMemoryLineageEnvironment,
     AgentResponse,
+    AgentTrustBoundaryEnvironment,
     FileEnvironment,
     FrameworkImportManifestEnvironment,
     FrameworkTraceEnvironment,
@@ -169,9 +171,12 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
     {
         "adversarial_attack_pack",
         "adversarial_pack",
+        "agent_control_plane",
         "agent_integration",
         "agent_integration_manifest",
         "agent_memory_lineage",
+        "agent_trust_boundary",
+        "control_plane",
         "file",
         "files",
         "framework_import",
@@ -192,6 +197,7 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "tool_fault",
         "tool_fault_injection",
         "tool_mock",
+        "trust_boundary",
         "voice",
         "voice_replay",
         "workspace_run_manifest",
@@ -638,6 +644,10 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(RedTeamReadinessEnvironment(payload))
         elif env_type in {"agent_integration", "agent_integration_manifest"}:
             environments.append(AgentIntegrationEnvironment(payload))
+        elif env_type in {"agent_trust_boundary", "trust_boundary"}:
+            environments.append(AgentTrustBoundaryEnvironment(payload))
+        elif env_type in {"agent_control_plane", "control_plane"}:
+            environments.append(AgentControlPlaneEnvironment(payload))
         elif env_type == "framework_import":
             environments.append(FrameworkImportManifestEnvironment(payload))
         elif env_type == "workspace_run_manifest":

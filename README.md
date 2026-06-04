@@ -58,6 +58,8 @@ agent-learn optimize examples/agent_integration_optimization.json \
   --output artifacts/agent-integration-optimization.json
 agent-learn optimize examples/optimizer_governance_optimization.json \
   --output artifacts/optimizer-governance-optimization.json
+agent-learn optimize examples/agent_control_plane_optimization.json \
+  --output artifacts/agent-control-plane-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -85,8 +87,8 @@ The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, eval, red-team, eval-suite optimization,
 world/framework/memory optimization, voice/streaming optimization, red-team
 optimization, workspace/observability optimization, agent-integration
-optimization, and optimizer-governance optimization jobs, then emits aggregate
-artifacts.
+optimization, optimizer-governance optimization, and agent control-plane
+optimization jobs, then emits aggregate artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -131,3 +133,10 @@ society trace, making multi-interaction search auditable. It verifies roles,
 proposals, rounds, diagnostics, role credit, best-candidate selection, and
 governance checks for role diversity, mediator review, contract gates,
 rollback, search locality, and dependency audit.
+
+The `agent_control_plane_optimization.json` example optimizes a red-team
+readiness gate for autonomous agents. It verifies the trust boundary and runtime
+agency controls: identity, permissions, sandboxing, audit, canaries, human
+approval, memory isolation, network egress, tool allowlists, data boundaries,
+secret handling, risk scoring, action policy, rollback, kill switches, circuit
+breakers, rate limits, budgets, containment, and drift detection.

@@ -53,6 +53,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -112,14 +113,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 10
-        assert payload["summary"]["passed_count"] == 10
+        assert payload["summary"]["job_count"] == 11
+        assert payload["summary"]["passed_count"] == 11
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
             "optimize",
@@ -901,5 +903,90 @@ def test_optimizer_governance_optimization_example_runs_society_trace(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "optimizer-governance-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_agent_control_plane_optimization_example_runs_trust_and_control_gate(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
+        "real-local-agent-control-plane-opt-key",
+    )
+
+    output_path = tmp_path / "agent-control-plane-optimization.json"
+    junit_path = tmp_path / "agent-control-plane-optimization.junit.xml"
+    sarif_path = tmp_path / "agent-control-plane-optimization.sarif.json"
+    markdown_path = tmp_path / "agent-control-plane-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "agent_control_plane_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.98
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    env_types = [
+        environment["type"]
+        for environment in payload["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == ["agent_trust_boundary", "agent_control_plane"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "agent_trust_boundary_coverage",
+        "agent_trust_boundary_quality",
+        "agent_control_plane_coverage",
+        "agent_control_plane_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) == {"agent_trust_boundary_model", "agent_control_plane"}
+    trust_summary = state["agent_trust_boundary_model"]["summary"]
+    assert trust_summary["control_count"] == 11
+    assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+    assert trust_summary["high_risk_unmitigated_count"] == 0
+    assert trust_summary["gaps"] == []
+    assert trust_summary["has_secret_handling"] is True
+    control_summary = state["agent_control_plane"]["summary"]
+    assert control_summary["control_count"] == 11
+    assert control_summary["required_control_rate"] == pytest.approx(1.0)
+    assert control_summary["exceeded_budget_count"] == 0
+    assert control_summary["high_risk_uncontained_count"] == 0
+    assert control_summary["gaps"] == []
+    assert control_summary["has_kill_switch"] is True
+    assert control_summary["has_drift_detection"] is True
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "agent-control-plane-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
