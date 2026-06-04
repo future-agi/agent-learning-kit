@@ -86,12 +86,18 @@ agent-learn optimize examples/social_memory_framework_optimization.json \
   --output artifacts/social-memory-framework-optimization.json
 agent-learn suite examples/regression_artifact_suite.json \
   --output artifacts/regression-artifact-suite.json
+agent-learn init ./agent-learning-project --preset optimize --force
 agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
   --output artifacts/voice-streaming-realtime.json
 agent-learn eval-cli list categories --format json
 agent-learn eval-cli init ./eval-project --template basic --force
 agent-learn doctor
 ```
+
+`agent-learn init` scaffolds runnable Agent Learning projects. The optimize
+preset generates a local task/world optimization manifest that patches both an
+agent action and a world-contract transition, then can be run with
+`agent-learn optimize`.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`, and `agent-learn suite`

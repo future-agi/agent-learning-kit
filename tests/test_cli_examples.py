@@ -396,7 +396,7 @@ def test_agent_learn_init_optimize_scaffold_uses_unified_cli(
     monkeypatch.setenv("AGENT_LEARNING_INIT_TEST_KEY", "real-local-init-key")
     project_dir = tmp_path / "agent-learning-project"
     init_output = tmp_path / "init.json"
-    dry_run_output = tmp_path / "optimize-dry-run.json"
+    optimize_output = tmp_path / "optimize.json"
 
     exit_code = main([
         "init",
@@ -428,20 +428,37 @@ def test_agent_learn_init_optimize_scaffold_uses_unified_cli(
     assert "agent-simulate" not in readme
     manifest_path = project_dir / "manifests" / "optimize.json"
     assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["version"] == "agent-learning.optimization.v1"
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent.responses.0.tool_calls",
+        "simulation.environments.0.data.transitions",
+    }
 
     exit_code = main([
         "optimize",
         str(manifest_path),
-        "--dry-run",
         "--output",
-        str(dry_run_output),
+        str(optimize_output),
     ])
 
     assert exit_code == 0
-    dry_run = json.loads(dry_run_output.read_text(encoding="utf-8"))
-    assert dry_run["kind"] == "agent-learning.optimization.v1"
-    assert dry_run["dry_run"] is True
-    assert dry_run["summary"]["search_path_count"] == 2
+    optimized = json.loads(optimize_output.read_text(encoding="utf-8"))
+    assert optimized["kind"] == "agent-learning.optimization.v1"
+    assert optimized["status"] == "passed"
+    assert optimized["summary"]["optimization_score"] >= 0.95
+    best_config = optimized["optimization"]["best_config"]
+    assert best_config["agent"]["responses"][0]["tool_calls"][0]["name"] == (
+        "apply_world_transition"
+    )
+    assert best_config["simulation"]["environments"][0]["data"]["transitions"][0][
+        "id"
+    ] == "approve_refund"
+    best_history = max(
+        optimized["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
 
 
 def test_world_framework_memory_optimization_example_runs_evidence_gates(

@@ -135,15 +135,24 @@ def _init(args: Sequence[str]) -> int:
         return 2
 
     target_dir = Path(parsed.directory).expanduser().resolve()
+    required_env = [str(value) for value in _as_list(parsed.required_env)] or [
+        "AGENT_LEARNING_API_KEY"
+    ]
     started = time.time()
     try:
         payload = cli._init_scaffold_result(
             target_dir=target_dir,
             preset=str(parsed.preset),
             name=str(parsed.name),
-            required_env=_as_list(parsed.required_env) or ["AGENT_LEARNING_API_KEY"],
+            required_env=required_env,
             force=bool(parsed.force),
             duration_seconds=round(time.time() - started, 4),
+        )
+        _rewrite_init_manifests_for_agent_learning(
+            target_dir=target_dir,
+            preset=str(parsed.preset),
+            name=str(parsed.name),
+            required_env=required_env,
         )
         _rewrite_init_readme_for_agent_learning(target_dir)
     except Exception as exc:
@@ -976,6 +985,190 @@ def _write_json_outputs(
         )
         written.append(str(path))
     return written
+
+
+def _rewrite_init_manifests_for_agent_learning(
+    *,
+    target_dir: Path,
+    preset: str,
+    name: str,
+    required_env: Sequence[str],
+) -> None:
+    preset = str(preset or "").lower().replace("_", "-")
+    if preset not in {"optimize", "all"}:
+        return
+    optimize_manifest = target_dir / "manifests" / "optimize.json"
+    if not optimize_manifest.exists():
+        return
+    optimize_manifest.write_text(
+        json.dumps(
+            _agent_learning_task_world_optimize_manifest(name, required_env),
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _agent_learning_task_world_optimize_manifest(
+    name: str,
+    required_env: Sequence[str],
+) -> Dict[str, Any]:
+    optimize_name = f"{_slug(name, default='agent-learning')}-task-world-optimize"
+    weak_agent = {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "I inspected the refund request but did not complete the "
+                    "world transition."
+                ),
+                "tool_calls": [],
+            }
+        ],
+    }
+    approve_refund_tool_call = {
+        "id": "approve_refund",
+        "name": "apply_world_transition",
+        "arguments": {"id": "approve_refund"},
+    }
+    approve_refund_transition = {
+        "id": "approve_refund",
+        "actor": "agent",
+        "resource": "refund",
+        "action": "approve_refund",
+        "required": True,
+        "preconditions": {"refund.status": "pending"},
+        "effects": {"refund.status": "approved"},
+        "postconditions": {"refund.status": "approved"},
+        "signals": ["refund_resolution"],
+    }
+    world_contract = {
+        "type": "world_contract",
+        "data": {
+            "name": f"{optimize_name}-world",
+            "actors": ["agent", "customer"],
+            "resources": ["refund"],
+            "initial_state": {
+                "policy": {"can_refund": True},
+                "refund": {"status": "pending"},
+            },
+            "transitions": [],
+            "invariants": [
+                {
+                    "id": "policy_allows_refunds",
+                    "must": {"policy.can_refund": True},
+                }
+            ],
+            "success_conditions": [
+                {
+                    "id": "refund_approved",
+                    "must": {"refund.status": "approved"},
+                }
+            ],
+        },
+    }
+    evaluation_config = {
+        "task_description": "Optimize a local task/world scaffold.",
+        "expected_result": "The selected agent approves the refund world contract.",
+        "required_tools": ["apply_world_transition"],
+        "available_tools": ["world_contract_status", "apply_world_transition"],
+        "success_criteria": [
+            "refund transition applied",
+            "world contract terminal status is success",
+        ],
+        "required_world_contract": [
+            "world_contract",
+            "transition",
+            "success_condition",
+            "refund",
+        ],
+        "world_contract_quality": {
+            "required_actors": ["agent", "customer"],
+            "required_resources": ["refund"],
+            "required_transitions": ["approve_refund"],
+            "min_completed_transitions": 1,
+            "require_all_required_transitions": True,
+            "require_all_invariants_pass": True,
+            "required_success_conditions": ["refund_approved"],
+            "terminal_status": "success",
+            "max_violation_count": 0,
+            "expected_state": {"refund": {"status": "approved"}},
+        },
+        "metric_weights": {
+            "world_contract_quality": 8.0,
+            "world_contract_coverage": 3.0,
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 1.0,
+        },
+    }
+    base_config = {
+        "agent": weak_agent,
+        "simulation": {"environments": [world_contract]},
+    }
+    return {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": optimize_name,
+        "required_env": list(required_env),
+        "scenario": {
+            "name": optimize_name,
+            "dataset": [
+                {
+                    "persona": {"name": "Kai", "role": "agent-owner"},
+                    "situation": "Kai needs a local scaffold that optimizes an agent action and its task world.",
+                    "outcome": "The refund world contract reaches terminal success.",
+                }
+            ],
+        },
+        "agent": weak_agent,
+        "simulation": {
+            "engine": "local_text",
+            "max_turns": 1,
+            "min_turns": 1,
+            "auto_execute_tools": True,
+            "environments": [world_contract],
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": 0.95,
+                "config": evaluation_config,
+            }
+        },
+        "optimization": {
+            "threshold": 0.95,
+            "target": {
+                "name": optimize_name,
+                "layers": ["planner", "tools", "world", "environment", "evaluator"],
+                "base_config": base_config,
+                "search_space": {
+                    "agent.responses.0.tool_calls": [[], [approve_refund_tool_call]],
+                    "simulation.environments.0.data.transitions": [
+                        [],
+                        [approve_refund_transition],
+                    ],
+                },
+                "metadata": {
+                    "source": "agent_learning.cli.init",
+                    "task_kind": "task_world",
+                },
+            },
+            "optimizer": {
+                "algorithm": "agent",
+                "max_candidates": 5,
+                "include_seed": True,
+                "auto_diagnose": False,
+            },
+        },
+    }
+
+
+def _slug(value: str, *, default: str) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    chars = [char if char.isalnum() or char == "-" else "-" for char in normalized]
+    slug = "-".join(part for part in "".join(chars).split("-") if part)
+    return slug or default
 
 
 def _rewrite_init_readme_for_agent_learning(target_dir: Path) -> None:
