@@ -61,6 +61,96 @@ def test_facades_expose_unified_agent_learning_modules():
     } <= set(simulate.supported_frameworks())
 
 
+def test_optimize_facade_exposes_advanced_governance_surfaces():
+    from agent_learning import optimize
+    from agent_learning.optimize import (
+        AgentFeedbackOptimizer,
+        build_optimizer_society_trace,
+    )
+
+    assert AgentFeedbackOptimizer is optimize.AgentFeedbackOptimizer
+    assert optimize.AgentMultiInteractionOptimizer is not None
+    assert optimize.AgentBanditOptimizer is not None
+    assert optimize.AgentParetoOptimizer is not None
+    assert optimize.AgentSocialMemoryOptimizer is not None
+    assert optimize.CouncilAgentOptimizer is not None
+    assert optimize.SocietyAgentOptimizer is not None
+    assert optimize.FutureAGIRegressionReplayOptimizer is not None
+    assert optimize.schedule_futureagi_registry_replay_optimization is not None
+    assert optimize.build_futureagi_registry_replay_pack_manifest is not None
+    assert optimize.build_agent_regression_dataset is not None
+    assert optimize.export_agent_deployment is not None
+    assert optimize.check_agent_deployment_promotion is not None
+    assert optimize.check_agent_deployment_rollback is not None
+    assert optimize.research_note_for is not None
+
+    candidate = optimize.AgentCandidate.from_config(
+        {
+            "framework": {"events": {"source": "langgraph_stream_events"}},
+            "langgraph": {"nodes": {"planner": "plan", "executor": "act"}},
+            "memory": {"state_persistence": "sqlite"},
+            "secrets": {"api_key": "real-local-secret-for-redaction"},
+        },
+        target_name="agent-learning-advanced-optimize",
+        layers=["policy", "security"],
+        patch={"policy.approval": "required"},
+    )
+    history = [
+        optimize.IterationHistory(
+            prompt="role proposal",
+            average_score=1.0,
+            individual_results=[optimize.EvaluationResult(score=1.0, reason="ok")],
+            candidate_id=candidate.id,
+            candidate_config=candidate.config,
+            layers=["policy", "security"],
+            metadata={
+                "proposal_role": "critic",
+                "proposal_round": 1,
+                "proposal_reason": "tighten approval and redaction gates",
+                "patch": candidate.patch,
+                "role_kind": "critic",
+                "proposal_metadata": {"role_archetype": "adversarial_reviewer"},
+            },
+        )
+    ]
+    result = optimize.OptimizationResult(
+        best_generator="scripted",
+        best_candidate=candidate,
+        history=history,
+        final_score=1.0,
+        metadata={
+            "optimizer": "SocietyAgentOptimizer",
+            "target_name": "agent-learning-advanced-optimize",
+            "best_candidate_id": candidate.id,
+            "roles": ["critic", "steward"],
+            "role_graph": [
+                {
+                    "name": "critic",
+                    "proposal_kind": "adversarial_review",
+                    "archetype": "adversarial_reviewer",
+                }
+            ],
+            "rounds": [{"round": 1, "proposal_count": 1}],
+            "diagnostics": [{"component": "policy", "status": "resolved"}],
+            "search_paths": ["policy.approval"],
+        },
+    )
+
+    trace = build_optimizer_society_trace(result)
+    assert trace["kind"] == "optimizer_society_trace"
+    assert trace["summary"]["role_count"] == 1
+    assert trace["summary"]["proposal_count"] == 1
+    assert trace["summary"]["final_score"] == pytest.approx(1.0)
+    assert "governance" in trace["signals"]
+
+    deployment = optimize.export_agent_deployment(result, framework="langgraph")
+    assert deployment.framework == "langgraph"
+    assert deployment.final_score == pytest.approx(1.0)
+    assert deployment.config["secrets"] == "<redacted>"
+    assert "secrets" in deployment.redactions
+    assert "langgraph.apply.json" in deployment.files
+
+
 def test_trinity_engines_are_vendored_in_agent_learning_kit():
     for module_name in ("fi.simulate", "fi.evals", "fi.opt"):
         module = importlib.import_module(module_name)

@@ -134,6 +134,12 @@ proposals, rounds, diagnostics, role credit, best-candidate selection, and
 governance checks for role diversity, mediator review, contract gates,
 rollback, search locality, and dependency audit.
 
+The `agent_learning.optimize` SDK facade exposes the advanced optimizer,
+deployment, replay, research, and governance APIs from the vendored engine:
+multi-interaction optimizers, council/society search, Future AGI replay
+optimizers, deployment export/promotion/rollback checks, regression replay-pack
+builders, research corpus helpers, and optimizer society traces.
+
 The `agent_control_plane_optimization.json` example optimizes a red-team
 readiness gate for autonomous agents. It verifies the trust boundary and runtime
 agency controls: identity, permissions, sandboxing, audit, canaries, human
