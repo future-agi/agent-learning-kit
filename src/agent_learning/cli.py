@@ -4,7 +4,8 @@ import argparse
 import importlib
 import json
 import sys
-from typing import Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .config import current_config
 
@@ -30,6 +31,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     command = args[0]
     if command == "doctor":
         return _doctor()
+    if command == "optimize-eval":
+        return _optimize_eval(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -49,6 +52,211 @@ def _simulate(args: Sequence[str]) -> int:
         print(f"agent-learn: import failed: {exc}", file=sys.stderr)
         return 2
     return int(cli.main(list(args)))
+
+
+def _optimize_eval(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn optimize-eval",
+        description=(
+            "Optimize a promptfoo-style eval suite with the unified agent "
+            "learning runtime."
+        ),
+    )
+    parser.add_argument(
+        "suite",
+        help="Path to a JSON/YAML eval suite with an optimization block.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help=(
+            "Write JSON output to this path. .xml paths are treated as JUnit; "
+            ".sarif paths as SARIF."
+        ),
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write compact JUnit XML output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 findings output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown report output.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Override optimization.threshold.",
+    )
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=None,
+        help="Override optimization.optimizer.max_candidates.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the optimization run name.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate suite/search space without executing optimization.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from fi.simulate.manifest import render_junit, render_markdown, render_sarif
+        from fi.simulate.suite import load_eval_suite_file, optimize_eval_suite_file
+    except Exception as exc:
+        print(
+            "agent-learn optimize-eval requires "
+            "`agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    suite_path = Path(parsed.suite).expanduser().resolve()
+    try:
+        suite = load_eval_suite_file(suite_path)
+        payload = optimize_eval_suite_file(
+            suite_path,
+            name=parsed.name,
+            threshold=parsed.threshold,
+            max_candidates=parsed.max_candidates,
+            dry_run=bool(parsed.dry_run),
+        )
+    except Exception as exc:
+        print(f"agent-learn optimize-eval: {exc}", file=sys.stderr)
+        return 1
+
+    written = _write_optimize_eval_outputs(
+        payload,
+        suite,
+        parsed,
+        suite_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _write_optimize_eval_outputs(
+    payload: Dict[str, Any],
+    suite: Mapping[str, Any],
+    args: argparse.Namespace,
+    suite_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+) -> List[str]:
+    output_paths = _optimize_eval_output_paths(suite, args, suite_path.parent)
+    written: List[str] = []
+    for path in output_paths["json"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        written.append(str(path))
+    for path in output_paths["junit"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_junit(payload), encoding="utf-8")
+        written.append(str(path))
+    for path in output_paths["sarif"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_sarif(payload, manifest_path=suite_path), encoding="utf-8")
+        written.append(str(path))
+    for path in output_paths["markdown"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_markdown(payload, source_path=suite_path), encoding="utf-8")
+        written.append(str(path))
+    return written
+
+
+def _optimize_eval_output_paths(
+    suite: Mapping[str, Any],
+    args: argparse.Namespace,
+    base_dir: Path,
+) -> Dict[str, List[Path]]:
+    outputs: Dict[str, List[Path]] = {
+        "json": [],
+        "junit": [],
+        "sarif": [],
+        "markdown": [],
+    }
+    suite_outputs = dict(suite.get("outputs") or {})
+    raw_json = [
+        *_as_list(suite_outputs.get("json")),
+        *_as_list(getattr(args, "output", [])),
+    ]
+    raw_junit = [
+        *_as_list(suite_outputs.get("junit")),
+        *_as_list(getattr(args, "junit", [])),
+    ]
+    raw_sarif = [
+        *_as_list(suite_outputs.get("sarif")),
+        *_as_list(getattr(args, "sarif", [])),
+    ]
+    raw_markdown = [
+        *_as_list(suite_outputs.get("markdown")),
+        *_as_list(suite_outputs.get("md")),
+        *_as_list(getattr(args, "markdown", [])),
+    ]
+    for value in raw_json:
+        path = _resolve_output_path(str(value), base_dir)
+        if path.name.endswith((".junit.xml", ".xml")):
+            outputs["junit"].append(path)
+        elif path.name.endswith((".sarif", ".sarif.json")):
+            outputs["sarif"].append(path)
+        else:
+            outputs["json"].append(path)
+    outputs["junit"].extend(_resolve_output_path(str(value), base_dir) for value in raw_junit)
+    outputs["sarif"].extend(_resolve_output_path(str(value), base_dir) for value in raw_sarif)
+    outputs["markdown"].extend(
+        _resolve_output_path(str(value), base_dir) for value in raw_markdown
+    )
+    return outputs
+
+
+def _as_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _resolve_output_path(value: str, base_dir: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
 
 
 def _doctor() -> int:
@@ -96,7 +304,7 @@ def _help(error: Optional[str] = None) -> int:
         nargs="?",
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
-            "compare, baseline, promote-to-regression, init"
+            "compare, baseline, promote-to-regression, optimize-eval, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

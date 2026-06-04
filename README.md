@@ -3,8 +3,9 @@
 `agent-learning-kit` is the unified Future AGI SDK for agent simulation,
 evaluation, red teaming, and optimization.
 
-The package gives users one key/config layer and one import namespace while
-preserving independent modules:
+The package gives users one key/config layer and one import namespace. Simulation,
+evals, red teaming, and optimization remain separate modules under that namespace
+so teams can install only the pieces they need.
 
 ```python
 from agent_learning import configure
@@ -22,21 +23,22 @@ pip install agent-learning-kit[optimize]
 pip install agent-learning-kit[trinity]
 ```
 
-The old SDKs remain usable during migration:
+`agent-learning-kit` is the public SDK. The lower-level packages are backing
+engines for now; public docs and automation should use `agent_learning.*` and
+`agent-learn`.
 
-- `agent-simulate` maps to `agent_learning.simulate`
-- `ai-evaluation` maps to `agent_learning.evals`
-- `agent-opt` maps to `agent_learning.optimize`
+New public SDK development belongs here. See [DEVELOPMENT.md](DEVELOPMENT.md)
+for the boundary between this package and the backing engine repos.
 
 CLI entrypoint:
 
 ```bash
 agent-learn eval suite.json --output artifacts/eval.json
+agent-learn optimize-eval suite.json --output artifacts/eval-optimization.json
 agent-learn run manifest.json --output artifacts/run.json
 agent-learn optimize manifest.json --output artifacts/optimization.json
 agent-learn doctor
 ```
 
-This first slice is an umbrella/facade package. It does not copy all code from
-the existing SDKs yet; it establishes the canonical package name, shared config,
-module boundaries, and CLI delegation needed for a staged migration.
+This first slice establishes the canonical package name, shared config, module
+boundaries, and CLI routing needed for the staged code move into one SDK.
