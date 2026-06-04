@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import json
 import os
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from agent_learning import configure, current_config, get_api_key
 from agent_learning.cli import main
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_configure_sets_unified_key_environment(monkeypatch):
@@ -43,6 +47,26 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
     assert evals.evaluate is not None
+
+
+def test_trinity_engines_are_vendored_in_agent_learning_kit():
+    for module_name in ("fi.simulate", "fi.evals", "fi.opt"):
+        module = importlib.import_module(module_name)
+        module_path = Path(module.__file__).resolve()
+        assert module_path.is_relative_to(PROJECT_ROOT / "src" / "fi")
+
+
+def test_agent_learning_kit_does_not_depend_on_legacy_sdk_distributions():
+    metadata = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+    project = metadata["project"]
+    dependencies = [*project.get("dependencies", [])]
+    for extra_dependencies in project.get("optional-dependencies", {}).values():
+        dependencies.extend(extra_dependencies)
+
+    legacy_distributions = ("agent-simulate", "ai-evaluation", "agent-opt")
+    normalized = "\n".join(dependencies).lower()
+    for distribution in legacy_distributions:
+        assert distribution not in normalized
 
 
 def _portfolio_data() -> dict:
