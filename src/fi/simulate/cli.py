@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 
 from fi.simulate import (
     AdversarialEnvironmentPack,
+    AgentIntegrationEnvironment,
     AgentMemoryLineageEnvironment,
     AgentResponse,
     FileEnvironment,
@@ -168,6 +169,8 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
     {
         "adversarial_attack_pack",
         "adversarial_pack",
+        "agent_integration",
+        "agent_integration_manifest",
         "agent_memory_lineage",
         "file",
         "files",
@@ -633,6 +636,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(RedTeamReadinessEnvironment(payload))
         elif env_type == "redteam_readiness":
             environments.append(RedTeamReadinessEnvironment(payload))
+        elif env_type in {"agent_integration", "agent_integration_manifest"}:
+            environments.append(AgentIntegrationEnvironment(payload))
         elif env_type == "framework_import":
             environments.append(FrameworkImportManifestEnvironment(payload))
         elif env_type == "workspace_run_manifest":

@@ -54,6 +54,8 @@ agent-learn optimize examples/redteam_autogen_optimization.json \
   --output artifacts/redteam-autogen-optimization.json
 agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability-optimization.json
+agent-learn optimize examples/agent_integration_optimization.json \
+  --output artifacts/agent-integration-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -80,7 +82,8 @@ lineage, and multi-agent review evidence.
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, eval, red-team, eval-suite optimization,
 world/framework/memory optimization, red-team optimization, and
-workspace/observability optimization jobs and emits aggregate artifacts.
+workspace/observability plus agent-integration optimization jobs and emits
+aggregate artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -113,3 +116,9 @@ optimizes the Future AGI UI/control-plane evidence loop: repository checkout,
 command logs, artifacts, simulations, evals, red-team runs, UI verification,
 live credential checks, security gates, AgentOptimizer results, and failed
 observability replay rows.
+
+The `agent_integration_optimization.json` example optimizes provider and
+framework integration coverage for the Future AGI UI/observability/evals layer.
+It verifies agent definition, personas, simulations, observability hooks, eval
+metrics, credentials, sessions, and channel coverage across LiveKit, Retell,
+ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported frameworks.

@@ -51,6 +51,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -110,14 +111,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 8
-        assert payload["summary"]["passed_count"] == 8
+        assert payload["summary"]["job_count"] == 9
+        assert payload["summary"]["passed_count"] == 9
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
             "optimize",
@@ -700,5 +702,108 @@ def test_workspace_observability_optimization_example_runs_evidence_gates(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "workspace-observability-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_agent_integration_optimization_example_runs_provider_matrix(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
+        "real-local-agent-integration-opt-key",
+    )
+
+    output_path = tmp_path / "agent-integration-optimization.json"
+    junit_path = tmp_path / "agent-integration-optimization.junit.xml"
+    sarif_path = tmp_path / "agent-integration-optimization.sarif.json"
+    markdown_path = tmp_path / "agent-integration-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "agent_integration_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.98
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    env_types = [
+        environment["type"]
+        for environment in payload["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == ["agent_integration"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "agent_integration_coverage",
+        "agent_integration_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) == {"agent_integration_manifest"}
+    summary = state["agent_integration_manifest"]["summary"]
+    assert set(summary["observed_providers"]) >= {
+        "agora",
+        "deepgram",
+        "elevenlabs",
+        "livekit",
+        "pipecat",
+        "retell",
+        "twilio",
+    }
+    assert set(summary["observed_channels"]) >= {
+        "chat",
+        "voice",
+        "webrtc",
+        "phone",
+        "sip",
+        "websocket",
+        "media_stream",
+    }
+    assert set(summary["trace_frameworks"]) >= {
+        "autogen",
+        "crewai",
+        "langchain",
+        "langgraph",
+        "livekit",
+        "openai_agents",
+        "pipecat",
+    }
+    assert summary["verified_provider_count"] == 14
+    assert summary["failed_session_count"] == 0
+    assert summary["missing_required_providers"] == []
+    assert summary["missing_required_channels"] == []
+    assert summary["missing_required_trace_frameworks"] == []
+    assert summary["providers_without_verified_credentials"] == []
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "agent-integration-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )

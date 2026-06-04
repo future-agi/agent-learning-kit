@@ -1,0 +1,835 @@
+{
+  "version": "agent-learning.optimization.v1",
+  "name": "agent-integration-optimization",
+  "required_env": [
+    "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "agent-integration-optimization",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Ira",
+          "role": "integration-lead"
+        },
+        "situation": "Ira needs Future AGI to validate agent definitions, personas, simulations, observability, evals, and the provider matrix for chat, voice, WebRTC, phone, and SIP integrations.",
+        "outcome": "The optimized integration proves LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials and replayable sessions."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "responses": [
+      {
+        "content": "Inspecting the Future AGI agent integration manifest and provider matrix before running simulations.",
+        "tool_calls": [
+          {
+            "id": "integration_status",
+            "name": "agent_integration_status",
+            "arguments": {}
+          },
+          {
+            "id": "voice_providers",
+            "name": "list_agent_integration_providers",
+            "arguments": {
+              "channel": "voice"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Checking LiveKit, Retell, and Twilio provider details for WebRTC, phone, and SIP routing.",
+        "tool_calls": [
+          {
+            "id": "livekit_provider",
+            "name": "inspect_agent_integration_provider",
+            "arguments": {
+              "provider": "livekit"
+            }
+          },
+          {
+            "id": "retell_provider",
+            "name": "inspect_agent_integration_provider",
+            "arguments": {
+              "provider": "retell"
+            }
+          },
+          {
+            "id": "twilio_provider",
+            "name": "inspect_agent_integration_provider",
+            "arguments": {
+              "provider": "twilio"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Checking replayable sessions and integration gaps across chat, voice, WebRTC, phone, SIP, and websocket channels.",
+        "tool_calls": [
+          {
+            "id": "livekit_sessions",
+            "name": "list_agent_integration_sessions",
+            "arguments": {
+              "provider": "livekit"
+            }
+          },
+          {
+            "id": "phone_sessions",
+            "name": "list_agent_integration_sessions",
+            "arguments": {
+              "channel": "phone"
+            }
+          },
+          {
+            "id": "integration_gaps",
+            "name": "list_agent_integration_gaps",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "content": "The optimized integration proves LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials, personas, simulations, observability hooks, eval metrics, transcripts, and traces.",
+        "tool_calls": []
+      }
+    ]
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 4,
+    "min_turns": 4,
+    "environments": [
+      {
+        "type": "agent_integration",
+        "data": {
+          "name": "seed-agent-integration",
+          "platform": "futureagi",
+          "agent_definition": {
+            "name": "support-agent",
+            "type": "chat"
+          },
+          "personas": [
+            {
+              "id": "support_admin",
+              "role": "admin"
+            }
+          ],
+          "providers": [
+            {
+              "provider": "livekit",
+              "channels": [
+                "webrtc"
+              ],
+              "credential_status": "configured"
+            }
+          ],
+          "sessions": [
+            {
+              "id": "seed_livekit",
+              "provider": "livekit",
+              "channel": "webrtc",
+              "status": "passed",
+              "trace_id": "trace_seed_livekit"
+            }
+          ],
+          "simulations": [],
+          "observability": {},
+          "evals": {},
+          "required_providers": [
+            "livekit",
+            "retell",
+            "elevenlabs",
+            "deepgram",
+            "agora",
+            "pipecat",
+            "twilio"
+          ],
+          "required_channels": [
+            "chat",
+            "voice",
+            "webrtc",
+            "phone",
+            "sip",
+            "websocket"
+          ],
+          "required_trace_frameworks": [
+            "langchain",
+            "langgraph",
+            "openai_agents",
+            "autogen",
+            "crewai",
+            "pipecat",
+            "livekit"
+          ]
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "agent_report": {
+      "threshold": 0.9,
+      "config": {
+        "task_description": "Optimize provider, persona, simulation, observability, eval, and TraceAI framework integration coverage for Future AGI as the UI/observability/evals layer.",
+        "expected_result": "The optimized integration proves LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials and replayable sessions.",
+        "required_tools": [
+          "agent_integration_status",
+          "list_agent_integration_providers",
+          "inspect_agent_integration_provider",
+          "list_agent_integration_sessions",
+          "list_agent_integration_gaps"
+        ],
+        "available_tools": [
+          "agent_integration_status",
+          "list_agent_integration_providers",
+          "inspect_agent_integration_provider",
+          "list_agent_integration_sessions",
+          "list_agent_integration_gaps"
+        ],
+        "required_artifact_types": [
+          "trace"
+        ],
+        "required_agent_integrations": [
+          "agent_integration",
+          "futureagi_platform",
+          "agent_definition",
+          "persona",
+          "provider",
+          "session",
+          "simulation",
+          "observability",
+          "eval",
+          "credential",
+          "traceai_framework",
+          "chat",
+          "voice",
+          "webrtc",
+          "phone",
+          "sip",
+          "websocket",
+          "media_stream",
+          "livekit",
+          "retell",
+          "elevenlabs",
+          "deepgram",
+          "agora",
+          "pipecat",
+          "twilio",
+          "langchain",
+          "langgraph",
+          "openai_agents",
+          "autogen",
+          "crewai"
+        ],
+        "agent_integration_quality": {
+          "require_agent_definition": true,
+          "require_persona": true,
+          "require_simulation": true,
+          "require_observability": true,
+          "require_evals": true,
+          "require_verified_credentials": true,
+          "min_provider_count": 14,
+          "min_session_count": 10,
+          "min_simulation_count": 7,
+          "min_persona_count": 3,
+          "min_observability_hooks": 5,
+          "min_eval_metric_count": 5,
+          "min_verified_providers": 14,
+          "min_passed_simulations": 7,
+          "min_trace_sessions": 10,
+          "min_transcript_sessions": 10,
+          "max_missing_credentials": 0,
+          "max_failed_sessions": 0,
+          "required_providers": [
+            "livekit",
+            "retell",
+            "elevenlabs",
+            "deepgram",
+            "agora",
+            "pipecat",
+            "twilio"
+          ],
+          "required_channels": [
+            "chat",
+            "voice",
+            "webrtc",
+            "phone",
+            "sip",
+            "websocket",
+            "media_stream"
+          ],
+          "required_trace_frameworks": [
+            "langchain",
+            "langgraph",
+            "openai_agents",
+            "autogen",
+            "crewai",
+            "pipecat",
+            "livekit"
+          ],
+          "required_provider_channels": {
+            "livekit": [
+              "webrtc",
+              "phone",
+              "sip"
+            ],
+            "retell": [
+              "chat",
+              "voice",
+              "phone"
+            ],
+            "elevenlabs": [
+              "voice",
+              "phone",
+              "sip",
+              "websocket"
+            ],
+            "deepgram": [
+              "voice",
+              "websocket"
+            ],
+            "agora": [
+              "voice",
+              "webrtc"
+            ],
+            "pipecat": [
+              "voice",
+              "webrtc",
+              "sip"
+            ],
+            "twilio": [
+              "phone",
+              "sip",
+              "media_stream"
+            ]
+          }
+        },
+        "success_criteria": [
+          "LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, and Twilio covered",
+          "TraceAI-supported frameworks covered",
+          "verified credentials",
+          "personas and simulations",
+          "Future AGI observability hooks",
+          "eval metrics",
+          "replayable transcripts and traces"
+        ],
+        "allow_extra_tool_arguments": true,
+        "metric_weights": {
+          "agent_integration_coverage": 6.0,
+          "agent_integration_quality": 10.0,
+          "tool_selection_accuracy": 2.0,
+          "final_response_quality": 2.0
+        }
+      }
+    }
+  },
+  "optimization": {
+    "threshold": 0.9,
+    "target": {
+      "name": "futureagi-agent-integration-matrix",
+      "layers": [
+        "integration",
+        "framework",
+        "voice",
+        "multi_agent",
+        "evaluator"
+      ],
+      "base_config": {
+        "simulation": {
+          "environments": [
+            {
+              "type": "agent_integration",
+              "data": {
+                "name": "seed-agent-integration",
+                "platform": "futureagi",
+                "agent_definition": {
+                  "name": "support-agent",
+                  "type": "chat"
+                },
+                "personas": [
+                  {
+                    "id": "support_admin",
+                    "role": "admin"
+                  }
+                ],
+                "providers": [
+                  {
+                    "provider": "livekit",
+                    "channels": [
+                      "webrtc"
+                    ],
+                    "credential_status": "configured"
+                  }
+                ],
+                "sessions": [
+                  {
+                    "id": "seed_livekit",
+                    "provider": "livekit",
+                    "channel": "webrtc",
+                    "status": "passed",
+                    "trace_id": "trace_seed_livekit"
+                  }
+                ],
+                "simulations": [],
+                "observability": {},
+                "evals": {}
+              }
+            }
+          ]
+        }
+      },
+      "search_space": {
+        "simulation.environments": [
+          [
+            {
+              "type": "agent_integration",
+              "data": {
+                "name": "seed-agent-integration",
+                "platform": "futureagi",
+                "agent_definition": {
+                  "name": "support-agent",
+                  "type": "chat"
+                },
+                "personas": [
+                  {
+                    "id": "support_admin",
+                    "role": "admin"
+                  }
+                ],
+                "providers": [
+                  {
+                    "provider": "livekit",
+                    "channels": [
+                      "webrtc"
+                    ],
+                    "credential_status": "configured"
+                  }
+                ],
+                "sessions": [
+                  {
+                    "id": "seed_livekit",
+                    "provider": "livekit",
+                    "channel": "webrtc",
+                    "status": "passed",
+                    "trace_id": "trace_seed_livekit"
+                  }
+                ],
+                "simulations": [],
+                "observability": {},
+                "evals": {}
+              }
+            }
+          ],
+          [
+            {
+              "type": "agent_integration",
+              "data": {
+                "name": "verified-agent-integration",
+                "platform": "futureagi",
+                "agent_definition": {
+                  "id": "support-agent",
+                  "name": "Support Agent",
+                  "type": "multi_modal",
+                  "instructions": "Handle chat, voice, WebRTC, phone, and SIP simulations with Future AGI observability and evals."
+                },
+                "personas": [
+                  {
+                    "id": "admin",
+                    "role": "workspace-admin",
+                    "channel": "chat"
+                  },
+                  {
+                    "id": "caller",
+                    "role": "phone-caller",
+                    "channel": "phone"
+                  },
+                  {
+                    "id": "redteam",
+                    "role": "security-reviewer",
+                    "channel": "voice"
+                  }
+                ],
+                "providers": [
+                  {
+                    "provider": "livekit",
+                    "channels": [
+                      "webrtc",
+                      "phone",
+                      "sip"
+                    ],
+                    "trace_framework": "livekit",
+                    "credential_ref": "LIVEKIT_API_KEY",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "retell",
+                    "channels": [
+                      "chat",
+                      "voice",
+                      "phone",
+                      "web_call"
+                    ],
+                    "credential_ref": "RETELL_API_KEY",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "elevenlabs",
+                    "channels": [
+                      "voice",
+                      "phone",
+                      "sip",
+                      "websocket"
+                    ],
+                    "credential_ref": "ELEVENLABS_API_KEY",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "deepgram",
+                    "channels": [
+                      "voice",
+                      "websocket"
+                    ],
+                    "credential_ref": "DEEPGRAM_API_KEY",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "agora",
+                    "channels": [
+                      "voice",
+                      "webrtc"
+                    ],
+                    "credential_ref": "AGORA_APP_ID",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "pipecat",
+                    "channels": [
+                      "voice",
+                      "webrtc",
+                      "sip"
+                    ],
+                    "trace_framework": "pipecat",
+                    "credential_ref": "PIPECAT_PIPELINE_REF",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "twilio",
+                    "channels": [
+                      "phone",
+                      "sip",
+                      "media_stream"
+                    ],
+                    "credential_ref": "TWILIO_ACCOUNT_SID",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "langchain",
+                    "channels": [
+                      "chat"
+                    ],
+                    "trace_framework": "langchain",
+                    "credential_ref": "TRACEAI_LANGCHAIN",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "langgraph",
+                    "channels": [
+                      "chat"
+                    ],
+                    "trace_framework": "langgraph",
+                    "credential_ref": "TRACEAI_LANGGRAPH",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "openai_agents",
+                    "channels": [
+                      "chat",
+                      "tool"
+                    ],
+                    "trace_framework": "openai_agents",
+                    "credential_ref": "TRACEAI_OPENAI_AGENTS",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "autogen",
+                    "channels": [
+                      "chat",
+                      "multi_agent"
+                    ],
+                    "trace_framework": "autogen",
+                    "credential_ref": "TRACEAI_AUTOGEN",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "crewai",
+                    "channels": [
+                      "chat",
+                      "multi_agent"
+                    ],
+                    "trace_framework": "crewai",
+                    "credential_ref": "TRACEAI_CREWAI",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "llamaindex",
+                    "channels": [
+                      "chat",
+                      "retrieval"
+                    ],
+                    "trace_framework": "llamaindex",
+                    "credential_ref": "TRACEAI_LLAMAINDEX",
+                    "credential_status": "verified"
+                  },
+                  {
+                    "provider": "pydantic_ai",
+                    "channels": [
+                      "chat",
+                      "tool"
+                    ],
+                    "trace_framework": "pydantic_ai",
+                    "credential_ref": "TRACEAI_PYDANTIC_AI",
+                    "credential_status": "verified"
+                  }
+                ],
+                "sessions": [
+                  {
+                    "id": "livekit_webrtc",
+                    "provider": "livekit",
+                    "channel": "webrtc",
+                    "status": "passed",
+                    "trace_id": "trace_livekit_webrtc",
+                    "transcript": "LiveKit WebRTC simulated room completed.",
+                    "webrtc_stats": {
+                      "jitter_ms": 8
+                    }
+                  },
+                  {
+                    "id": "livekit_sip",
+                    "provider": "livekit",
+                    "channel": "sip",
+                    "status": "passed",
+                    "trace_id": "trace_livekit_sip",
+                    "transcript": "LiveKit SIP simulated phone bridge completed.",
+                    "sip_trunk": "lk-sip"
+                  },
+                  {
+                    "id": "retell_chat",
+                    "provider": "retell",
+                    "channel": "chat",
+                    "status": "passed",
+                    "trace_id": "trace_retell_chat",
+                    "messages": [
+                      {
+                        "role": "assistant",
+                        "content": "Retell chat simulation passed."
+                      }
+                    ]
+                  },
+                  {
+                    "id": "retell_phone",
+                    "provider": "retell",
+                    "channel": "phone",
+                    "status": "passed",
+                    "trace_id": "trace_retell_phone",
+                    "transcript": "Retell phone simulation passed.",
+                    "phone_number": "+15550101010"
+                  },
+                  {
+                    "id": "elevenlabs_voice",
+                    "provider": "elevenlabs",
+                    "channel": "voice",
+                    "status": "passed",
+                    "trace_id": "trace_elevenlabs_voice",
+                    "transcript": "ElevenLabs voice agent simulation passed."
+                  },
+                  {
+                    "id": "deepgram_websocket",
+                    "provider": "deepgram",
+                    "channel": "websocket",
+                    "status": "passed",
+                    "trace_id": "trace_deepgram_ws",
+                    "transcript": "Deepgram websocket voice-agent replay passed."
+                  },
+                  {
+                    "id": "agora_webrtc",
+                    "provider": "agora",
+                    "channel": "webrtc",
+                    "status": "passed",
+                    "trace_id": "trace_agora_webrtc",
+                    "transcript": "Agora conversational AI WebRTC simulation passed.",
+                    "webrtc_stats": {
+                      "jitter_ms": 11
+                    }
+                  },
+                  {
+                    "id": "pipecat_livekit",
+                    "provider": "pipecat",
+                    "channel": "voice",
+                    "status": "passed",
+                    "trace_id": "trace_pipecat_livekit",
+                    "transcript": "Pipecat LiveKit transport simulation passed.",
+                    "framework": "pipecat"
+                  },
+                  {
+                    "id": "twilio_media_stream",
+                    "provider": "twilio",
+                    "channel": "media_stream",
+                    "status": "passed",
+                    "trace_id": "trace_twilio_media",
+                    "transcript": "Twilio media stream simulation passed.",
+                    "sip_call_id": "CA123"
+                  },
+                  {
+                    "id": "twilio_sip",
+                    "provider": "twilio",
+                    "channel": "sip",
+                    "status": "passed",
+                    "trace_id": "trace_twilio_sip",
+                    "transcript": "Twilio SIP trunk simulation passed.",
+                    "sip_trunk": "twilio-sip"
+                  },
+                  {
+                    "id": "langgraph_trace",
+                    "provider": "langgraph",
+                    "channel": "chat",
+                    "status": "passed",
+                    "trace_id": "trace_langgraph",
+                    "transcript": "LangGraph trace ingestion simulation passed.",
+                    "framework": "langgraph"
+                  },
+                  {
+                    "id": "autogen_trace",
+                    "provider": "autogen",
+                    "channel": "chat",
+                    "status": "passed",
+                    "trace_id": "trace_autogen",
+                    "transcript": "AutoGen multi-agent trace ingestion simulation passed.",
+                    "framework": "autogen"
+                  }
+                ],
+                "simulations": [
+                  {
+                    "id": "sim_livekit",
+                    "provider": "livekit",
+                    "channel": "webrtc",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_retell",
+                    "provider": "retell",
+                    "channel": "chat",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_elevenlabs",
+                    "provider": "elevenlabs",
+                    "channel": "voice",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_deepgram",
+                    "provider": "deepgram",
+                    "channel": "websocket",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_agora",
+                    "provider": "agora",
+                    "channel": "webrtc",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_pipecat",
+                    "provider": "pipecat",
+                    "channel": "voice",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_twilio",
+                    "provider": "twilio",
+                    "channel": "phone",
+                    "passed": true
+                  }
+                ],
+                "observability": {
+                  "platform": "futureagi",
+                  "traces": [
+                    "trace_livekit_webrtc",
+                    "trace_retell_chat",
+                    "trace_twilio_sip"
+                  ],
+                  "webhooks": [
+                    "agent_integration.session.completed",
+                    "agent_integration.eval.completed"
+                  ],
+                  "dashboards": [
+                    "futureagi/provider-matrix"
+                  ],
+                  "runs": [
+                    "provider-matrix-ci"
+                  ]
+                },
+                "evals": {
+                  "metrics": {
+                    "agent_goal_accuracy": 1.0,
+                    "tool_call_accuracy": 1.0,
+                    "voice_turn_taking": 1.0,
+                    "streaming_interaction_quality": 1.0,
+                    "agent_integration_quality": 1.0
+                  },
+                  "runs": [
+                    {
+                      "id": "provider_matrix_eval",
+                      "metrics": {
+                        "agent_integration_coverage": 1.0,
+                        "agent_integration_quality": 1.0
+                      }
+                    }
+                  ]
+                },
+                "required_providers": [
+                  "livekit",
+                  "retell",
+                  "elevenlabs",
+                  "deepgram",
+                  "agora",
+                  "pipecat",
+                  "twilio"
+                ],
+                "required_channels": [
+                  "chat",
+                  "voice",
+                  "webrtc",
+                  "phone",
+                  "sip",
+                  "websocket",
+                  "media_stream"
+                ],
+                "required_trace_frameworks": [
+                  "langchain",
+                  "langgraph",
+                  "openai_agents",
+                  "autogen",
+                  "crewai",
+                  "pipecat",
+                  "livekit"
+                ],
+                "metadata": {
+                  "source": "agent-learning-kit",
+                  "platform_role": "futureagi_ui_observability_evals"
+                }
+              }
+            }
+          ]
+        ]
+      },
+      "metadata": {
+        "source": "agent-learning-kit",
+        "cookbook": "agent-integration-optimization"
+      }
+    },
+    "optimizer": {
+      "max_candidates": 3,
+      "include_seed": true,
+      "auto_diagnose": false
+    }
+  }
+}
