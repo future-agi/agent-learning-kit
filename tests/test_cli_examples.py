@@ -189,3 +189,82 @@ def test_world_framework_memory_optimization_example_runs_evidence_gates(
     assert "world-framework-memory-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_multi_framework_simulation_suite_runs_framework_adapters(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+        "real-local-multi-framework-key",
+    )
+
+    output_path = tmp_path / "multi-framework-suite.json"
+    junit_path = tmp_path / "multi-framework-suite.junit.xml"
+    sarif_path = tmp_path / "multi-framework-suite.sarif.json"
+    markdown_path = tmp_path / "multi-framework-suite.md"
+
+    exit_code = main([
+        "suite",
+        str(EXAMPLES / "multi_framework_simulation_suite.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.suite.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["commands"] == {"run": 4}
+    assert payload["summary"]["score"] == pytest.approx(1.0)
+
+    expected = {
+        "langchain-runnable": ("langchain", "ainvoke", "dict", "text"),
+        "langgraph-state-graph": ("langgraph", "ainvoke", "dict", "text"),
+        "pipecat-voice-pipeline": ("pipecat", "process", "dict", "voice"),
+        "livekit-realtime-agent": ("livekit", "respond", "text", "voice"),
+    }
+    assert set(expected) == {child["id"] for child in payload["children"]}
+    for child in payload["children"]:
+        framework, method, input_mode, modality = expected[child["id"]]
+        assert child["kind"] == "agent-learning.run.v1"
+        assert child["status"] == "passed"
+        case = child["result"]["report"]["results"][0]
+        state = case["metadata"]["environment_state"]
+        runtime = state["framework_runtime"]
+        summary = runtime["summary"]
+        assert runtime["framework"] == framework
+        assert runtime["modality"] == modality
+        assert summary["framework"] == framework
+        assert summary["methods"] == [method]
+        assert summary["input_modes"] == [input_mode]
+        assert summary["tool_call_count"] == 1
+        assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+        assistant_messages = [
+            message for message in case["messages"] if message["role"] == "assistant"
+        ]
+        assert "framework_trace_status" in {
+            call["name"]
+            for message in assistant_messages
+            for call in message.get("tool_calls", [])
+        }
+        assert "framework_status" in {
+            message.get("tool_call_id")
+            for message in case["messages"]
+            if message["role"] == "tool"
+        }
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "multi-framework-simulation-suite" in markdown_path.read_text(
+        encoding="utf-8"
+    )

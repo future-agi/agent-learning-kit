@@ -1,0 +1,37 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "multi-framework-simulation-suite",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "jobs": [
+    {
+      "id": "langchain-runnable",
+      "command": "run",
+      "path": "framework_langchain_manifest.json",
+      "no_eval": true,
+      "name": "suite-langchain-runnable"
+    },
+    {
+      "id": "langgraph-state-graph",
+      "command": "run",
+      "path": "framework_langgraph_manifest.json",
+      "no_eval": true,
+      "name": "suite-langgraph-state-graph"
+    },
+    {
+      "id": "pipecat-voice-pipeline",
+      "command": "run",
+      "path": "framework_pipecat_manifest.json",
+      "no_eval": true,
+      "name": "suite-pipecat-voice-pipeline"
+    },
+    {
+      "id": "livekit-realtime-agent",
+      "command": "run",
+      "path": "framework_livekit_manifest.json",
+      "no_eval": true,
+      "name": "suite-livekit-realtime-agent"
+    }
+  ]
+}

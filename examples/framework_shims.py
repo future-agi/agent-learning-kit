@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+
+def _tool_calls() -> list[dict]:
+    return [
+        {
+            "id": "framework_status",
+            "name": "framework_trace_status",
+            "arguments": {},
+        }
+    ]
+
+
+class LocalLangChainRunnable:
+    async def ainvoke(self, payload: dict) -> dict:
+        assert payload["metadata"]["framework"] == "langchain"
+        assert payload["metadata"]["cookbook"] == "multi-framework-simulation"
+        return {
+            "content": (
+                "LangChain-style runnable completed the support workflow with "
+                "framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "langchain"},
+        }
+
+
+class LocalLangGraphApp:
+    async def ainvoke(self, payload: dict) -> dict:
+        assert payload["metadata"]["framework"] == "langgraph"
+        assert payload["metadata"]["cookbook"] == "multi-framework-simulation"
+        return {
+            "content": (
+                "LangGraph-style graph completed the stateful refund workflow "
+                "with framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "langgraph"},
+        }
+
+
+class LocalPipecatPipeline:
+    def process(self, payload: dict) -> dict:
+        assert payload["metadata"]["framework"] == "pipecat"
+        assert payload["modality"] == "voice"
+        return {
+            "content": (
+                "Pipecat-style voice pipeline completed the voice handoff with "
+                "framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "pipecat"},
+        }
+
+
+class LocalLiveKitAgent:
+    def respond(self, text: str) -> dict:
+        assert text
+        return {
+            "content": (
+                "LiveKit-style realtime agent completed the voice room response "
+                "with framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "livekit"},
+        }
+
+
+def build_langchain_agent() -> LocalLangChainRunnable:
+    return LocalLangChainRunnable()
+
+
+def build_langgraph_agent() -> LocalLangGraphApp:
+    return LocalLangGraphApp()
+
+
+def build_pipecat_pipeline() -> LocalPipecatPipeline:
+    return LocalPipecatPipeline()
+
+
+def build_livekit_agent() -> LocalLiveKitAgent:
+    return LocalLiveKitAgent()
