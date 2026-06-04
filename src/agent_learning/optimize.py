@@ -335,6 +335,120 @@ def optimize_task(
     )
 
 
+def build_redteam_optimization_manifest(
+    *,
+    name: str,
+    attack_candidates: Sequence[Sequence[str]],
+    surface_candidates: Sequence[Sequence[str]],
+    evaluation_config: Mapping[str, Any],
+    scenario: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    redteam: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    taxonomies: Sequence[str] = ("owasp_llm_top_10", "owasp_agentic_ai"),
+    channels: Sequence[str] = ("chat",),
+    providers: Sequence[str] = ("local_cli",),
+    frameworks: Sequence[str] = ("agent_learning_kit",),
+    target: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable red-team campaign optimization manifest.
+
+    This is the SDK path for the promptfoo-style red-team use case: optimize the
+    attack/surface matrix while the simulator auto-generates the adversarial
+    attack pack and campaign evidence that ai-evaluation scores.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not attack_candidates:
+        raise ValueError("attack_candidates must contain at least one candidate")
+    if not surface_candidates:
+        raise ValueError("surface_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+
+    attacks = _string_matrix("attack_candidates", attack_candidates)
+    surfaces = _string_matrix("surface_candidates", surface_candidates)
+    base_redteam = {
+        "auto_generate": True,
+        "taxonomies": [str(item) for item in taxonomies],
+        "attacks": copy.deepcopy(attacks[0]),
+        "surfaces": copy.deepcopy(surfaces[0]),
+        "channels": [str(item) for item in channels],
+        "providers": [str(item) for item in providers],
+        "frameworks": [str(item) for item in frameworks],
+        "target": copy.deepcopy(dict(target or {"agent": name, "environment": "local"})),
+    }
+    base_redteam.update(copy.deepcopy(dict(redteam or {})))
+    search_space = {
+        "redteam.attacks": copy.deepcopy(attacks),
+        "redteam.surfaces": copy.deepcopy(surfaces),
+    }
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "redteam": copy.deepcopy(base_redteam),
+        "scenario": copy.deepcopy(dict(scenario or _default_redteam_scenario(name))),
+        "agent": copy.deepcopy(dict(agent or _default_redteam_agent())),
+        "simulation": {
+            "engine": "local_text",
+            "max_turns": 3,
+            "min_turns": 3,
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": copy.deepcopy(dict(evaluation_config)),
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": ["harness", "security", "evaluator"],
+                "base_config": {
+                    "redteam": {
+                        "attacks": copy.deepcopy(attacks[0]),
+                        "surfaces": copy.deepcopy(surfaces[0]),
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": "agent_learning.optimize.build_redteam_optimization_manifest",
+                    "task_kind": "redteam_campaign",
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_redteam_campaign(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a red-team campaign optimization manifest."""
+
+    manifest = build_redteam_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -497,6 +611,18 @@ def _task_search_space(
     return optimization_search_space
 
 
+def _string_matrix(name: str, values: Sequence[Sequence[str]]) -> list[list[str]]:
+    matrix: list[list[str]] = []
+    for index, candidate in enumerate(values):
+        if isinstance(candidate, (str, bytes)):
+            raise ValueError(f"{name}[{index}] must be a sequence of strings")
+        items = [str(item) for item in candidate if str(item or "").strip()]
+        if not items:
+            raise ValueError(f"{name}[{index}] must not be empty")
+        matrix.append(items)
+    return matrix
+
+
 def _default_task_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -506,6 +632,52 @@ def _default_task_scenario(name: str) -> dict[str, Any]:
                 "situation": "Optimize an agent task through Agent Learning Kit.",
                 "outcome": "The optimized agent satisfies the configured evaluation.",
             }
+        ],
+    }
+
+
+def _default_redteam_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Asha", "role": "security-engineer"},
+                "situation": "Optimize a red-team attack and surface matrix through Agent Learning Kit.",
+                "outcome": "The optimized campaign covers the required attacks and surfaces.",
+            }
+        ],
+    }
+
+
+def _default_redteam_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": "Inspecting the generated adversarial attack pack.",
+                "tool_calls": [
+                    {"id": "adv", "name": "adversarial_pack_status", "arguments": {}}
+                ],
+            },
+            {
+                "content": "Inspecting red-team campaign coverage and gaps.",
+                "tool_calls": [
+                    {
+                        "id": "campaign",
+                        "name": "red_team_campaign_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "gaps",
+                        "name": "list_red_team_campaign_gaps",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": "The optimized red-team campaign covers the required attacks and surfaces.",
+                "tool_calls": [],
+            },
         ],
     }
 
@@ -618,12 +790,14 @@ __all__ = [
     "diagnose_report",
     "diagnose_text",
     "build_framework_optimization_manifest",
+    "build_redteam_optimization_manifest",
     "build_task_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",
+    "optimize_redteam_campaign",
     "optimize_task",
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",

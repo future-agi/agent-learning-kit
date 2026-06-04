@@ -223,6 +223,10 @@ Runnable SDK cookbook:
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_optimization.py \
+  artifacts/sdk-redteam-optimization.json
 ```
 
 The `artifact_task_eval_suite.json` example evaluates a saved
