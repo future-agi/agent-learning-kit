@@ -217,6 +217,12 @@ result = optimize.optimize_task(
 )
 ```
 
+For retrieval and memory layers, pass candidates with `retrieval_memory` and
+`agent_memory_lineage` data. The SDK builds a runnable local manifest that
+searches current-document grounding, source attribution, memory writes, policy
+checks, canaries, observability, and memory-lineage artifacts as one coherent
+candidate bundle.
+
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
@@ -233,6 +239,10 @@ Runnable SDK cookbook:
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_memory_optimization.py \
+  artifacts/sdk-memory-optimization.json
 
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \

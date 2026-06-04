@@ -74,6 +74,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
+    assert optimize.build_memory_optimization_manifest is not None
+    assert optimize.optimize_memory_layer is not None
     assert optimize.build_multi_agent_optimization_manifest is not None
     assert optimize.optimize_multi_agent_coordination is not None
     assert optimize.build_realtime_optimization_manifest is not None
@@ -891,6 +893,61 @@ def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):
     state = best_history["report"]["results"][0]["metadata"]["environment_state"]
     assert state["voice"]["current_route"] == "support"
     assert state["streaming_trace"]["state"]["route"] == "support"
+
+
+def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY",
+        "real-local-sdk-memory-example-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_memory_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_memory_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+
+    output_path = tmp_path / "sdk-memory-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.9
+    best_config = result["optimization"]["best_config"]
+    env_types = [
+        environment["type"]
+        for environment in best_config["simulation"]["environments"]
+    ]
+    assert env_types == ["retrieval_memory", "agent_memory_lineage"]
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"agent", "simulation.environments"}
+    assert best_history["metrics"]["retrieval_context_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["agent_memory_lineage_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["agent_memory_lineage_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert state["agent_memory_lineage"]["summary"]["has_source_attribution"] is True
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):

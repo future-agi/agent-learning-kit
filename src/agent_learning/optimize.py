@@ -543,6 +543,92 @@ def optimize_realtime_stack(
     )
 
 
+def build_memory_optimization_manifest(
+    *,
+    name: str,
+    memory_candidates: Sequence[Mapping[str, Any]],
+    evaluation_config: Mapping[str, Any],
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    search_space: Optional[Mapping[str, Sequence[Any]]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable memory/retrieval optimization manifest.
+
+    Candidates can provide ``retrieval_memory`` and/or ``agent_memory_lineage``
+    data. They are searched as one environment bundle so retrieval freshness,
+    source attribution, memory writes, policy checks, and observability lineage
+    stay coherent.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not memory_candidates:
+        raise ValueError("memory_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+
+    environment_candidates = [
+        _memory_environment_bundle(candidate)
+        for candidate in memory_candidates
+    ]
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else [_default_memory_agent()]
+    )
+    inferred_turns = _max_agent_response_count(agents, min_turns)
+
+    return build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agents,
+        evaluation_config=evaluation_config,
+        scenario=scenario or _default_memory_scenario(name),
+        environment_candidates=environment_candidates,
+        required_env=required_env,
+        optimizer=optimizer,
+        threshold=threshold,
+        layers=("retrieval", "memory", "tools", "policy", "evaluator"),
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns if max_turns is not None else inferred_turns,
+        auto_execute_tools=auto_execute_tools,
+        search_space=search_space,
+        target_metadata={
+            "source": "agent_learning.optimize.build_memory_optimization_manifest",
+            "task_kind": "memory_retrieval",
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+
+
+def optimize_memory_layer(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a memory/retrieval optimization manifest."""
+
+    manifest = build_memory_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_redteam_optimization_manifest(
     *,
     name: str,
@@ -884,6 +970,57 @@ def _typed_realtime_environment(
     return {"type": environment_type, "data": environment_data}
 
 
+def _memory_environment_bundle(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
+    candidate_dict = copy.deepcopy(dict(candidate))
+    explicit_environments = candidate_dict.pop("environments", None)
+    if explicit_environments is not None:
+        bundle = [copy.deepcopy(dict(item)) for item in explicit_environments]
+        if not bundle:
+            raise ValueError("memory candidate environments must not be empty")
+        return bundle
+
+    bundle: list[dict[str, Any]] = []
+    retrieval_data = candidate_dict.pop(
+        "retrieval_memory",
+        candidate_dict.pop("retrieval", None),
+    )
+    if retrieval_data is not None:
+        bundle.append(_typed_memory_environment("retrieval_memory", retrieval_data))
+    lineage_data = candidate_dict.pop(
+        "agent_memory_lineage",
+        candidate_dict.pop("lineage", None),
+    )
+    if lineage_data is not None:
+        bundle.append(_typed_memory_environment("agent_memory_lineage", lineage_data))
+    if candidate_dict:
+        raise ValueError(
+            "memory candidate keys must be environments, retrieval_memory, retrieval, agent_memory_lineage, or lineage"
+        )
+    if not bundle:
+        raise ValueError(
+            "memory candidate must define retrieval_memory or agent_memory_lineage"
+        )
+    return bundle
+
+
+def _typed_memory_environment(environment_type: str, data: Any) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        raise ValueError(f"{environment_type} candidate data must be a mapping")
+    return {"type": environment_type, "data": copy.deepcopy(dict(data))}
+
+
+def _max_agent_response_count(
+    agent_candidates: Sequence[Mapping[str, Any]],
+    minimum: int,
+) -> int:
+    counts = [
+        len(candidate.get("responses", []))
+        for candidate in agent_candidates
+        if isinstance(candidate.get("responses", []), Sequence)
+    ]
+    return max([int(minimum), *counts])
+
+
 def _base_environments(
     *,
     environments: Optional[Sequence[Mapping[str, Any]]],
@@ -1064,6 +1201,86 @@ def _default_realtime_agent(
     }
 
 
+def _default_memory_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "memory-owner"},
+                "situation": "Optimize retrieval freshness and memory lineage through Agent Learning Kit.",
+                "outcome": "The optimized memory harness satisfies retrieval, attribution, policy, and lineage gates.",
+            }
+        ],
+    }
+
+
+def _default_memory_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": "Retrieve the current refund policy and read the source document.",
+                "tool_calls": [
+                    {
+                        "id": "retrieve_policy",
+                        "name": "retrieve_documents",
+                        "arguments": {
+                            "query": "current refund policy source grounding",
+                            "top_k": 1,
+                        },
+                    },
+                    {
+                        "id": "read_policy",
+                        "name": "read_document",
+                        "arguments": {"id": "doc_refund_2026"},
+                    },
+                    {
+                        "id": "cite_policy",
+                        "name": "cite_sources",
+                        "arguments": {
+                            "doc_ids": ["doc_refund_2026"],
+                            "claim": "Refund approval is allowed by the current policy.",
+                            "freshness_checked": True,
+                        },
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "The current refund policy grounding, source attribution, "
+                    "memory provenance, and retention/deletion/redaction "
+                    "policies are recorded and enforced."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "memory_lineage_status",
+                        "name": "agent_memory_lineage_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "memory_lineage_ops",
+                        "name": "list_memory_lineage_operations",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "retrieval_memory_status",
+                        "name": "retrieval_memory_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "write_decision_memory",
+                        "name": "write_memory",
+                        "arguments": {
+                            "key": "refund_decision",
+                            "value": "approved_with_policy_grounding",
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+
 def _default_redteam_agent() -> dict[str, Any]:
     return {
         "type": "scripted",
@@ -1205,6 +1422,7 @@ __all__ = [
     "diagnose_report",
     "diagnose_text",
     "build_framework_optimization_manifest",
+    "build_memory_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_realtime_optimization_manifest",
     "build_redteam_optimization_manifest",
@@ -1214,6 +1432,7 @@ __all__ = [
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",
+    "optimize_memory_layer",
     "optimize_multi_agent_coordination",
     "optimize_realtime_stack",
     "optimize_redteam_campaign",
