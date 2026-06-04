@@ -222,6 +222,11 @@ candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
 reconciliation, and shared room-state behavior together.
 
+For realtime voice and streaming stacks, pass paired candidates with `voice`
+and `streaming_trace` data. The SDK builds a runnable local optimization
+manifest that searches call routing, voice timing/audio quality, and streaming
+tool-delta evidence as one coherent candidate bundle.
+
 Runnable SDK cookbook:
 
 ```bash
@@ -232,6 +237,10 @@ AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \
   artifacts/sdk-multi-agent-optimization.json
+
+AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_realtime_voice_optimization.py \
+  artifacts/sdk-realtime-voice-optimization.json
 
 AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_optimization.py \

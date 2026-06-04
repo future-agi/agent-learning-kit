@@ -439,6 +439,110 @@ def optimize_multi_agent_coordination(
     )
 
 
+def build_realtime_optimization_manifest(
+    *,
+    name: str,
+    realtime_candidates: Sequence[Mapping[str, Any]],
+    evaluation_config: Mapping[str, Any],
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    framework: str = "livekit",
+    modality: str = "voice",
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    search_space: Optional[Mapping[str, Sequence[Any]]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable realtime voice/streaming optimization manifest.
+
+    Each realtime candidate can declare ``voice`` and/or ``streaming_trace``
+    data. The helper turns those into manifest environments and searches the
+    environment bundle as one candidate, which keeps call routing, audio
+    quality, and streaming-token evidence coherent.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not realtime_candidates:
+        raise ValueError("realtime_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+
+    environment_candidates = [
+        _realtime_environment_bundle(candidate, framework=framework)
+        for candidate in realtime_candidates
+    ]
+    includes_voice = any(
+        any(environment["type"] == "voice" for environment in bundle)
+        for bundle in environment_candidates
+    )
+    includes_streaming = any(
+        any(environment["type"] == "streaming_trace" for environment in bundle)
+        for bundle in environment_candidates
+    )
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else [
+            _default_realtime_agent(
+                include_voice=includes_voice,
+                include_streaming=includes_streaming,
+            )
+        ]
+    )
+
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agents,
+        evaluation_config=evaluation_config,
+        scenario=scenario or _default_realtime_scenario(name),
+        environment_candidates=environment_candidates,
+        required_env=required_env,
+        optimizer=optimizer,
+        threshold=threshold,
+        layers=("harness", "voice", "streaming", "integration", "evaluator"),
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+        search_space=search_space,
+        target_base_config={"simulation": {"modality": modality}},
+        target_metadata={
+            "source": "agent_learning.optimize.build_realtime_optimization_manifest",
+            "task_kind": "realtime_voice_streaming",
+            "framework": framework,
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["simulation"]["modality"] = modality
+    return manifest
+
+
+def optimize_realtime_stack(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a realtime voice/streaming optimization manifest."""
+
+    manifest = build_realtime_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_redteam_optimization_manifest(
     *,
     name: str,
@@ -724,6 +828,62 @@ def _multi_agent_environment(room_data: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _realtime_environment_bundle(
+    candidate: Mapping[str, Any],
+    *,
+    framework: str,
+) -> list[dict[str, Any]]:
+    candidate_dict = copy.deepcopy(dict(candidate))
+    explicit_environments = candidate_dict.pop("environments", None)
+    if explicit_environments is not None:
+        bundle = [copy.deepcopy(dict(item)) for item in explicit_environments]
+        if not bundle:
+            raise ValueError("realtime candidate environments must not be empty")
+        return bundle
+
+    bundle: list[dict[str, Any]] = []
+    if "voice" in candidate_dict:
+        bundle.append(
+            _typed_realtime_environment(
+                "voice",
+                candidate_dict.pop("voice"),
+                framework=framework,
+            )
+        )
+    streaming_data = candidate_dict.pop(
+        "streaming_trace",
+        candidate_dict.pop("streaming", None),
+    )
+    if streaming_data is not None:
+        bundle.append(
+            _typed_realtime_environment(
+                "streaming_trace",
+                streaming_data,
+                framework=framework,
+            )
+        )
+    if candidate_dict:
+        raise ValueError(
+            "realtime candidate keys must be environments, voice, streaming_trace, or streaming"
+        )
+    if not bundle:
+        raise ValueError("realtime candidate must define voice or streaming_trace")
+    return bundle
+
+
+def _typed_realtime_environment(
+    environment_type: str,
+    data: Any,
+    *,
+    framework: str,
+) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        raise ValueError(f"{environment_type} candidate data must be a mapping")
+    environment_data = copy.deepcopy(dict(data))
+    environment_data.setdefault("framework", framework)
+    return {"type": environment_type, "data": environment_data}
+
+
 def _base_environments(
     *,
     environments: Optional[Sequence[Mapping[str, Any]]],
@@ -819,6 +979,87 @@ def _default_multi_agent_scenario(name: str) -> dict[str, Any]:
                 "situation": "Optimize handoff, review, and reconciliation through Agent Learning Kit.",
                 "outcome": "The optimized multi-agent trace satisfies the configured coordination gates.",
             }
+        ],
+    }
+
+
+def _default_realtime_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "realtime-agent-owner"},
+                "situation": "Optimize realtime voice and streaming evidence through Agent Learning Kit.",
+                "outcome": "The optimized realtime harness satisfies the configured latency, voice, and streaming gates.",
+            }
+        ],
+    }
+
+
+def _default_realtime_agent(
+    *,
+    include_voice: bool,
+    include_streaming: bool,
+) -> dict[str, Any]:
+    first_turn_tools: list[dict[str, Any]] = []
+    second_turn_tools: list[dict[str, Any]] = []
+    if include_voice:
+        first_turn_tools.extend([
+            {"id": "voice_status", "name": "voice_status", "arguments": {}},
+            {"id": "voice_timing", "name": "voice_timing", "arguments": {}},
+            {
+                "id": "transcribe_user",
+                "name": "transcribe_audio",
+                "arguments": {"id": "utt_refund"},
+            },
+            {
+                "id": "route_support",
+                "name": "route_call",
+                "arguments": {
+                    "route": "support",
+                    "reason": "refund support request",
+                },
+            },
+        ])
+        second_turn_tools.append(
+            {
+                "id": "speak_answer",
+                "name": "speak",
+                "arguments": {
+                    "text": "Your refund request has been routed to support.",
+                    "latency_ms": 240,
+                },
+            }
+        )
+    if include_streaming:
+        second_turn_tools.extend([
+            {
+                "id": "stream_status",
+                "name": "streaming_trace_status",
+                "arguments": {},
+            },
+            {
+                "id": "stream_tool_events",
+                "name": "list_stream_events",
+                "arguments": {"signal": "tool_delta"},
+            },
+            {
+                "id": "inspect_stream_tool",
+                "name": "inspect_stream_event",
+                "arguments": {"id": "stream_tool_delta"},
+            },
+        ])
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": "Inspecting realtime voice routing and transcription evidence.",
+                "tool_calls": first_turn_tools,
+            },
+            {
+                "content": "Realtime voice and streaming evidence proves the support route.",
+                "tool_calls": second_turn_tools,
+            },
         ],
     }
 
@@ -965,6 +1206,7 @@ __all__ = [
     "diagnose_text",
     "build_framework_optimization_manifest",
     "build_multi_agent_optimization_manifest",
+    "build_realtime_optimization_manifest",
     "build_redteam_optimization_manifest",
     "build_task_optimization_manifest",
     "optimize_eval_suite",
@@ -973,6 +1215,7 @@ __all__ = [
     "optimize_manifest",
     "optimize_manifest_file",
     "optimize_multi_agent_coordination",
+    "optimize_realtime_stack",
     "optimize_redteam_campaign",
     "optimize_task",
     "problem_from_eval_suite_file",
