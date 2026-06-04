@@ -64,6 +64,8 @@ agent-learn optimize examples/browser_cua_optimization.json \
   --output artifacts/browser-cua-optimization.json
 agent-learn optimize examples/framework_certification_optimization.json \
   --output artifacts/framework-certification-optimization.json
+agent-learn optimize examples/autonomous_redteam_task_world_optimization.json \
+  --output artifacts/autonomous-redteam-task-world-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -92,8 +94,9 @@ one manifest runs simulation, eval, red-team, eval-suite optimization,
 world/framework/memory optimization, voice/streaming optimization, red-team
 optimization, workspace/observability optimization, agent-integration
 optimization, optimizer-governance optimization, agent control-plane
-optimization, browser/CUA red-team optimization, and framework-certification
-optimization jobs, then emits aggregate artifacts.
+optimization, browser/CUA red-team optimization, framework-certification
+optimization, and autonomous task/world red-team optimization jobs, then emits
+aggregate artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -162,3 +165,9 @@ The `framework_certification_optimization.json` example optimizes a framework
 certification harness before rollout or migration. It verifies lifecycle
 session evidence, capability matrices, adapter smoke probes, and source-target
 portability mappings for framework-neutral agent stacks.
+
+The `autonomous_redteam_task_world_optimization.json` example optimizes a
+local autonomous task/world red-team harness. It verifies structured artifacts,
+domain package invariants, world-state progress, adversarial canary resistance,
+tool argument schemas, autonomy-loop stages, memory writes, skill storage, and
+stop decisions through `agent-learn optimize`.

@@ -22,7 +22,9 @@ from fi.simulate import (
     AgentMemoryLineageEnvironment,
     AgentResponse,
     AgentTrustBoundaryEnvironment,
+    AutonomyLoopEnvironment,
     BrowserEnvironment,
+    DomainPackageEnvironment,
     FileEnvironment,
     FrameworkCapabilityEnvironment,
     FrameworkImportManifestEnvironment,
@@ -40,11 +42,13 @@ from fi.simulate import (
     RetrievalMemoryEnvironment,
     Scenario,
     StreamingTraceEnvironment,
+    StructuredArtifactEnvironment,
     TestRunner,
     ToolFaultInjectionEnvironment,
     ToolMockEnvironment,
     VoiceEnvironment,
     WorkspaceRunEnvironment,
+    WorldAttackReplayEnvironment,
     WorldContractEnvironment,
     WorldOrchestrationReplayEnvironment,
     normalize_optimizer_society_trace,
@@ -181,12 +185,15 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "agent_integration_manifest",
         "agent_memory_lineage",
         "agent_trust_boundary",
+        "autonomy_loop",
         "browser",
         "browser_cua",
         "computer_use",
         "computer_use_browser",
         "control_plane",
         "cua",
+        "domain_package",
+        "domain_packages",
         "file",
         "files",
         "framework_capability",
@@ -212,6 +219,8 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "redteam_readiness",
         "retrieval_memory",
         "streaming_trace",
+        "structured_artifact",
+        "structured_artifacts",
         "tool_fault",
         "tool_fault_injection",
         "tool_mock",
@@ -219,6 +228,7 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "voice",
         "voice_replay",
         "workspace_run_manifest",
+        "world_attack_replay",
         "world_contract",
         "world_orchestration_replay",
     }
@@ -640,8 +650,14 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_browser_environment(payload, base_dir))
         elif env_type in {"file", "files"}:
             environments.append(_build_file_environment(payload))
+        elif env_type in {"structured_artifact", "structured_artifacts"}:
+            environments.append(_build_structured_artifact_environment(payload))
+        elif env_type in {"domain_package", "domain_packages"}:
+            environments.append(_build_domain_package_environment(payload))
         elif env_type == "world_contract":
             environments.append(_build_world_contract_environment(payload))
+        elif env_type == "world_attack_replay":
+            environments.append(_build_world_attack_replay_environment(payload))
         elif env_type == "world_orchestration_replay":
             environments.append(_build_world_orchestration_replay_environment(payload))
         elif env_type == "framework_trace":
@@ -682,6 +698,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(WorkspaceRunEnvironment(payload))
         elif env_type == "observability_replay":
             environments.append(ObservabilityReplayEnvironment(payload))
+        elif env_type == "autonomy_loop":
+            environments.append(_build_autonomy_loop_environment(payload))
         else:
             raise ManifestError(f"unsupported environment type: {env_type or '<missing>'}")
     return environments
@@ -794,6 +812,46 @@ def _build_file_environment(payload: Mapping[str, Any]) -> FileEnvironment:
     return FileEnvironment({str(path): str(content) for path, content in files.items()})
 
 
+def _build_structured_artifact_environment(
+    payload: Mapping[str, Any],
+) -> StructuredArtifactEnvironment:
+    source = dict(payload)
+    artifacts = source.get("artifacts") or source.get("fixtures") or source.get("items")
+    if artifacts is None:
+        artifacts = {
+            key: value
+            for key, value in source.items()
+            if key not in {"default_domain", "domain", "state", "metadata", "description"}
+        }
+    if not artifacts:
+        raise ManifestError("structured_artifact environment requires data.artifacts")
+    return StructuredArtifactEnvironment(
+        artifacts,
+        default_domain=str(source.get("default_domain") or source.get("domain") or "generic"),
+        state=dict(source.get("state") or {}),
+    )
+
+
+def _build_domain_package_environment(
+    payload: Mapping[str, Any],
+) -> DomainPackageEnvironment:
+    source = dict(payload)
+    packages = source.get("packages") or source.get("fixtures") or source.get("items")
+    if packages is None:
+        packages = {
+            key: value
+            for key, value in source.items()
+            if key not in {"default_domain", "domain", "state", "metadata", "description"}
+        }
+    if not packages:
+        raise ManifestError("domain_package environment requires data.packages")
+    return DomainPackageEnvironment(
+        packages,
+        default_domain=str(source.get("default_domain") or source.get("domain") or "generic"),
+        state=dict(source.get("state") or {}),
+    )
+
+
 def _build_world_contract_environment(payload: Mapping[str, Any]) -> WorldContractEnvironment:
     source = dict(payload.get("contract") or payload)
     return WorldContractEnvironment(
@@ -806,6 +864,22 @@ def _build_world_contract_environment(payload: Mapping[str, Any]) -> WorldContra
         policy_gates=_coerce_list(source.get("policy_gates") or source.get("policies")),
         adversarial_surfaces=_coerce_list(source.get("adversarial_surfaces") or source.get("surfaces")),
         initial_state=dict(source.get("initial_state") or source.get("state") or {}),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_world_attack_replay_environment(
+    payload: Mapping[str, Any],
+) -> WorldAttackReplayEnvironment:
+    source = dict(payload)
+    return WorldAttackReplayEnvironment(
+        world_contract=source.get("world_contract")
+        or source.get("contract")
+        or source.get("world"),
+        attack_pack=source.get("attack_pack")
+        or source.get("adversarial")
+        or source.get("attacks"),
+        include_blocked_tools=bool(source.get("include_blocked_tools", True)),
         metadata=dict(source.get("metadata") or {}),
     )
 
@@ -1098,6 +1172,25 @@ def _build_adversarial_environment(payload: Mapping[str, Any]) -> AdversarialEnv
         if key in source:
             kwargs[key] = source[key]
     return AdversarialEnvironmentPack(**kwargs)
+
+
+def _build_autonomy_loop_environment(payload: Mapping[str, Any]) -> AutonomyLoopEnvironment:
+    source = dict(payload)
+    return AutonomyLoopEnvironment(
+        goal=_optional_string(source.get("goal") or source.get("objective")),
+        required_stages=_coerce_list(source.get("required_stages") or source.get("stages")),
+        feedback=dict(source.get("feedback") or {}),
+        prior_memory=dict(source.get("prior_memory") or source.get("memory") or {}),
+        skill_library=source.get("skill_library") or source.get("skills") or {},
+        policy=dict(source.get("policy") or {}),
+        expected_plan=dict(source.get("expected_plan") or {}),
+        expected_verification=dict(source.get("expected_verification") or {}),
+        expected_reflection=dict(source.get("expected_reflection") or {}),
+        expected_memory=dict(source.get("expected_memory") or {}),
+        expected_skills=_coerce_list(source.get("expected_skills")),
+        expected_stop=source.get("expected_stop"),
+        state=dict(source.get("state") or {}),
+    )
 
 
 def _environment_payload(spec: Dict[str, Any], base_dir: Path) -> Dict[str, Any]:

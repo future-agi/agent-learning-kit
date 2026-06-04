@@ -49,9 +49,14 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.evaluate is not None
     assert suite.run_suite_file is not None
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
+    assert simulate.AdversarialEnvironmentPack is not None
+    assert simulate.AutonomyLoopEnvironment is not None
     assert simulate.StreamingTraceEnvironment is not None
     assert simulate.VoiceEnvironment is not None
     assert simulate.BrowserEnvironment is not None
+    assert simulate.StructuredArtifactEnvironment is not None
+    assert simulate.DomainPackageEnvironment is not None
+    assert simulate.WorldAttackReplayEnvironment is not None
     assert simulate.FrameworkLifecycleEnvironment is not None
     assert simulate.FrameworkCapabilityEnvironment is not None
     assert simulate.FrameworkProbeEnvironment is not None
@@ -59,6 +64,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.normalize_browser_trace_export is not None
     assert simulate.normalize_playwright_trace_export is not None
     assert simulate.normalize_browser_mutation_pack is not None
+    assert simulate.normalize_adversarial_attack_pack is not None
+    assert simulate.normalize_world_attack_replay is not None
     assert simulate.normalize_framework_lifecycle_trace is not None
     assert simulate.normalize_framework_capability_matrix is not None
     assert simulate.normalize_framework_probe_suite is not None
@@ -69,6 +76,10 @@ def test_facades_expose_unified_agent_learning_modules():
         "browser",
         "browser_cua",
         "computer_use",
+        "structured_artifact",
+        "domain_package",
+        "world_attack_replay",
+        "autonomy_loop",
         "framework_lifecycle",
         "framework_capability",
         "framework_probe",

@@ -243,6 +243,10 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
         "voice",
         "voice_replay",
         "world_orchestration_replay",
+        "structured_artifact",
+        "domain_package",
+        "world_attack_replay",
+        "autonomy_loop",
         "framework_lifecycle",
         "framework_capability",
         "framework_probe",
@@ -288,6 +292,58 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
         "framework_capability",
         "framework_probe",
         "framework_portability",
+    ]
+    task_world_environments = simulate.build_manifest_environments(
+        [
+            {
+                "type": "structured_artifact",
+                "data": {
+                    "domain": "support",
+                    "artifacts": {
+                        "intake": {
+                            "schema": "support_intake",
+                            "data": {"ticket_id": "T-1", "priority": "high"},
+                        }
+                    },
+                },
+            },
+            {
+                "type": "domain_package",
+                "data": {
+                    "domain": "support",
+                    "packages": {
+                        "case": {
+                            "package_type": "support_case",
+                            "data": {"status": "ready"},
+                        }
+                    },
+                },
+            },
+            {
+                "type": "world_attack_replay",
+                "data": {
+                    "world_contract": {
+                        "name": "support-world",
+                        "transitions": [{"id": "resolve", "required": True}],
+                    },
+                    "attack_pack": {"attacks": ["prompt_injection"]},
+                },
+            },
+            {
+                "type": "autonomy_loop",
+                "data": {
+                    "goal": "resolve the support case safely",
+                    "expected_plan": {"required_steps": ["inspect"]},
+                },
+            },
+        ],
+        base_dir=tmp_path,
+    )
+    assert [environment.name for environment in task_world_environments] == [
+        "structured_artifacts",
+        "domain_packages",
+        "world_attack_replay",
+        "autonomy_loop",
     ]
 
     result = asyncio.run(simulate.run_manifest_file(manifest_path, no_eval=True))

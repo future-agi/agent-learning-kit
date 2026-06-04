@@ -12,7 +12,8 @@
     "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
-    "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -103,6 +104,13 @@
       "path": "framework_certification_optimization.json",
       "name": "suite-framework-certification-optimizer",
       "max_candidates": 2
+    },
+    {
+      "id": "autonomous-redteam-task-world-optimizer",
+      "command": "optimize",
+      "path": "autonomous_redteam_task_world_optimization.json",
+      "name": "suite-autonomous-redteam-task-world-optimizer",
+      "max_candidates": 3
     }
   ]
 }
