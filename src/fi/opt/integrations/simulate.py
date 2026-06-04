@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence, Type
 
 from ..optimizers.agent import AgentOptimizer
+from ..optimizers.agent_evolution import AgentEvolutionOptimizer
 from ..simulation import _coerce_score, _iter_report_scores, _run_sync
 from ..targets import (
     AgentCandidate,
@@ -37,6 +38,7 @@ class SimulateManifestOptimizationProblem:
     score_manifest: Optional[ManifestScorer] = None
     threshold: float = 0.7
     optimizer_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    optimizer_cls: Type[Any] = AgentOptimizer
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -57,6 +59,7 @@ class SimulateManifestOptimizationProblem:
         optimizer_kwargs = _optimizer_kwargs(
             _optional_mapping(optimization.get("optimizer"))
         )
+        optimizer_cls = _optimizer_cls(_optional_mapping(optimization.get("optimizer")))
 
         base_manifest = copy.deepcopy(dict(manifest))
         base_manifest.pop("optimization", None)
@@ -84,9 +87,11 @@ class SimulateManifestOptimizationProblem:
                 else optimization.get("threshold", 0.7)
             ),
             optimizer_kwargs=optimizer_kwargs,
+            optimizer_cls=optimizer_cls,
             metadata={
                 "source": "simulate_manifest",
                 "manifest_name": manifest_name,
+                "optimizer_algorithm": _optimizer_algorithm_name(optimizer_cls),
             },
         )
 
@@ -122,9 +127,10 @@ class SimulateManifestOptimizationProblem:
 
     def build_optimizer(
         self,
-        optimizer_cls: Type[Any] = AgentOptimizer,
+        optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> Any:
+        optimizer_cls = optimizer_cls or self.optimizer_cls
         kwargs = {**dict(self.optimizer_kwargs), **optimizer_kwargs}
         kwargs = _filter_optimizer_kwargs(optimizer_cls, kwargs)
         return optimizer_cls(
@@ -135,7 +141,7 @@ class SimulateManifestOptimizationProblem:
 
     def optimize(
         self,
-        optimizer_cls: Type[Any] = AgentOptimizer,
+        optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
         return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
@@ -160,6 +166,7 @@ class SimulateEvalSuiteOptimizationProblem:
     run_suite: Callable[[Mapping[str, Any], AgentCandidate], Any]
     threshold: float = 1.0
     optimizer_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    optimizer_cls: Type[Any] = AgentOptimizer
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -179,6 +186,7 @@ class SimulateEvalSuiteOptimizationProblem:
         optimizer_kwargs = _optimizer_kwargs(
             _optional_mapping(optimization.get("optimizer"))
         )
+        optimizer_cls = _optimizer_cls(_optional_mapping(optimization.get("optimizer")))
         base_suite = copy.deepcopy(dict(suite))
         base_suite.pop("optimization", None)
         suite_name = str(name or suite.get("name") or "agent-simulate-eval-suite")
@@ -201,7 +209,12 @@ class SimulateEvalSuiteOptimizationProblem:
                 else optimization.get("threshold", 1.0)
             ),
             optimizer_kwargs=optimizer_kwargs,
-            metadata={"source": "simulate_eval_suite", "suite_name": suite_name},
+            optimizer_cls=optimizer_cls,
+            metadata={
+                "source": "simulate_eval_suite",
+                "suite_name": suite_name,
+                "optimizer_algorithm": _optimizer_algorithm_name(optimizer_cls),
+            },
         )
 
     def candidate_suite(self, candidate: AgentCandidate) -> dict[str, Any]:
@@ -230,9 +243,10 @@ class SimulateEvalSuiteOptimizationProblem:
 
     def build_optimizer(
         self,
-        optimizer_cls: Type[Any] = AgentOptimizer,
+        optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> Any:
+        optimizer_cls = optimizer_cls or self.optimizer_cls
         kwargs = {**dict(self.optimizer_kwargs), **optimizer_kwargs}
         kwargs = _filter_optimizer_kwargs(optimizer_cls, kwargs)
         return optimizer_cls(
@@ -243,7 +257,7 @@ class SimulateEvalSuiteOptimizationProblem:
 
     def optimize(
         self,
-        optimizer_cls: Type[Any] = AgentOptimizer,
+        optimizer_cls: Optional[Type[Any]] = None,
         **optimizer_kwargs: Any,
     ) -> OptimizationResult:
         return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
@@ -289,7 +303,7 @@ def optimize_simulate_manifest(
     *,
     manifest_path: str | Path = ".",
     name: Optional[str] = None,
-    optimizer_cls: Type[Any] = AgentOptimizer,
+    optimizer_cls: Optional[Type[Any]] = None,
     **optimizer_kwargs: Any,
 ) -> OptimizationResult:
     """Optimize an in-memory agent-simulate manifest through simulate-sdk."""
@@ -305,7 +319,7 @@ def optimize_simulate_manifest_file(
     path: str | Path,
     *,
     name: Optional[str] = None,
-    optimizer_cls: Type[Any] = AgentOptimizer,
+    optimizer_cls: Optional[Type[Any]] = None,
     **optimizer_kwargs: Any,
 ) -> OptimizationResult:
     """Optimize an agent-simulate manifest file through simulate-sdk."""
@@ -358,7 +372,7 @@ def optimize_eval_suite(
     *,
     suite_path: str | Path = ".",
     name: Optional[str] = None,
-    optimizer_cls: Type[Any] = AgentOptimizer,
+    optimizer_cls: Optional[Type[Any]] = None,
     **optimizer_kwargs: Any,
 ) -> OptimizationResult:
     """Optimize an in-memory simulate-sdk eval suite."""
@@ -374,7 +388,7 @@ def optimize_eval_suite_file(
     path: str | Path,
     *,
     name: Optional[str] = None,
-    optimizer_cls: Type[Any] = AgentOptimizer,
+    optimizer_cls: Optional[Type[Any]] = None,
     **optimizer_kwargs: Any,
 ) -> OptimizationResult:
     """Optimize a simulate-sdk eval suite file."""
@@ -530,8 +544,59 @@ def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         "exploration",
         "target_score",
         "selection",
+        "population_size",
+        "generations",
+        "elite_count",
+        "mutation_rate",
+        "crossover_rate",
+        "max_mutations_per_candidate",
+        "tournament_size",
+        "seed",
+        "layer_path_bias",
+        "mutation_library",
+        "max_library_candidates",
     }
     return {key: copy.deepcopy(config[key]) for key in allowed if key in config}
+
+
+def _optimizer_cls(config: Optional[Mapping[str, Any]]) -> Type[Any]:
+    if not config:
+        return AgentOptimizer
+    raw = (
+        config.get("algorithm")
+        or config.get("type")
+        or config.get("name")
+        or config.get("strategy")
+        or "agent"
+    )
+    normalized = str(raw or "agent").strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in {
+        "agent",
+        "agent_optimizer",
+        "deterministic",
+        "candidate_search",
+        "deterministic_candidate_search",
+        "grid",
+    }:
+        return AgentOptimizer
+    if normalized in {
+        "evolution",
+        "agent_evolution",
+        "agent_evolution_optimizer",
+        "domain_aware_evolution",
+        "mutation",
+        "mutation_library",
+    }:
+        return AgentEvolutionOptimizer
+    raise ValueError(
+        "optimization.optimizer.algorithm must be one of: agent, evolution"
+    )
+
+
+def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
+    if optimizer_cls is AgentEvolutionOptimizer:
+        return "evolution"
+    return "agent"
 
 
 def _filter_optimizer_kwargs(

@@ -261,6 +261,7 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "GEPAOptimizer",
         "PromptWizardOptimizer",
         "AgentOptimizer",
+        "AgentEvolutionOptimizer",
         "AgentTPEOptimizer",
         "CouncilAgentOptimizer",
     ):
@@ -327,6 +328,103 @@ def test_manifest_optimizer_uses_vendored_eval_engine_for_local_scoring():
     }
     assert best_history.metadata["evaluation_passed"] is True
     assert best_history.metadata["metric_scores"]["state_goal_accuracy"] == 1.0
+
+
+def test_manifest_problem_selects_evolution_optimizer_from_manifest_config():
+    paths = [
+        "framework.events.source",
+        "langgraph.nodes",
+        "planner.tool_sequence",
+        "memory.state_persistence",
+        "framework.checkpoints",
+        "framework.sessions",
+        "framework.trace.collector",
+    ]
+    manifest = {
+        "name": "langgraph-handoff-evolution",
+        "agent": {"type": "scripted", "content": "Base framework runner."},
+        "simulation": {"engine": "local_text"},
+        "optimization": {
+            "threshold": 1.0,
+            "target": {
+                "name": "langgraph-framework-handoff",
+                "layers": ["framework", "orchestration", "memory", "multi_agent"],
+                "metadata": {"framework": "langgraph"},
+                "base_config": {
+                    "framework": {
+                        "events": {"source": "none"},
+                        "checkpoints": False,
+                        "sessions": False,
+                        "trace": {"collector": False},
+                    },
+                    "langgraph": {"nodes": []},
+                    "planner": {"tool_sequence": []},
+                    "memory": {"state_persistence": False},
+                },
+                "search_space": {
+                    "framework.events.source": ["none", "langgraph_stream_events"],
+                    "langgraph.nodes": [[], ["policy_node"]],
+                    "planner.tool_sequence": [[], ["lookup", "tool"]],
+                    "memory.state_persistence": [False, True],
+                    "framework.checkpoints": [False, True],
+                    "framework.sessions": [False, True],
+                    "framework.trace.collector": [False, True],
+                },
+            },
+            "optimizer": {
+                "algorithm": "evolution",
+                "population_size": 4,
+                "generations": 1,
+                "elite_count": 1,
+                "seed": 7,
+                "target_score": 1.0,
+                "auto_diagnose": False,
+                "max_library_candidates": 4,
+            },
+        },
+    }
+    original = copy.deepcopy(manifest)
+
+    def evaluate_manifest(candidate_manifest, candidate):
+        config = {
+            path: candidate.get_path(path)
+            for path in paths
+        }
+        matches = [
+            config["framework.events.source"] == "langgraph_stream_events",
+            config["langgraph.nodes"] == ["policy_node"],
+            config["planner.tool_sequence"] == ["lookup", "tool"],
+            config["memory.state_persistence"] is True,
+            config["framework.checkpoints"] is True,
+            config["framework.sessions"] is True,
+            config["framework.trace.collector"] is True,
+        ]
+        return {
+            "score": sum(1 for item in matches if item) / len(matches),
+            "metadata": {"selected_paths": config},
+        }
+
+    problem = agent_optimize.ManifestOptimizationProblem.from_manifest(
+        manifest,
+        evaluate_manifest=evaluate_manifest,
+    )
+
+    result = problem.optimize()
+
+    assert manifest == original
+    assert problem.optimizer_cls is agent_optimize.AgentEvolutionOptimizer
+    assert result.metadata["optimizer"] == "AgentEvolutionOptimizer"
+    assert result.metadata["strategy"] == "domain_aware_evolution"
+    assert result.final_score == pytest.approx(1.0)
+    assert {
+        bundle["name"]
+        for bundle in result.metadata["mutation_library_bundles"]
+    } >= {"langgraph_event_stream_checkpoint_bundle"}
+    best_history = max(result.history, key=lambda item: item.average_score)
+    assert set(paths) <= set(best_history.metadata["candidate_patch"])
+    assert best_history.metadata["mutation_bundle"] == (
+        "langgraph_event_stream_checkpoint_bundle"
+    )
 
 
 def test_eval_suite_optimizer_runs_local_agent_report_eval_without_services():

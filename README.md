@@ -176,6 +176,13 @@ society trace, making multi-interaction search auditable. It verifies roles,
 proposals, rounds, diagnostics, role credit, best-candidate selection, and
 governance checks for role diversity, mediator review, contract gates,
 rollback, search locality, and dependency audit.
+Optimization manifests can select the mutation-aware evolutionary optimizer with
+`optimization.optimizer.algorithm: "evolution"`, then tune `population_size`,
+`generations`, `elite_count`, `mutation_rate`, `crossover_rate`, `seed`,
+`target_score`, and `max_library_candidates`. This reuses the same
+`agent-learn optimize` command, but searches coherent framework/world/memory/
+multi-agent patches from the Agent Mutation Library instead of only enumerating
+flat candidate values.
 
 The `agent_learning.optimize` SDK facade exposes the advanced optimizer,
 deployment, replay, research, and governance APIs from the vendored engine:

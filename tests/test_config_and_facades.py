@@ -1010,6 +1010,68 @@ def test_agent_learn_optimize_runs_unified_command_and_writes_artifacts(
     )
 
 
+def test_agent_learn_optimize_selects_evolution_optimizer_from_manifest(
+    tmp_path,
+    monkeypatch,
+):
+    pytest.importorskip("fi.opt")
+    monkeypatch.setenv(
+        "AGENT_LEARNING_OPTIMIZE_EVOLUTION_TEST_KEY",
+        "real-local-opt-evolution-key",
+    )
+    manifest = _optimization_manifest("AGENT_LEARNING_OPTIMIZE_EVOLUTION_TEST_KEY")
+    manifest["name"] = "agent-learning-kit-optimize-evolution"
+    manifest["optimization"]["optimizer"] = {
+        "algorithm": "evolution",
+        "population_size": 2,
+        "generations": 1,
+        "elite_count": 1,
+        "seed": 11,
+        "target_score": 0.99,
+        "auto_diagnose": False,
+        "mutation_library": False,
+        "max_library_candidates": 0,
+    }
+    manifest_path = tmp_path / "optimize-evolution.json"
+    output_path = tmp_path / "optimize-evolution-result.json"
+    junit_path = tmp_path / "optimize-evolution-result.junit.xml"
+    sarif_path = tmp_path / "optimize-evolution-result.sarif.json"
+    markdown_path = tmp_path / "optimize-evolution-result.md"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    exit_code = main([
+        "optimize",
+        str(manifest_path),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.9
+    trace = payload["optimization"]["optimizer_trace"]
+    assert trace["optimizer"] == "AgentEvolutionOptimizer"
+    assert trace["summary"]["final_score"] >= 0.9
+    assert trace["summary"]["has_role_graph"] is True
+    assert "search_path" in trace["signals"]
+    assert payload["optimization"]["best_config"]["simulation"]["environments"][0][
+        "data"
+    ]["selected_optimizer"] == "bandit"
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    assert json.loads(sarif_path.read_text(encoding="utf-8"))["version"] == "2.1.0"
+    assert "manifest_optimization_quality" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp_path):
     suite_path = tmp_path / "suite.json"
     output_path = tmp_path / "optimization.json"
