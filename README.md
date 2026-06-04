@@ -52,6 +52,8 @@ agent-learn optimize examples/redteam_campaign_optimization.json \
   --output artifacts/redteam-campaign-optimization.json
 agent-learn optimize examples/redteam_autogen_optimization.json \
   --output artifacts/redteam-autogen-optimization.json
+agent-learn optimize examples/workspace_observability_optimization.json \
+  --output artifacts/workspace-observability-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -76,8 +78,9 @@ LangGraph-style world orchestration across framework trace, retrieval, memory
 lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
-one manifest runs simulation, eval, red-team, eval-suite optimization, and
-world/framework/memory optimization jobs and emits aggregate artifacts.
+one manifest runs simulation, eval, red-team, eval-suite optimization,
+world/framework/memory optimization, red-team optimization, and
+workspace/observability optimization jobs and emits aggregate artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -103,3 +106,10 @@ The `redteam_autogen_optimization.json` example starts from
 `redteam.auto_generate: true` and optimizes the declared attack/surface matrix;
 each candidate regenerates local adversarial attack-pack and campaign evidence
 before scoring.
+
+The `workspace_observability_optimization.json` example migrates the old
+workspace-run and observability-replay cookbooks into one CLI manifest. It
+optimizes the Future AGI UI/control-plane evidence loop: repository checkout,
+command logs, artifacts, simulations, evals, red-team runs, UI verification,
+live credential checks, security gates, AgentOptimizer results, and failed
+observability replay rows.

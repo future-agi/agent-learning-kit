@@ -6,7 +6,8 @@
     "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
     "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
-    "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -54,6 +55,13 @@
       "command": "optimize",
       "path": "redteam_campaign_optimization.json",
       "name": "suite-redteam-campaign-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "workspace-observability-optimizer",
+      "command": "optimize",
+      "path": "workspace_observability_optimization.json",
+      "name": "suite-workspace-observability-optimizer",
       "max_candidates": 2
     }
   ]

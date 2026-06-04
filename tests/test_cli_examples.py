@@ -50,6 +50,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -109,14 +110,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 7
-        assert payload["summary"]["passed_count"] == 7
+        assert payload["summary"]["job_count"] == 8
+        assert payload["summary"]["passed_count"] == 8
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
             "optimize",
@@ -618,5 +620,85 @@ def test_redteam_autogen_optimization_example_regenerates_candidate_matrix(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "redteam-autogen-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_workspace_observability_optimization_example_runs_evidence_gates(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
+        "real-local-workspace-observability-opt-key",
+    )
+
+    output_path = tmp_path / "workspace-observability-optimization.json"
+    junit_path = tmp_path / "workspace-observability-optimization.junit.xml"
+    sarif_path = tmp_path / "workspace-observability-optimization.sarif.json"
+    markdown_path = tmp_path / "workspace-observability-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "workspace_observability_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.9
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    env_types = [
+        environment["type"]
+        for environment in payload["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == ["workspace_run_manifest", "observability_replay"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "workspace_run_coverage",
+        "workspace_run_quality",
+        "observability_replay_coverage",
+        "observability_replay_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) >= {"workspace_run_manifest", "observability_replay_pack"}
+    workspace_summary = state["workspace_run_manifest"]["summary"]
+    assert workspace_summary["failed_command_count"] == 0
+    assert workspace_summary["open_red_team_finding_count"] == 0
+    assert workspace_summary["secret_leak_count"] == 0
+    assert workspace_summary["missing_required_evidence"] == []
+    replay_summary = state["observability_replay_pack"]["summary"]
+    assert replay_summary["case_count"] == 2
+    assert replay_summary["failed_case_count"] == 1
+    assert replay_summary["missing_trace_signals"] == []
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "workspace-observability-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
