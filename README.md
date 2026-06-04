@@ -217,6 +217,14 @@ result = optimize.optimize_task(
 )
 ```
 
+Runnable SDK cookbook:
+
+```bash
+AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_task_world_optimization.py \
+  artifacts/sdk-task-world-optimization.json
+```
+
 The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
 provider loads JSON/YAML artifacts, extracts named paths such as task

@@ -563,6 +563,42 @@ def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     ]["summary"]["terminal_status"] == "success"
 
 
+def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY",
+        "real-local-sdk-task-world-example-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_task_world_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_task_world_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "agent.responses.0.tool_calls",
+        "simulation.environments.0.data.transitions",
+    }
+
+    output_path = tmp_path / "sdk-task-world-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+
+
 def test_trinity_engines_are_vendored_in_agent_learning_kit():
     for module_name in ("fi.simulate", "fi.evals", "fi.opt"):
         module = importlib.import_module(module_name)
