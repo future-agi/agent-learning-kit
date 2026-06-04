@@ -3,6 +3,7 @@
   "name": "local-agent-learning-suite",
   "required_env": [
     "AGENT_LEARNING_RUN_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
     "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
     "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
@@ -20,6 +21,7 @@
   "required_capabilities": {
     "commands": [
       "run",
+      "suite",
       "eval",
       "redteam",
       "optimize_eval",
@@ -27,6 +29,7 @@
     ],
     "result_kinds": [
       "agent-learning.run.v1",
+      "agent-learning.suite.v1",
       "agent-learning.eval.v1",
       "agent-learning.redteam.v1",
       "agent-learning.eval-optimization.v1",
@@ -47,6 +50,9 @@
       "streaming_trace",
       "voice",
       "world_orchestration_replay"
+    ],
+    "environment_state_keys": [
+      "framework_runtime"
     ],
     "providers": [
       "vapi",
@@ -91,6 +97,12 @@
       "path": "run_manifest.json",
       "no_eval": true,
       "name": "suite-local-simulation"
+    },
+    {
+      "id": "multi-framework-adapter-suite",
+      "command": "suite",
+      "path": "multi_framework_simulation_suite.json",
+      "name": "suite-multi-framework-adapters"
     },
     {
       "id": "promptfoo-style-eval",

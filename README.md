@@ -114,20 +114,23 @@ LangGraph-style world orchestration across framework trace, retrieval, memory
 lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
-one manifest runs simulation, eval, red-team, eval-suite optimization,
-world/framework/memory optimization, voice/streaming optimization, red-team
-optimization, workspace/observability optimization, agent-integration
-optimization, multi-agent framework handoff optimization, optimizer-governance
-optimization, agent control-plane
+one manifest runs simulation, the nested multi-framework adapter suite, eval,
+red-team, eval-suite optimization, world/framework/memory optimization,
+voice/streaming optimization, red-team optimization, workspace/observability
+optimization, agent-integration optimization, multi-agent framework handoff
+optimization, optimizer-governance optimization, agent control-plane
 optimization, browser/CUA red-team optimization, framework-certification
 optimization, autonomous task/world red-team optimization, and multimodal image
 optimization jobs, then emits aggregate artifacts plus a capability summary of
 commands, result kinds, environment types, providers, frameworks, channels, and
-metrics observed from the child run outputs. Suites can also declare
+metrics observed from the child run outputs, including environment-state keys
+such as framework adapter runtime evidence. Suites can also declare
 `required_capabilities`; if any required command, result kind, environment type,
-provider, framework, channel, or metric is absent from the executed child
-artifacts, `agent-learn suite` fails the run and records the missing capability
-in JSON, JUnit, SARIF, and Markdown outputs.
+environment-state key, provider, framework, channel, or metric is absent from
+the executed child artifacts, `agent-learn suite` fails the run and records the
+missing capability in JSON, JUnit, SARIF, and Markdown outputs.
+Suite jobs can call other suite manifests, so the top-level suite can enforce
+coverage from composed child suites without losing nested child artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework

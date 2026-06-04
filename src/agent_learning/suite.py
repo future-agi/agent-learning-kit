@@ -20,6 +20,7 @@ _CHILD_COMMANDS = {
     "replay",
     "report",
     "run",
+    "suite",
     "eval",
     "redteam",
     "optimize",
@@ -64,6 +65,14 @@ def required_suite_env(
         try:
             child = _load_child_source(job, base_dir=base_dir)
         except Exception:
+            continue
+        if _normalize_command(job.get("command") or job.get("type")) == "suite":
+            required.update(
+                required_suite_env(
+                    child,
+                    suite_path=_job_path(job, base_dir=base_dir),
+                )
+            )
             continue
         required.update(_as_string_list(child.get("required_env")))
     return sorted(required)
@@ -395,6 +404,23 @@ def _execute_child_payload(
         )
         payload["kind"] = AGENT_LEARNING_RUN_KIND
         return payload
+    if command == "suite":
+        payload = run_suite_file(
+            path,
+            options=SuiteRunOptions(
+                name=_job_name(job),
+                threshold=_job_threshold(job, suite_options),
+                max_candidates=_job_max_candidates(job, suite_options),
+                dry_run=_job_dry_run(job, suite_options),
+                fail_fast=bool(
+                    suite_options.fail_fast
+                    or job.get("fail_fast")
+                    or job.get("fail-fast")
+                ),
+            ),
+        )
+        payload["kind"] = AGENT_LEARNING_SUITE_KIND
+        return payload
     if command == "eval":
         from agent_learning import evals
         from agent_learning.cli import AGENT_LEARNING_EVAL_KIND
@@ -543,6 +569,8 @@ def _write_child_outputs(
 
 
 def _child_renderers(command: str) -> tuple[Any, Any, Any]:
+    if command == "suite":
+        return render_junit, render_sarif, render_markdown
     if command == "redteam":
         from agent_learning import redteam
 
@@ -703,6 +731,14 @@ def _suite_capability_findings(
 
 
 def _collect_result_capabilities(payload: Mapping[str, Any], caps: dict[str, set[str]]) -> None:
+    for child in _as_list(payload.get("children") or payload.get("jobs")):
+        child_item = _as_mapping(child)
+        if not child_item:
+            continue
+        _add_capability(caps, "child_ids", child_item.get("id"))
+        _add_capability(caps, "commands", child_item.get("command"))
+        _add_capability(caps, "result_kinds", child_item.get("kind"))
+        _collect_result_capabilities(_as_mapping(child_item.get("result")), caps)
     _collect_summary_capabilities(_as_mapping(payload.get("summary")), caps)
     optimization = _as_mapping(payload.get("optimization"))
     best_config = _as_mapping(optimization.get("best_config"))
@@ -933,6 +969,8 @@ def _normalize_command(value: Any) -> str:
         "red_team": "redteam",
         "optimization": "optimize",
         "optimizeeval": "optimize_eval",
+        "subsuite": "suite",
+        "sub_suite": "suite",
         "promotion": "promote_to_regression",
         "regression_promotion": "promote_to_regression",
         "promote": "promote_to_regression",

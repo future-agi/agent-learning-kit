@@ -46,6 +46,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "agent-learning.suite.v1",
             [
                 "AGENT_LEARNING_RUN_EXAMPLE_KEY",
+                "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
                 "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
                 "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
@@ -118,8 +119,8 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 16
-        assert payload["summary"]["passed_count"] == 16
+        assert payload["summary"]["job_count"] == 17
+        assert payload["summary"]["passed_count"] == 17
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -131,6 +132,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "optimize_eval",
             "redteam",
             "run",
+            "suite",
         }
         assert set(capabilities["result_kinds"]) == {
             "agent_learning.eval.v1",
@@ -138,6 +140,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent_learning.optimization.v1",
             "agent_learning.redteam.v1",
             "agent_learning.run.v1",
+            "agent_learning.suite.v1",
         }
         assert {
             "adversarial_attack_pack",
@@ -159,6 +162,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent_integration_manifest",
             "browser",
             "framework_capability_matrix",
+            "framework_runtime",
             "optimizer_society_trace",
             "red_team_campaign",
             "streaming_trace",
@@ -197,6 +201,7 @@ def test_shipped_examples_execute_through_unified_cli(
             assert set(values) <= set(capabilities[capability])
         assert [child["command"] for child in payload["children"]] == [
             "run",
+            "suite",
             "eval",
             "redteam",
             "optimize_eval",
@@ -215,11 +220,25 @@ def test_shipped_examples_execute_through_unified_cli(
         ]
         assert {child["kind"] for child in payload["children"]} == {
             "agent-learning.run.v1",
+            "agent-learning.suite.v1",
             "agent-learning.eval.v1",
             "agent-learning.redteam.v1",
             "agent-learning.eval-optimization.v1",
             "agent-learning.optimization.v1",
         }
+        nested = next(
+            child
+            for child in payload["children"]
+            if child["id"] == "multi-framework-adapter-suite"
+        )
+        assert nested["kind"] == "agent-learning.suite.v1"
+        assert nested["result"]["summary"]["commands"] == {"run": 4}
+        assert [child["id"] for child in nested["result"]["children"]] == [
+            "langchain-runnable",
+            "langgraph-state-graph",
+            "pipecat-voice-pipeline",
+            "livekit-realtime-agent",
+        ]
     if command in {"run", "eval", "redteam"}:
         assert payload["summary"]["case_count"] >= 1
 
