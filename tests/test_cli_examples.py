@@ -52,6 +52,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_MULTI_AGENT_FRAMEWORK_HANDOFF_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
@@ -117,8 +118,8 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 15
-        assert payload["summary"]["passed_count"] == 15
+        assert payload["summary"]["job_count"] == 16
+        assert payload["summary"]["passed_count"] == 16
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -146,6 +147,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "browser_cua",
             "framework_capability",
             "framework_trace",
+            "multi_agent_room",
             "multimodal_image",
             "optimizer_trace",
             "red_team_campaign",
@@ -166,7 +168,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert {"bland", "livekit", "retell", "twilio", "vapi"} <= set(
             capabilities["providers"]
         )
-        assert {"langchain", "langgraph", "livekit", "pipecat"} <= set(
+        assert {
+            "autogen",
+            "crewai",
+            "langchain",
+            "langgraph",
+            "livekit",
+            "openai_agents",
+            "pipecat",
+        } <= set(
             capabilities["frameworks"]
         )
         assert {"chat", "phone", "sip", "voice", "webrtc", "websocket"} <= set(
@@ -176,6 +186,8 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent_integration_quality",
             "browser_action_outcome",
             "framework_capability_quality",
+            "framework_transcript_quality",
+            "multi_agent_coordination_quality",
             "multimodal_faithfulness",
             "red_team_campaign_quality",
             "voice_trace_coverage",
@@ -188,6 +200,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
             "optimize",
@@ -975,6 +988,120 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "agent-integration-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_multi_agent_framework_handoff_optimization_example_runs_captured_traces(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_MULTI_AGENT_FRAMEWORK_HANDOFF_OPT_EXAMPLE_KEY",
+        "real-local-multi-agent-framework-handoff-opt-key",
+    )
+
+    output_path = tmp_path / "multi-agent-framework-handoff-optimization.json"
+    junit_path = tmp_path / "multi-agent-framework-handoff-optimization.junit.xml"
+    sarif_path = tmp_path / "multi-agent-framework-handoff-optimization.sarif.json"
+    markdown_path = tmp_path / "multi-agent-framework-handoff-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "multi_agent_framework_handoff_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.99
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert payload["optimization"]["optimizer_trace"]["optimizer"] == (
+        "AgentEvolutionOptimizer"
+    )
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_config_envs = payload["optimization"]["best_config"]["simulation"][
+        "environments"
+    ]
+    assert [environment["type"] for environment in best_config_envs] == [
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "multi_agent_room",
+    ]
+    assert [
+        environment["data"]["framework"]
+        for environment in best_config_envs
+        if environment["type"] == "framework_trace"
+    ] == ["openai_agents", "autogen", "crewai", "langgraph"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "framework_transcript_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "task_completion",
+        "trajectory_score",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) == {"framework_trace", "multi_agent"}
+
+    transcript_metric = next(
+        metric
+        for metric in case["evaluation"]["agent_report"]["metrics"]
+        if metric["name"] == "framework_transcript_quality"
+    )
+    observed = transcript_metric["details"]["observed"]
+    assert set(observed["speaker_sequence"]) >= {
+        "triage_agent",
+        "retrieval_agent",
+        "critic_agent",
+        "planner",
+        "researcher",
+        "reviewer",
+        "manager",
+        "analyst",
+        "qa",
+        "retriever",
+        "critic",
+    }
+    assert {handoff["to"] for handoff in observed["handoffs"]} >= {
+        "retrieval_agent",
+        "critic_agent",
+        "researcher",
+        "analyst",
+        "retriever",
+    }
+    assert "ckpt_retrieval" in {
+        checkpoint["id"].replace("-", "_")
+        for checkpoint in observed["checkpoints"]
+    }
+    assert observed["errors"] == []
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "multi-agent-framework-handoff-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 

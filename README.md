@@ -56,6 +56,8 @@ agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability-optimization.json
 agent-learn optimize examples/agent_integration_optimization.json \
   --output artifacts/agent-integration-optimization.json
+agent-learn optimize examples/multi_agent_framework_handoff_optimization.json \
+  --output artifacts/multi-agent-framework-handoff-optimization.json
 agent-learn optimize examples/optimizer_governance_optimization.json \
   --output artifacts/optimizer-governance-optimization.json
 agent-learn optimize examples/agent_control_plane_optimization.json \
@@ -115,7 +117,8 @@ The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, eval, red-team, eval-suite optimization,
 world/framework/memory optimization, voice/streaming optimization, red-team
 optimization, workspace/observability optimization, agent-integration
-optimization, optimizer-governance optimization, agent control-plane
+optimization, multi-agent framework handoff optimization, optimizer-governance
+optimization, agent control-plane
 optimization, browser/CUA red-team optimization, framework-certification
 optimization, autonomous task/world red-team optimization, and multimodal image
 optimization jobs, then emits aggregate artifacts plus a capability summary of
@@ -170,6 +173,13 @@ It verifies agent definition, personas, simulations, observability hooks, eval
 metrics, credentials, sessions, and channel coverage across LiveKit, Vapi,
 Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and
 TraceAI-supported frameworks.
+
+The `multi_agent_framework_handoff_optimization.json` example optimizes
+captured multi-agent framework transcripts across OpenAI Agents, AutoGen,
+CrewAI, and LangGraph. It uses `AgentEvolutionOptimizer` through
+`agent-learn optimize` and verifies handoffs, review, reconciliation, source
+grounding, checkpoint lineage, and framework transcript quality from local JSONL
+fixtures.
 
 The `optimizer_governance_optimization.json` example optimizes an optimizer
 society trace, making multi-interaction search auditable. It verifies roles,

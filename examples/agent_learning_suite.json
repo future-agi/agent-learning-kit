@@ -9,6 +9,7 @@
     "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTI_AGENT_FRAMEWORK_HANDOFF_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
@@ -39,6 +40,7 @@
       "browser_cua",
       "framework_capability",
       "framework_trace",
+      "multi_agent_room",
       "multimodal_image",
       "optimizer_trace",
       "red_team_campaign",
@@ -56,6 +58,9 @@
     "frameworks": [
       "langchain",
       "langgraph",
+      "openai_agents",
+      "autogen",
+      "crewai",
       "livekit",
       "pipecat"
     ],
@@ -71,6 +76,8 @@
       "agent_integration_quality",
       "browser_action_outcome",
       "framework_capability_quality",
+      "framework_transcript_quality",
+      "multi_agent_coordination_quality",
       "multimodal_faithfulness",
       "red_team_campaign_quality",
       "voice_trace_coverage",
@@ -137,6 +144,13 @@
       "command": "optimize",
       "path": "agent_integration_optimization.json",
       "name": "suite-agent-integration-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "multi-agent-framework-handoff-optimizer",
+      "command": "optimize",
+      "path": "multi_agent_framework_handoff_optimization.json",
+      "name": "suite-multi-agent-framework-handoff-optimizer",
       "max_candidates": 2
     },
     {
