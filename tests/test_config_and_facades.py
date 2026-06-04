@@ -39,9 +39,12 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.evaluate is not None
 
 
-def test_agent_learn_eval_delegates_to_simulate_cli(tmp_path):
+def test_agent_learn_eval_runs_unified_command_and_writes_artifacts(tmp_path):
     suite_path = tmp_path / "suite.json"
     output_path = tmp_path / "result.json"
+    junit_path = tmp_path / "result.junit.xml"
+    sarif_path = tmp_path / "result.sarif.json"
+    markdown_path = tmp_path / "result.md"
     suite_path.write_text(
         json.dumps(
             {
@@ -61,12 +64,27 @@ def test_agent_learn_eval_delegates_to_simulate_cli(tmp_path):
         encoding="utf-8",
     )
 
-    exit_code = main(["eval", str(suite_path), "--output", str(output_path)])
+    exit_code = main([
+        "eval",
+        str(suite_path),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
 
     assert exit_code == 0
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["status"] == "passed"
-    assert payload["kind"] == "agent-simulate.eval.v1"
+    assert payload["kind"] == "agent-learning.eval.v1"
+    assert payload["summary"]["case_count"] == 1
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    assert json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0]["results"] == []
+    assert "agent-learning-kit-eval" in markdown_path.read_text(encoding="utf-8")
 
 
 def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp_path):

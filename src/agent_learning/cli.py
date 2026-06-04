@@ -10,10 +10,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 from .config import current_config
 
 
+AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
+AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
+
+
 SIMULATE_COMMANDS = {
     "baseline",
     "compare",
-    "eval",
     "init",
     "optimize",
     "promote-to-regression",
@@ -31,6 +34,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     command = args[0]
     if command == "doctor":
         return _doctor()
+    if command == "eval":
+        return _eval(args[1:])
     if command == "optimize-eval":
         return _optimize_eval(args[1:])
     if command == "simulate":
@@ -54,6 +59,55 @@ def _simulate(args: Sequence[str]) -> int:
     return int(cli.main(list(args)))
 
 
+def _eval(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn eval",
+        description="Run a promptfoo-style eval suite with Agent Learning Kit.",
+    )
+    _add_eval_suite_args(parser, optimize=False)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from fi.simulate.manifest import render_junit, render_markdown, render_sarif
+        from fi.simulate.suite import load_eval_suite_file, run_eval_suite_file
+    except Exception as exc:
+        print(
+            "agent-learn eval requires `agent-learning-kit[simulate]` "
+            "or `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    suite_path = Path(parsed.suite).expanduser().resolve()
+    try:
+        suite = load_eval_suite_file(suite_path)
+        payload = run_eval_suite_file(
+            suite_path,
+            name=parsed.name,
+            threshold=parsed.threshold,
+            dry_run=bool(parsed.dry_run),
+        )
+    except Exception as exc:
+        print(f"agent-learn eval: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_EVAL_KIND
+    written = _write_result_outputs(
+        payload,
+        suite,
+        parsed,
+        suite_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
 def _optimize_eval(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn optimize-eval",
@@ -62,9 +116,61 @@ def _optimize_eval(args: Sequence[str]) -> int:
             "learning runtime."
         ),
     )
+    _add_eval_suite_args(parser, optimize=True)
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=None,
+        help="Override optimization.optimizer.max_candidates.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from fi.simulate.manifest import render_junit, render_markdown, render_sarif
+        from fi.simulate.suite import load_eval_suite_file, optimize_eval_suite_file
+    except Exception as exc:
+        print(
+            "agent-learn optimize-eval requires "
+            "`agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    suite_path = Path(parsed.suite).expanduser().resolve()
+    try:
+        suite = load_eval_suite_file(suite_path)
+        payload = optimize_eval_suite_file(
+            suite_path,
+            name=parsed.name,
+            threshold=parsed.threshold,
+            max_candidates=parsed.max_candidates,
+            dry_run=bool(parsed.dry_run),
+        )
+    except Exception as exc:
+        print(f"agent-learn optimize-eval: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_EVAL_OPTIMIZATION_KIND
+    written = _write_result_outputs(
+        payload,
+        suite,
+        parsed,
+        suite_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _add_eval_suite_args(parser: argparse.ArgumentParser, *, optimize: bool) -> None:
     parser.add_argument(
         "suite",
-        help="Path to a JSON/YAML eval suite with an optimization block.",
+        help="Path to a JSON/YAML eval suite.",
     )
     parser.add_argument(
         "-o",
@@ -99,73 +205,38 @@ def _optimize_eval(args: Sequence[str]) -> int:
         "--threshold",
         type=float,
         default=None,
-        help="Override optimization.threshold.",
-    )
-    parser.add_argument(
-        "--max-candidates",
-        type=int,
-        default=None,
-        help="Override optimization.optimizer.max_candidates.",
+        help=(
+            "Override optimization.threshold."
+            if optimize
+            else "Override suite threshold."
+        ),
     )
     parser.add_argument(
         "--name",
         default=None,
-        help="Override the optimization run name.",
+        help=(
+            "Override the optimization run name."
+            if optimize
+            else "Override the suite run name."
+        ),
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate suite/search space without executing optimization.",
+        help=(
+            "Validate suite/search space without executing optimization."
+            if optimize
+            else "Validate suite shape without executing providers."
+        ),
     )
     parser.add_argument(
         "--quiet",
         action="store_true",
         help="Do not print JSON summary when no output path is configured.",
     )
-    parsed = parser.parse_args(list(args))
-
-    try:
-        from fi.simulate.manifest import render_junit, render_markdown, render_sarif
-        from fi.simulate.suite import load_eval_suite_file, optimize_eval_suite_file
-    except Exception as exc:
-        print(
-            "agent-learn optimize-eval requires "
-            "`agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
-
-    suite_path = Path(parsed.suite).expanduser().resolve()
-    try:
-        suite = load_eval_suite_file(suite_path)
-        payload = optimize_eval_suite_file(
-            suite_path,
-            name=parsed.name,
-            threshold=parsed.threshold,
-            max_candidates=parsed.max_candidates,
-            dry_run=bool(parsed.dry_run),
-        )
-    except Exception as exc:
-        print(f"agent-learn optimize-eval: {exc}", file=sys.stderr)
-        return 1
-
-    written = _write_optimize_eval_outputs(
-        payload,
-        suite,
-        parsed,
-        suite_path,
-        render_junit=render_junit,
-        render_sarif=render_sarif,
-        render_markdown=render_markdown,
-    )
-    payload["outputs_written"] = written
-    if not written and not parsed.quiet:
-        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
-    return int(payload.get("exit_code", 0))
 
 
-def _write_optimize_eval_outputs(
+def _write_result_outputs(
     payload: Dict[str, Any],
     suite: Mapping[str, Any],
     args: argparse.Namespace,
@@ -175,7 +246,7 @@ def _write_optimize_eval_outputs(
     render_sarif: Any,
     render_markdown: Any,
 ) -> List[str]:
-    output_paths = _optimize_eval_output_paths(suite, args, suite_path.parent)
+    output_paths = _result_output_paths(suite, args, suite_path.parent)
     written: List[str] = []
     for path in output_paths["json"]:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +270,7 @@ def _write_optimize_eval_outputs(
     return written
 
 
-def _optimize_eval_output_paths(
+def _result_output_paths(
     suite: Mapping[str, Any],
     args: argparse.Namespace,
     base_dir: Path,
