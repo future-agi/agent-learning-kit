@@ -22,6 +22,7 @@ from fi.simulate import (
     AgentMemoryLineageEnvironment,
     AgentResponse,
     AgentTrustBoundaryEnvironment,
+    BrowserEnvironment,
     FileEnvironment,
     FrameworkImportManifestEnvironment,
     FrameworkTraceEnvironment,
@@ -176,7 +177,12 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "agent_integration_manifest",
         "agent_memory_lineage",
         "agent_trust_boundary",
+        "browser",
+        "browser_cua",
+        "computer_use",
+        "computer_use_browser",
         "control_plane",
+        "cua",
         "file",
         "files",
         "framework_import",
@@ -618,6 +624,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_tool_mock_environment(payload))
         elif env_type in {"tool_fault_injection", "tool_fault"}:
             environments.append(_build_tool_fault_environment(payload))
+        elif env_type in {"browser", "browser_cua", "cua", "computer_use", "computer_use_browser"}:
+            environments.append(_build_browser_environment(payload, base_dir))
         elif env_type in {"file", "files"}:
             environments.append(_build_file_environment(payload))
         elif env_type == "world_contract":
@@ -710,6 +718,51 @@ def _build_tool_fault_environment(payload: Mapping[str, Any]) -> ToolFaultInject
     return ToolFaultInjectionEnvironment(
         failures,
         default_error=str(source.get("default_error") or "Injected transient tool failure."),
+    )
+
+
+def _build_browser_environment(
+    payload: Mapping[str, Any],
+    base_dir: Path,
+) -> BrowserEnvironment:
+    source = dict(payload)
+    browser_trace_source = source.get("browser_trace_source") or source.get("trace_source")
+    if browser_trace_source not in (None, ""):
+        browser_trace_source = _resolve_manifest_source(str(browser_trace_source), base_dir)
+    playwright_trace_source = source.get("playwright_trace_source")
+    if playwright_trace_source not in (None, ""):
+        playwright_trace_source = _resolve_manifest_source(str(playwright_trace_source), base_dir)
+    return BrowserEnvironment(
+        url=str(source.get("url") or source.get("current_url") or "https://example.test/"),
+        dom=str(source.get("dom") or source.get("html") or "<html><body></body></html>"),
+        screenshot_uri=_optional_string(source.get("screenshot_uri") or source.get("screenshot")),
+        allowed_domains=_coerce_list(source.get("allowed_domains") or source.get("domains")),
+        state=dict(source.get("state") or {}),
+        snapshots=_coerce_list(source.get("snapshots")),
+        actions=source.get("actions") or source.get("action_fixtures"),
+        regions=source.get("regions") or source.get("coordinate_regions"),
+        console_logs=_coerce_list(source.get("console_logs") or source.get("console")),
+        network_log=_coerce_list(source.get("network_log") or source.get("network")),
+        storage_state=source.get("storage_state") or source.get("storageState"),
+        cookies=source.get("cookies"),
+        local_storage=source.get("local_storage") or source.get("localStorage"),
+        session_storage=source.get("session_storage") or source.get("sessionStorage"),
+        runtime_events=_coerce_list(source.get("runtime_events") or source.get("runtime")),
+        performance_entries=_coerce_list(
+            source.get("performance_entries") or source.get("performance")
+        ),
+        prompt_injections=_coerce_list(
+            source.get("prompt_injections") or source.get("prompt_injection_surfaces")
+        ),
+        browser_trace=source.get("browser_trace") or source.get("trace_export"),
+        browser_trace_source=browser_trace_source,
+        trace_provider=str(source.get("trace_provider") or source.get("provider") or "browser"),
+        playwright_trace=source.get("playwright_trace"),
+        playwright_trace_source=playwright_trace_source,
+        video_artifacts=_coerce_list(source.get("video_artifacts") or source.get("videos")),
+        perturbations=_coerce_list(source.get("perturbations")),
+        mutation_pack=source.get("mutation_pack") or source.get("browser_mutation_pack"),
+        mutations=_coerce_list(source.get("mutations") or source.get("browser_mutations")),
     )
 
 

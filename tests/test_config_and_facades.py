@@ -51,8 +51,15 @@ def test_facades_expose_unified_agent_learning_modules():
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
     assert simulate.StreamingTraceEnvironment is not None
     assert simulate.VoiceEnvironment is not None
+    assert simulate.BrowserEnvironment is not None
+    assert simulate.normalize_browser_trace_export is not None
+    assert simulate.normalize_playwright_trace_export is not None
+    assert simulate.normalize_browser_mutation_pack is not None
     assert simulate.normalize_streaming_trace_events is not None
     assert simulate.normalize_voice_timing_distribution is not None
+    assert {"browser", "browser_cua", "computer_use"} <= set(
+        simulate.supported_manifest_environment_types()
+    )
     assert {
         "langchain",
         "langgraph",

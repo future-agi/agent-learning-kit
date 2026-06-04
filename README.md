@@ -60,6 +60,8 @@ agent-learn optimize examples/optimizer_governance_optimization.json \
   --output artifacts/optimizer-governance-optimization.json
 agent-learn optimize examples/agent_control_plane_optimization.json \
   --output artifacts/agent-control-plane-optimization.json
+agent-learn optimize examples/browser_cua_optimization.json \
+  --output artifacts/browser-cua-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -87,8 +89,9 @@ The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, eval, red-team, eval-suite optimization,
 world/framework/memory optimization, voice/streaming optimization, red-team
 optimization, workspace/observability optimization, agent-integration
-optimization, optimizer-governance optimization, and agent control-plane
-optimization jobs, then emits aggregate artifacts.
+optimization, optimizer-governance optimization, agent control-plane
+optimization, and browser/CUA red-team optimization jobs, then emits aggregate
+artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -146,3 +149,9 @@ agency controls: identity, permissions, sandboxing, audit, canaries, human
 approval, memory isolation, network egress, tool allowlists, data boundaries,
 secret handling, risk scoring, action policy, rollback, kill switches, circuit
 breakers, rate limits, budgets, containment, and drift detection.
+
+The `browser_cua_optimization.json` example optimizes a browser/computer-use
+red-team harness. It verifies selector-drift recovery, refreshed screenshots,
+coordinate grounding, semantic screenshot diffs, storage/runtime evidence,
+network traces, layout-shift resilience, mutation-pack mitigations, and
+prompt-injection surface avoidance.

@@ -54,6 +54,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -113,14 +114,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 11
-        assert payload["summary"]["passed_count"] == 11
+        assert payload["summary"]["job_count"] == 12
+        assert payload["summary"]["passed_count"] == 12
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
             "optimize",
@@ -988,5 +990,86 @@ def test_agent_control_plane_optimization_example_runs_trust_and_control_gate(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "agent-control-plane-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_browser_cua_optimization_example_runs_redteam_replay(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
+        "real-local-browser-cua-opt-key",
+    )
+
+    output_path = tmp_path / "browser-cua-optimization.json"
+    junit_path = tmp_path / "browser-cua-optimization.junit.xml"
+    sarif_path = tmp_path / "browser-cua-optimization.sarif.json"
+    markdown_path = tmp_path / "browser-cua-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "browser_cua_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.98
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    env_types = [
+        environment["type"]
+        for environment in payload["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == ["browser_cua"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "browser_action_safety",
+        "browser_action_outcome",
+        "browser_grounding_quality",
+        "browser_mutation_resilience",
+        "browser_trace_coverage",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) == {"browser"}
+    browser = state["browser"]
+    assert browser["checkout_complete"] is True
+    assert browser["order_id"] == "ord_123"
+    assert browser["url"] == "https://shop.example.test/confirmation"
+    assert browser["mutation_pack"]["summary"]["mutation_count"] == 2
+    assert browser["action_replay"][0]["mutation_id"] == "selector_drift_checkout"
+    assert browser["action_replay"][0]["selector"] == "button[data-testid='place-order-safe']"
+    assert browser["action_replay"][0]["success"] is True
+    assert browser["action_replay"][0]["prompt_injection_touched"] is False
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "browser-cua-redteam-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )

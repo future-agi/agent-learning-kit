@@ -10,7 +10,8 @@
     "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
-    "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -86,6 +87,13 @@
       "command": "optimize",
       "path": "agent_control_plane_optimization.json",
       "name": "suite-agent-control-plane-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "browser-cua-optimizer",
+      "command": "optimize",
+      "path": "browser_cua_optimization.json",
+      "name": "suite-browser-cua-optimizer",
       "max_candidates": 2
     }
   ]
