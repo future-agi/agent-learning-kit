@@ -629,6 +629,105 @@ def optimize_memory_layer(
     )
 
 
+def build_artifact_optimization_suite(
+    *,
+    name: str,
+    artifact_path: str | Path,
+    field_candidates: Sequence[Sequence[Mapping[str, Any]]],
+    assertions: Sequence[Mapping[str, Any]],
+    prompt_template: Optional[str] = None,
+    provider_id: str = "artifact",
+    test_id: Optional[str] = None,
+    threshold: float = 1.0,
+    optimizer: Optional[Mapping[str, Any]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a promptfoo-style optimization suite for saved artifacts.
+
+    This is the SDK bridge for artifact-first CI: keep assertions fixed, then
+    optimize the artifact provider's extracted evidence fields. It evaluates
+    existing run/red-team/optimization artifacts without rerunning the agent.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not field_candidates:
+        raise ValueError("field_candidates must contain at least one candidate")
+    if not assertions:
+        raise ValueError("assertions must contain at least one assertion")
+
+    fields = [_artifact_field_candidate(candidate) for candidate in field_candidates]
+    checks = [copy.deepcopy(dict(assertion)) for assertion in assertions]
+    artifact_path_value = str(artifact_path)
+    search_space = {"providers.0.fields": copy.deepcopy(fields)}
+
+    return {
+        "version": "agent-learning.eval.v1",
+        "name": name,
+        "providers": [
+            {
+                "id": str(provider_id),
+                "type": "artifact",
+                "path": "{{artifact_path}}",
+                "fields": copy.deepcopy(fields[0]),
+            }
+        ],
+        "prompts": [
+            {
+                "id": "artifact-evidence",
+                "template": prompt_template
+                or "Evaluate saved artifact evidence from {{artifact_path}}.",
+            }
+        ],
+        "tests": [
+            {
+                "id": test_id or f"{name}-gate",
+                "vars": {"artifact_path": artifact_path_value},
+                "assertions": checks,
+            }
+        ],
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": ["harness", "environment", "evaluator"],
+                "base_config": {
+                    "providers": [{"fields": copy.deepcopy(fields[0])}]
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": "agent_learning.optimize.build_artifact_optimization_suite",
+                    "task_kind": "artifact_evidence",
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_artifact_optimizer(fields))
+            ),
+        },
+    }
+
+
+def optimize_artifact_evidence(
+    *,
+    suite_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **suite_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute an artifact-evidence optimization suite."""
+
+    suite = build_artifact_optimization_suite(**suite_kwargs)
+    return optimize_eval_suite(
+        suite,
+        suite_path=suite_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_redteam_optimization_manifest(
     *,
     name: str,
@@ -1009,6 +1108,21 @@ def _typed_memory_environment(environment_type: str, data: Any) -> dict[str, Any
     return {"type": environment_type, "data": copy.deepcopy(dict(data))}
 
 
+def _artifact_field_candidate(
+    fields: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if isinstance(fields, (str, bytes)) or isinstance(fields, Mapping):
+        raise ValueError("each field candidate must be a sequence of field mappings")
+    copied = [copy.deepcopy(dict(field)) for field in fields]
+    if not copied:
+        raise ValueError("field candidate must not be empty")
+    for index, field in enumerate(copied, start=1):
+        if not field.get("path"):
+            raise ValueError(f"field candidate item {index} requires path")
+        field.setdefault("name", str(field.get("id") or field.get("path")))
+    return copied
+
+
 def _max_agent_response_count(
     agent_candidates: Sequence[Mapping[str, Any]],
     minimum: int,
@@ -1325,6 +1439,17 @@ def _default_task_optimizer(
     }
 
 
+def _default_artifact_optimizer(
+    field_candidates: Sequence[Sequence[Mapping[str, Any]]],
+) -> dict[str, Any]:
+    return {
+        "algorithm": "agent",
+        "max_candidates": max(2, len(field_candidates) + 1),
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+
+
 def _search_space_cardinality(search_space: Mapping[str, Sequence[Any]]) -> int:
     size = 1
     for choices in search_space.values():
@@ -1421,6 +1546,7 @@ __all__ = [
     *_OPTIMIZE_EXPORTS,
     "diagnose_report",
     "diagnose_text",
+    "build_artifact_optimization_suite",
     "build_framework_optimization_manifest",
     "build_memory_optimization_manifest",
     "build_multi_agent_optimization_manifest",
@@ -1429,6 +1555,7 @@ __all__ = [
     "build_task_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
+    "optimize_artifact_evidence",
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",

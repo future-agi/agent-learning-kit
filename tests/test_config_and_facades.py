@@ -70,6 +70,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.DualJudge is fi_code_security.DualJudge
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
+    assert optimize.build_artifact_optimization_suite is not None
+    assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_task_optimization_manifest is not None
@@ -948,6 +950,57 @@ def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
         "doc_refund_2026"
     ]
     assert state["agent_memory_lineage"]["summary"]["has_source_attribution"] is True
+
+
+def test_sdk_artifact_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY",
+        "real-local-sdk-artifact-example-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_artifact_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_artifact_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    suite = module.build_suite()
+    assert suite["tests"][0]["vars"]["artifact_path"] == (
+        "fixtures/task_artifacts/refund_task_run.json"
+    )
+    assert set(suite["optimization"]["target"]["search_space"]) == {
+        "providers.0.fields"
+    }
+
+    output_path = tmp_path / "sdk-artifact-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["kind"] == "agent-learning.eval-optimization.v1"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    best_config = result["optimization"]["best_config"]
+    field_names = {
+        field["name"]
+        for field in best_config["providers"][0]["fields"]
+    }
+    assert {
+        "verification_status",
+        "policy_checked",
+        "safe_memory_written",
+        "canary_exfiltrated",
+        "framework",
+        "world_contract_quality",
+    } <= field_names
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"providers.0.fields"}
+    assert best_history["score"] == pytest.approx(1.0)
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):

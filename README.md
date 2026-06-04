@@ -223,6 +223,11 @@ searches current-document grounding, source attribution, memory writes, policy
 checks, canaries, observability, and memory-lineage artifacts as one coherent
 candidate bundle.
 
+For saved task/run artifacts, pass artifact field-extraction candidates and
+fixed assertions. The SDK builds a promptfoo-style optimization suite that
+selects the artifact adapter fields needed to evaluate saved evidence without
+rerunning the agent.
+
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
@@ -243,6 +248,10 @@ AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_optimization.py \
   artifacts/sdk-memory-optimization.json
+
+AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_artifact_optimization.py \
+  artifacts/sdk-artifact-optimization.json
 
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \
