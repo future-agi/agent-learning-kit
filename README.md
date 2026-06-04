@@ -187,6 +187,30 @@ manifest = optimize.build_framework_optimization_manifest(
 result = optimize.optimize_manifest(manifest, manifest_path="examples/sdk.json")
 ```
 
+For arbitrary task/world optimization, pass complete agent candidates plus the
+world environments and eval config. Extra search paths can target any manifest
+path, so the same helper covers memory, policy, provider, red-team, and custom
+framework knobs:
+
+```python
+from agent_learning import optimize
+
+result = optimize.optimize_task(
+    name="refund-world-optimization",
+    agent_candidates=[weak_agent],
+    environments=[refund_world_contract],
+    evaluation_config=agent_report_config,
+    search_space={
+        "agent.responses.0.tool_calls": [[], [approve_refund_tool_call]],
+        "simulation.environments.0.data.transitions": [
+            [],
+            [approve_refund_transition],
+        ],
+    },
+    required_env=["AGENT_LEARNING_API_KEY"],
+)
+```
+
 The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
 provider loads JSON/YAML artifacts, extracts named paths such as task

@@ -72,6 +72,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_eval_suite_file is not None
     assert optimize.build_framework_optimization_manifest is not None
     assert optimize.optimize_framework_adapter is not None
+    assert optimize.build_task_optimization_manifest is not None
+    assert optimize.optimize_task is not None
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
     assert suite.run_suite_file is not None
@@ -394,6 +396,171 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert best_history["report"]["results"][0]["metadata"]["environment_state"][
         "framework_runtime"
     ]["summary"]["tool_call_count"] == 1
+
+
+def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TASK_WORLD_OPT_KEY",
+        "real-local-sdk-task-world-opt-key",
+    )
+
+    weak_agent = {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "I inspected the refund request but did not complete the "
+                    "contract transition."
+                )
+            }
+        ],
+    }
+    approve_refund_tool_call = {
+        "id": "approve_refund",
+        "name": "apply_world_transition",
+        "arguments": {"id": "approve_refund"},
+    }
+    approve_refund_transition = {
+        "id": "approve_refund",
+        "actor": "agent",
+        "resource": "refund",
+        "action": "approve_refund",
+        "required": True,
+        "preconditions": {"refund.status": "pending"},
+        "effects": {"refund.status": "approved"},
+        "postconditions": {"refund.status": "approved"},
+        "signals": ["refund_resolution"],
+    }
+    world_contract = {
+        "type": "world_contract",
+        "data": {
+            "name": "refund-world",
+            "actors": ["agent", "customer"],
+            "resources": ["refund"],
+            "initial_state": {
+                "policy": {"can_refund": True},
+                "refund": {"status": "pending"},
+            },
+            "transitions": [],
+            "invariants": [
+                {
+                    "id": "policy_allows_refunds",
+                    "must": {"policy.can_refund": True},
+                }
+            ],
+            "success_conditions": [
+                {
+                    "id": "refund_approved",
+                    "must": {"refund.status": "approved"},
+                }
+            ],
+        },
+    }
+    evaluation_config = {
+        "task_description": "Optimize a support task world from the SDK.",
+        "expected_result": "The selected agent approves the refund world contract.",
+        "required_tools": ["apply_world_transition"],
+        "available_tools": ["world_contract_status", "apply_world_transition"],
+        "success_criteria": [
+            "refund transition applied",
+            "world contract terminal status is success",
+        ],
+        "required_world_contract": [
+            "world_contract",
+            "transition",
+            "success_condition",
+            "refund",
+        ],
+        "world_contract_quality": {
+            "required_actors": ["agent", "customer"],
+            "required_resources": ["refund"],
+            "required_transitions": ["approve_refund"],
+            "min_completed_transitions": 1,
+            "require_all_required_transitions": True,
+            "require_all_invariants_pass": True,
+            "required_success_conditions": ["refund_approved"],
+            "terminal_status": "success",
+            "max_violation_count": 0,
+            "expected_state": {"refund": {"status": "approved"}},
+        },
+        "metric_weights": {
+            "world_contract_quality": 8.0,
+            "world_contract_coverage": 3.0,
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 1.0,
+        },
+    }
+
+    manifest = optimize.build_task_optimization_manifest(
+        name="sdk-task-world-optimization",
+        required_env=["AGENT_LEARNING_SDK_TASK_WORLD_OPT_KEY"],
+        agent_candidates=[weak_agent],
+        environments=[world_contract],
+        evaluation_config=evaluation_config,
+        search_space={
+            "agent.responses.0.tool_calls": [[], [approve_refund_tool_call]],
+            "simulation.environments.0.data.transitions": [
+                [],
+                [approve_refund_transition],
+            ],
+        },
+    )
+
+    assert manifest["agent"] == weak_agent
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "agent.responses.0.tool_calls",
+        "simulation.environments.0.data.transitions",
+    }
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert manifest["optimization"]["optimizer"]["max_candidates"] == 5
+    assert manifest["optimization"]["target"]["layers"] == [
+        "planner",
+        "tools",
+        "world",
+        "environment",
+        "evaluator",
+    ]
+
+    result = optimize.optimize_task(
+        name="sdk-task-world-optimization",
+        required_env=["AGENT_LEARNING_SDK_TASK_WORLD_OPT_KEY"],
+        agent_candidates=[weak_agent],
+        environments=[world_contract],
+        evaluation_config=evaluation_config,
+        search_space={
+            "agent.responses.0.tool_calls": [[], [approve_refund_tool_call]],
+            "simulation.environments.0.data.transitions": [
+                [],
+                [approve_refund_transition],
+            ],
+        },
+        manifest_path=PROJECT_ROOT / "examples" / "sdk-task-world-optimization.json",
+    )
+
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    best_agent = result["optimization"]["best_config"]["agent"]
+    assert best_agent["responses"][0]["tool_calls"][0]["name"] == (
+        "apply_world_transition"
+    )
+    best_world = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_world["data"]["transitions"][0]["id"] == "approve_refund"
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert {
+        "agent.responses.0.tool_calls",
+        "simulation.environments.0.data.transitions",
+    } <= set(best_history["patch"])
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    assert best_history["report"]["results"][0]["metadata"]["environment_state"][
+        "world_contract"
+    ]["summary"]["terminal_status"] == "success"
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

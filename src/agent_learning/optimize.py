@@ -208,6 +208,133 @@ def optimize_manifest(
     )
 
 
+def build_task_optimization_manifest(
+    *,
+    name: str,
+    agent_candidates: Sequence[Mapping[str, Any]],
+    evaluation_config: Mapping[str, Any],
+    scenario: Optional[Mapping[str, Any]] = None,
+    environments: Optional[Sequence[Mapping[str, Any]]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    layers: Sequence[str] = ("planner", "tools", "world", "environment", "evaluator"),
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    base_agent: Optional[Mapping[str, Any]] = None,
+    search_space: Optional[Mapping[str, Sequence[Any]]] = None,
+    target_base_config: Optional[Mapping[str, Any]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable optimization manifest for any task/world agent.
+
+    Unlike ``build_framework_optimization_manifest``, candidates are complete
+    manifest agent configs. The helper can also search environment bundles and
+    arbitrary manifest paths, which makes it usable for worlds, memory, policy,
+    red-team harnesses, provider settings, or custom framework knobs without
+    hand-writing the optimization JSON.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not agent_candidates:
+        raise ValueError("agent_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    copied_agents = [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+    base_agent_config = (
+        copy.deepcopy(dict(base_agent))
+        if base_agent is not None
+        else copy.deepcopy(copied_agents[0])
+    )
+    base_environments = _base_environments(
+        environments=environments,
+        environment_candidates=environment_candidates,
+    )
+
+    target_base = copy.deepcopy(dict(target_base_config or {}))
+    target_base.setdefault("agent", copy.deepcopy(base_agent_config))
+    simulation_base = target_base.setdefault("simulation", {})
+    if not isinstance(simulation_base, dict):
+        raise ValueError("target_base_config.simulation must be a mapping")
+    simulation_base.setdefault("environments", copy.deepcopy(base_environments))
+
+    optimization_search_space = _task_search_space(
+        agent_candidates=copied_agents,
+        environment_candidates=environment_candidates,
+        search_space=search_space,
+    )
+    metadata = {
+        "source": "agent_learning.optimize.build_task_optimization_manifest",
+        "task_kind": "task",
+        **copy.deepcopy(dict(target_metadata or {})),
+    }
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(dict(scenario or _default_task_scenario(name))),
+        "agent": copy.deepcopy(base_agent_config),
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": bool(auto_execute_tools),
+            "environments": copy.deepcopy(base_environments),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": copy.deepcopy(dict(evaluation_config)),
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": [str(layer) for layer in layers],
+                "base_config": target_base,
+                "search_space": optimization_search_space,
+                "metadata": metadata,
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(optimization_search_space))
+            ),
+        },
+    }
+
+
+def optimize_task(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a generic task/world optimization manifest."""
+
+    manifest = build_task_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -255,65 +382,26 @@ def build_framework_optimization_manifest(
         )
         for candidate in adapter_candidates
     ]
-    base_agent_config = (
-        copy.deepcopy(dict(base_agent))
-        if base_agent is not None
-        else copy.deepcopy(agent_candidates[0])
-    )
-    base_environments = _base_environments(
+    return build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agent_candidates,
+        evaluation_config=evaluation_config,
+        scenario=scenario or _default_framework_scenario(name),
         environments=environments,
         environment_candidates=environment_candidates,
+        required_env=required_env,
+        optimizer=optimizer or _default_framework_optimizer(agent_candidates),
+        threshold=threshold,
+        layers=("framework", "harness", "evaluator"),
+        min_turns=1,
+        max_turns=1,
+        base_agent=base_agent,
+        target_metadata={
+            "source": "agent_learning.optimize.build_framework_optimization_manifest",
+            "task_kind": "framework_adapter",
+            "framework": framework,
+        },
     )
-
-    search_space: dict[str, list[Any]] = {
-        "agent": copy.deepcopy(agent_candidates),
-    }
-    if environment_candidates is not None:
-        if not environment_candidates:
-            raise ValueError("environment_candidates must not be empty when provided")
-        search_space["simulation.environments"] = [
-            copy.deepcopy(list(candidate))
-            for candidate in environment_candidates
-        ]
-
-    return {
-        "version": "agent-learning.optimization.v1",
-        "name": name,
-        "required_env": [str(key) for key in required_env],
-        "scenario": copy.deepcopy(dict(scenario or _default_framework_scenario(name))),
-        "agent": copy.deepcopy(base_agent_config),
-        "simulation": {
-            "engine": "local_text",
-            "max_turns": 1,
-            "min_turns": 1,
-            "environments": copy.deepcopy(base_environments),
-        },
-        "evaluation": {
-            "agent_report": {
-                "threshold": float(threshold),
-                "config": copy.deepcopy(dict(evaluation_config)),
-            }
-        },
-        "optimization": {
-            "threshold": float(threshold),
-            "target": {
-                "name": name,
-                "layers": ["framework", "harness", "evaluator"],
-                "base_config": {
-                    "agent": copy.deepcopy(base_agent_config),
-                    "simulation": {
-                        "environments": copy.deepcopy(base_environments),
-                    },
-                },
-                "search_space": search_space,
-                "metadata": {
-                    "source": "agent_learning.optimize.build_framework_optimization_manifest",
-                    "framework": framework,
-                },
-            },
-            "optimizer": copy.deepcopy(dict(optimizer or _default_framework_optimizer(agent_candidates))),
-        },
-    }
 
 
 def optimize_framework_adapter(
@@ -371,6 +459,73 @@ def _base_environments(
     if environment_candidates:
         return [copy.deepcopy(dict(item)) for item in environment_candidates[0]]
     return []
+
+
+def _task_search_space(
+    *,
+    agent_candidates: Sequence[Mapping[str, Any]],
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]],
+    search_space: Optional[Mapping[str, Sequence[Any]]],
+) -> dict[str, list[Any]]:
+    optimization_search_space: dict[str, list[Any]] = {
+        "agent": [copy.deepcopy(dict(candidate)) for candidate in agent_candidates],
+    }
+
+    if environment_candidates is not None:
+        if not environment_candidates:
+            raise ValueError("environment_candidates must not be empty when provided")
+        optimization_search_space["simulation.environments"] = [
+            [copy.deepcopy(dict(item)) for item in candidate]
+            for candidate in environment_candidates
+        ]
+
+    for path, choices in (search_space or {}).items():
+        path_key = str(path)
+        if not path_key:
+            raise ValueError("search_space paths must be non-empty")
+        if path_key in optimization_search_space:
+            raise ValueError(f"search_space path {path_key!r} is already defined")
+        if isinstance(choices, (str, bytes)) or isinstance(choices, Mapping):
+            raise ValueError(
+                f"search_space.{path_key} must be a sequence of candidate values"
+            )
+        values = [copy.deepcopy(value) for value in choices]
+        if not values:
+            raise ValueError(f"search_space.{path_key} must not be empty")
+        optimization_search_space[path_key] = values
+
+    return optimization_search_space
+
+
+def _default_task_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "agent-owner"},
+                "situation": "Optimize an agent task through Agent Learning Kit.",
+                "outcome": "The optimized agent satisfies the configured evaluation.",
+            }
+        ],
+    }
+
+
+def _default_task_optimizer(
+    search_space: Mapping[str, Sequence[Any]],
+) -> dict[str, Any]:
+    return {
+        "algorithm": "agent",
+        "max_candidates": max(2, _search_space_cardinality(search_space) + 1),
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+
+
+def _search_space_cardinality(search_space: Mapping[str, Sequence[Any]]) -> int:
+    size = 1
+    for choices in search_space.values():
+        size *= max(1, len(choices))
+    return size
 
 
 def _default_framework_scenario(name: str) -> dict[str, Any]:
@@ -463,11 +618,13 @@ __all__ = [
     "diagnose_report",
     "diagnose_text",
     "build_framework_optimization_manifest",
+    "build_task_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",
+    "optimize_task",
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
