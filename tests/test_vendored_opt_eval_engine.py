@@ -183,10 +183,33 @@ def _eval_suite() -> dict:
 
 
 def test_agent_learning_facades_resolve_to_vendored_fi_engines():
+    fi_evals = _assert_vendored_module("fi.evals")
     fi_opt = _assert_vendored_module("fi.opt")
     fi_opt_simulate = _assert_vendored_module("fi.opt.integrations.simulate")
     fi_agent_metrics = _assert_vendored_module("fi.evals.metrics.agents")
 
+    assert set(fi_evals.__all__) <= set(agent_evals.__all__)
+    for name in (
+        "StreamingConfig",
+        "StreamingEvalResult",
+        "ChunkResult",
+        "EarlyStopPolicy",
+        "ExecutionMode",
+        "BaseEvaluation",
+        "EvalBuilder",
+        "blocking_evaluator",
+        "async_evaluator",
+        "custom_eval",
+        "simple_eval",
+        "EvalTemplateManager",
+        "Protect",
+        "protect",
+        "list_evaluations",
+        "Toxicity",
+        "PromptInjection",
+        "TaskCompletion",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_evals, name)
     assert agent_optimize.ManifestOptimizationProblem is fi_opt.ManifestOptimizationProblem
     assert agent_optimize.EvalSuiteOptimizationProblem is fi_opt.EvalSuiteOptimizationProblem
     assert agent_optimize.ManifestOptimizationProblem is (

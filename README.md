@@ -89,6 +89,9 @@ engine code while keeping `agent_learning.*` as the public API.
 `agent_learning.simulate` mirrors the vendored `fi.simulate` public SDK surface:
 agent definitions/wrappers, local/cloud/realtime engines, environments,
 normalizers, manifest helpers, eval-suite helpers, and artifact renderers.
+`agent_learning.evals` mirrors the vendored `fi.evals` public SDK surface:
+cloud/client evals, built-in templates, streaming evals, framework evaluators,
+Protect helpers, execution handles, and the unified `evaluate` API.
 
 The `world_framework_memory_optimization.json` example optimizes a
 LangGraph-style world orchestration across framework trace, retrieval, memory
