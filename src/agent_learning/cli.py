@@ -12,6 +12,7 @@ from .config import current_config
 
 AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
+AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
 
 
 SIMULATE_COMMANDS = {
@@ -23,7 +24,6 @@ SIMULATE_COMMANDS = {
     "redteam",
     "replay",
     "report",
-    "run",
 }
 
 
@@ -34,6 +34,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     command = args[0]
     if command == "doctor":
         return _doctor()
+    if command == "run":
+        return _run(args[1:])
     if command == "eval":
         return _eval(args[1:])
     if command == "optimize-eval":
@@ -57,6 +59,63 @@ def _simulate(args: Sequence[str]) -> int:
         print(f"agent-learn: import failed: {exc}", file=sys.stderr)
         return 2
     return int(cli.main(list(args)))
+
+
+def _run(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn run",
+        description="Run a local simulation/evaluation manifest with Agent Learning Kit.",
+    )
+    _add_manifest_run_args(parser)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from fi.simulate.manifest import (
+            load_manifest_file,
+            render_junit,
+            render_markdown,
+            render_sarif,
+            run_manifest_file,
+        )
+    except Exception as exc:
+        print(
+            "agent-learn run requires `agent-learning-kit[simulate]` "
+            "or `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    manifest_path = Path(parsed.manifest).expanduser().resolve()
+    try:
+        manifest = load_manifest_file(manifest_path)
+        payload = _run_async(
+            run_manifest_file(
+                manifest_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                no_eval=bool(parsed.no_eval),
+                dry_run=bool(parsed.dry_run),
+            )
+        )
+    except Exception as exc:
+        print(f"agent-learn run: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_RUN_KIND
+    written = _write_result_outputs(
+        payload,
+        manifest,
+        parsed,
+        manifest_path,
+        render_junit=render_junit,
+        render_sarif=render_sarif,
+        render_markdown=render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
 
 
 def _eval(args: Sequence[str]) -> int:
@@ -165,6 +224,65 @@ def _optimize_eval(args: Sequence[str]) -> int:
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
+
+
+def _add_manifest_run_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("manifest", help="Path to a JSON/YAML manifest.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help=(
+            "Write JSON output to this path. .xml paths are treated as JUnit; "
+            ".sarif paths as SARIF."
+        ),
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write compact JUnit XML output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 findings output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown report output.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Override evaluation.agent_report.threshold.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the run name.",
+    )
+    parser.add_argument(
+        "--no-eval",
+        action="store_true",
+        help="Run simulation only.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate manifest/env without executing.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
 
 
 def _add_eval_suite_args(parser: argparse.ArgumentParser, *, optimize: bool) -> None:
@@ -328,6 +446,14 @@ def _resolve_output_path(value: str, base_dir: Path) -> Path:
     if path.is_absolute():
         return path
     return base_dir / path
+
+
+def _run_async(awaitable: Any) -> Any:
+    try:
+        import asyncio
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("asyncio is required for agent-learn run.") from exc
+    return asyncio.run(awaitable)
 
 
 def _doctor() -> int:

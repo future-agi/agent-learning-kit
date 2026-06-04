@@ -35,15 +35,15 @@ CLI entrypoint:
 ```bash
 agent-learn eval examples/eval_suite.json --output artifacts/eval.json
 agent-learn optimize-eval examples/eval_suite_optimization.json --output artifacts/eval-optimization.json
-agent-learn run manifest.json --output artifacts/run.json
+agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
 agent-learn optimize manifest.json --output artifacts/optimization.json
 agent-learn doctor
 ```
 
-`agent-learn eval` and `agent-learn optimize-eval` write Agent Learning Kit
-artifact kinds (`agent-learning.eval.v1` and
-`agent-learning.eval-optimization.v1`) plus optional JUnit, SARIF, and Markdown
-outputs for CI.
+`agent-learn run`, `agent-learn eval`, and `agent-learn optimize-eval` write
+Agent Learning Kit artifact kinds (`agent-learning.run.v1`,
+`agent-learning.eval.v1`, and `agent-learning.eval-optimization.v1`) plus
+optional JUnit, SARIF, and Markdown outputs for CI.
 
 This first slice establishes the canonical package name, shared config, module
 boundaries, and CLI routing needed for the staged code move into one SDK.
