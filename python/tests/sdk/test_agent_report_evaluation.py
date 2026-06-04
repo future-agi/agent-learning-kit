@@ -4773,6 +4773,208 @@ def test_evaluate_agent_report_scores_optimizer_society_trace_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_optimizer_backend_portfolio_quality():
+    portfolio = {
+        "kind": "optimizer_backend_portfolio",
+        "selected_optimizer": "society",
+        "final_score": 1.0,
+        "improved": True,
+        "feedback_source": "futureagi",
+        "rollback_decision": {"rollback_required": False},
+        "feedback_cases": [{"id": "case_multi_agent_memory"}],
+        "diagnoses": [{"component": "multi_agent", "failure_mode": "coordination_failure"}],
+        "search_paths": [
+            "multi_agent.handoff.contract",
+            "memory.shared_case_summary",
+            "policy.reconciliation.mode",
+        ],
+        "backend_plan": [
+            {"optimizer": "society", "rank": 1, "allocation_kind": "society_deliberation"},
+            {"optimizer": "social_memory", "rank": 2, "allocation_kind": "memory_collective"},
+            {"optimizer": "pareto", "rank": 3, "allocation_kind": "multi_objective"},
+        ],
+        "backend_runs": [
+            {"optimizer": "society", "status": "completed", "final_score": 1.0, "improved": True},
+            {"optimizer": "social_memory", "status": "completed", "final_score": 0.98, "improved": True},
+            {"optimizer": "pareto", "status": "completed", "final_score": 0.97, "improved": True},
+        ],
+        "backend_lineage": [
+            {
+                "optimizer": "society",
+                "status": "completed",
+                "candidate_id": "candidate_society",
+                "selection_relation": "selected",
+                "patch_paths": [
+                    "multi_agent.handoff.contract",
+                    "memory.shared_case_summary",
+                    "policy.reconciliation.mode",
+                ],
+            },
+            {
+                "optimizer": "social_memory",
+                "status": "completed",
+                "candidate_id": "candidate_social_memory",
+                "selection_relation": "equivalent",
+                "patch_paths": ["memory.shared_case_summary"],
+            },
+            {
+                "optimizer": "pareto",
+                "status": "completed",
+                "candidate_id": "candidate_pareto",
+                "selection_relation": "supporting",
+                "patch_paths": ["policy.reconciliation.mode"],
+            },
+        ],
+        "ablation_report": {
+            "selected_optimizer": "society",
+            "selected_candidate_id": "candidate_society",
+            "final_score": 1.0,
+            "best_without_selected_optimizer": "social_memory",
+            "best_without_selected_score": 0.98,
+            "score_delta_without_selected": 0.02,
+            "selected_backend_required": False,
+            "dependency": "backend_consensus",
+            "consensus_backends": ["social_memory", "pareto"],
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Audit optimizer backend portfolio."},
+                    {
+                        "role": "assistant",
+                        "content": "Portfolio has backend allocation, lineage, consensus, and ablation evidence.",
+                        "tool_calls": [
+                            {"id": "status", "name": "optimizer_portfolio_status", "arguments": {}},
+                            {"id": "ablation", "name": "inspect_optimizer_ablation", "arguments": {}},
+                        ],
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "optimizer_backend_portfolio"},
+                        "data": portfolio,
+                    }
+                ],
+                "metadata": {"environment_state": {"optimizer_backend_portfolio": portfolio}},
+            }
+        ]
+    }
+    config = {
+        "required_optimizer_portfolio": [
+            "optimizer_portfolio",
+            "backend_plan",
+            "backend_run",
+            "backend_lineage",
+            "selected_optimizer",
+            "ablation",
+            "consensus",
+            "selected_relation",
+            "diagnostic",
+            "feedback",
+            "search_path",
+            "improvement",
+            "rollback_decision",
+            "society",
+            "social_memory",
+            "pareto",
+        ],
+        "optimizer_portfolio_quality": {
+            "required_backends": ["society", "social_memory", "pareto"],
+            "required_completed_backends": ["society", "social_memory", "pareto"],
+            "required_consensus_backends": ["social_memory", "pareto"],
+            "required_search_paths": [
+                "multi_agent.handoff.contract",
+                "memory.shared_case_summary",
+                "policy.reconciliation.mode",
+            ],
+            "required_selection_relations": ["selected", "equivalent", "supporting"],
+            "required_dependencies": ["backend_consensus"],
+            "min_backend_plan_count": 3,
+            "min_backend_run_count": 3,
+            "min_completed_backends": 3,
+            "min_lineage_count": 3,
+            "min_consensus_backends": 2,
+            "min_feedback_cases": 1,
+            "min_diagnostics": 1,
+            "min_search_paths": 3,
+            "min_improved_backends": 3,
+            "min_final_score": 0.99,
+            "max_failed_backends": 0,
+            "require_selected_optimizer": True,
+            "require_backend_plan": True,
+            "require_backend_runs": True,
+            "require_backend_lineage": True,
+            "require_completed_backend": True,
+            "require_ablation": True,
+            "require_consensus": True,
+            "require_selected_relation": True,
+            "require_diagnostics": True,
+            "require_feedback": True,
+            "require_search_paths": True,
+            "require_improvement": True,
+            "require_rollback_decision": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["optimizer_portfolio_coverage"] == 1.0
+    assert scores["optimizer_portfolio_quality"] == 1.0
+
+    bad_portfolio = {
+        **portfolio,
+        "selected_optimizer": "bandit",
+        "final_score": 0.2,
+        "improved": False,
+        "rollback_decision": {},
+        "feedback_cases": [],
+        "diagnoses": [],
+        "search_paths": [],
+        "backend_plan": [{"optimizer": "bandit", "rank": 1}],
+        "backend_runs": [
+            {"optimizer": "bandit", "status": "failed", "final_score": 0.2, "failure": "no lineage"}
+        ],
+        "backend_lineage": [],
+        "ablation_report": {
+            "selected_optimizer": "bandit",
+            "selected_candidate_id": "candidate_bandit",
+            "final_score": 0.2,
+            "selected_backend_required": True,
+            "dependency": "single_backend",
+            "consensus_backends": [],
+        },
+    }
+    report["results"][0]["artifacts"][0]["data"] = bad_portfolio
+    report["results"][0]["metadata"]["environment_state"]["optimizer_backend_portfolio"] = bad_portfolio
+
+    failing = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing.findings}
+
+    assert failing_scores["optimizer_portfolio_coverage"] < 1.0
+    assert failing_scores["optimizer_portfolio_quality"] < 1.0
+    assert {
+        "missing_optimizer_portfolio_key",
+        "optimizer_portfolio_completed_backend_count_low",
+        "optimizer_portfolio_failed_backend_count_high",
+        "optimizer_portfolio_final_score_low",
+        "optimizer_portfolio_backend_missing",
+        "optimizer_portfolio_consensus_backend_missing",
+        "optimizer_portfolio_search_path_missing",
+        "optimizer_portfolio_selection_relation_missing",
+        "optimizer_portfolio_dependency_missing",
+        "optimizer_portfolio_backend_lineage_missing",
+        "optimizer_portfolio_consensus_missing",
+        "optimizer_portfolio_diagnostics_missing",
+        "optimizer_portfolio_feedback_missing",
+        "optimizer_portfolio_rollback_decision_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_streaming_trace_quality():
     trace = {
         "kind": "streaming_trace",

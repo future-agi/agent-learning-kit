@@ -209,6 +209,8 @@ class AgentReportEvalConfig(BaseModel):
     workspace_run_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_trace: List[str] = Field(default_factory=list)
     optimizer_trace_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_optimizer_portfolio: List[str] = Field(default_factory=list)
+    optimizer_portfolio_quality: Dict[str, Any] = Field(default_factory=dict)
     required_agent_memory_lineage: List[str] = Field(default_factory=list)
     agent_memory_lineage_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
@@ -434,6 +436,8 @@ class AgentReportEvaluator:
                 *_workspace_run_quality_metrics(report_context, config),
                 *_optimizer_trace_coverage_metrics(report_context, config),
                 *_optimizer_trace_quality_metrics(report_context, config),
+                *_optimizer_portfolio_coverage_metrics(report_context, config),
+                *_optimizer_portfolio_quality_metrics(report_context, config),
                 *_agent_memory_lineage_coverage_metrics(report_context, config),
                 *_agent_memory_lineage_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -19539,6 +19543,588 @@ def _optimizer_trace_quality_metric(
             "findings": findings,
             "observed": observed,
         },
+    )
+
+
+def _optimizer_portfolio_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_optimizer_portfolio(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        event_name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_optimizer_portfolio(payload, metadata):
+            payloads.append(payload)
+        elif "optimizer_ablation" in event_type or "optimizer_ablation" in event_name:
+            payloads.append({"kind": "optimizer_backend_portfolio", "ablation_report": payload})
+        elif "optimizer_backend" in event_type or "optimizer_backend" in event_name:
+            payloads.append({"kind": "optimizer_backend_portfolio", "backend_runs": [payload]})
+        elif "optimizer_portfolio" in event_type or "optimizer_portfolio" in event_name:
+            payloads.append(
+                {
+                    "kind": "optimizer_backend_portfolio",
+                    "summary": _as_dict(payload.get("summary")),
+                    "signals": _as_list(payload.get("signals")),
+                }
+            )
+    metadata = _as_dict(context.get("metadata", {}))
+    state = _as_dict(metadata.get("environment_state"))
+    state_payload = _as_dict(state.get("optimizer_backend_portfolio"))
+    if state_payload:
+        payloads.append(state_payload)
+    direct_payload = _as_dict(metadata.get("optimizer_backend_portfolio"))
+    if direct_payload:
+        payloads.append(direct_payload)
+    return _dedupe_optimizer_portfolio_payloads(payloads)
+
+
+def _optimizer_portfolio_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _optimizer_portfolio_payloads_from_context(context):
+        observed.update({"optimizer_portfolio", "backend_portfolio", "optimizer_backend_portfolio"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_optimizer_portfolio_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _optimizer_portfolio_summary([payload])
+        for key in _as_list(summary.get("observed_evidence", [])):
+            normalized = _normalize_optimizer_portfolio_key(key)
+            if normalized:
+                observed.add(normalized)
+        for key in _as_list(summary.get("observed_signals", [])):
+            normalized = _normalize_optimizer_portfolio_key(key)
+            if normalized:
+                observed.add(normalized)
+        for key in (
+            "planned_backends",
+            "completed_backends",
+            "lineage_backends",
+            "consensus_backends",
+            "selection_relations",
+            "allocation_kinds",
+        ):
+            for item in _as_list(summary.get(key, [])):
+                normalized = _normalize_optimizer_portfolio_key(item)
+                if normalized:
+                    observed.add(normalized)
+        for flag, evidence_key in (
+            ("has_selected_optimizer", "selected_optimizer"),
+            ("has_backend_plan", "backend_plan"),
+            ("has_backend_runs", "backend_run"),
+            ("has_backend_lineage", "backend_lineage"),
+            ("has_completed_backend", "completed"),
+            ("has_ablation", "ablation"),
+            ("has_consensus", "consensus"),
+            ("has_selected_relation", "selected_relation"),
+            ("has_diagnostics", "diagnostic"),
+            ("has_feedback", "feedback"),
+            ("has_search_paths", "search_path"),
+            ("has_improvement", "improvement"),
+            ("has_rollback_decision", "rollback_decision"),
+        ):
+            if summary.get(flag):
+                observed.add(evidence_key)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "optimizer_portfolio_status",
+            "list_optimizer_backends",
+            "inspect_optimizer_backend",
+            "inspect_optimizer_ablation",
+            "list_optimizer_portfolio_gaps",
+        }:
+            observed.update({"optimizer_portfolio", "backend_portfolio"})
+            if name == "list_optimizer_backends":
+                observed.add("backend_run")
+            elif name == "inspect_optimizer_backend":
+                observed.add("backend_lineage")
+            elif name == "inspect_optimizer_ablation":
+                observed.add("ablation")
+    return observed
+
+
+def _looks_like_optimizer_portfolio(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    if kind == "optimizer_backend_portfolio":
+        return True
+    return any(
+        key in data
+        for key in (
+            "backend_plan",
+            "backend_runs",
+            "backend_lineage",
+            "ablation_report",
+        )
+    ) and ("selected_optimizer" in data or "final_score" in data or "summary" in data)
+
+
+def _optimizer_portfolio_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    planned: set[str] = set()
+    completed: set[str] = set()
+    failed: set[str] = set()
+    lineage_backends: set[str] = set()
+    consensus_backends: set[str] = set()
+    search_paths: set[str] = set()
+    selection_relations: set[str] = set()
+    allocation_kinds: set[str] = set()
+    observed_evidence: set[str] = set()
+    observed_signals: set[str] = set()
+    selected_optimizer = ""
+    selected_candidate_id = ""
+    dependency = ""
+    selected_backend_required = False
+    final_score: Optional[float] = None
+    best_without_selected_score: Optional[float] = None
+    score_delta_without_selected: Optional[float] = None
+    backend_plan_count = 0
+    backend_run_count = 0
+    lineage_count = 0
+    selected_lineage_count = 0
+    improved_backend_count = 0
+    feedback_case_count = 0
+    diagnostic_count = 0
+    has_rollback_decision = False
+    has_improvement = False
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        summary = _as_dict(payload_dict.get("summary"))
+        observed_evidence.update(
+            _normalize_optimizer_portfolio_key(item)
+            for item in _as_list(summary.get("observed_evidence", []))
+            if _normalize_optimizer_portfolio_key(item)
+        )
+        observed_signals.update(
+            _normalize_optimizer_portfolio_key(item)
+            for item in [
+                *_as_list(payload_dict.get("signals", [])),
+                *_as_list(summary.get("observed_signals", [])),
+            ]
+            if _normalize_optimizer_portfolio_key(item)
+        )
+        selected_optimizer = selected_optimizer or _normalize_optimizer_portfolio_key(
+            payload_dict.get("selected_optimizer") or summary.get("selected_optimizer")
+        )
+        selected_candidate_id = selected_candidate_id or str(summary.get("selected_candidate_id") or "")
+        dependency = dependency or _normalize_optimizer_portfolio_key(summary.get("dependency"))
+        selected_backend_required = selected_backend_required or bool(summary.get("selected_backend_required"))
+        final_score = _max_optional_float(final_score, payload_dict.get("final_score"), summary.get("final_score"))
+        best_without_selected_score = _max_optional_float(best_without_selected_score, summary.get("best_without_selected_score"))
+        delta = _as_float(summary.get("score_delta_without_selected"))
+        if delta is not None:
+            score_delta_without_selected = delta
+        feedback_case_count += len(_as_list(payload_dict.get("feedback_cases", [])))
+        diagnostic_count += len(_as_list(payload_dict.get("diagnoses", payload_dict.get("diagnostics", []))))
+        backend_plan_count += len(_as_list(payload_dict.get("backend_plan", [])))
+        backend_run_count += len(_as_list(payload_dict.get("backend_runs", [])))
+        lineage_count += len(_as_list(payload_dict.get("backend_lineage", [])))
+        has_rollback_decision = has_rollback_decision or bool(payload_dict.get("rollback_decision")) or bool(summary.get("has_rollback_decision"))
+        has_improvement = has_improvement or bool(payload_dict.get("improved")) or bool(summary.get("has_improvement"))
+
+        planned.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("planned_backends", [])) if _normalize_optimizer_portfolio_key(item))
+        completed.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("completed_backends", [])) if _normalize_optimizer_portfolio_key(item))
+        failed.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("failed_backends", [])) if _normalize_optimizer_portfolio_key(item))
+        lineage_backends.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("lineage_backends", [])) if _normalize_optimizer_portfolio_key(item))
+        consensus_backends.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("consensus_backends", [])) if _normalize_optimizer_portfolio_key(item))
+        search_paths.update(str(item) for item in _as_list(summary.get("search_paths", [])) if str(item))
+        selection_relations.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("selection_relations", [])) if _normalize_optimizer_portfolio_key(item))
+        allocation_kinds.update(_normalize_optimizer_portfolio_key(item) for item in _as_list(summary.get("allocation_kinds", [])) if _normalize_optimizer_portfolio_key(item))
+
+        for item in _as_list(payload_dict.get("backend_plan", [])):
+            record = _as_dict(item)
+            optimizer = _normalize_optimizer_portfolio_key(record.get("optimizer"))
+            if optimizer:
+                planned.add(optimizer)
+                observed_signals.add(optimizer)
+            allocation_kind = _normalize_optimizer_portfolio_key(record.get("allocation_kind") or _as_dict(record.get("metadata")).get("allocation_kind"))
+            if allocation_kind:
+                allocation_kinds.add(allocation_kind)
+                observed_signals.add(allocation_kind)
+
+        for item in _as_list(payload_dict.get("backend_runs", [])):
+            record = _as_dict(item)
+            optimizer = _normalize_optimizer_portfolio_key(record.get("optimizer"))
+            status = _normalize_optimizer_portfolio_key(record.get("status"))
+            if optimizer:
+                observed_signals.add(optimizer)
+            if status:
+                observed_signals.add(status)
+            if optimizer and status in {"completed", "success", "succeeded"}:
+                completed.add(optimizer)
+            if optimizer and (status in {"failed", "error"} or record.get("failure")):
+                failed.add(optimizer)
+            final_score = _max_optional_float(final_score, record.get("final_score"))
+            if record.get("improved"):
+                improved_backend_count += 1
+                has_improvement = True
+
+        for item in _as_list(payload_dict.get("backend_lineage", [])):
+            record = _as_dict(item)
+            optimizer = _normalize_optimizer_portfolio_key(record.get("optimizer"))
+            relation = _normalize_optimizer_portfolio_key(record.get("selection_relation"))
+            if optimizer:
+                lineage_backends.add(optimizer)
+                observed_signals.add(optimizer)
+            if relation:
+                selection_relations.add(relation)
+                observed_signals.add(relation)
+            if optimizer == selected_optimizer or relation == "selected":
+                selected_lineage_count += 1
+            search_paths.update(str(path) for path in _as_list(record.get("patch_paths", [])) if str(path))
+            search_paths.update(str(path) for path in _as_list(record.get("shared_patch_paths", [])) if str(path))
+            search_paths.update(str(path) for path in _as_list(record.get("unique_patch_paths", [])) if str(path))
+
+        ablation = _as_dict(payload_dict.get("ablation_report"))
+        if ablation:
+            selected_optimizer = selected_optimizer or _normalize_optimizer_portfolio_key(ablation.get("selected_optimizer"))
+            selected_candidate_id = selected_candidate_id or str(ablation.get("selected_candidate_id") or "")
+            dependency = dependency or _normalize_optimizer_portfolio_key(ablation.get("dependency"))
+            selected_backend_required = selected_backend_required or bool(ablation.get("selected_backend_required"))
+            consensus_backends.update(
+                _normalize_optimizer_portfolio_key(item)
+                for item in _as_list(ablation.get("consensus_backends", []))
+                if _normalize_optimizer_portfolio_key(item)
+            )
+            final_score = _max_optional_float(final_score, ablation.get("final_score"))
+            best_without_selected_score = _max_optional_float(best_without_selected_score, ablation.get("best_without_selected_score"))
+            delta = _as_float(ablation.get("score_delta_without_selected"))
+            if delta is not None:
+                score_delta_without_selected = delta
+            if dependency:
+                observed_signals.add(dependency)
+
+        search_paths.update(str(item) for item in _as_list(payload_dict.get("search_paths", [])) if str(item))
+
+        backend_plan_count = max(backend_plan_count, _as_int(summary.get("backend_plan_count")) or 0)
+        backend_run_count = max(backend_run_count, _as_int(summary.get("backend_run_count")) or 0)
+        lineage_count = max(lineage_count, _as_int(summary.get("lineage_count")) or 0)
+        selected_lineage_count = max(selected_lineage_count, _as_int(summary.get("selected_lineage_count")) or 0)
+        improved_backend_count = max(improved_backend_count, _as_int(summary.get("improved_backend_count")) or 0)
+        feedback_case_count = max(feedback_case_count, _as_int(summary.get("feedback_case_count")) or 0)
+        diagnostic_count = max(diagnostic_count, _as_int(summary.get("diagnostic_count")) or 0)
+
+    if selected_optimizer:
+        observed_signals.add(selected_optimizer)
+    if dependency:
+        observed_signals.add(dependency)
+    if planned:
+        observed_evidence.add("backend_plan")
+    if backend_run_count or completed or failed:
+        observed_evidence.add("backend_run")
+    if lineage_count or lineage_backends:
+        observed_evidence.add("backend_lineage")
+    if selected_optimizer:
+        observed_evidence.add("selected_optimizer")
+    if consensus_backends:
+        observed_evidence.add("consensus")
+    if selection_relations:
+        observed_evidence.add("selected_relation")
+    if feedback_case_count:
+        observed_evidence.add("feedback")
+    if diagnostic_count:
+        observed_evidence.add("diagnostic")
+    if search_paths:
+        observed_evidence.add("search_path")
+    if has_improvement:
+        observed_evidence.add("improvement")
+    if has_rollback_decision:
+        observed_evidence.add("rollback_decision")
+
+    has_ablation = bool(consensus_backends or selected_candidate_id or dependency or selected_backend_required)
+    if has_ablation:
+        observed_evidence.add("ablation")
+    return {
+        "selected_optimizer": selected_optimizer or None,
+        "selected_candidate_id": selected_candidate_id or None,
+        "dependency": dependency or None,
+        "selected_backend_required": selected_backend_required,
+        "final_score": final_score,
+        "best_without_selected_score": best_without_selected_score,
+        "score_delta_without_selected": score_delta_without_selected,
+        "backend_plan_count": max(backend_plan_count, len(planned)),
+        "backend_run_count": max(backend_run_count, len(completed) + len(failed)),
+        "completed_backend_count": len(completed),
+        "failed_backend_count": len(failed),
+        "lineage_count": max(lineage_count, len(lineage_backends)),
+        "selected_lineage_count": selected_lineage_count,
+        "improved_backend_count": improved_backend_count,
+        "consensus_backend_count": len(consensus_backends),
+        "feedback_case_count": feedback_case_count,
+        "diagnostic_count": diagnostic_count,
+        "search_path_count": len(search_paths),
+        "planned_backends": sorted(planned),
+        "completed_backends": sorted(completed),
+        "failed_backends": sorted(failed),
+        "lineage_backends": sorted(lineage_backends),
+        "consensus_backends": sorted(consensus_backends),
+        "search_paths": sorted(search_paths),
+        "selection_relations": sorted(selection_relations),
+        "allocation_kinds": sorted(allocation_kinds),
+        "all_backends": sorted(planned | completed | lineage_backends),
+        "observed_evidence": sorted(observed_evidence | {"optimizer_portfolio", "backend_portfolio", "optimizer_backend_portfolio"}),
+        "observed_signals": sorted(observed_signals),
+        "has_selected_optimizer": bool(selected_optimizer),
+        "has_backend_plan": bool(planned or backend_plan_count),
+        "has_backend_runs": bool(backend_run_count or completed or failed),
+        "has_backend_lineage": bool(lineage_count or lineage_backends),
+        "has_completed_backend": bool(completed),
+        "has_ablation": has_ablation,
+        "has_consensus": bool(consensus_backends),
+        "has_selected_relation": bool(selected_lineage_count or "selected" in selection_relations),
+        "has_diagnostics": bool(diagnostic_count),
+        "has_feedback": bool(feedback_case_count),
+        "has_search_paths": bool(search_paths),
+        "has_improvement": has_improvement,
+        "has_rollback_decision": has_rollback_decision,
+        "has_failure_evidence": bool(failed),
+    }
+
+
+def _append_optimizer_portfolio_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "optimizer_portfolio_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_optimizer_portfolio_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _max_optional_float(current: Optional[float], *values: Any) -> Optional[float]:
+    result = current
+    for value in values:
+        numeric = _as_float(value)
+        if numeric is None:
+            continue
+        if result is None or numeric > result:
+            result = numeric
+    return result
+
+
+def _dedupe_optimizer_portfolio_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        if not payload_dict:
+            continue
+        key = json.dumps(payload_dict, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload_dict)
+    return deduped
+
+
+def _optimizer_portfolio_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_optimizer_portfolio and not _optimizer_portfolio_payloads_from_context(context):
+        return []
+    return [_optimizer_portfolio_coverage_metric(context, config)]
+
+
+def _optimizer_portfolio_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_optimizer_portfolio_key(key) for key in config.required_optimizer_portfolio]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="optimizer_portfolio_coverage",
+            score=1.0,
+            reason="No required optimizer portfolio keys provided.",
+        )
+    observed = _optimizer_portfolio_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="optimizer_portfolio_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required optimizer portfolio evidence observed."
+            if not missing
+            else f"Missing optimizer portfolio evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_optimizer_portfolio_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _optimizer_portfolio_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.optimizer_portfolio_quality:
+        return []
+    return [_optimizer_portfolio_quality_metric(context, config.optimizer_portfolio_quality)]
+
+
+def _optimizer_portfolio_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _optimizer_portfolio_summary(_optimizer_portfolio_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for config_key, observed_key, finding_type in (
+        ("min_backend_plan_count", "backend_plan_count", "optimizer_portfolio_backend_plan_count_low"),
+        ("min_backend_run_count", "backend_run_count", "optimizer_portfolio_backend_run_count_low"),
+        ("min_completed_backends", "completed_backend_count", "optimizer_portfolio_completed_backend_count_low"),
+        ("min_lineage_count", "lineage_count", "optimizer_portfolio_lineage_count_low"),
+        ("min_consensus_backends", "consensus_backend_count", "optimizer_portfolio_consensus_count_low"),
+        ("min_feedback_cases", "feedback_case_count", "optimizer_portfolio_feedback_count_low"),
+        ("min_diagnostics", "diagnostic_count", "optimizer_portfolio_diagnostic_count_low"),
+        ("min_search_paths", "search_path_count", "optimizer_portfolio_search_path_count_low"),
+        ("min_improved_backends", "improved_backend_count", "optimizer_portfolio_improved_backend_count_low"),
+    ):
+        expected = _as_int(requirements.get(config_key))
+        if expected is None:
+            continue
+        actual = _as_int(observed.get(observed_key)) or 0
+        _append_optimizer_portfolio_check(
+            checks,
+            findings,
+            check=config_key,
+            expected=expected,
+            actual=actual,
+            match=actual >= expected,
+            finding_type=finding_type,
+        )
+
+    max_failed_backends = _as_int(requirements.get("max_failed_backends"))
+    if max_failed_backends is not None:
+        actual_failed = _as_int(observed.get("failed_backend_count")) or 0
+        _append_optimizer_portfolio_check(
+            checks,
+            findings,
+            check="max_failed_backends",
+            expected=max_failed_backends,
+            actual=actual_failed,
+            match=actual_failed <= max_failed_backends,
+            finding_type="optimizer_portfolio_failed_backend_count_high",
+        )
+
+    min_final_score = _as_float(requirements.get("min_final_score") or requirements.get("required_final_score"))
+    if min_final_score is not None:
+        actual_score = _as_float(observed.get("final_score"))
+        _append_optimizer_portfolio_check(
+            checks,
+            findings,
+            check="min_final_score",
+            expected=min_final_score,
+            actual=actual_score,
+            match=(actual_score or 0.0) >= min_final_score,
+            finding_type="optimizer_portfolio_final_score_low",
+        )
+
+    for backend in _string_list(requirements.get("required_backends") or requirements.get("backends")):
+        normalized = _normalize_optimizer_portfolio_key(backend)
+        _append_optimizer_portfolio_check(checks, findings, check="backend", expected=normalized, actual=observed["all_backends"], match=normalized in observed["all_backends"], finding_type="optimizer_portfolio_backend_missing")
+
+    for backend in _string_list(requirements.get("required_completed_backends") or requirements.get("completed_backends")):
+        normalized = _normalize_optimizer_portfolio_key(backend)
+        _append_optimizer_portfolio_check(checks, findings, check="completed_backend", expected=normalized, actual=observed["completed_backends"], match=normalized in observed["completed_backends"], finding_type="optimizer_portfolio_completed_backend_missing")
+
+    for backend in _string_list(requirements.get("required_consensus_backends") or requirements.get("consensus_backends")):
+        normalized = _normalize_optimizer_portfolio_key(backend)
+        _append_optimizer_portfolio_check(checks, findings, check="consensus_backend", expected=normalized, actual=observed["consensus_backends"], match=normalized in observed["consensus_backends"], finding_type="optimizer_portfolio_consensus_backend_missing")
+
+    for path in _string_list(requirements.get("required_search_paths") or requirements.get("search_paths")):
+        _append_optimizer_portfolio_check(checks, findings, check="search_path", expected=path, actual=observed["search_paths"], match=path in observed["search_paths"], finding_type="optimizer_portfolio_search_path_missing")
+
+    for relation in _string_list(requirements.get("required_selection_relations") or requirements.get("selection_relations")):
+        normalized = _normalize_optimizer_portfolio_key(relation)
+        _append_optimizer_portfolio_check(checks, findings, check="selection_relation", expected=normalized, actual=observed["selection_relations"], match=normalized in observed["selection_relations"], finding_type="optimizer_portfolio_selection_relation_missing")
+
+    for dependency in _string_list(requirements.get("required_dependencies") or requirements.get("dependencies")):
+        normalized = _normalize_optimizer_portfolio_key(dependency)
+        _append_optimizer_portfolio_check(checks, findings, check="dependency", expected=normalized, actual=observed.get("dependency"), match=observed.get("dependency") == normalized, finding_type="optimizer_portfolio_dependency_missing")
+
+    for evidence in _string_list(requirements.get("required_evidence") or requirements.get("evidence")):
+        normalized = _normalize_optimizer_portfolio_key(evidence)
+        _append_optimizer_portfolio_check(checks, findings, check="evidence", expected=normalized, actual=observed["observed_evidence"], match=normalized in observed["observed_evidence"], finding_type="optimizer_portfolio_evidence_missing")
+
+    for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_optimizer_portfolio_key(signal)
+        _append_optimizer_portfolio_check(checks, findings, check="signal", expected=normalized, actual=observed["observed_signals"], match=normalized in observed["observed_signals"], finding_type="optimizer_portfolio_signal_missing")
+
+    for key, field, finding_type in (
+        ("require_selected_optimizer", "has_selected_optimizer", "optimizer_portfolio_selected_optimizer_missing"),
+        ("require_backend_plan", "has_backend_plan", "optimizer_portfolio_backend_plan_missing"),
+        ("require_backend_runs", "has_backend_runs", "optimizer_portfolio_backend_runs_missing"),
+        ("require_backend_lineage", "has_backend_lineage", "optimizer_portfolio_backend_lineage_missing"),
+        ("require_completed_backend", "has_completed_backend", "optimizer_portfolio_completed_backend_missing"),
+        ("require_ablation", "has_ablation", "optimizer_portfolio_ablation_missing"),
+        ("require_consensus", "has_consensus", "optimizer_portfolio_consensus_missing"),
+        ("require_selected_relation", "has_selected_relation", "optimizer_portfolio_selected_relation_missing"),
+        ("require_diagnostics", "has_diagnostics", "optimizer_portfolio_diagnostics_missing"),
+        ("require_feedback", "has_feedback", "optimizer_portfolio_feedback_missing"),
+        ("require_search_paths", "has_search_paths", "optimizer_portfolio_search_paths_missing"),
+        ("require_improvement", "has_improvement", "optimizer_portfolio_improvement_missing"),
+        ("require_rollback_decision", "has_rollback_decision", "optimizer_portfolio_rollback_decision_missing"),
+    ):
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_optimizer_portfolio_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[field],
+            match=observed[field] is required,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="optimizer_portfolio_quality",
+            score=1.0,
+            reason="No optimizer portfolio quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="optimizer_portfolio_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} optimizer portfolio quality check(s) matched.",
+        details={"checks": checks, "findings": findings, "observed": observed},
     )
 
 
