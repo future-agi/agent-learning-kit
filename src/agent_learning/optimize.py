@@ -335,6 +335,110 @@ def optimize_task(
     )
 
 
+def build_multi_agent_optimization_manifest(
+    *,
+    name: str,
+    participants: Mapping[str, Any] | Sequence[Any],
+    agent_candidates: Sequence[Mapping[str, Any]],
+    evaluation_config: Mapping[str, Any],
+    room: Optional[Mapping[str, Any]] = None,
+    room_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    search_space: Optional[Mapping[str, Sequence[Any]]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable optimization manifest for multi-agent coordination.
+
+    The helper optimizes both the scripted agent trace and the simulated
+    ``multi_agent_room`` contract. That is the useful SDK primitive for
+    handoffs, review, reconciliation, and shared room-state checks.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not agent_candidates:
+        raise ValueError("agent_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+
+    base_room_data = _multi_agent_room_data(participants=participants, room=room)
+    room_env = _multi_agent_environment(base_room_data)
+    environment_candidates = None
+    environments: Optional[list[dict[str, Any]]] = [room_env]
+    if room_candidates is not None:
+        if not room_candidates:
+            raise ValueError("room_candidates must not be empty when provided")
+        environments = None
+        environment_candidates = [
+            [
+                _multi_agent_environment(
+                    _multi_agent_room_candidate(base_room_data, candidate)
+                )
+            ]
+            for candidate in room_candidates
+        ]
+
+    inferred_turns = max(
+        [
+            len(candidate.get("responses", []))
+            for candidate in agent_candidates
+            if isinstance(candidate.get("responses", []), Sequence)
+        ]
+        or [min_turns]
+    )
+    max_turns_value = max_turns if max_turns is not None else max(min_turns, inferred_turns)
+
+    return build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agent_candidates,
+        evaluation_config=evaluation_config,
+        scenario=scenario or _default_multi_agent_scenario(name),
+        environments=environments,
+        environment_candidates=environment_candidates,
+        required_env=required_env,
+        optimizer=optimizer,
+        threshold=threshold,
+        layers=("multi_agent", "orchestration", "tools", "memory", "evaluator"),
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=auto_execute_tools,
+        search_space=search_space,
+        target_metadata={
+            "source": "agent_learning.optimize.build_multi_agent_optimization_manifest",
+            "task_kind": "multi_agent_coordination",
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+
+
+def optimize_multi_agent_coordination(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a multi-agent coordination optimization manifest."""
+
+    manifest = build_multi_agent_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_redteam_optimization_manifest(
     *,
     name: str,
@@ -563,6 +667,63 @@ def _framework_agent_candidate(
     }
 
 
+def _multi_agent_room_data(
+    *,
+    participants: Mapping[str, Any] | Sequence[Any],
+    room: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    room_data = copy.deepcopy(dict(room or {}))
+    configured_participants = (
+        room_data.pop("participants", None)
+        or room_data.pop("agents", None)
+        or room_data.pop("roles", None)
+        or participants
+    )
+    room_data["participants"] = _copy_multi_agent_participants(
+        configured_participants
+    )
+    return room_data
+
+
+def _multi_agent_room_candidate(
+    base_room_data: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    room_data = copy.deepcopy(dict(base_room_data))
+    room_data.update(copy.deepcopy(dict(candidate)))
+    return _multi_agent_room_data(
+        participants=room_data.get("participants", {}),
+        room=room_data,
+    )
+
+
+def _copy_multi_agent_participants(
+    participants: Mapping[str, Any] | Sequence[Any],
+) -> Mapping[str, Any] | list[Any]:
+    if isinstance(participants, Mapping):
+        copied = copy.deepcopy(dict(participants))
+        if not copied:
+            raise ValueError("participants must not be empty")
+        return copied
+    if isinstance(participants, (str, bytes)):
+        raise ValueError("participants must be a mapping or sequence of roles")
+    copied_list = [
+        copy.deepcopy(dict(item)) if isinstance(item, Mapping) else str(item)
+        for item in participants
+        if item not in (None, "")
+    ]
+    if not copied_list:
+        raise ValueError("participants must not be empty")
+    return copied_list
+
+
+def _multi_agent_environment(room_data: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "multi_agent_room",
+        "data": copy.deepcopy(dict(room_data)),
+    }
+
+
 def _base_environments(
     *,
     environments: Optional[Sequence[Mapping[str, Any]]],
@@ -644,6 +805,19 @@ def _default_redteam_scenario(name: str) -> dict[str, Any]:
                 "persona": {"name": "Asha", "role": "security-engineer"},
                 "situation": "Optimize a red-team attack and surface matrix through Agent Learning Kit.",
                 "outcome": "The optimized campaign covers the required attacks and surfaces.",
+            }
+        ],
+    }
+
+
+def _default_multi_agent_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "multi-agent-owner"},
+                "situation": "Optimize handoff, review, and reconciliation through Agent Learning Kit.",
+                "outcome": "The optimized multi-agent trace satisfies the configured coordination gates.",
             }
         ],
     }
@@ -790,6 +964,7 @@ __all__ = [
     "diagnose_report",
     "diagnose_text",
     "build_framework_optimization_manifest",
+    "build_multi_agent_optimization_manifest",
     "build_redteam_optimization_manifest",
     "build_task_optimization_manifest",
     "optimize_eval_suite",
@@ -797,6 +972,7 @@ __all__ = [
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",
+    "optimize_multi_agent_coordination",
     "optimize_redteam_campaign",
     "optimize_task",
     "problem_from_eval_suite_file",

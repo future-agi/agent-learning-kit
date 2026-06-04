@@ -217,12 +217,21 @@ result = optimize.optimize_task(
 )
 ```
 
+For multi-agent coordination, pass explicit participant roles, agent trace
+candidates, and room-contract candidates. The SDK builds a runnable
+`multi_agent_room` optimization manifest that can search handoff, review,
+reconciliation, and shared room-state behavior together.
+
 Runnable SDK cookbook:
 
 ```bash
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \
+  artifacts/sdk-multi-agent-optimization.json
 
 AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_optimization.py \

@@ -74,6 +74,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
+    assert optimize.build_multi_agent_optimization_manifest is not None
+    assert optimize.optimize_multi_agent_coordination is not None
     assert optimize.build_redteam_optimization_manifest is not None
     assert optimize.optimize_redteam_campaign is not None
     assert evals.evaluate is not None
@@ -599,6 +601,246 @@ def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+
+
+def test_optimize_facade_builds_and_runs_multi_agent_coordination_manifest(
+    monkeypatch,
+):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_AGENT_OPT_KEY",
+        "real-local-sdk-multi-agent-opt-key",
+    )
+    participants = {
+        "planner": {"name": "planner", "role": "task planner"},
+        "retriever": {"name": "retriever", "role": "policy evidence retriever"},
+        "critic": {"name": "critic", "role": "grounding reviewer"},
+    }
+    weak_agent = {
+        "type": "scripted",
+        "responses": [
+            {"content": "I skipped handoff and review.", "tool_calls": []}
+        ],
+    }
+    strong_agent = {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "The optimized trace proves planner, retriever, and critic "
+                    "roles coordinate through a verifiable room contract."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "handoff_retriever",
+                        "name": "handoff",
+                        "arguments": {
+                            "to": "retriever",
+                            "task": "Collect the current refund policy evidence.",
+                            "reason": "source grounding is required",
+                            "context": {
+                                "doc_id": "doc_refund_2026",
+                                "world_state": "refund_case_open",
+                            },
+                        },
+                    },
+                    {
+                        "id": "review_critic",
+                        "name": "request_review",
+                        "arguments": {
+                            "reviewer": "critic",
+                            "target": "refund policy answer",
+                            "criteria": ["policy", "handoff", "source"],
+                        },
+                    },
+                    {
+                        "id": "reconcile_answer",
+                        "name": "reconcile",
+                        "arguments": {
+                            "summary": "approved refund answer reconciled",
+                            "accepted_source": "critic",
+                            "conflicts": [],
+                        },
+                    },
+                    {
+                        "id": "room_status_after",
+                        "name": "room_status",
+                        "arguments": {},
+                    },
+                ],
+            }
+        ],
+    }
+    weak_room = {
+        "participants": {
+            "planner": participants["planner"],
+            "retriever": participants["retriever"],
+        },
+        "state": {"case": {"status": "triage"}},
+    }
+    strong_room = {
+        "participants": participants,
+        "handoff_contracts": {
+            "retriever": {
+                "require_reason": True,
+                "required_context_keys": ["doc_id", "world_state"],
+                "required_task_terms": ["refund policy"],
+            }
+        },
+        "expected_handoffs": [
+            {
+                "to": "retriever",
+                "task_contains": "current refund policy",
+                "reason_contains": "source grounding",
+                "context_keys": ["doc_id", "world_state"],
+                "contract_matched": True,
+            }
+        ],
+        "expected_reviews": [
+            {
+                "reviewer": "critic",
+                "target_contains": "refund policy answer",
+                "criteria": ["policy", "handoff", "source"],
+            }
+        ],
+        "expected_reconciliation": {
+            "summary_contains": "approved refund answer",
+            "accepted_source": "critic",
+            "conflicts_empty": True,
+        },
+        "allow_unknown_roles": False,
+        "state": {"case": {"status": "resolved"}},
+    }
+    evaluation_config = {
+        "task_description": "Optimize a multi-agent coordination loop.",
+        "expected_result": (
+            "The optimized trace proves planner, retriever, and critic roles "
+            "coordinate through a verifiable room contract."
+        ),
+        "required_tools": [
+            "handoff",
+            "request_review",
+            "reconcile",
+            "room_status",
+        ],
+        "required_multi_agent_trace": [
+            "trace",
+            "role",
+            "contract",
+            "handoff",
+            "review",
+            "reconciliation",
+            "state",
+        ],
+        "required_multi_agent_roles": ["planner", "retriever", "critic"],
+        "expected_multi_agent_handoffs": strong_room["expected_handoffs"],
+        "expected_multi_agent_reviews": strong_room["expected_reviews"],
+        "expected_multi_agent_reconciliation": (
+            strong_room["expected_reconciliation"]
+        ),
+        "metric_weights": {
+            "multi_agent_coordination_quality": 8.0,
+            "multi_agent_trace_coverage": 4.0,
+            "tool_selection_accuracy": 3.0,
+            "task_completion": 1.0,
+        },
+    }
+
+    manifest = optimize.build_multi_agent_optimization_manifest(
+        name="sdk-multi-agent-coordination-optimization",
+        required_env=["AGENT_LEARNING_SDK_MULTI_AGENT_OPT_KEY"],
+        participants=participants,
+        agent_candidates=[weak_agent, strong_agent],
+        room_candidates=[weak_room, strong_room],
+        evaluation_config=evaluation_config,
+        threshold=0.9,
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_MULTI_AGENT_OPT_KEY"]
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "multi_agent",
+        "orchestration",
+        "tools",
+        "memory",
+        "evaluator",
+    ]
+
+    result = optimize.optimize_multi_agent_coordination(
+        name="sdk-multi-agent-coordination-optimization",
+        required_env=["AGENT_LEARNING_SDK_MULTI_AGENT_OPT_KEY"],
+        participants=participants,
+        agent_candidates=[weak_agent, strong_agent],
+        room_candidates=[weak_room, strong_room],
+        evaluation_config=evaluation_config,
+        threshold=0.9,
+        manifest_path=PROJECT_ROOT / "examples" / "sdk-multi-agent.json",
+    )
+
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.9
+    best_config = result["optimization"]["best_config"]
+    assert best_config["agent"]["responses"][0]["tool_calls"][0]["name"] == (
+        "handoff"
+    )
+    best_room = best_config["simulation"]["environments"][0]["data"]
+    assert best_room["handoff_contracts"]["retriever"]["require_reason"] is True
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"agent", "simulation.environments"}
+    assert best_history["metrics"]["multi_agent_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["multi_agent_coordination_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+
+
+def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY",
+        "real-local-sdk-multi-agent-example-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_multi_agent_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+
+    output_path = tmp_path / "sdk-multi-agent-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.9
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["multi_agent_coordination_quality"] == (
+        pytest.approx(1.0)
+    )
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
