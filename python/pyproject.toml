@@ -1,7 +1,7 @@
 [project]
-name = "ai-evaluation"
+name = "agent-learning-kit-legacy-evaluation-source"
 version = "1.1.0"
-description = "We help GenAI teams maintain high-accuracy for their Models in production."
+description = "Legacy evaluation source moved into agent-learning-kit; do not publish as ai-evaluation."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Future AGI", email = "no-reply@futureagi.com"}]
@@ -41,9 +41,6 @@ all = [
     "redis>=5.0.0",
     "ray>=2.0.0",
 ]
-
-[project.scripts]
-fi = "fi.cli.main:main"
 
 [dependency-groups]
 dev = [

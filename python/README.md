@@ -5,7 +5,8 @@
 > **SDK migration:** new public Python SDK development now happens in
 > [`agent-learning-kit`](../../agent-learning-kit). Use `agent-learn` and
 > `agent_learning.evals` for new docs, examples, and integrations. This package
-> remains the backing evaluation engine during the migration.
+> has moved into `agent-learning-kit/src/fi/evals`; this source tree is legacy
+> history and should not be published as `ai-evaluation`.
 
 Welcome to Future AGI - Empowering GenAI Teams with Advanced Performance Management
 
