@@ -116,7 +116,59 @@ _FI_EVAL_EXPORT_NAMES = (
     "simple_eval",
 )
 
+_AUTOEVAL_EXPORT_NAMES = (
+    "AppCategory",
+    "RiskLevel",
+    "DomainSensitivity",
+    "AppRequirement",
+    "AppAnalysis",
+    "AutoEvalResult",
+    "EvalConfig",
+    "ScannerConfig",
+    "AutoEvalConfig",
+    "AutoEvalPipeline",
+    "register_eval_class",
+    "register_scanner_class",
+    "get_template",
+    "list_templates",
+    "get_template_names",
+    "TEMPLATES",
+    "AppAnalyzer",
+    "EvalRecommender",
+    "RuleBasedAnalyzer",
+    "export_yaml",
+    "export_json",
+    "load_yaml",
+    "load_json",
+    "load_config",
+    "to_yaml_string",
+    "to_json_string",
+    "from_yaml_string",
+    "from_json_string",
+    "InteractiveConfigurator",
+    "InteractiveSession",
+    "ClarificationQuestion",
+)
+
+_LOCAL_EVAL_EXPORT_NAMES = (
+    "RoutingMode",
+    "LOCAL_CAPABLE_METRICS",
+    "can_run_locally",
+    "select_routing_mode",
+    "LocalMetricRegistry",
+    "get_registry",
+    "LocalEvaluator",
+    "LocalEvaluatorConfig",
+    "LocalEvaluationResult",
+    "HybridEvaluator",
+    "LocalLLMConfig",
+    "OllamaLLM",
+    "LocalLLMFactory",
+)
+
 _EVAL_EXPORTS = {name: "fi.evals" for name in _FI_EVAL_EXPORT_NAMES}
+_EVAL_EXPORTS.update({name: "fi.evals.autoeval" for name in _AUTOEVAL_EXPORT_NAMES})
+_EVAL_EXPORTS.update({name: "fi.evals.local" for name in _LOCAL_EVAL_EXPORT_NAMES})
 _EVAL_EXPORTS["AgentReportEvaluator"] = "fi.evals.metrics.agents"
 
 

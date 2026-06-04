@@ -184,6 +184,8 @@ def _eval_suite() -> dict:
 
 def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_evals = _assert_vendored_module("fi.evals")
+    fi_autoeval = _assert_vendored_module("fi.evals.autoeval")
+    fi_local_evals = _assert_vendored_module("fi.evals.local")
     fi_opt = _assert_vendored_module("fi.opt")
     fi_optimizers = _assert_vendored_module("fi.opt.optimizers")
     fi_opt_simulate = _assert_vendored_module("fi.opt.integrations.simulate")
@@ -211,6 +213,28 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "TaskCompletion",
     ):
         assert getattr(agent_evals, name) is getattr(fi_evals, name)
+    assert set(fi_autoeval.__all__) <= set(agent_evals.__all__)
+    assert set(fi_local_evals.__all__) <= set(agent_evals.__all__)
+    for name in (
+        "AutoEvalPipeline",
+        "AutoEvalConfig",
+        "AppAnalyzer",
+        "EvalRecommender",
+        "get_template_names",
+        "to_yaml_string",
+        "from_yaml_string",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_autoeval, name)
+    for name in (
+        "RoutingMode",
+        "LOCAL_CAPABLE_METRICS",
+        "can_run_locally",
+        "select_routing_mode",
+        "LocalEvaluator",
+        "HybridEvaluator",
+        "LocalLLMFactory",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_local_evals, name)
     assert set(fi_opt.__all__) <= set(agent_optimize.__all__)
     assert set(fi_optimizers.__all__) <= set(agent_optimize.__all__)
     for name in (
@@ -356,6 +380,32 @@ def test_eval_suite_optimizer_runs_local_agent_report_eval_without_services():
     assert best_history.metadata["report"]["metadata"]["routing_mode"] == (
         "tool_grounded"
     )
+
+
+def test_eval_facade_runs_autoeval_template_and_local_metric_without_services():
+    template_names = agent_evals.get_template_names()
+    config = agent_evals.get_template("agent_workflow")
+    yaml_text = agent_evals.to_yaml_string(config)
+    roundtrip = agent_evals.from_yaml_string(yaml_text)
+    route = agent_evals.select_routing_mode(
+        "contains",
+        agent_evals.RoutingMode.HYBRID,
+    )
+
+    evaluator = agent_evals.LocalEvaluator()
+    result = evaluator.evaluate(
+        "contains",
+        inputs=[{"response": "refund approved by autonomous support agent"}],
+        config={"keyword": "approved"},
+    )
+
+    assert "agent_workflow" in template_names
+    assert roundtrip.name == "agent_workflow"
+    assert agent_evals.can_run_locally("contains") is True
+    assert agent_evals.can_run_locally("groundedness") is False
+    assert route is agent_evals.RoutingMode.LOCAL
+    assert result.executed_locally == {"contains"}
+    assert result.results.eval_results[0].output == pytest.approx(1.0)
 
 
 def test_manifest_optimization_diagnosis_routes_search_space_paths():
