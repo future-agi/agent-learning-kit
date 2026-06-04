@@ -48,6 +48,8 @@ agent-learn optimize examples/world_framework_memory_optimization.json \
   --output artifacts/world-framework-memory-optimization.json
 agent-learn optimize examples/voice_streaming_realtime_optimization.json \
   --output artifacts/voice-streaming-realtime-optimization.json
+agent-learn optimize examples/redteam_campaign_optimization.json \
+  --output artifacts/redteam-campaign-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -89,3 +91,8 @@ The `voice_streaming_realtime_optimization.json` example optimizes the same
 voice plus streaming harness through `agent-learn optimize`, selecting the
 candidate with clean call routing, voice timing/audio quality, and streaming
 tool-delta evidence.
+
+The `redteam_campaign_optimization.json` example optimizes an adversarial
+attack-pack, campaign matrix, readiness, observability, and mitigation harness
+through `agent-learn optimize`, selecting the candidate with clean red-team
+campaign and readiness gates.

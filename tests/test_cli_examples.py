@@ -49,6 +49,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
                 "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -108,14 +109,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 6
-        assert payload["summary"]["passed_count"] == 6
+        assert payload["summary"]["job_count"] == 7
+        assert payload["summary"]["passed_count"] == 7
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
         ]
@@ -454,5 +456,83 @@ def test_voice_streaming_realtime_optimization_example_runs_evidence_gates(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "voice-streaming-realtime-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_redteam_campaign_optimization_example_runs_evidence_gates(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
+        "real-local-redteam-opt-key",
+    )
+
+    output_path = tmp_path / "redteam-campaign-optimization.json"
+    junit_path = tmp_path / "redteam-campaign-optimization.junit.xml"
+    sarif_path = tmp_path / "redteam-campaign-optimization.sarif.json"
+    markdown_path = tmp_path / "redteam-campaign-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "redteam_campaign_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.9
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_config = payload["optimization"]["best_config"]
+    env_types = [
+        environment["type"]
+        for environment in best_config["simulation"]["environments"]
+    ]
+    assert env_types == [
+        "adversarial_attack_pack",
+        "red_team_campaign",
+        "red_team_readiness",
+    ]
+
+    best_campaign = best_config["simulation"]["environments"][1]["data"]
+    assert best_campaign["required_attack_types"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert best_campaign["required_surfaces"] == ["tool", "memory"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "red_team_readiness_coverage",
+        "red_team_readiness_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "redteam-campaign-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
