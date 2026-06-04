@@ -495,6 +495,7 @@ def _suite_result(
     for child in children:
         command = str(child.get("command") or "unknown")
         command_counts[command] = command_counts.get(command, 0) + 1
+    capabilities = _suite_capability_summary(children)
     return {
         "kind": AGENT_LEARNING_SUITE_KIND,
         "version": AGENT_LEARNING_SUITE_KIND,
@@ -511,12 +512,141 @@ def _suite_result(
             "skipped_count": max(job_count - len(children), 0),
             "score": score,
             "commands": command_counts,
+            "capabilities": capabilities,
         },
         "children": list(children),
         "jobs": list(children),
         "findings": _suite_findings(children),
         "duration_seconds": duration_seconds,
     }
+
+
+def _suite_capability_summary(children: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    caps: dict[str, set[str]] = {
+        "channels": set(),
+        "child_ids": set(),
+        "commands": set(),
+        "environment_state_keys": set(),
+        "environment_types": set(),
+        "frameworks": set(),
+        "metrics": set(),
+        "modalities": set(),
+        "providers": set(),
+        "result_kinds": set(),
+        "search_paths": set(),
+    }
+    for child in children:
+        _add_capability(caps, "child_ids", child.get("id"))
+        _add_capability(caps, "commands", child.get("command"))
+        _add_capability(caps, "result_kinds", child.get("kind"))
+        result = _as_mapping(child.get("result"))
+        _collect_result_capabilities(result, caps)
+    return {key: sorted(values) for key, values in caps.items()}
+
+
+def _collect_result_capabilities(payload: Mapping[str, Any], caps: dict[str, set[str]]) -> None:
+    _collect_summary_capabilities(_as_mapping(payload.get("summary")), caps)
+    optimization = _as_mapping(payload.get("optimization"))
+    best_config = _as_mapping(optimization.get("best_config"))
+    simulation = _as_mapping(best_config.get("simulation"))
+    for environment in _as_list(simulation.get("environments")):
+        env = _as_mapping(environment)
+        _add_capability(caps, "environment_types", env.get("type"))
+    for history in _as_list(optimization.get("history")):
+        item = _as_mapping(history)
+        _add_capabilities(caps, "metrics", _as_mapping(item.get("metrics")).keys())
+        _collect_report_capabilities(_as_mapping(item.get("report")), caps)
+    _collect_report_capabilities(_as_mapping(payload.get("report")), caps)
+    _collect_report_capabilities(_as_mapping(_as_mapping(payload.get("evaluation")).get("report")), caps)
+    _collect_payload_capabilities(payload, caps)
+
+
+def _collect_report_capabilities(report: Mapping[str, Any], caps: dict[str, set[str]]) -> None:
+    for result in _as_list(report.get("results")):
+        case = _as_mapping(result)
+        metadata = _as_mapping(case.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        _add_capabilities(caps, "environment_state_keys", environment_state.keys())
+        for state in environment_state.values():
+            _collect_payload_capabilities(state, caps)
+        _collect_payload_capabilities(_as_mapping(case.get("evaluation")), caps)
+
+
+def _collect_payload_capabilities(
+    value: Any,
+    caps: dict[str, set[str]],
+    *,
+    depth: int = 0,
+) -> None:
+    if depth > 12:
+        return
+    if isinstance(value, Mapping):
+        item = _as_mapping(value)
+        _collect_summary_capabilities(_as_mapping(item.get("summary")), caps)
+        _add_capability(caps, "frameworks", item.get("framework"))
+        _add_capability(caps, "providers", item.get("provider"))
+        _add_capability(caps, "channels", item.get("channel"))
+        _add_capability(caps, "channels", item.get("modality"))
+        _add_capability(caps, "modalities", item.get("modality"))
+        _add_capabilities(caps, "metrics", _as_mapping(item.get("metrics")).keys())
+        if _suite_key(item.get("type")) in _KNOWN_ENVIRONMENT_TYPES:
+            _add_capability(caps, "environment_types", item.get("type"))
+        for metric in _as_list(item.get("metrics")):
+            metric_item = _as_mapping(metric)
+            _add_capability(caps, "metrics", metric_item.get("name"))
+        for child in item.values():
+            _collect_payload_capabilities(child, caps, depth=depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            _collect_payload_capabilities(child, caps, depth=depth + 1)
+
+
+def _collect_summary_capabilities(summary: Mapping[str, Any], caps: dict[str, set[str]]) -> None:
+    if not summary:
+        return
+    _add_capabilities(caps, "search_paths", summary.get("search_paths"))
+    _add_capabilities(caps, "providers", summary.get("observed_providers"))
+    _add_capabilities(caps, "providers", summary.get("required_providers"))
+    _add_capabilities(caps, "channels", summary.get("observed_channels"))
+    _add_capabilities(caps, "channels", summary.get("required_channels"))
+    _add_capabilities(caps, "frameworks", summary.get("trace_frameworks"))
+    _add_capabilities(caps, "frameworks", summary.get("observed_frameworks"))
+    _add_capabilities(caps, "frameworks", summary.get("required_trace_frameworks"))
+    _add_capabilities(caps, "frameworks", summary.get("frameworks"))
+    _add_capabilities(caps, "metrics", summary.get("observed_metrics"))
+    _add_capabilities(caps, "metrics", summary.get("required_metrics"))
+    _add_capabilities(caps, "metrics", summary.get("eval_metrics"))
+    _add_capabilities(caps, "metrics", _as_mapping(summary.get("metric_averages")).keys())
+    provider_channels = _as_mapping(summary.get("provider_channels"))
+    _add_capabilities(caps, "providers", provider_channels.keys())
+    for channels in provider_channels.values():
+        _add_capabilities(caps, "channels", channels)
+
+
+def _add_capabilities(
+    caps: dict[str, set[str]],
+    key: str,
+    values: Any,
+) -> None:
+    if isinstance(values, Mapping):
+        values = values.keys()
+    elif values is None:
+        return
+    elif isinstance(values, (str, bytes)):
+        values = [values]
+    else:
+        try:
+            values = list(values)
+        except TypeError:
+            values = [values]
+    for value in values:
+        _add_capability(caps, key, value)
+
+
+def _add_capability(caps: dict[str, set[str]], key: str, value: Any) -> None:
+    normalized = _suite_key(value)
+    if normalized:
+        caps[key].add(normalized)
 
 
 def _suite_findings(children: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -722,6 +852,48 @@ def _as_list(value: Any) -> list[Any]:
 
 def _as_string_list(value: Any) -> list[str]:
     return [str(item) for item in _as_list(value) if str(item)]
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _suite_key(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return ""
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+_KNOWN_ENVIRONMENT_TYPES = {
+    "adversarial_attack_pack",
+    "agent_control_plane",
+    "agent_integration",
+    "agent_memory_lineage",
+    "agent_trust_boundary",
+    "autonomy_loop",
+    "browser",
+    "domain_package",
+    "framework_capability",
+    "framework_lifecycle",
+    "framework_portability",
+    "framework_probe",
+    "framework_trace",
+    "multimodal_image",
+    "multi_agent_room",
+    "observability_replay",
+    "optimizer_trace",
+    "red_team_campaign",
+    "red_team_readiness",
+    "retrieval_memory",
+    "streaming_trace",
+    "voice",
+    "workspace_run_manifest",
+    "world_attack_replay",
+    "world_contract",
+    "world_orchestration_replay",
+}
 
 
 def _md_cell(value: Any) -> str:

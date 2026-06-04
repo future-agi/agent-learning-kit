@@ -116,7 +116,9 @@ optimization, workspace/observability optimization, agent-integration
 optimization, optimizer-governance optimization, agent control-plane
 optimization, browser/CUA red-team optimization, framework-certification
 optimization, autonomous task/world red-team optimization, and multimodal image
-optimization jobs, then emits aggregate artifacts.
+optimization jobs, then emits aggregate artifacts plus a capability summary of
+commands, result kinds, environment types, providers, frameworks, channels, and
+metrics observed from the child run outputs.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework

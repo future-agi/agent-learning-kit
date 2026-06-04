@@ -120,6 +120,64 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["job_count"] == 15
         assert payload["summary"]["passed_count"] == 15
         assert payload["summary"]["score"] == pytest.approx(1.0)
+        capabilities = payload["summary"]["capabilities"]
+        assert set(capabilities["commands"]) == {
+            "eval",
+            "optimize",
+            "optimize_eval",
+            "redteam",
+            "run",
+        }
+        assert set(capabilities["result_kinds"]) == {
+            "agent_learning.eval.v1",
+            "agent_learning.eval_optimization.v1",
+            "agent_learning.optimization.v1",
+            "agent_learning.redteam.v1",
+            "agent_learning.run.v1",
+        }
+        assert {
+            "adversarial_attack_pack",
+            "agent_control_plane",
+            "agent_integration",
+            "autonomy_loop",
+            "browser_cua",
+            "framework_capability",
+            "framework_trace",
+            "multimodal_image",
+            "optimizer_trace",
+            "red_team_campaign",
+            "streaming_trace",
+            "voice",
+            "world_orchestration_replay",
+        } <= set(capabilities["environment_types"])
+        assert {
+            "agent_integration_manifest",
+            "browser",
+            "framework_capability_matrix",
+            "optimizer_society_trace",
+            "red_team_campaign",
+            "streaming_trace",
+            "voice",
+            "world_contract",
+        } <= set(capabilities["environment_state_keys"])
+        assert {"bland", "livekit", "retell", "twilio", "vapi"} <= set(
+            capabilities["providers"]
+        )
+        assert {"langchain", "langgraph", "livekit", "pipecat"} <= set(
+            capabilities["frameworks"]
+        )
+        assert {"chat", "phone", "sip", "voice", "webrtc", "websocket"} <= set(
+            capabilities["channels"]
+        )
+        assert {
+            "agent_integration_quality",
+            "browser_action_outcome",
+            "framework_capability_quality",
+            "multimodal_faithfulness",
+            "red_team_campaign_quality",
+            "voice_trace_coverage",
+            "world_contract_quality",
+        } <= set(capabilities["metrics"])
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
