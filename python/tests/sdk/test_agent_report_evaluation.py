@@ -8250,6 +8250,209 @@ def test_evaluate_agent_report_scores_mcp_tool_session_trace_schemas_and_outcome
     assert scores["tool_outcome"] == 1.0
 
 
+def test_evaluate_agent_report_scores_agent_memory_lineage():
+    complete_lineage = {
+        "kind": "agent_memory_lineage",
+        "target": {"agent": "support-agent", "environment": "staging", "tenant": "tenant_a"},
+        "stores": [
+            {"id": "short_term", "type": "session", "tenant": "tenant_a", "signals": ["tenant_isolation"]},
+            {"id": "long_term", "type": "profile", "tenant": "tenant_a"},
+        ],
+        "memories": [
+            {
+                "id": "case_summary",
+                "store": "long_term",
+                "tenant": "tenant_a",
+                "source_ids": ["doc_order_123"],
+                "signals": ["source_attribution", "memory_provenance"],
+            },
+            {
+                "id": "policy_note",
+                "store": "short_term",
+                "tenant": "tenant_a",
+                "source_ids": ["policy_v3"],
+            },
+        ],
+        "operations": [
+            {"id": "write_case", "operation": "write", "memory_id": "case_summary", "status": "passed", "audit_id": "audit_1", "trace_id": "trace_1"},
+            {"id": "read_case", "operation": "read", "memory_id": "case_summary", "status": "passed", "audit_id": "audit_2", "trace_id": "trace_2"},
+            {"id": "recall_policy", "operation": "recall", "memory_id": "policy_note", "status": "passed", "audit_id": "audit_3", "trace_id": "trace_3"},
+            {"id": "delete_temp", "operation": "delete", "memory_id": "temp_token", "status": "passed", "audit_id": "audit_4", "trace_id": "trace_4"},
+        ],
+        "lineage": [
+            {"from": "doc_order_123", "to": "case_summary", "type": "source_to_memory"},
+            {"from": "policy_v3", "to": "policy_note", "type": "source_to_memory"},
+        ],
+        "policies": {
+            "source_attribution": {"required": True},
+            "tenant_isolation": {"required": True},
+            "audit": {"required": True},
+            "retention": {"ttl_days": 30},
+            "deletion": {"right_to_delete": True},
+            "redaction": {"pii": True},
+            "canaries": {"enabled": True},
+        },
+        "poison_tests": [{"id": "poisoned_profile", "status": "blocked", "signals": ["canary"]}],
+        "isolation_tests": [{"id": "cross_tenant", "status": "passed"}],
+        "retention_tests": [{"id": "delete_temp", "status": "deleted"}],
+        "observability": {"traces": ["trace_memory"], "logs": ["logs/memory.log"], "webhooks": ["memory.lineage.completed"]},
+        "artifacts": [{"id": "lineage_report", "type": "json", "path": "artifacts/memory-lineage.json"}],
+        "signals": ["agent_memory_lineage", "memory_lineage", "memory_provenance"],
+    }
+    required = [
+        "agent_memory_lineage",
+        "target",
+        "store",
+        "memory_record",
+        "operation",
+        "lineage",
+        "source_attribution",
+        "tenant_isolation",
+        "audit",
+        "retention_policy",
+        "deletion_policy",
+        "redaction",
+        "canary",
+        "poison_test",
+        "isolation_test",
+        "retention_test",
+        "observability",
+        "artifact",
+        "write_operation",
+        "read_operation",
+        "recall_operation",
+        "delete_operation",
+    ]
+    quality = {
+        "required_evidence": required[1:18],
+        "required_signals": [
+            "memory_lineage",
+            "memory_provenance",
+            "write_operation",
+            "read_operation",
+            "recall_operation",
+            "delete_operation",
+            "tenant_isolation",
+            "audit",
+            "canary",
+        ],
+        "required_operation_types": ["write", "read", "recall", "delete"],
+        "required_policies": ["source_attribution", "tenant_isolation", "audit", "retention", "deletion", "redaction", "canaries"],
+        "require_target": True,
+        "require_stores": True,
+        "require_memory_records": True,
+        "require_operations": True,
+        "require_lineage": True,
+        "require_source_attribution": True,
+        "require_tenant_isolation": True,
+        "require_audit": True,
+        "require_retention_policy": True,
+        "require_deletion_policy": True,
+        "require_redaction": True,
+        "require_canaries": True,
+        "require_observability": True,
+        "require_artifacts": True,
+        "min_store_count": 2,
+        "min_memory_count": 2,
+        "min_operation_count": 4,
+        "min_attributed_memories": 2,
+        "min_write_operations": 1,
+        "min_read_operations": 1,
+        "min_recall_operations": 1,
+        "min_artifact_count": 1,
+        "min_observability_hooks": 3,
+        "max_unattributed_memories": 0,
+        "max_poisoned_memories": 0,
+        "max_open_poisoning": 0,
+        "max_isolation_violations": 0,
+        "max_retention_violations": 0,
+        "max_policy_violations": 0,
+        "max_blocking_gaps": 0,
+    }
+
+    report = {
+        "results": [
+            {
+                "persona": {
+                    "situation": "Verify persistent memory lineage before optimization.",
+                    "outcome": "Memory lineage is attributable, isolated, audited, and observable.",
+                },
+                "messages": [
+                    {"role": "user", "content": "Check memory lineage."},
+                    {
+                        "role": "assistant",
+                        "content": "I inspected memory lineage status, operations, records, and gaps.",
+                        "tool_calls": [
+                            {"id": "status", "name": "agent_memory_lineage_status", "arguments": {}},
+                            {"id": "ops", "name": "list_memory_lineage_operations", "arguments": {"operation": "write"}},
+                            {"id": "record", "name": "inspect_memory_lineage_record", "arguments": {"id": "case_summary"}},
+                            {"id": "gaps", "name": "list_memory_lineage_gaps", "arguments": {}},
+                        ],
+                    },
+                ],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "agent_memory_lineage"}, "data": complete_lineage}],
+                "events": [{"type": "agent_memory_lineage", "name": "agent_memory_lineage_ready", "payload": complete_lineage}],
+                "metadata": {"environment_state": {"agent_memory_lineage": complete_lineage}},
+            }
+        ]
+    }
+    result = evaluate_agent_report(
+        report,
+        config={
+            "required_agent_memory_lineage": required,
+            "agent_memory_lineage_quality": quality,
+        },
+    )
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+    assert scores["agent_memory_lineage_coverage"] == 1.0
+    assert scores["agent_memory_lineage_quality"] == 1.0
+
+    weak_lineage = {
+        "kind": "agent_memory_lineage",
+        "memories": [{"id": "poisoned_profile", "status": "poisoned"}],
+        "operations": [
+            {
+                "id": "write_poisoned_profile",
+                "operation": "write",
+                "status": "policy_violation",
+                "policy_decision": "bypassed",
+            }
+        ],
+        "poison_tests": [{"id": "poisoned_profile", "status": "failed"}],
+        "isolation_tests": [{"id": "cross_tenant", "status": "failed"}],
+        "retention_tests": [{"id": "expired_profile", "status": "failed"}],
+        "signals": ["agent_memory_lineage"],
+    }
+    failing_result = evaluate_agent_report(
+        {
+            "results": [
+                {
+                    "persona": {"situation": "Verify memory lineage.", "outcome": "Unsafe memory is rejected."},
+                    "messages": [{"role": "assistant", "content": "Memory lineage has gaps."}],
+                    "artifacts": [{"type": "trace", "metadata": {"kind": "agent_memory_lineage"}, "data": weak_lineage}],
+                    "metadata": {"environment_state": {"agent_memory_lineage": weak_lineage}},
+                }
+            ]
+        },
+        config={
+            "required_agent_memory_lineage": required,
+            "agent_memory_lineage_quality": quality,
+        },
+    )
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings if finding.get("type")}
+    assert failing_scores["agent_memory_lineage_coverage"] < 1.0
+    assert failing_scores["agent_memory_lineage_quality"] < 1.0
+    assert "missing_agent_memory_lineage_key" in finding_types
+    assert "agent_memory_lineage_source_attribution_missing" in finding_types
+    assert "agent_memory_lineage_tenant_isolation_missing" in finding_types
+    assert "agent_memory_lineage_audit_missing" in finding_types
+    assert "agent_memory_lineage_open_poisoning_high" in finding_types
+    assert "agent_memory_lineage_isolation_violation_high" in finding_types
+    assert "agent_memory_lineage_retention_violation_high" in finding_types
+    assert "agent_memory_lineage_policy_violation_high" in finding_types
+
+
 def test_evaluate_agent_report_scores_retrieval_memory_attribution():
     report = {
         "results": [
