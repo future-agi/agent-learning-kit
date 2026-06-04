@@ -49,6 +49,8 @@ agent-learn optimize examples/world_framework_memory_optimization.json \
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
+agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
+  --output artifacts/voice-streaming-realtime.json
 agent-learn doctor
 ```
 
@@ -75,3 +77,8 @@ The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
 adapter path, proving text and voice framework shims can be simulated without
 adding framework-specific runtime dependencies.
+
+The `voice_streaming_realtime_manifest.json` example makes `voice` and
+`streaming_trace` first-class manifest environments. It replays voice timing,
+transcription, call routing, TTS, and streaming token/tool events through one
+local realtime simulation artifact.

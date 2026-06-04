@@ -50,6 +50,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
             ],
         ),
+        (
+            "run",
+            "voice_streaming_realtime_manifest.json",
+            "agent-learning.run.v1",
+            "AGENT_LEARNING_VOICE_STREAMING_EXAMPLE_KEY",
+        ),
     ],
 )
 def test_shipped_examples_execute_through_unified_cli(
@@ -266,5 +272,112 @@ def test_multi_framework_simulation_suite_runs_framework_adapters(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "multi-framework-simulation-suite" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_voice_streaming_realtime_manifest_runs_manifest_environments(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_VOICE_STREAMING_EXAMPLE_KEY",
+        "real-local-voice-streaming-key",
+    )
+
+    output_path = tmp_path / "voice-streaming.json"
+    junit_path = tmp_path / "voice-streaming.junit.xml"
+    sarif_path = tmp_path / "voice-streaming.sarif.json"
+    markdown_path = tmp_path / "voice-streaming.md"
+
+    exit_code = main([
+        "run",
+        str(EXAMPLES / "voice_streaming_realtime_manifest.json"),
+        "--no-eval",
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.run.v1"
+    assert payload["status"] == "passed"
+    case = payload["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) >= {"voice", "streaming_trace"}
+
+    voice = state["voice"]
+    assert voice["sample_rate_hz"] == 16000
+    assert voice["last_transcript"] == "I need help with a refund on my order."
+    assert voice["route_history"] == [
+        {
+            "route": "support",
+            "reason": "refund support request",
+            "target": {"queue": "refund_support", "priority": "high"},
+        }
+    ]
+    assert voice["timing_distribution"]["stage_order"] == ["vad", "stt", "llm", "tts"]
+    assert voice["timing_distribution"]["sample_count"] == 12
+    assert voice["timing_distribution"]["stages"]["tts"]["p50_ms"] == 260.0
+    assert voice["tts_history"][0]["text"].startswith("Your refund request")
+
+    streaming = state["streaming_trace"]
+    assert streaming["framework"] == "livekit"
+    assert streaming["summary"]["event_count"] == 4
+    assert streaming["summary"]["tool_delta_count"] == 1
+    assert "tool_delta" in streaming["signals"]
+
+    assistant_tool_names = {
+        call["name"]
+        for message in case["messages"]
+        if message["role"] == "assistant"
+        for call in message.get("tool_calls", [])
+    }
+    assert {
+        "voice_status",
+        "voice_timing",
+        "transcribe_audio",
+        "route_call",
+        "streaming_trace_status",
+        "list_stream_events",
+        "inspect_stream_event",
+        "speak",
+    } <= assistant_tool_names
+    tool_response_ids = {
+        message.get("tool_call_id")
+        for message in case["messages"]
+        if message["role"] == "tool"
+    }
+    assert {
+        "voice_status",
+        "voice_timing",
+        "transcribe_user",
+        "route_support",
+        "stream_status",
+        "stream_tool_events",
+        "inspect_stream_tool",
+        "speak_answer",
+    } <= tool_response_ids
+
+    event_names = {(event["type"], event.get("name")) for event in case["events"]}
+    assert ("voice_trace", "voice_status") in event_names
+    assert ("voice_timing", "voice_timing_distribution") in event_names
+    assert ("voice_route", "call_routed") in event_names
+    assert ("voice", "tts_output") in event_names
+    assert ("streaming_trace", "streaming_trace_status") in event_names
+    assert ("streaming_trace", "streaming_events_listed") in event_names
+    assert ("streaming_trace", "streaming_event_inspected") in event_names
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "voice-streaming-realtime-simulation" in markdown_path.read_text(
         encoding="utf-8"
     )

@@ -239,6 +239,9 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
     assert {
         "multi_agent_room",
         "retrieval_memory",
+        "streaming_trace",
+        "voice",
+        "voice_replay",
         "world_orchestration_replay",
     } <= set(simulate.supported_manifest_environment_types())
 

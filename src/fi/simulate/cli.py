@@ -31,9 +31,11 @@ from fi.simulate import (
     RedTeamReadinessEnvironment,
     RetrievalMemoryEnvironment,
     Scenario,
+    StreamingTraceEnvironment,
     TestRunner,
     ToolFaultInjectionEnvironment,
     ToolMockEnvironment,
+    VoiceEnvironment,
     WorkspaceRunEnvironment,
     WorldContractEnvironment,
     WorldOrchestrationReplayEnvironment,
@@ -183,9 +185,12 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "redteam_campaign",
         "redteam_readiness",
         "retrieval_memory",
+        "streaming_trace",
         "tool_fault",
         "tool_fault_injection",
         "tool_mock",
+        "voice",
+        "voice_replay",
         "workspace_run_manifest",
         "world_contract",
         "world_orchestration_replay",
@@ -616,6 +621,10 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_retrieval_memory_environment(payload))
         elif env_type == "multi_agent_room":
             environments.append(_build_multi_agent_room_environment(payload))
+        elif env_type in {"voice", "voice_replay"}:
+            environments.append(_build_voice_environment(payload, base_dir))
+        elif env_type == "streaming_trace":
+            environments.append(_build_streaming_trace_environment(payload, base_dir))
         elif env_type in {"adversarial_attack_pack", "adversarial_pack"}:
             environments.append(_build_adversarial_environment(payload))
         elif env_type in {"red_team_campaign", "redteam_campaign"}:
@@ -809,6 +818,82 @@ def _build_multi_agent_room_environment(
         expected_reconciliation=dict(source.get("expected_reconciliation") or {}),
         state=dict(source.get("state") or {}),
         allow_unknown_roles=bool(source.get("allow_unknown_roles", True)),
+    )
+
+
+def _build_voice_environment(
+    payload: Mapping[str, Any],
+    base_dir: Path,
+) -> VoiceEnvironment:
+    source = dict(payload)
+    export_source = (
+        source.get("voice_export_source")
+        or source.get("export_source")
+        or source.get("trace_source")
+    )
+    if export_source not in (None, ""):
+        export_source = _resolve_manifest_source(str(export_source), base_dir)
+    return VoiceEnvironment(
+        utterances=_coerce_list(source.get("utterances") or source.get("transcripts")),
+        audio_uris=_coerce_list(source.get("audio_uris") or source.get("audio")),
+        sample_rate_hz=int(source.get("sample_rate_hz") or source.get("sample_rate") or 16000),
+        stt_latency_ms=int(source.get("stt_latency_ms") or 180),
+        tts_latency_ms=int(source.get("tts_latency_ms") or 320),
+        state=dict(source.get("state") or {}),
+        event_replay=_coerce_list(source.get("event_replay") or source.get("events")),
+        frame_replay=_coerce_list(source.get("frame_replay") or source.get("frames")),
+        latency_profile=dict(source.get("latency_profile") or {}),
+        timing_distribution=dict(
+            source.get("timing_distribution")
+            or source.get("timing")
+            or source.get("latency_distribution")
+            or {}
+        ),
+        noise_profile=dict(source.get("noise_profile") or source.get("noise") or {}),
+        allow_interruptions=bool(source.get("allow_interruptions", True)),
+        interruption_policy=dict(source.get("interruption_policy") or {}),
+        routes=source.get("routes"),
+        initial_route=_optional_string(source.get("initial_route")),
+        voice_export=source.get("voice_export") or source.get("export"),
+        voice_export_source=export_source,
+        export_framework=str(source.get("export_framework") or source.get("framework") or "voice"),
+        export_headers=dict(source.get("export_headers") or source.get("headers") or {}),
+        export_auth=dict(source.get("export_auth") or source.get("auth") or {}),
+        export_pagination=dict(source.get("export_pagination") or source.get("pagination") or {}),
+        export_max_pages=int(source.get("export_max_pages") or source.get("max_pages") or 20),
+        export_timeout=float(source.get("export_timeout") or source.get("timeout") or 30.0),
+        waveforms=_coerce_list(source.get("waveforms")),
+        diarization=source.get("diarization") or source.get("speaker_segments"),
+        perceptual_metrics=(
+            source.get("perceptual_metrics")
+            or source.get("audio_quality")
+            or source.get("quality_profile")
+        ),
+    )
+
+
+def _build_streaming_trace_environment(
+    payload: Mapping[str, Any],
+    base_dir: Path,
+) -> StreamingTraceEnvironment:
+    source = dict(payload)
+    export_source = source.get("export_source") or source.get("source")
+    if export_source not in (None, ""):
+        export_source = _resolve_manifest_source(str(export_source), base_dir)
+    return StreamingTraceEnvironment(
+        framework=str(source.get("framework") or source.get("provider") or "streaming"),
+        events=_coerce_list(
+            source.get("events")
+            or source.get("stream_events")
+            or source.get("chunks")
+            or source.get("frames")
+        ),
+        trace_export=source.get("trace_export") or source.get("export"),
+        export_source=export_source,
+        export_headers=dict(source.get("export_headers") or source.get("headers") or {}),
+        export_timeout=float(source.get("export_timeout") or source.get("timeout") or 30.0),
+        state=dict(source.get("state") or {}),
+        metadata=dict(source.get("metadata") or {}),
     )
 
 

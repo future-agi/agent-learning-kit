@@ -49,6 +49,10 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.evaluate is not None
     assert suite.run_suite_file is not None
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
+    assert simulate.StreamingTraceEnvironment is not None
+    assert simulate.VoiceEnvironment is not None
+    assert simulate.normalize_streaming_trace_events is not None
+    assert simulate.normalize_voice_timing_distribution is not None
     assert {
         "langchain",
         "langgraph",
