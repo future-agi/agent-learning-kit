@@ -11,7 +11,8 @@
     "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
-    "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -94,6 +95,13 @@
       "command": "optimize",
       "path": "browser_cua_optimization.json",
       "name": "suite-browser-cua-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "framework-certification-optimizer",
+      "command": "optimize",
+      "path": "framework_certification_optimization.json",
+      "name": "suite-framework-certification-optimizer",
       "max_candidates": 2
     }
   ]

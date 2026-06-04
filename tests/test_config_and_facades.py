@@ -52,14 +52,28 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.StreamingTraceEnvironment is not None
     assert simulate.VoiceEnvironment is not None
     assert simulate.BrowserEnvironment is not None
+    assert simulate.FrameworkLifecycleEnvironment is not None
+    assert simulate.FrameworkCapabilityEnvironment is not None
+    assert simulate.FrameworkProbeEnvironment is not None
+    assert simulate.FrameworkPortabilityEnvironment is not None
     assert simulate.normalize_browser_trace_export is not None
     assert simulate.normalize_playwright_trace_export is not None
     assert simulate.normalize_browser_mutation_pack is not None
+    assert simulate.normalize_framework_lifecycle_trace is not None
+    assert simulate.normalize_framework_capability_matrix is not None
+    assert simulate.normalize_framework_probe_suite is not None
+    assert simulate.normalize_framework_portability_matrix is not None
     assert simulate.normalize_streaming_trace_events is not None
     assert simulate.normalize_voice_timing_distribution is not None
-    assert {"browser", "browser_cua", "computer_use"} <= set(
-        simulate.supported_manifest_environment_types()
-    )
+    assert {
+        "browser",
+        "browser_cua",
+        "computer_use",
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    } <= set(simulate.supported_manifest_environment_types())
     assert {
         "langchain",
         "langgraph",

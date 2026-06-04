@@ -55,6 +55,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -114,14 +115,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 12
-        assert payload["summary"]["passed_count"] == 12
+        assert payload["summary"]["job_count"] == 13
+        assert payload["summary"]["passed_count"] == 13
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
             "optimize",
             "optimize",
@@ -1071,5 +1073,102 @@ def test_browser_cua_optimization_example_runs_redteam_replay(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "browser-cua-redteam-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_framework_certification_optimization_example_runs_framework_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
+        "real-local-framework-cert-opt-key",
+    )
+
+    output_path = tmp_path / "framework-certification-optimization.json"
+    junit_path = tmp_path / "framework-certification-optimization.junit.xml"
+    sarif_path = tmp_path / "framework-certification-optimization.sarif.json"
+    markdown_path = tmp_path / "framework-certification-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "framework_certification_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.98
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    env_types = [
+        environment["type"]
+        for environment in payload["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == [
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    ]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "framework_lifecycle_coverage",
+        "framework_lifecycle_quality",
+        "framework_capability_coverage",
+        "framework_capability_quality",
+        "framework_probe_coverage",
+        "framework_probe_quality",
+        "framework_portability_coverage",
+        "framework_portability_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) == {
+        "framework_lifecycle_trace",
+        "framework_capability_matrix",
+        "framework_probe_suite",
+        "framework_portability_matrix",
+    }
+    lifecycle = state["framework_lifecycle_trace"]["summary"]
+    assert lifecycle["phase_count"] == 10
+    assert lifecycle["recovered_error_count"] == 1
+    capability = state["framework_capability_matrix"]["summary"]
+    assert capability["supported_count"] == 9
+    assert capability["missing_count"] == 0
+    probe = state["framework_probe_suite"]["summary"]
+    assert probe["passed_count"] == 12
+    assert probe["failed_count"] == 0
+    portability = state["framework_portability_matrix"]["summary"]
+    assert portability["mapped_count"] == 10
+    assert portability["missing_count"] == 0
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "framework-certification-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )

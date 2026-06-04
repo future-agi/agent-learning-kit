@@ -62,6 +62,8 @@ agent-learn optimize examples/agent_control_plane_optimization.json \
   --output artifacts/agent-control-plane-optimization.json
 agent-learn optimize examples/browser_cua_optimization.json \
   --output artifacts/browser-cua-optimization.json
+agent-learn optimize examples/framework_certification_optimization.json \
+  --output artifacts/framework-certification-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -90,8 +92,8 @@ one manifest runs simulation, eval, red-team, eval-suite optimization,
 world/framework/memory optimization, voice/streaming optimization, red-team
 optimization, workspace/observability optimization, agent-integration
 optimization, optimizer-governance optimization, agent control-plane
-optimization, and browser/CUA red-team optimization jobs, then emits aggregate
-artifacts.
+optimization, browser/CUA red-team optimization, and framework-certification
+optimization jobs, then emits aggregate artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -155,3 +157,8 @@ red-team harness. It verifies selector-drift recovery, refreshed screenshots,
 coordinate grounding, semantic screenshot diffs, storage/runtime evidence,
 network traces, layout-shift resilience, mutation-pack mitigations, and
 prompt-injection surface avoidance.
+
+The `framework_certification_optimization.json` example optimizes a framework
+certification harness before rollout or migration. It verifies lifecycle
+session evidence, capability matrices, adapter smoke probes, and source-target
+portability mappings for framework-neutral agent stacks.

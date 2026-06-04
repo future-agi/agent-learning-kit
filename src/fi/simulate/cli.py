@@ -24,7 +24,11 @@ from fi.simulate import (
     AgentTrustBoundaryEnvironment,
     BrowserEnvironment,
     FileEnvironment,
+    FrameworkCapabilityEnvironment,
     FrameworkImportManifestEnvironment,
+    FrameworkLifecycleEnvironment,
+    FrameworkPortabilityEnvironment,
+    FrameworkProbeEnvironment,
     FrameworkTraceEnvironment,
     MultiAgentRoomEnvironment,
     ObservabilityReplayEnvironment,
@@ -185,7 +189,15 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "cua",
         "file",
         "files",
+        "framework_capability",
+        "framework_capability_matrix",
         "framework_import",
+        "framework_lifecycle",
+        "framework_lifecycle_trace",
+        "framework_portability",
+        "framework_portability_matrix",
+        "framework_probe",
+        "framework_probe_suite",
         "framework_trace",
         "mock_tools",
         "multi_agent_room",
@@ -634,6 +646,14 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_world_orchestration_replay_environment(payload))
         elif env_type == "framework_trace":
             environments.append(_build_framework_trace_environment(payload, base_dir))
+        elif env_type in {"framework_lifecycle", "framework_lifecycle_trace"}:
+            environments.append(_build_framework_lifecycle_environment(payload))
+        elif env_type in {"framework_capability", "framework_capability_matrix"}:
+            environments.append(_build_framework_capability_environment(payload))
+        elif env_type in {"framework_probe", "framework_probe_suite"}:
+            environments.append(_build_framework_probe_environment(payload))
+        elif env_type in {"framework_portability", "framework_portability_matrix"}:
+            environments.append(_build_framework_portability_environment(payload))
         elif env_type == "retrieval_memory":
             environments.append(_build_retrieval_memory_environment(payload))
         elif env_type == "multi_agent_room":
@@ -813,6 +833,89 @@ def _build_framework_trace_environment(
         adapter_required_signals=_coerce_list(source.get("adapter_required_signals")),
         adapter_required_mappings=dict(source.get("adapter_required_mappings") or {}),
         state=dict(source.get("state") or {}),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_framework_lifecycle_environment(
+    payload: Mapping[str, Any],
+) -> FrameworkLifecycleEnvironment:
+    source = dict(payload)
+    return FrameworkLifecycleEnvironment(
+        source.get("trace") or source.get("lifecycle_trace") or source.get("export"),
+        name=str(source.get("name") or "framework-lifecycle-trace"),
+        framework=str(source.get("framework") or "custom"),
+        session_id=_optional_string(source.get("session_id") or source.get("thread_id")),
+        phases=_coerce_list(source.get("phases") or source.get("events")),
+        state=dict(source.get("state") or {}),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_framework_capability_environment(
+    payload: Mapping[str, Any],
+) -> FrameworkCapabilityEnvironment:
+    source = dict(payload)
+    return FrameworkCapabilityEnvironment(
+        source.get("matrix") or source.get("capability_matrix") or source.get("export"),
+        name=str(source.get("name") or "framework-capability-matrix"),
+        framework=str(source.get("framework") or "custom"),
+        version=_optional_string(source.get("version") or source.get("framework_version")),
+        capabilities=_coerce_list(source.get("capabilities") or source.get("features")),
+        task_surfaces=_coerce_list(
+            source.get("task_surfaces") or source.get("surfaces") or source.get("tasks")
+        ),
+        constraints=_coerce_list(source.get("constraints")),
+        integrations=_coerce_list(source.get("integrations") or source.get("connectors")),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_framework_probe_environment(
+    payload: Mapping[str, Any],
+) -> FrameworkProbeEnvironment:
+    source = dict(payload)
+    return FrameworkProbeEnvironment(
+        source.get("suite") or source.get("probe_suite") or source.get("export"),
+        name=str(source.get("name") or "framework-probe-suite"),
+        framework=str(source.get("framework") or "custom"),
+        version=_optional_string(source.get("version") or source.get("framework_version")),
+        probes=_coerce_list(
+            source.get("probes")
+            or source.get("checks")
+            or source.get("smoke_tests")
+            or source.get("tests")
+        ),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_framework_portability_environment(
+    payload: Mapping[str, Any],
+) -> FrameworkPortabilityEnvironment:
+    source = dict(payload)
+    return FrameworkPortabilityEnvironment(
+        source.get("matrix") or source.get("portability_matrix") or source.get("export"),
+        name=str(source.get("name") or "framework-portability-matrix"),
+        source_framework=str(
+            source.get("source_framework")
+            or source.get("source")
+            or source.get("from_framework")
+            or "source"
+        ),
+        target_framework=str(
+            source.get("target_framework")
+            or source.get("target")
+            or source.get("to_framework")
+            or "target"
+        ),
+        version=_optional_string(source.get("version") or source.get("framework_version")),
+        mappings=_coerce_list(
+            source.get("mappings")
+            or source.get("migration_mappings")
+            or source.get("portability_mappings")
+        ),
+        constraints=_coerce_list(source.get("constraints") or source.get("requirements")),
         metadata=dict(source.get("metadata") or {}),
     )
 

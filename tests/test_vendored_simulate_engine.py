@@ -243,7 +243,52 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
         "voice",
         "voice_replay",
         "world_orchestration_replay",
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
     } <= set(simulate.supported_manifest_environment_types())
+    certification_environments = simulate.build_manifest_environments(
+        [
+            {
+                "type": "framework_lifecycle",
+                "data": {
+                    "framework": "langgraph",
+                    "session_id": "thread-123",
+                    "phases": [{"id": "init", "stage": "initialize"}],
+                },
+            },
+            {
+                "type": "framework_capability",
+                "data": {
+                    "framework": "langgraph",
+                    "capabilities": [{"name": "tool_calling", "category": "tools"}],
+                },
+            },
+            {
+                "type": "framework_probe",
+                "data": {
+                    "framework": "langgraph",
+                    "probes": [{"id": "invoke", "operation": "invoke"}],
+                },
+            },
+            {
+                "type": "framework_portability",
+                "data": {
+                    "source_framework": "langgraph",
+                    "target_framework": "openai_agents",
+                    "mappings": [{"id": "invoke", "source": "invoke", "target": "run"}],
+                },
+            },
+        ],
+        base_dir=tmp_path,
+    )
+    assert [environment.name for environment in certification_environments] == [
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    ]
 
     result = asyncio.run(simulate.run_manifest_file(manifest_path, no_eval=True))
 
