@@ -48,6 +48,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_RUN_EXAMPLE_KEY",
                 "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
                 "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -107,14 +108,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
     if command == "suite":
-        assert payload["summary"]["job_count"] == 5
-        assert payload["summary"]["passed_count"] == 5
+        assert payload["summary"]["job_count"] == 6
+        assert payload["summary"]["passed_count"] == 6
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",
             "redteam",
             "optimize_eval",
+            "optimize",
             "optimize",
         ]
         assert {child["kind"] for child in payload["children"]} == {
@@ -379,5 +381,78 @@ def test_voice_streaming_realtime_manifest_runs_manifest_environments(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "voice-streaming-realtime-simulation" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_voice_streaming_realtime_optimization_example_runs_evidence_gates(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
+        "real-local-voice-streaming-opt-key",
+    )
+
+    output_path = tmp_path / "voice-streaming-optimization.json"
+    junit_path = tmp_path / "voice-streaming-optimization.junit.xml"
+    sarif_path = tmp_path / "voice-streaming-optimization.sarif.json"
+    markdown_path = tmp_path / "voice-streaming-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "voice_streaming_realtime_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.99
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_config = payload["optimization"]["best_config"]
+    env_types = [
+        environment["type"]
+        for environment in best_config["simulation"]["environments"]
+    ]
+    assert env_types == ["voice", "streaming_trace"]
+    assert best_config["simulation"]["environments"][0]["data"]["sample_rate_hz"] == 16000
+    assert (
+        best_config["simulation"]["environments"][1]["data"]["state"]["route"]
+        == "support"
+    )
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "voice_trace_coverage",
+        "voice_interaction_quality",
+        "voice_timing_distribution_quality",
+        "voice_turn_taking",
+        "tool_argument_schema",
+        "streaming_trace_coverage",
+        "streaming_interaction_quality",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "voice-streaming-realtime-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )

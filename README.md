@@ -46,6 +46,8 @@ agent-learn redteam examples/redteam_manifest.json --output artifacts/redteam.js
 agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json
 agent-learn optimize examples/world_framework_memory_optimization.json \
   --output artifacts/world-framework-memory-optimization.json
+agent-learn optimize examples/voice_streaming_realtime_optimization.json \
+  --output artifacts/voice-streaming-realtime-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -82,3 +84,8 @@ The `voice_streaming_realtime_manifest.json` example makes `voice` and
 `streaming_trace` first-class manifest environments. It replays voice timing,
 transcription, call routing, TTS, and streaming token/tool events through one
 local realtime simulation artifact.
+
+The `voice_streaming_realtime_optimization.json` example optimizes the same
+voice plus streaming harness through `agent-learn optimize`, selecting the
+candidate with clean call routing, voice timing/audio quality, and streaming
+tool-delta evidence.

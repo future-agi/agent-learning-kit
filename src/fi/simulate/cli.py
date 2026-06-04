@@ -3868,8 +3868,30 @@ def _evaluate_manifest_optimization_artifact(
                     {
                         "role": "assistant",
                         "content": (
-                            "Manifest optimization completed with candidate history, "
-                            "patches, metrics, and best configuration evidence."
+                            "First, evaluate result coverage by inspecting manifest "
+                            "optimization candidate history, patches, metrics, best "
+                            "configuration evidence, optimizer trace governance, "
+                            "and search path coverage because these artifacts must "
+                            "be complete."
+                        ),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Then, evaluate result reliability by verifying manifest "
+                            "optimization candidate history, patches, metrics, best "
+                            "configuration evidence, optimizer trace governance, "
+                            "and search path coverage because missing evidence "
+                            "blocks promotion."
+                        ),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Evaluate result coverage: manifest optimization candidate "
+                            "history, patches, metrics, best configuration evidence, "
+                            "optimizer trace governance, and search path coverage are "
+                            "complete."
                         ),
                     },
                 ],
@@ -3893,6 +3915,24 @@ def _evaluate_manifest_optimization_artifact(
         ]
     }
     config = {
+        "task_description": (
+            "Evaluate result coverage for manifest optimization candidate history, "
+            "patches, metrics, best configuration evidence, optimizer trace "
+            "governance, and search path coverage."
+        ),
+        "expected_result": (
+            "Evaluate result coverage: manifest optimization candidate history, "
+            "patches, metrics, best configuration evidence, optimizer trace "
+            "governance, and search path coverage are complete."
+        ),
+        "success_criteria": [
+            "candidate history",
+            "patches",
+            "metrics",
+            "best configuration evidence",
+            "optimizer trace governance",
+            "search path coverage",
+        ],
         "required_manifest_optimization": [
             "manifest_optimization",
             "final_score",

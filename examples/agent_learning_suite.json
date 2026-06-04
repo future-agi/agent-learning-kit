@@ -4,7 +4,8 @@
   "required_env": [
     "AGENT_LEARNING_RUN_EXAMPLE_KEY",
     "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
-    "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -38,6 +39,13 @@
       "command": "optimize",
       "path": "world_framework_memory_optimization.json",
       "name": "suite-world-framework-memory-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "voice-streaming-realtime-optimizer",
+      "command": "optimize",
+      "path": "voice_streaming_realtime_optimization.json",
+      "name": "suite-voice-streaming-realtime-optimizer",
       "max_candidates": 2
     }
   ]
