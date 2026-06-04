@@ -120,7 +120,10 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["job_count"] == 15
         assert payload["summary"]["passed_count"] == 15
         assert payload["summary"]["score"] == pytest.approx(1.0)
+        assert payload["summary"]["capability_gate_passed"] is True
+        assert payload["summary"]["missing_required_capabilities"] == {}
         capabilities = payload["summary"]["capabilities"]
+        required_capabilities = payload["summary"]["required_capabilities"]
         assert set(capabilities["commands"]) == {
             "eval",
             "optimize",
@@ -178,6 +181,8 @@ def test_shipped_examples_execute_through_unified_cli(
             "voice_trace_coverage",
             "world_contract_quality",
         } <= set(capabilities["metrics"])
+        for capability, values in required_capabilities.items():
+            assert set(values) <= set(capabilities[capability])
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "eval",

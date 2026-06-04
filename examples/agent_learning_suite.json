@@ -16,6 +16,67 @@
     "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY"
   ],
+  "required_capabilities": {
+    "commands": [
+      "run",
+      "eval",
+      "redteam",
+      "optimize_eval",
+      "optimize"
+    ],
+    "result_kinds": [
+      "agent-learning.run.v1",
+      "agent-learning.eval.v1",
+      "agent-learning.redteam.v1",
+      "agent-learning.eval-optimization.v1",
+      "agent-learning.optimization.v1"
+    ],
+    "environment_types": [
+      "adversarial_attack_pack",
+      "agent_control_plane",
+      "agent_integration",
+      "autonomy_loop",
+      "browser_cua",
+      "framework_capability",
+      "framework_trace",
+      "multimodal_image",
+      "optimizer_trace",
+      "red_team_campaign",
+      "streaming_trace",
+      "voice",
+      "world_orchestration_replay"
+    ],
+    "providers": [
+      "vapi",
+      "bland",
+      "livekit",
+      "retell",
+      "twilio"
+    ],
+    "frameworks": [
+      "langchain",
+      "langgraph",
+      "livekit",
+      "pipecat"
+    ],
+    "channels": [
+      "chat",
+      "phone",
+      "sip",
+      "voice",
+      "webrtc",
+      "websocket"
+    ],
+    "metrics": [
+      "agent_integration_quality",
+      "browser_action_outcome",
+      "framework_capability_quality",
+      "multimodal_faithfulness",
+      "red_team_campaign_quality",
+      "voice_trace_coverage",
+      "world_contract_quality"
+    ]
+  },
   "jobs": [
     {
       "id": "local-simulation",

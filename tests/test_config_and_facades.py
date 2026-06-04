@@ -567,6 +567,86 @@ def test_agent_learn_eval_runs_unified_command_and_writes_artifacts(tmp_path):
     assert "agent-learning-kit-eval" in markdown_path.read_text(encoding="utf-8")
 
 
+def test_agent_learn_suite_fails_missing_required_capability(tmp_path):
+    eval_path = tmp_path / "suite-eval.json"
+    suite_path = tmp_path / "suite.json"
+    output_path = tmp_path / "suite-result.json"
+    junit_path = tmp_path / "suite-result.junit.xml"
+    sarif_path = tmp_path / "suite-result.sarif.json"
+    markdown_path = tmp_path / "suite-result.md"
+    eval_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-simulate.eval.v1",
+                "name": "agent-learning-kit-capability-eval",
+                "providers": [{"id": "echo", "type": "echo"}],
+                "prompts": [{"id": "support", "template": "{{question}}"}],
+                "tests": [
+                    {
+                        "id": "policy",
+                        "vars": {"question": "Where is the policy?"},
+                        "assert": [{"type": "contains", "value": "policy"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-learning.suite.v1",
+                "name": "agent-learning-kit-capability-gate",
+                "required_capabilities": {
+                    "commands": ["eval"],
+                    "providers": ["vapi"],
+                    "metrics": ["eval_assertions"],
+                },
+                "jobs": [
+                    {
+                        "id": "eval-child",
+                        "command": "eval",
+                        "path": str(eval_path),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "suite",
+        str(suite_path),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["summary"]["passed_count"] == 1
+    assert payload["summary"]["capability_gate_passed"] is False
+    assert payload["summary"]["missing_required_capabilities"] == {
+        "providers": ["vapi"]
+    }
+    assert payload["findings"][0]["type"] == "suite_required_capability_missing"
+    assert payload["findings"][0]["capability"] == "providers"
+    assert "failures=\"1\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["runs"][0]["results"][0]["ruleId"] == (
+        "suite_required_capability_missing"
+    )
+    assert "agent-learning-kit-capability-gate" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_agent_learn_run_executes_manifest_and_writes_unified_artifacts(
     tmp_path,
     monkeypatch,

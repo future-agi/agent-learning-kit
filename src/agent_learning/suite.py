@@ -166,10 +166,18 @@ def run_suite(
 def render_junit(result: Mapping[str, Any]) -> str:
     name = escape(str(result.get("name") or "agent-learning-suite"))
     children = list(result.get("children") or result.get("jobs") or [])
-    failures = sum(1 for child in children if int(child.get("exit_code", 1)) != 0)
+    finding_failures = [
+        finding
+        for finding in list(result.get("findings") or [])
+        if str(_as_mapping(finding).get("type")) == "suite_required_capability_missing"
+    ]
+    failures = (
+        sum(1 for child in children if int(child.get("exit_code", 1)) != 0)
+        + len(finding_failures)
+    )
     lines = [
         (
-            f'<testsuite name="{name}" tests="{len(children)}" '
+            f'<testsuite name="{name}" tests="{len(children) + len(finding_failures)}" '
             f'failures="{failures}" errors="0">'
         )
     ]
@@ -184,6 +192,13 @@ def render_junit(result: Mapping[str, Any]) -> str:
         if int(child.get("exit_code", 1)) != 0:
             message = escape(str(child.get("error") or child.get("status") or "failed"))
             lines.append(f'    <failure message="{message}">{message}</failure>')
+        lines.append("  </testcase>")
+    for index, finding in enumerate(finding_failures, start=1):
+        item = _as_mapping(finding)
+        finding_name = escape(str(item.get("type") or f"suite_finding_{index}"))
+        message = escape(str(item.get("reason") or finding_name))
+        lines.append(f'  <testcase classname="suite" name="{finding_name}" time="0.0000">')
+        lines.append(f'    <failure message="{message}">{message}</failure>')
         lines.append("  </testcase>")
     lines.append("</testsuite>")
     return "\n".join(lines)
@@ -489,13 +504,24 @@ def _suite_result(
     job_count = len(_suite_jobs(suite))
     passed = [child for child in children if int(child.get("exit_code", 1)) == 0]
     failed = [child for child in children if int(child.get("exit_code", 1)) != 0]
-    suite_passed = len(failed) == 0 and len(children) == job_count
     score = round(len(passed) / job_count, 4) if job_count else 0.0
     command_counts: dict[str, int] = {}
     for child in children:
         command = str(child.get("command") or "unknown")
         command_counts[command] = command_counts.get(command, 0) + 1
     capabilities = _suite_capability_summary(children)
+    required_capabilities = _suite_required_capabilities(suite)
+    missing_capabilities = _missing_required_capabilities(
+        required_capabilities,
+        capabilities,
+    )
+    capability_findings = _suite_capability_findings(missing_capabilities)
+    suite_findings = [*capability_findings, *_suite_findings(children)]
+    suite_passed = (
+        len(failed) == 0
+        and len(children) == job_count
+        and not capability_findings
+    )
     return {
         "kind": AGENT_LEARNING_SUITE_KIND,
         "version": AGENT_LEARNING_SUITE_KIND,
@@ -513,10 +539,13 @@ def _suite_result(
             "score": score,
             "commands": command_counts,
             "capabilities": capabilities,
+            "required_capabilities": required_capabilities,
+            "missing_required_capabilities": missing_capabilities,
+            "capability_gate_passed": not capability_findings,
         },
         "children": list(children),
         "jobs": list(children),
-        "findings": _suite_findings(children),
+        "findings": suite_findings,
         "duration_seconds": duration_seconds,
     }
 
@@ -542,6 +571,74 @@ def _suite_capability_summary(children: Sequence[Mapping[str, Any]]) -> dict[str
         result = _as_mapping(child.get("result"))
         _collect_result_capabilities(result, caps)
     return {key: sorted(values) for key, values in caps.items()}
+
+
+def _suite_required_capabilities(suite: Mapping[str, Any]) -> dict[str, list[str]]:
+    raw = (
+        suite.get("required_capabilities")
+        or suite.get("capability_requirements")
+        or suite.get("capabilities_required")
+        or {}
+    )
+    if not isinstance(raw, Mapping):
+        return {}
+    requirements: dict[str, list[str]] = {}
+    for key, values in raw.items():
+        normalized_key = _suite_key(key)
+        if not normalized_key:
+            continue
+        normalized_values = sorted(
+            {
+                _suite_key(value)
+                for value in _as_list(values)
+                if _suite_key(value)
+            }
+        )
+        if normalized_values:
+            requirements[normalized_key] = normalized_values
+    return requirements
+
+
+def _missing_required_capabilities(
+    required: Mapping[str, Sequence[str]],
+    observed: Mapping[str, Sequence[str]],
+) -> dict[str, list[str]]:
+    missing: dict[str, list[str]] = {}
+    for key, required_values in required.items():
+        observed_values = {_suite_key(value) for value in _as_list(observed.get(key))}
+        missing_values = sorted(
+            {
+                _suite_key(value)
+                for value in _as_list(required_values)
+                if _suite_key(value) and _suite_key(value) not in observed_values
+            }
+        )
+        if missing_values:
+            missing[key] = missing_values
+    return missing
+
+
+def _suite_capability_findings(
+    missing_capabilities: Mapping[str, Sequence[str]],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for capability, missing_values in sorted(missing_capabilities.items()):
+        values = sorted(_suite_key(value) for value in missing_values if _suite_key(value))
+        if not values:
+            continue
+        findings.append(
+            {
+                "type": "suite_required_capability_missing",
+                "level": "error",
+                "reason": (
+                    f"Missing required suite capability `{capability}`: "
+                    f"{', '.join(values)}."
+                ),
+                "capability": capability,
+                "missing": values,
+            }
+        )
+    return findings
 
 
 def _collect_result_capabilities(payload: Mapping[str, Any], caps: dict[str, set[str]]) -> None:

@@ -118,7 +118,11 @@ optimization, browser/CUA red-team optimization, framework-certification
 optimization, autonomous task/world red-team optimization, and multimodal image
 optimization jobs, then emits aggregate artifacts plus a capability summary of
 commands, result kinds, environment types, providers, frameworks, channels, and
-metrics observed from the child run outputs.
+metrics observed from the child run outputs. Suites can also declare
+`required_capabilities`; if any required command, result kind, environment type,
+provider, framework, channel, or metric is absent from the executed child
+artifacts, `agent-learn suite` fails the run and records the missing capability
+in JSON, JUnit, SARIF, and Markdown outputs.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
