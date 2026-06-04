@@ -8,7 +8,8 @@
     "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
-    "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY"
+    "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY"
   ],
   "jobs": [
     {
@@ -70,6 +71,13 @@
       "command": "optimize",
       "path": "agent_integration_optimization.json",
       "name": "suite-agent-integration-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "optimizer-governance-optimizer",
+      "command": "optimize",
+      "path": "optimizer_governance_optimization.json",
+      "name": "suite-optimizer-governance-optimizer",
       "max_candidates": 2
     }
   ]

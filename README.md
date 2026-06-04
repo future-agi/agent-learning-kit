@@ -56,6 +56,8 @@ agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability-optimization.json
 agent-learn optimize examples/agent_integration_optimization.json \
   --output artifacts/agent-integration-optimization.json
+agent-learn optimize examples/optimizer_governance_optimization.json \
+  --output artifacts/optimizer-governance-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -81,9 +83,10 @@ lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, eval, red-team, eval-suite optimization,
-world/framework/memory optimization, red-team optimization, and
-workspace/observability plus agent-integration optimization jobs and emits
-aggregate artifacts.
+world/framework/memory optimization, voice/streaming optimization, red-team
+optimization, workspace/observability optimization, agent-integration
+optimization, and optimizer-governance optimization jobs, then emits aggregate
+artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
@@ -122,3 +125,9 @@ framework integration coverage for the Future AGI UI/observability/evals layer.
 It verifies agent definition, personas, simulations, observability hooks, eval
 metrics, credentials, sessions, and channel coverage across LiveKit, Retell,
 ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported frameworks.
+
+The `optimizer_governance_optimization.json` example optimizes an optimizer
+society trace, making multi-interaction search auditable. It verifies roles,
+proposals, rounds, diagnostics, role credit, best-candidate selection, and
+governance checks for role diversity, mediator review, contract gates,
+rollback, search locality, and dependency audit.
