@@ -185,6 +185,7 @@ def _eval_suite() -> dict:
 def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_evals = _assert_vendored_module("fi.evals")
     fi_opt = _assert_vendored_module("fi.opt")
+    fi_optimizers = _assert_vendored_module("fi.opt.optimizers")
     fi_opt_simulate = _assert_vendored_module("fi.opt.integrations.simulate")
     fi_agent_metrics = _assert_vendored_module("fi.evals.metrics.agents")
 
@@ -210,6 +211,36 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "TaskCompletion",
     ):
         assert getattr(agent_evals, name) is getattr(fi_evals, name)
+    assert set(fi_opt.__all__) <= set(agent_optimize.__all__)
+    assert set(fi_optimizers.__all__) <= set(agent_optimize.__all__)
+    for name in (
+        "AgentMutationBundle",
+        "FrameworkMutationRule",
+        "DEFAULT_AGENT_MUTATION_LIBRARY",
+        "AgentComponentSpec",
+        "FailureMode",
+        "COMPONENT_SPECS",
+        "FAILURE_ROUTES",
+        "diagnose_agent_report_evaluation",
+        "SimulateManifestOptimizationProblem",
+        "SimulateEvalSuiteOptimizationProblem",
+        "problem_from_simulate_manifest",
+        "problem_from_eval_suite",
+        "optimize_simulate_manifest",
+        "deep_merge",
+        "set_path",
+    ):
+        assert getattr(agent_optimize, name) is getattr(fi_opt, name)
+    for name in (
+        "RandomSearchOptimizer",
+        "BayesianSearchOptimizer",
+        "GEPAOptimizer",
+        "PromptWizardOptimizer",
+        "AgentOptimizer",
+        "AgentTPEOptimizer",
+        "CouncilAgentOptimizer",
+    ):
+        assert getattr(agent_optimize, name) is getattr(fi_optimizers, name)
     assert agent_optimize.ManifestOptimizationProblem is fi_opt.ManifestOptimizationProblem
     assert agent_optimize.EvalSuiteOptimizationProblem is fi_opt.EvalSuiteOptimizationProblem
     assert agent_optimize.ManifestOptimizationProblem is (

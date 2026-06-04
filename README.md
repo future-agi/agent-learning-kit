@@ -154,7 +154,9 @@ The `agent_learning.optimize` SDK facade exposes the advanced optimizer,
 deployment, replay, research, and governance APIs from the vendored engine:
 multi-interaction optimizers, council/society search, Future AGI replay
 optimizers, deployment export/promotion/rollback checks, regression replay-pack
-builders, research corpus helpers, and optimizer society traces.
+builders, research corpus helpers, optimizer society traces, component
+diagnosis, mutation libraries, simulation/eval-suite optimization bridges,
+deep-merge/path helpers, and concrete optimizer classes.
 
 The `agent_control_plane_optimization.json` example optimizes a red-team
 readiness gate for autonomous agents. It verifies the trust boundary and runtime
