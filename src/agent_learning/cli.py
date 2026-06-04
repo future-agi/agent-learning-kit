@@ -15,6 +15,7 @@ AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
+AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
 
 
 SIMULATE_COMMANDS = {
@@ -44,6 +45,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _optimize(args[1:])
     if command == "optimize-eval":
         return _optimize_eval(args[1:])
+    if command == "suite":
+        return _suite(args[1:])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -320,6 +323,58 @@ def _optimize_eval(args: Sequence[str]) -> int:
     return int(payload.get("exit_code", 0))
 
 
+def _suite(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn suite",
+        description=(
+            "Run a promptfoo-style Agent Learning suite across simulation, "
+            "eval, red-team, and optimization jobs."
+        ),
+    )
+    _add_suite_args(parser)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import suite
+    except Exception as exc:
+        print(
+            "agent-learn suite requires `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    suite_path = Path(parsed.suite).expanduser().resolve()
+    try:
+        manifest = suite.load_suite_file(suite_path)
+        payload = suite.run_suite_file(
+            suite_path,
+            name=parsed.name,
+            threshold=parsed.threshold,
+            max_candidates=parsed.max_candidates,
+            dry_run=bool(parsed.dry_run),
+            fail_fast=bool(parsed.fail_fast),
+        )
+    except Exception as exc:
+        print(f"agent-learn suite: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_SUITE_KIND
+    written = _write_result_outputs(
+        payload,
+        manifest,
+        parsed,
+        suite_path,
+        render_junit=suite.render_junit,
+        render_sarif=suite.render_sarif,
+        render_markdown=suite.render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
 def _add_manifest_optimization_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("manifest", help="Path to a JSON/YAML optimization manifest.")
     parser.add_argument(
@@ -562,6 +617,71 @@ def _add_eval_suite_args(parser: argparse.ArgumentParser, *, optimize: bool) -> 
     )
 
 
+def _add_suite_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("suite", help="Path to a JSON/YAML Agent Learning suite.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help=(
+            "Write JSON output to this path. .xml paths are treated as JUnit; "
+            ".sarif paths as SARIF."
+        ),
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write compact JUnit XML output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 findings output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown report output.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Override child thresholds where supported.",
+    )
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=None,
+        help="Override optimization child max_candidates where supported.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the suite run name.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate suite and child manifests without executing them.",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop after the first failing child job.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+
+
 def _write_result_outputs(
     payload: Dict[str, Any],
     suite: Mapping[str, Any],
@@ -670,6 +790,7 @@ def _doctor() -> int:
         "evaluation": "agent_learning.evals",
         "redteam": "agent_learning.redteam",
         "optimize": "agent_learning.optimize",
+        "suite": "agent_learning.suite",
         "engine.simulate": "fi.simulate",
         "engine.evals": "fi.evals",
         "engine.opt": "fi.opt",
@@ -713,7 +834,7 @@ def _help(error: Optional[str] = None) -> int:
         nargs="?",
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
-            "compare, baseline, promote-to-regression, optimize-eval, init"
+            "compare, baseline, promote-to-regression, optimize-eval, suite, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

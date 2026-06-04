@@ -39,7 +39,7 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 
 def test_facades_expose_unified_agent_learning_modules():
-    from agent_learning import evals, optimize, redteam, simulate
+    from agent_learning import evals, optimize, redteam, simulate, suite
 
     assert simulate.run_eval_suite_file is not None
     assert redteam.redteam_manifest_file is not None
@@ -47,6 +47,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
     assert evals.evaluate is not None
+    assert suite.run_suite_file is not None
+    assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

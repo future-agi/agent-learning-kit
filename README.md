@@ -9,7 +9,7 @@ ship in this package.
 
 ```python
 from agent_learning import configure
-from agent_learning import simulate, evals, redteam, optimize
+from agent_learning import simulate, evals, redteam, optimize, suite
 
 configure(api_key="...")
 ```
@@ -46,16 +46,17 @@ agent-learn redteam examples/redteam_manifest.json --output artifacts/redteam.js
 agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json
 agent-learn optimize examples/world_framework_memory_optimization.json \
   --output artifacts/world-framework-memory-optimization.json
+agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn doctor
 ```
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
-`agent-learn optimize`, and `agent-learn optimize-eval` write Agent Learning Kit
-artifact kinds
+`agent-learn optimize`, `agent-learn optimize-eval`, and `agent-learn suite`
+write Agent Learning Kit artifact kinds
 (`agent-learning.run.v1`, `agent-learning.eval.v1`,
 `agent-learning.redteam.v1`, `agent-learning.optimization.v1`, and
-`agent-learning.eval-optimization.v1`) plus optional JUnit, SARIF, and Markdown
-outputs for CI.
+`agent-learning.eval-optimization.v1`, plus `agent-learning.suite.v1`) plus
+optional JUnit, SARIF, and Markdown outputs for CI.
 
 This package now contains the actual `fi.simulate`, `fi.evals`, and `fi.opt`
 engine code while keeping `agent_learning.*` as the public API.
@@ -63,3 +64,7 @@ engine code while keeping `agent_learning.*` as the public API.
 The `world_framework_memory_optimization.json` example optimizes a
 LangGraph-style world orchestration across framework trace, retrieval, memory
 lineage, and multi-agent review evidence.
+
+The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
+one manifest runs simulation, eval, red-team, eval-suite optimization, and
+world/framework/memory optimization jobs and emits aggregate artifacts.

@@ -40,18 +40,28 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "agent-learning.eval-optimization.v1",
             None,
         ),
+        (
+            "suite",
+            "agent_learning_suite.json",
+            "agent-learning.suite.v1",
+            [
+                "AGENT_LEARNING_RUN_EXAMPLE_KEY",
+                "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
+                "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
+            ],
+        ),
     ],
 )
 def test_shipped_examples_execute_through_unified_cli(
     command: str,
     example: str,
     kind: str,
-    required_env: str | None,
+    required_env: str | list[str] | None,
     tmp_path,
     monkeypatch,
 ):
-    if required_env:
-        monkeypatch.setenv(required_env, f"real-local-{required_env.lower()}")
+    for env_key in [required_env] if isinstance(required_env, str) else required_env or []:
+        monkeypatch.setenv(env_key, f"real-local-{env_key.lower()}")
 
     output_path = tmp_path / f"{command}.json"
     junit_path = tmp_path / f"{command}.junit.xml"
@@ -90,6 +100,24 @@ def test_shipped_examples_execute_through_unified_cli(
     if command == "optimize-eval":
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
+    if command == "suite":
+        assert payload["summary"]["job_count"] == 5
+        assert payload["summary"]["passed_count"] == 5
+        assert payload["summary"]["score"] == pytest.approx(1.0)
+        assert [child["command"] for child in payload["children"]] == [
+            "run",
+            "eval",
+            "redteam",
+            "optimize_eval",
+            "optimize",
+        ]
+        assert {child["kind"] for child in payload["children"]} == {
+            "agent-learning.run.v1",
+            "agent-learning.eval.v1",
+            "agent-learning.redteam.v1",
+            "agent-learning.eval-optimization.v1",
+            "agent-learning.optimization.v1",
+        }
     if command in {"run", "eval", "redteam"}:
         assert payload["summary"]["case_count"] >= 1
 

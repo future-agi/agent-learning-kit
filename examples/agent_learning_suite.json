@@ -1,0 +1,44 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "local-agent-learning-suite",
+  "required_env": [
+    "AGENT_LEARNING_RUN_EXAMPLE_KEY",
+    "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
+    "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY"
+  ],
+  "jobs": [
+    {
+      "id": "local-simulation",
+      "command": "run",
+      "path": "run_manifest.json",
+      "no_eval": true,
+      "name": "suite-local-simulation"
+    },
+    {
+      "id": "promptfoo-style-eval",
+      "command": "eval",
+      "path": "eval_suite.json",
+      "name": "suite-promptfoo-eval"
+    },
+    {
+      "id": "agent-red-team",
+      "command": "redteam",
+      "path": "redteam_manifest.json",
+      "name": "suite-agent-red-team"
+    },
+    {
+      "id": "eval-suite-optimizer",
+      "command": "optimize-eval",
+      "path": "eval_suite_optimization.json",
+      "name": "suite-eval-suite-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "world-framework-memory-optimizer",
+      "command": "optimize",
+      "path": "world_framework_memory_optimization.json",
+      "name": "suite-world-framework-memory-optimizer",
+      "max_candidates": 2
+    }
+  ]
+}
