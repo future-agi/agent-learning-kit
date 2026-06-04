@@ -153,8 +153,9 @@ observability replay rows.
 The `agent_integration_optimization.json` example optimizes provider and
 framework integration coverage for the Future AGI UI/observability/evals layer.
 It verifies agent definition, personas, simulations, observability hooks, eval
-metrics, credentials, sessions, and channel coverage across LiveKit, Retell,
-ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported frameworks.
+metrics, credentials, sessions, and channel coverage across LiveKit, Vapi,
+Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and
+TraceAI-supported frameworks.
 
 The `optimizer_governance_optimization.json` example optimizes an optimizer
 society trace, making multi-interaction search auditable. It verifies roles,

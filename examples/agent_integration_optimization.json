@@ -13,7 +13,7 @@
           "role": "integration-lead"
         },
         "situation": "Ira needs Future AGI to validate agent definitions, personas, simulations, observability, evals, and the provider matrix for chat, voice, WebRTC, phone, and SIP integrations.",
-        "outcome": "The optimized integration proves LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials and replayable sessions."
+        "outcome": "The optimized integration proves LiveKit, Vapi, Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials and replayable sessions."
       }
     ]
   },
@@ -38,7 +38,7 @@
         ]
       },
       {
-        "content": "Checking LiveKit, Retell, and Twilio provider details for WebRTC, phone, and SIP routing.",
+        "content": "Checking LiveKit, Vapi, Retell, Bland, and Twilio provider details for WebRTC, phone, and SIP routing.",
         "tool_calls": [
           {
             "id": "livekit_provider",
@@ -48,10 +48,24 @@
             }
           },
           {
+            "id": "vapi_provider",
+            "name": "inspect_agent_integration_provider",
+            "arguments": {
+              "provider": "vapi"
+            }
+          },
+          {
             "id": "retell_provider",
             "name": "inspect_agent_integration_provider",
             "arguments": {
               "provider": "retell"
+            }
+          },
+          {
+            "id": "bland_provider",
+            "name": "inspect_agent_integration_provider",
+            "arguments": {
+              "provider": "bland"
             }
           },
           {
@@ -88,7 +102,7 @@
         ]
       },
       {
-        "content": "The optimized integration proves LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials, personas, simulations, observability hooks, eval metrics, transcripts, and traces.",
+        "content": "The optimized integration proves LiveKit, Vapi, Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials, personas, simulations, observability hooks, eval metrics, transcripts, and traces.",
         "tool_calls": []
       }
     ]
@@ -136,7 +150,9 @@
           "evals": {},
           "required_providers": [
             "livekit",
+            "vapi",
             "retell",
+            "bland",
             "elevenlabs",
             "deepgram",
             "agora",
@@ -169,7 +185,7 @@
       "threshold": 0.9,
       "config": {
         "task_description": "Optimize provider, persona, simulation, observability, eval, and TraceAI framework integration coverage for Future AGI as the UI/observability/evals layer.",
-        "expected_result": "The optimized integration proves LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials and replayable sessions.",
+        "expected_result": "The optimized integration proves LiveKit, Vapi, Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported framework coverage with verified credentials and replayable sessions.",
         "required_tools": [
           "agent_integration_status",
           "list_agent_integration_providers",
@@ -207,7 +223,9 @@
           "websocket",
           "media_stream",
           "livekit",
+          "vapi",
           "retell",
+          "bland",
           "elevenlabs",
           "deepgram",
           "agora",
@@ -226,21 +244,23 @@
           "require_observability": true,
           "require_evals": true,
           "require_verified_credentials": true,
-          "min_provider_count": 14,
-          "min_session_count": 10,
-          "min_simulation_count": 7,
+          "min_provider_count": 16,
+          "min_session_count": 14,
+          "min_simulation_count": 9,
           "min_persona_count": 3,
           "min_observability_hooks": 5,
           "min_eval_metric_count": 5,
-          "min_verified_providers": 14,
-          "min_passed_simulations": 7,
-          "min_trace_sessions": 10,
-          "min_transcript_sessions": 10,
+          "min_verified_providers": 16,
+          "min_passed_simulations": 9,
+          "min_trace_sessions": 14,
+          "min_transcript_sessions": 14,
           "max_missing_credentials": 0,
           "max_failed_sessions": 0,
           "required_providers": [
             "livekit",
+            "vapi",
             "retell",
+            "bland",
             "elevenlabs",
             "deepgram",
             "agora",
@@ -271,10 +291,25 @@
               "phone",
               "sip"
             ],
+            "vapi": [
+              "chat",
+              "voice",
+              "webrtc",
+              "phone",
+              "sip",
+              "websocket"
+            ],
             "retell": [
               "chat",
               "voice",
               "phone"
+            ],
+            "bland": [
+              "voice",
+              "phone",
+              "sip",
+              "web_call",
+              "websocket"
             ],
             "elevenlabs": [
               "voice",
@@ -303,7 +338,7 @@
           }
         },
         "success_criteria": [
-          "LiveKit, Retell, ElevenLabs, Deepgram, Agora, Pipecat, and Twilio covered",
+          "LiveKit, Vapi, Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, and Twilio covered",
           "TraceAI-supported frameworks covered",
           "verified credentials",
           "personas and simulations",
@@ -460,6 +495,19 @@
                     "credential_status": "live_verified"
                   },
                   {
+                    "provider": "vapi",
+                    "channels": [
+                      "chat",
+                      "voice",
+                      "webrtc",
+                      "phone",
+                      "sip",
+                      "websocket"
+                    ],
+                    "credential_ref": "VAPI_API_KEY",
+                    "credential_status": "live_verified"
+                  },
+                  {
                     "provider": "retell",
                     "channels": [
                       "chat",
@@ -468,6 +516,18 @@
                       "web_call"
                     ],
                     "credential_ref": "RETELL_API_KEY",
+                    "credential_status": "live_verified"
+                  },
+                  {
+                    "provider": "bland",
+                    "channels": [
+                      "voice",
+                      "phone",
+                      "sip",
+                      "web_call",
+                      "websocket"
+                    ],
+                    "credential_ref": "BLAND_API_KEY",
                     "credential_status": "live_verified"
                   },
                   {
@@ -611,6 +671,15 @@
                     "sip_trunk": "lk-sip"
                   },
                   {
+                    "id": "vapi_phone",
+                    "provider": "vapi",
+                    "channel": "phone",
+                    "status": "passed",
+                    "trace_id": "trace_vapi_phone",
+                    "transcript": "Vapi phone simulation passed.",
+                    "phone_number": "+15550101011"
+                  },
+                  {
                     "id": "retell_chat",
                     "provider": "retell",
                     "channel": "chat",
@@ -631,6 +700,15 @@
                     "trace_id": "trace_retell_phone",
                     "transcript": "Retell phone simulation passed.",
                     "phone_number": "+15550101010"
+                  },
+                  {
+                    "id": "bland_web_call",
+                    "provider": "bland",
+                    "channel": "web_call",
+                    "status": "passed",
+                    "trace_id": "trace_bland_web_call",
+                    "transcript": "Bland web call simulation passed.",
+                    "call_id": "bland-call-123"
                   },
                   {
                     "id": "elevenlabs_voice",
@@ -713,9 +791,21 @@
                     "passed": true
                   },
                   {
+                    "id": "sim_vapi",
+                    "provider": "vapi",
+                    "channel": "phone",
+                    "passed": true
+                  },
+                  {
                     "id": "sim_retell",
                     "provider": "retell",
                     "channel": "chat",
+                    "passed": true
+                  },
+                  {
+                    "id": "sim_bland",
+                    "provider": "bland",
+                    "channel": "web_call",
                     "passed": true
                   },
                   {
@@ -753,7 +843,9 @@
                   "platform": "futureagi",
                   "traces": [
                     "trace_livekit_webrtc",
+                    "trace_vapi_phone",
                     "trace_retell_chat",
+                    "trace_bland_web_call",
                     "trace_twilio_sip"
                   ],
                   "webhooks": [
@@ -787,7 +879,9 @@
                 },
                 "required_providers": [
                   "livekit",
+                  "vapi",
                   "retell",
+                  "bland",
                   "elevenlabs",
                   "deepgram",
                   "agora",

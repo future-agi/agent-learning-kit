@@ -19112,6 +19112,7 @@ def _normalize_agent_integration_provider(value: Any) -> str:
     normalized = _normalize_agent_integration_key(value)
     aliases = {
         "11labs": "elevenlabs",
+        "bland_ai": "bland",
         "eleven_labs": "elevenlabs",
         "google_adk": "google_adk",
         "google_genai": "google_genai",
@@ -19120,6 +19121,7 @@ def _normalize_agent_integration_provider(value: Any) -> str:
         "pydantic_ai": "pydantic_ai",
         "retell_ai": "retell",
         "trace_ai": "traceai",
+        "vapi_ai": "vapi",
     }
     return aliases.get(normalized, normalized)
 
@@ -26072,7 +26074,6 @@ def _normalize_browser_trace_key(key: str) -> str:
         "action_replay": "action_replay",
         "dom_mutations": "dom_mutation",
         "dom_mutation": "dom_mutation",
-        "mutations": "dom_mutation",
         "state_updates": "state",
         "state": "state",
         "final_state": "state",

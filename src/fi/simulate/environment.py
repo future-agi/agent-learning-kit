@@ -8597,9 +8597,10 @@ class AgentIntegrationEnvironment(EnvironmentAdapter):
     """
     Replay provider/channel integration evidence for agent simulations.
 
-    This environment is the neutral integration boundary for LiveKit, Retell,
-    ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI instrumented
-    frameworks. Future AGI belongs in `platform`, not as an agent framework.
+    This environment is the neutral integration boundary for LiveKit, Vapi,
+    Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI
+    instrumented frameworks. Future AGI belongs in `platform`, not as an agent
+    framework.
     """
 
     name = "agent_integration"
@@ -13740,7 +13741,9 @@ TRACEAI_SUPPORTED_AGENT_FRAMEWORKS = {
 AGENT_INTEGRATION_PROVIDER_CAPABILITIES: Dict[str, List[str]] = {
     "livekit_bridge": ["chat", "voice", "webrtc", "phone", "sip", "video", "data", "observability"],
     "livekit": ["webrtc", "phone", "sip", "system_engine", "transport"],
+    "vapi": ["chat", "voice", "webrtc", "phone", "sip", "websocket", "webhook", "analysis"],
     "retell": ["chat", "voice", "phone", "web_call", "webhook", "analysis"],
+    "bland": ["voice", "phone", "sip", "web_call", "websocket", "webhook", "pathways", "analysis"],
     "elevenlabs": ["voice", "phone", "sip", "twilio", "websocket", "agent_workflow"],
     "deepgram": ["voice", "stt", "tts", "websocket", "livekit", "agent_api"],
     "agora": ["voice", "webrtc", "tts", "multimodal", "realtime_state"],
@@ -15031,8 +15034,14 @@ def _normalize_agent_integration_sessions(value: Any) -> List[Dict[str, Any]]:
         item = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {"transcript": str(raw)}
         provider = _normalize_agent_integration_provider_name(item.get("provider") or item.get("framework"))
         channel = _normalize_agent_integration_channel(item.get("channel") or item.get("modality") or item.get("call_type"))
-        if not channel and provider in {"retell", "twilio"}:
-            channel = "phone" if item.get("phone_number") or item.get("call_id") else "voice"
+        if not channel:
+            capabilities = set(AGENT_INTEGRATION_PROVIDER_CAPABILITIES.get(provider, []))
+            has_phone = item.get("phone_number") or item.get("call_id")
+            has_sip = item.get("sip_trunk") or item.get("sip_call_id")
+            if has_sip and "sip" in capabilities:
+                channel = "sip"
+            elif has_phone and "phone" in capabilities:
+                channel = "phone"
         if not channel:
             channel = "chat" if item.get("messages") else "voice" if item.get("audio") or item.get("transcript") else "session"
         signals = {
@@ -15276,6 +15285,8 @@ def _normalize_agent_integration_provider_name(value: Any) -> str:
         "eleven_labs": "elevenlabs",
         "11labs": "elevenlabs",
         "retell_ai": "retell",
+        "bland_ai": "bland",
+        "vapi_ai": "vapi",
         "trace_ai": "traceai",
     }
     return aliases.get(normalized, normalized)
@@ -15489,7 +15500,9 @@ def _framework_import_summary(
         for source in sources
         if source.get("status") in {"failed", "error", "timeout", "cancelled", "canceled"}
     ]
-    has_export = lambda *names: bool(observed_export_types.intersection(names))
+    def has_export(*names: str) -> bool:
+        return bool(observed_export_types.intersection(names))
+
     return {
         "has_target": bool(target),
         "has_adapter": bool(adapter),
@@ -23792,7 +23805,7 @@ def _playwright_video_artifacts_from_record(
 
 
 def _playwright_perturbations_from_record(record: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    text = _stringify(record).lower() if "_stringify" in globals() else json.dumps(record, default=str).lower()
+    text = _stringify_dict(record).lower()
     if "layout_shift" not in text and "layout-shift" not in text and "stale_screenshot" not in text and "stale screenshot" not in text:
         return []
     return [_normalize_browser_perturbation(record, index=0)]
@@ -23821,7 +23834,7 @@ def _normalize_browser_perturbation(
     index: int,
 ) -> Dict[str, Any]:
     item = copy.deepcopy(dict(perturbation)) if isinstance(perturbation, Mapping) else {"type": str(perturbation)}
-    text = _stringify(item).lower() if "_stringify" in globals() else json.dumps(item, default=str).lower()
+    text = _stringify_dict(item).lower()
     kind = str(item.get("type") or item.get("kind") or item.get("name") or "")
     if not kind:
         if "stale" in text:
@@ -23858,7 +23871,7 @@ def _normalize_browser_mutation(
     default_url: Optional[str],
 ) -> Dict[str, Any]:
     item = copy.deepcopy(dict(mutation)) if isinstance(mutation, Mapping) else {"type": str(mutation)}
-    text = _stringify(item).lower() if "_stringify" in globals() else json.dumps(item, default=str).lower()
+    text = _stringify_dict(item).lower()
     mutation_type = str(
         item.get("type")
         or item.get("kind")

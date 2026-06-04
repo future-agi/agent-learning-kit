@@ -802,17 +802,35 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
         assert metrics[metric] == pytest.approx(1.0)
 
     case = best_history["report"]["results"][0]
+    quality_metric = next(
+        metric
+        for metric in case["evaluation"]["agent_report"]["metrics"]
+        if metric["name"] == "agent_integration_quality"
+    )
+    provider_channel_checks = {
+        (check["expected"]["provider"], check["expected"]["channel"]): check["match"]
+        for check in quality_metric["details"]["checks"]
+        if check["check"] == "required_provider_channel"
+    }
+    assert provider_channel_checks[("vapi", "phone")] is True
+    assert provider_channel_checks[("vapi", "webrtc")] is True
+    assert provider_channel_checks[("bland", "phone")] is True
+    assert provider_channel_checks[("bland", "sip")] is True
+    assert provider_channel_checks[("bland", "webrtc")] is True
+
     state = case["metadata"]["environment_state"]
     assert set(state) == {"agent_integration_manifest"}
     summary = state["agent_integration_manifest"]["summary"]
     assert set(summary["observed_providers"]) >= {
         "agora",
+        "bland",
         "deepgram",
         "elevenlabs",
         "livekit",
         "pipecat",
         "retell",
         "twilio",
+        "vapi",
     }
     assert set(summary["observed_channels"]) >= {
         "chat",
@@ -832,7 +850,7 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
         "openai_agents",
         "pipecat",
     }
-    assert summary["verified_provider_count"] == 14
+    assert summary["verified_provider_count"] == 16
     assert summary["failed_session_count"] == 0
     assert summary["missing_required_providers"] == []
     assert summary["missing_required_channels"] == []
