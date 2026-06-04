@@ -489,11 +489,24 @@ def test_public_eval_suite_api_evaluates_saved_artifact_provider(
                         "id": "task_artifact",
                         "vars": {"artifact_path": str(artifact_path)},
                         "assert": [
-                            {"type": "contains", "value": '"status": "passed"'},
-                            {"type": "contains", "value": '"task_completion": 1.0'},
                             {
-                                "type": "contains",
-                                "value": '"verification_status": "approved"',
+                                "type": "json_path_equals",
+                                "path": "fields.status",
+                                "value": "passed",
+                            },
+                            {
+                                "type": "json_path_gte",
+                                "path": "fields.task_completion",
+                                "value": 1.0,
+                            },
+                            {
+                                "type": "json_path_equals",
+                                "path": "fields.verification_status",
+                                "value": "approved",
+                            },
+                            {
+                                "type": "json_path_exists",
+                                "path": "artifact_path",
                             },
                         ],
                     }
@@ -506,8 +519,65 @@ def test_public_eval_suite_api_evaluates_saved_artifact_provider(
     result = simulate.run_eval_suite_file(suite_path)
 
     assert result["status"] == "passed"
-    assert result["summary"]["assertion_count"] == 3
+    assert result["summary"]["assertion_count"] == 4
     case = result["eval_suite"]["cases"][0]
     assert case["provider_type"] == "artifact"
+    assert {item["type"] for item in case["assertions"]} == {
+        "json_path_equals",
+        "json_path_exists",
+        "json_path_gte",
+    }
     assert '"task_completion": 1.0' in case["output"]
     assert '"verification_status": "approved"' in case["output"]
+
+
+def test_public_eval_suite_api_reports_json_path_assertion_failures() -> None:
+    suite = {
+        "version": "agent-simulate.eval.v1",
+        "name": "json-path-assertions",
+        "providers": [
+            {
+                "id": "scripted",
+                "type": "scripted",
+                "response": json.dumps(
+                    {
+                        "metrics": {"score": 0.4},
+                        "items": ["policy"],
+                        "status": "warning",
+                    }
+                ),
+            }
+        ],
+        "prompts": [{"id": "task", "template": "score"}],
+        "tests": [
+            {
+                "id": "structured",
+                "assert": [
+                    {
+                        "type": "json_path_contains",
+                        "path": "items",
+                        "value": "policy",
+                    },
+                    {"type": "json_path_lte", "path": "metrics.score", "value": 0.5},
+                    {"type": "json_path_gte", "path": "metrics.score", "value": 0.9},
+                    {"type": "json_path_exists", "path": "metrics.missing"},
+                ],
+            }
+        ],
+    }
+
+    result = simulate.run_eval_suite(suite)
+
+    assert result["status"] == "failed"
+    assert result["summary"]["passed_assertion_count"] == 2
+    assert result["summary"]["failed_assertion_count"] == 2
+    case = result["eval_suite"]["cases"][0]
+    failed = [item for item in case["assertions"] if not item["passed"]]
+    assert failed[0]["type"] == "json_path_gte"
+    assert failed[0]["actual"] == pytest.approx(0.4)
+    assert failed[0]["path"] == "metrics.score"
+    assert failed[1]["type"] == "json_path_exists"
+    assert failed[1]["path"] == "metrics.missing"
+    assert "missing key" in failed[1]["error"]
+    assert case["findings"][0]["actual"] == pytest.approx(0.4)
+    assert case["findings"][0]["path"] == "metrics.score"

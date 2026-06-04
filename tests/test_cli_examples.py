@@ -133,6 +133,10 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["assertion_count"] == 8
         case = payload["eval_suite"]["cases"][0]
         assert case["provider_type"] == "artifact"
+        assert {item["type"] for item in case["assertions"]} == {
+            "json_path_equals",
+            "json_path_gte",
+        }
         assert '"task_completion": 1.0' in case["output"]
         assert '"verification_status": "approved"' in case["output"]
         assert '"canary_exfiltrated": false' in case["output"]

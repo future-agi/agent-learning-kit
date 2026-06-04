@@ -18,6 +18,51 @@ from .manifest import CLI_SCHEMA_VERSION, ManifestError
 EVAL_SUITE_SCHEMA_VERSION = "agent-simulate.eval.v1"
 EVAL_SUITE_OPTIMIZATION_SCHEMA_VERSION = "agent-learning.eval-optimization.v1"
 
+_JSON_PATH_EQUALS_ASSERTIONS = {
+    "json_path_equals",
+    "json_path_equal",
+    "json_equals",
+    "path_equals",
+    "path_equal",
+}
+_JSON_PATH_EXISTS_ASSERTIONS = {
+    "json_path_exists",
+    "json_exists",
+    "path_exists",
+}
+_JSON_PATH_GTE_ASSERTIONS = {
+    "json_path_gte",
+    "json_path_ge",
+    "json_gte",
+    "path_gte",
+    "greater_than_or_equal",
+}
+_JSON_PATH_LTE_ASSERTIONS = {
+    "json_path_lte",
+    "json_path_le",
+    "json_lte",
+    "path_lte",
+    "less_than_or_equal",
+}
+_JSON_PATH_CONTAINS_ASSERTIONS = {
+    "json_path_contains",
+    "json_contains",
+    "path_contains",
+}
+_JSON_PATH_NOT_CONTAINS_ASSERTIONS = {
+    "json_path_not_contains",
+    "json_not_contains",
+    "path_not_contains",
+}
+_JSON_PATH_ASSERTIONS = (
+    _JSON_PATH_EQUALS_ASSERTIONS
+    | _JSON_PATH_EXISTS_ASSERTIONS
+    | _JSON_PATH_GTE_ASSERTIONS
+    | _JSON_PATH_LTE_ASSERTIONS
+    | _JSON_PATH_CONTAINS_ASSERTIONS
+    | _JSON_PATH_NOT_CONTAINS_ASSERTIONS
+)
+
 
 @dataclass(frozen=True)
 class EvalSuiteOptions:
@@ -311,9 +356,18 @@ def _normalize_assertion(assertion: Any, test_id: str, index: int) -> Dict[str, 
     else:
         item = _as_dict(assertion)
     item["type"] = str(item.get("type") or item.get("kind") or "contains").lower().replace("-", "_")
+    if "path" not in item:
+        for alias in ("json_path", "field"):
+            if alias in item:
+                item["path"] = item.get(alias)
+                break
     if "value" not in item and "expected" in item:
         item["value"] = item.get("expected")
-    if "value" not in item:
+    assertion_type = str(item["type"])
+    if assertion_type in _JSON_PATH_ASSERTIONS and not item.get("path"):
+        raise ManifestError(f"assertion {index} in test `{test_id}` requires a path")
+    requires_value = assertion_type not in _JSON_PATH_EXISTS_ASSERTIONS
+    if requires_value and "value" not in item:
         raise ManifestError(f"assertion {index} in test `{test_id}` requires a value")
     return item
 
@@ -352,7 +406,9 @@ def _run_eval_case(
             "test_id": test.get("id"),
             "assertion_type": failure.get("type"),
             "expected": failure.get("expected"),
-            "actual": output,
+            "actual": failure.get("actual", output),
+            "path": failure.get("path"),
+            "error": failure.get("error"),
         }
         for failure in failures
     ]
@@ -533,6 +589,8 @@ def _artifact_path_tokens(path: str) -> List[str]:
 
 def _evaluate_assertion(assertion: Mapping[str, Any], output: str) -> Dict[str, Any]:
     assertion_type = str(assertion.get("type") or "contains").lower().replace("-", "_")
+    if assertion_type in _JSON_PATH_ASSERTIONS:
+        return _evaluate_json_path_assertion(assertion, output, assertion_type)
     expected = assertion.get("value")
     text = str(output)
     expected_text = str(expected)
@@ -552,6 +610,87 @@ def _evaluate_assertion(assertion: Mapping[str, Any], output: str) -> Dict[str, 
         "actual": output,
         "passed": bool(passed),
     }
+
+
+def _evaluate_json_path_assertion(
+    assertion: Mapping[str, Any],
+    output: str,
+    assertion_type: str,
+) -> Dict[str, Any]:
+    path = str(
+        assertion.get("path")
+        or assertion.get("json_path")
+        or assertion.get("field")
+        or ""
+    )
+    expected = assertion.get("value")
+    result: Dict[str, Any] = {
+        "type": assertion_type,
+        "path": path,
+        "expected": True if assertion_type in _JSON_PATH_EXISTS_ASSERTIONS else expected,
+        "actual": None,
+        "passed": False,
+    }
+    if not path:
+        result["error"] = "json path assertion requires a path"
+        return result
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as exc:
+        result["error"] = f"output is not valid JSON: {exc.msg}"
+        return result
+    try:
+        actual = _extract_artifact_path(document, path)
+    except ManifestError as exc:
+        result["error"] = str(exc)
+        return result
+    result["actual"] = actual
+
+    if assertion_type in _JSON_PATH_EXISTS_ASSERTIONS:
+        result["passed"] = True
+    elif assertion_type in _JSON_PATH_EQUALS_ASSERTIONS:
+        result["passed"] = actual == expected
+    elif assertion_type in _JSON_PATH_GTE_ASSERTIONS:
+        passed, error = _json_path_numeric_compare(actual, expected, "gte")
+        result["passed"] = passed
+        if error:
+            result["error"] = error
+    elif assertion_type in _JSON_PATH_LTE_ASSERTIONS:
+        passed, error = _json_path_numeric_compare(actual, expected, "lte")
+        result["passed"] = passed
+        if error:
+            result["error"] = error
+    elif assertion_type in _JSON_PATH_CONTAINS_ASSERTIONS:
+        result["passed"] = _json_path_contains(actual, expected)
+    elif assertion_type in _JSON_PATH_NOT_CONTAINS_ASSERTIONS:
+        result["passed"] = not _json_path_contains(actual, expected)
+    return result
+
+
+def _json_path_numeric_compare(
+    actual: Any,
+    expected: Any,
+    operator: str,
+) -> tuple[bool, str | None]:
+    try:
+        actual_number = float(actual)
+        expected_number = float(expected)
+    except (TypeError, ValueError):
+        return (
+            False,
+            f"expected numeric JSON path values, got actual={actual!r} expected={expected!r}",
+        )
+    if operator == "gte":
+        return actual_number >= expected_number, None
+    return actual_number <= expected_number, None
+
+
+def _json_path_contains(actual: Any, expected: Any) -> bool:
+    if isinstance(actual, Mapping):
+        return expected in actual or str(expected) in actual
+    if isinstance(actual, (list, tuple, set)):
+        return expected in actual
+    return str(expected) in str(actual)
 
 
 def _suite_result(

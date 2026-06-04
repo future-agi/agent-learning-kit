@@ -974,6 +974,23 @@ def test_sdk_artifact_optimization_example_runs(monkeypatch, tmp_path):
     assert set(suite["optimization"]["target"]["search_space"]) == {
         "providers.0.fields"
     }
+    assert {item["type"] for item in suite["tests"][0]["assertions"]} == {
+        "json_path_equals",
+        "json_path_gte",
+    }
+    assert {
+        item["path"]
+        for item in suite["tests"][0]["assertions"]
+    } == {
+        "fields.status",
+        "fields.task_completion",
+        "fields.verification_status",
+        "fields.policy_checked",
+        "fields.safe_memory_written",
+        "fields.canary_exfiltrated",
+        "fields.framework",
+        "fields.world_contract_quality",
+    }
 
     output_path = tmp_path / "sdk-artifact-result.json"
     result = module.run(output_path)

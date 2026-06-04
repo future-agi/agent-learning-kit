@@ -224,9 +224,12 @@ checks, canaries, observability, and memory-lineage artifacts as one coherent
 candidate bundle.
 
 For saved task/run artifacts, pass artifact field-extraction candidates and
-fixed assertions. The SDK builds a promptfoo-style optimization suite that
-selects the artifact adapter fields needed to evaluate saved evidence without
-rerunning the agent.
+fixed structured assertions. The SDK builds a promptfoo-style optimization
+suite that selects the artifact adapter fields needed to evaluate saved
+evidence without rerunning the agent. Assertions can target JSON paths such as
+`fields.task_completion` with typed equality, existence, numeric bounds, and
+containment checks, so artifact gates do not depend on serialized JSON
+formatting.
 
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
@@ -270,8 +273,9 @@ The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
 provider loads JSON/YAML artifacts, extracts named paths such as task
 completion, verification status, framework runtime, and world-contract metrics,
-then runs normal promptfoo-style assertions through `agent-learn eval`. This is
-the CI path for evaluating task/world artifacts without rerunning the agent.
+then runs structured promptfoo-style JSON-path assertions through
+`agent-learn eval`. This is the CI path for evaluating task/world artifacts
+without rerunning the agent.
 For direct agent-report metrics over an existing artifact, `agent-learn
 eval-artifact` consumes the same saved artifact plus
 `artifact_task_eval_config.json` and emits JSON, JUnit, SARIF, and Markdown
