@@ -86,6 +86,9 @@ optional JUnit, SARIF, and Markdown outputs for CI.
 
 This package now contains the actual `fi.simulate`, `fi.evals`, and `fi.opt`
 engine code while keeping `agent_learning.*` as the public API.
+`agent_learning.simulate` mirrors the vendored `fi.simulate` public SDK surface:
+agent definitions/wrappers, local/cloud/realtime engines, environments,
+normalizers, manifest helpers, eval-suite helpers, and artifact renderers.
 
 The `world_framework_memory_optimization.json` example optimizes a
 LangGraph-style world orchestration across framework trace, retrieval, memory

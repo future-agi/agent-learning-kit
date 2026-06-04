@@ -41,6 +41,10 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 def test_facades_expose_unified_agent_learning_modules():
     from agent_learning import evals, optimize, redteam, simulate, suite
 
+    fi_simulate = importlib.import_module("fi.simulate")
+    fi_engines = importlib.import_module("fi.simulate.simulation.engines")
+
+    assert set(fi_simulate.__all__) <= set(simulate.__all__)
     assert simulate.run_eval_suite_file is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
@@ -57,6 +61,39 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.StructuredArtifactEnvironment is not None
     assert simulate.DomainPackageEnvironment is not None
     assert simulate.WorldAttackReplayEnvironment is not None
+    assert simulate.AgentDefinition is fi_simulate.AgentDefinition
+    assert simulate.SimulatorAgentDefinition is fi_simulate.SimulatorAgentDefinition
+    assert simulate.SimulationArtifact is fi_simulate.SimulationArtifact
+    assert simulate.SimulationEvent is fi_simulate.SimulationEvent
+    assert simulate.EnvironmentSnapshot is fi_simulate.EnvironmentSnapshot
+    assert simulate.FileEnvironment is fi_simulate.FileEnvironment
+    assert simulate.AgentTrustBoundaryEnvironment is (
+        fi_simulate.AgentTrustBoundaryEnvironment
+    )
+    assert simulate.AgentControlPlaneEnvironment is (
+        fi_simulate.AgentControlPlaneEnvironment
+    )
+    assert simulate.AgentIntegrationEnvironment is (
+        fi_simulate.AgentIntegrationEnvironment
+    )
+    assert simulate.ObservabilityReplayEnvironment is (
+        fi_simulate.ObservabilityReplayEnvironment
+    )
+    assert simulate.OptimizerTraceEnvironment is fi_simulate.OptimizerTraceEnvironment
+    assert simulate.OptimizerPortfolioEnvironment is (
+        fi_simulate.OptimizerPortfolioEnvironment
+    )
+    assert simulate.RedTeamCampaignEnvironment is (
+        fi_simulate.RedTeamCampaignEnvironment
+    )
+    assert simulate.RedTeamReadinessEnvironment is (
+        fi_simulate.RedTeamReadinessEnvironment
+    )
+    assert simulate.WorkspaceRunEnvironment is fi_simulate.WorkspaceRunEnvironment
+    assert simulate.BaseEngine is fi_engines.BaseEngine
+    assert simulate.CloudEngine is fi_engines.CloudEngine
+    assert simulate.LiveKitEngine is fi_engines.LiveKitEngine
+    assert simulate.LocalTextEngine is fi_engines.LocalTextEngine
     assert simulate.FrameworkLifecycleEnvironment is not None
     assert simulate.FrameworkCapabilityEnvironment is not None
     assert simulate.FrameworkProbeEnvironment is not None
@@ -83,6 +120,15 @@ def test_facades_expose_unified_agent_learning_modules():
         "autonomy_loop",
         "image",
         "vision",
+        "agent_trust_boundary",
+        "agent_control_plane",
+        "agent_integration",
+        "observability_replay",
+        "workspace_run_manifest",
+        "optimizer_trace",
+        "optimizer_backend_portfolio",
+        "red_team_campaign",
+        "red_team_readiness",
         "framework_lifecycle",
         "framework_capability",
         "framework_probe",
