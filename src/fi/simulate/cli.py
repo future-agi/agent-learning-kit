@@ -1031,6 +1031,11 @@ def _generate_redteam_matrix_environments(
             "redteam.auto_generate is enabled"
         )
 
+    environments[:] = [
+        spec
+        for spec in environments
+        if not _is_auto_generated_redteam_environment(spec)
+    ]
     existing = {
         str(spec.get("type") or spec.get("kind") or "").lower().replace("-", "_")
         for spec in environments
@@ -1047,6 +1052,21 @@ def _generate_redteam_matrix_environments(
                 "data": _redteam_matrix_campaign(redteam, attack_pack),
             }
         )
+
+
+def _is_auto_generated_redteam_environment(spec: Any) -> bool:
+    if not isinstance(spec, Mapping):
+        return False
+    env_type = str(spec.get("type") or spec.get("kind") or "").lower().replace("-", "_")
+    if env_type not in REDTEAM_ENV_TYPES:
+        return False
+    data = spec.get("data")
+    if not isinstance(data, Mapping):
+        data = spec
+    metadata = data.get("metadata") if isinstance(data, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        return False
+    return str(metadata.get("source") or "") == "redteam.auto_generate"
 
 
 def _redteam_auto_generate_enabled(redteam: Mapping[str, Any]) -> bool:
@@ -2514,10 +2534,10 @@ def _replay_command_for_manifest(manifest: Mapping[str, Any]) -> str:
         return "redteam" if explicit == "red-team" else explicit
     if explicit in aliases:
         return aliases[explicit]
-    if manifest.get("redteam") is not None or manifest.get("red_team") is not None:
-        return "redteam"
     if manifest.get("optimization") is not None:
         return "optimize"
+    if manifest.get("redteam") is not None or manifest.get("red_team") is not None:
+        return "redteam"
     return "run"
 
 

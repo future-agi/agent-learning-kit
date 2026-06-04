@@ -50,6 +50,8 @@ agent-learn optimize examples/voice_streaming_realtime_optimization.json \
   --output artifacts/voice-streaming-realtime-optimization.json
 agent-learn optimize examples/redteam_campaign_optimization.json \
   --output artifacts/redteam-campaign-optimization.json
+agent-learn optimize examples/redteam_autogen_optimization.json \
+  --output artifacts/redteam-autogen-optimization.json
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
@@ -96,3 +98,8 @@ The `redteam_campaign_optimization.json` example optimizes an adversarial
 attack-pack, campaign matrix, readiness, observability, and mitigation harness
 through `agent-learn optimize`, selecting the candidate with clean red-team
 campaign and readiness gates.
+
+The `redteam_autogen_optimization.json` example starts from
+`redteam.auto_generate: true` and optimizes the declared attack/surface matrix;
+each candidate regenerates local adversarial attack-pack and campaign evidence
+before scoring.

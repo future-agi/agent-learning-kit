@@ -53,10 +53,10 @@ def detect_manifest_command(
 ) -> Literal["run", "redteam", "optimize"]:
     """Return the default command for a manifest shape."""
 
-    if manifest.get("redteam") is not None or manifest.get("red_team") is not None:
-        return "redteam"
     if manifest.get("optimization") is not None:
         return "optimize"
+    if _has_redteam_block(manifest):
+        return "redteam"
     return "run"
 
 
@@ -134,6 +134,34 @@ def prepare_redteam_manifest(manifest: Mapping[str, Any]) -> Dict[str, Any]:
     runtime_manifest = copy.deepcopy(dict(manifest))
     _cli()._prepare_redteam_manifest(runtime_manifest)
     return runtime_manifest
+
+
+def _has_redteam_block(manifest: Mapping[str, Any]) -> bool:
+    return manifest.get("redteam") not in (None, "", [], {}) or manifest.get("red_team") not in (None, "", [], {})
+
+
+def _prepare_redteam_if_present(
+    manifest: Dict[str, Any],
+    cli: Any,
+) -> Optional[Dict[str, Any]]:
+    if not _has_redteam_block(manifest):
+        return None
+    return cli._prepare_redteam_manifest(manifest)
+
+
+def _redteam_optimization_summary(
+    manifest: Mapping[str, Any],
+    cli: Any,
+) -> Optional[Dict[str, Any]]:
+    if not _has_redteam_block(manifest):
+        return None
+    runtime_manifest = copy.deepcopy(dict(manifest))
+    try:
+        return _prepare_redteam_if_present(runtime_manifest, cli)
+    except ManifestError as exc:
+        if "requires at least one adversarial_attack_pack" in str(exc):
+            return None
+        raise
 
 
 async def run_local_text_manifest(
@@ -612,24 +640,31 @@ def optimize_manifest(
     validate_manifest_env(runtime_manifest)
     apply_manifest_env(runtime_manifest)
     optimization = cli._optimization_config(runtime_manifest)
+    redteam_summary = _redteam_optimization_summary(runtime_manifest, cli)
     if opts.dry_run:
-        return {
+        summary = {
+            "required_env": required_manifest_env(runtime_manifest),
+            "search_path_count": len(
+                cli._target_config(optimization).get("search_space", {})
+            ),
+            "max_candidates": cli._optimizer_config(optimization).get(
+                "max_candidates"
+            ),
+        }
+        if redteam_summary is not None:
+            summary["redteam"] = redteam_summary
+        result = {
             "schema_version": CLI_SCHEMA_VERSION,
             "name": str(runtime_manifest.get("name") or manifest_path.stem),
             "status": "passed",
             "exit_code": 0,
             "dry_run": True,
-            "summary": {
-                "required_env": required_manifest_env(runtime_manifest),
-                "search_path_count": len(
-                    cli._target_config(optimization).get("search_space", {})
-                ),
-                "max_candidates": cli._optimizer_config(optimization).get(
-                    "max_candidates"
-                ),
-            },
+            "summary": summary,
             "duration_seconds": round(time.time() - started, 4),
         }
+        if redteam_summary is not None:
+            result["redteam"] = redteam_summary
+        return result
 
     problem = build_manifest_optimization_problem(
         runtime_manifest,
@@ -637,12 +672,16 @@ def optimize_manifest(
         name=str(runtime_manifest.get("name") or manifest_path.stem),
     )
     result = problem.optimize()
-    return cli._optimization_result(
+    payload = cli._optimization_result(
         manifest=runtime_manifest,
         optimization_result=result,
         threshold=float(optimization.get("threshold", 0.7)),
         duration_seconds=round(time.time() - started, 4),
     )
+    if redteam_summary is not None:
+        payload["redteam"] = redteam_summary
+        payload.setdefault("summary", {})["redteam"] = redteam_summary
+    return payload
 
 
 def build_manifest_optimization_problem(
@@ -655,8 +694,9 @@ def build_manifest_optimization_problem(
 
     cli = _cli()
     manifest_path = Path(manifest_path).expanduser().resolve()
-    optimization = cli._optimization_config(manifest)
-    manifest_base = copy.deepcopy(dict(manifest))
+    runtime_manifest = copy.deepcopy(dict(manifest))
+    optimization = cli._optimization_config(runtime_manifest)
+    manifest_base = copy.deepcopy(dict(runtime_manifest))
     manifest_base.pop("optimization", None)
 
     try:
@@ -665,7 +705,12 @@ def build_manifest_optimization_problem(
         raise ManifestError("agent-opt is required for manifest optimization.") from exc
 
     def evaluate_manifest(candidate_manifest: Mapping[str, Any], candidate: Any) -> Any:
-        return run_local_text_manifest(candidate_manifest, manifest_path)
+        if isinstance(candidate_manifest, dict):
+            runtime_candidate = candidate_manifest
+        else:
+            runtime_candidate = copy.deepcopy(dict(candidate_manifest))
+        _prepare_redteam_if_present(runtime_candidate, cli)
+        return run_local_text_manifest(runtime_candidate, manifest_path)
 
     def score_manifest(
         candidate_manifest: Mapping[str, Any],

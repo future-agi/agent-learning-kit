@@ -270,6 +270,20 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
     ] == ["approve_refund", "framework_status"]
 
 
+def test_public_manifest_command_detection_prioritizes_optimization() -> None:
+    assert simulate.detect_manifest_command(
+        {
+            "redteam": {"auto_generate": True},
+            "optimization": {
+                "target": {
+                    "base_config": {},
+                    "search_space": {"redteam.surfaces": [["tool"]]},
+                }
+            },
+        }
+    ) == "optimize"
+
+
 def test_public_eval_suite_api_runs_local_prompt_provider(tmp_path: Path) -> None:
     suite_path = tmp_path / "suite.json"
     suite_path.write_text(json.dumps(_eval_suite()), encoding="utf-8")

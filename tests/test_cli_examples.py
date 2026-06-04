@@ -536,3 +536,87 @@ def test_redteam_campaign_optimization_example_runs_evidence_gates(
     assert "redteam-campaign-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_redteam_autogen_optimization_example_regenerates_candidate_matrix(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_REDTEAM_AUTOGEN_OPT_EXAMPLE_KEY",
+        "real-local-redteam-autogen-opt-key",
+    )
+
+    output_path = tmp_path / "redteam-autogen-optimization.json"
+    junit_path = tmp_path / "redteam-autogen-optimization.junit.xml"
+    sarif_path = tmp_path / "redteam-autogen-optimization.sarif.json"
+    markdown_path = tmp_path / "redteam-autogen-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "redteam_autogen_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.97
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert payload["redteam"]["auto_generate"] is True
+    assert set(payload["summary"]["search_paths"]) >= {
+        "redteam.attacks",
+        "redteam.surfaces",
+    }
+
+    best_config = payload["optimization"]["best_config"]
+    assert best_config["redteam"]["attacks"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert best_config["redteam"]["surfaces"] == ["tool", "memory"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"] == {
+        "redteam.attacks": [
+            "prompt_injection",
+            "credential_exfiltration",
+        ],
+        "redteam.surfaces": ["tool", "memory"],
+    }
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) >= {"adversarial", "red_team_campaign"}
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 4
+    assert campaign_summary["coverage_cell_count"] == 4
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "redteam-autogen-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )

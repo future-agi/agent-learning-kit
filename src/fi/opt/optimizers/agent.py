@@ -227,6 +227,7 @@ def _history_from_candidate(evaluation: CandidateEvaluation) -> IterationHistory
         metadata={
             "reason": evaluation.reason,
             "patch": evaluation.candidate.patch,
+            "report": evaluation.report,
             **evaluation.metadata,
         },
     )
