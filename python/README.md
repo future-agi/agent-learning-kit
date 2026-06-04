@@ -2,6 +2,11 @@
 
 ![Company Logo](https://fi-content.s3.ap-south-1.amazonaws.com/Logo.png)
 
+> **SDK migration:** new public Python SDK development now happens in
+> [`agent-learning-kit`](../../agent-learning-kit). Use `agent-learn` and
+> `agent_learning.evals` for new docs, examples, and integrations. This package
+> remains the backing evaluation engine during the migration.
+
 Welcome to Future AGI - Empowering GenAI Teams with Advanced Performance Management
 
 # Overview

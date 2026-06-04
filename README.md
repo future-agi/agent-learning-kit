@@ -1,5 +1,10 @@
 ![Company Logo](Logo.png)
 
+> **SDK migration:** new public SDK development now happens in
+> [`agent-learning-kit`](../agent-learning-kit). Use `agent-learn` and
+> `agent_learning.evals` for new docs, examples, and integrations. This
+> repository is the backing evaluation engine during the migration.
+
 <div align="center">
 
 # AI-Evaluation SDK
