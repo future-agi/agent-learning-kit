@@ -166,6 +166,27 @@ then synthesizes the high-credit adapter patch and framework-trace patch into a
 roles (`smriti`, `arjuna`, `vidura`, `sangha`, `dharma_steward`), proposal
 rounds, role credit, governance checks, and the final synthesized patch.
 
+SDK users can build the same kind of runnable framework optimization manifest
+without hand-writing JSON:
+
+```python
+from agent_learning import optimize
+
+manifest = optimize.build_framework_optimization_manifest(
+    name="sdk-framework-adapter-optimization",
+    framework="custom_refund_orchestrator",
+    target="framework_shims.py:build_custom_refund_orchestrator",
+    adapter_candidates=[
+        {"method": "run", "input_mode": "text"},
+        {"method": "execute_task", "input_mode": "dict"},
+    ],
+    environments=[{"type": "framework_trace", "data": framework_trace}],
+    evaluation_config=agent_report_config,
+    required_env=["AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY"],
+)
+result = optimize.optimize_manifest(manifest, manifest_path="examples/sdk.json")
+```
+
 The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`
 provider loads JSON/YAML artifacts, extracts named paths such as task

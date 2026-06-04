@@ -70,6 +70,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.DualJudge is fi_code_security.DualJudge
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
+    assert optimize.build_framework_optimization_manifest is not None
+    assert optimize.optimize_framework_adapter is not None
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
     assert suite.run_suite_file is not None
@@ -264,6 +266,134 @@ def test_optimize_facade_exposes_advanced_governance_surfaces():
     assert deployment.config["secrets"] == "<redacted>"
     assert "secrets" in deployment.redactions
     assert "langgraph.apply.json" in deployment.files
+
+
+def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY",
+        "real-local-sdk-framework-opt-key",
+    )
+
+    evaluation_config = {
+        "task_description": "Optimize a custom framework adapter from the SDK.",
+        "expected_result": (
+            "The selected adapter runs execute_task with dict input and emits "
+            "framework_trace_status tool evidence."
+        ),
+        "required_tools": ["framework_trace_status"],
+        "available_tools": ["framework_trace_status"],
+        "success_criteria": [
+            "execute_task adapter method selected",
+            "dict input mode selected",
+            "framework_trace_status tool evidence emitted",
+        ],
+        "required_framework_trace": [
+            "framework_trace",
+            "custom_refund_orchestrator",
+            "planner",
+            "tool",
+            "policy",
+            "framework_trace_status",
+        ],
+        "required_framework_runtime": [
+            "framework_runtime",
+            "method",
+            "input",
+            "output",
+            "tool",
+            "metadata",
+        ],
+        "framework_runtime_contract": {
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "required_tools": ["framework_trace_status"],
+            "required_signals": ["method", "input", "output", "tool", "metadata"],
+            "max_error_count": 0,
+            "min_invocation_count": 1,
+        },
+        "metric_weights": {
+            "framework_runtime_contract": 10.0,
+            "framework_runtime_coverage": 4.0,
+            "framework_trace_coverage": 2.0,
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 1.0,
+        },
+    }
+    framework_trace = [
+        {
+            "type": "framework_trace",
+            "data": {
+                "framework": "custom_refund_orchestrator",
+                "spans": [
+                    {
+                        "id": "custom_refund_orchestrator",
+                        "name": "CustomRefundOrchestrator.execute_task",
+                        "input": "refund workflow",
+                        "output": "approved",
+                        "tool_calls": [{"name": "framework_trace_status"}],
+                        "signals": ["planner", "tool", "policy"],
+                    }
+                ],
+                "adapter_required_signals": ["planner", "tool", "policy"],
+                "adapter_required_mappings": {"tool": ["tool_name"]},
+            },
+        }
+    ]
+
+    manifest = optimize.build_framework_optimization_manifest(
+        name="sdk-framework-adapter-optimization",
+        framework="custom_refund_orchestrator",
+        target="framework_shims.py:build_custom_refund_orchestrator",
+        required_env=["AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY"],
+        adapter_candidates=[
+            {"method": "run", "input_mode": "text"},
+            {"method": "execute_task", "input_mode": "dict"},
+        ],
+        environments=framework_trace,
+        evaluation_config=evaluation_config,
+        metadata={"cookbook": "multi-framework-simulation"},
+    )
+
+    assert manifest["agent"]["method"] == "run"
+    assert manifest["optimization"]["target"]["search_space"]["agent"][1]["method"] == (
+        "execute_task"
+    )
+    assert manifest["optimization"]["target"]["base_config"]["simulation"][
+        "environments"
+    ] == framework_trace
+
+    result = optimize.optimize_framework_adapter(
+        name="sdk-framework-adapter-optimization",
+        framework="custom_refund_orchestrator",
+        target="framework_shims.py:build_custom_refund_orchestrator",
+        required_env=["AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY"],
+        adapter_candidates=[
+            {"method": "run", "input_mode": "text"},
+            {"method": "execute_task", "input_mode": "dict"},
+        ],
+        environments=framework_trace,
+        evaluation_config=evaluation_config,
+        metadata={"cookbook": "multi-framework-simulation"},
+        manifest_path=PROJECT_ROOT / "examples" / "sdk-framework-optimization.json",
+    )
+
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    best_agent = result["optimization"]["best_config"]["agent"]
+    assert best_agent["method"] == "execute_task"
+    assert best_agent["input_mode"] == "dict"
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["report"]["results"][0]["metadata"]["environment_state"][
+        "framework_runtime"
+    ]["summary"]["tool_call_count"] == 1
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

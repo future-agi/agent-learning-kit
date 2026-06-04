@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from ._facade import optional_module
 
@@ -207,6 +208,195 @@ def optimize_manifest(
     )
 
 
+def build_framework_optimization_manifest(
+    *,
+    name: str,
+    framework: str,
+    target: str,
+    adapter_candidates: Sequence[Mapping[str, Any]],
+    evaluation_config: Mapping[str, Any],
+    scenario: Optional[Mapping[str, Any]] = None,
+    environments: Optional[Sequence[Mapping[str, Any]]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    factory: bool = True,
+    trace_runtime: bool = True,
+    metadata: Optional[Mapping[str, Any]] = None,
+    base_agent: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable manifest for optimizing any framework adapter.
+
+    The helper keeps the public SDK path concise while preserving the same
+    manifest contract used by ``agent-learn optimize``. Candidates are explicit
+    adapter specs, so callers can avoid invalid method/input-mode pairings.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not target:
+        raise ValueError("target is required")
+    if not adapter_candidates:
+        raise ValueError("adapter_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+
+    agent_candidates = [
+        _framework_agent_candidate(
+            framework=framework,
+            target=target,
+            candidate=candidate,
+            factory=factory,
+            trace_runtime=trace_runtime,
+            metadata=metadata,
+        )
+        for candidate in adapter_candidates
+    ]
+    base_agent_config = (
+        copy.deepcopy(dict(base_agent))
+        if base_agent is not None
+        else copy.deepcopy(agent_candidates[0])
+    )
+    base_environments = _base_environments(
+        environments=environments,
+        environment_candidates=environment_candidates,
+    )
+
+    search_space: dict[str, list[Any]] = {
+        "agent": copy.deepcopy(agent_candidates),
+    }
+    if environment_candidates is not None:
+        if not environment_candidates:
+            raise ValueError("environment_candidates must not be empty when provided")
+        search_space["simulation.environments"] = [
+            copy.deepcopy(list(candidate))
+            for candidate in environment_candidates
+        ]
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(dict(scenario or _default_framework_scenario(name))),
+        "agent": copy.deepcopy(base_agent_config),
+        "simulation": {
+            "engine": "local_text",
+            "max_turns": 1,
+            "min_turns": 1,
+            "environments": copy.deepcopy(base_environments),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": copy.deepcopy(dict(evaluation_config)),
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": ["framework", "harness", "evaluator"],
+                "base_config": {
+                    "agent": copy.deepcopy(base_agent_config),
+                    "simulation": {
+                        "environments": copy.deepcopy(base_environments),
+                    },
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": "agent_learning.optimize.build_framework_optimization_manifest",
+                    "framework": framework,
+                },
+            },
+            "optimizer": copy.deepcopy(dict(optimizer or _default_framework_optimizer(agent_candidates))),
+        },
+    }
+
+
+def optimize_framework_adapter(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a framework adapter optimization manifest."""
+
+    manifest = build_framework_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
+def _framework_agent_candidate(
+    *,
+    framework: str,
+    target: str,
+    candidate: Mapping[str, Any],
+    factory: bool,
+    trace_runtime: bool,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    candidate_dict = copy.deepcopy(dict(candidate))
+    merged_metadata = {
+        **copy.deepcopy(dict(metadata or {})),
+        **copy.deepcopy(dict(candidate_dict.pop("metadata", {}) or {})),
+    }
+    return {
+        "type": "framework",
+        "framework": framework,
+        "target": target,
+        "factory": bool(candidate_dict.pop("factory", factory)),
+        "trace_runtime": bool(candidate_dict.pop("trace_runtime", trace_runtime)),
+        "metadata": merged_metadata,
+        **candidate_dict,
+    }
+
+
+def _base_environments(
+    *,
+    environments: Optional[Sequence[Mapping[str, Any]]],
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]],
+) -> list[dict[str, Any]]:
+    if environments is not None:
+        return [copy.deepcopy(dict(item)) for item in environments]
+    if environment_candidates:
+        return [copy.deepcopy(dict(item)) for item in environment_candidates[0]]
+    return []
+
+
+def _default_framework_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "framework-owner"},
+                "situation": "Optimize a framework adapter through Agent Learning Kit.",
+                "outcome": "The optimized adapter satisfies the configured evaluation.",
+            }
+        ],
+    }
+
+
+def _default_framework_optimizer(
+    agent_candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "algorithm": "agent",
+        "max_candidates": max(2, len(agent_candidates) + 1),
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+
+
 def optimize_eval_suite_file(
     path: str | Path,
     *,
@@ -272,8 +462,10 @@ __all__ = [
     *_OPTIMIZE_EXPORTS,
     "diagnose_report",
     "diagnose_text",
+    "build_framework_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
+    "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",
     "problem_from_eval_suite_file",
