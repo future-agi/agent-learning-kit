@@ -2469,6 +2469,18 @@ def _red_team_campaign_quality_metric(
             finding_type="red_team_run_artifact_missing",
         )
 
+    if requirements.get("require_executed_run_evidence") is not None:
+        missing = _red_team_campaign_cell_list(summary, "missing_executed_cells", "cells_without_executed_evidence")
+        _append_red_team_campaign_check(
+            checks,
+            findings,
+            check="require_executed_run_evidence",
+            expected=bool(requirements.get("require_executed_run_evidence")),
+            actual=missing,
+            match=(not missing) is bool(requirements.get("require_executed_run_evidence")),
+            finding_type="red_team_run_evidence_missing",
+        )
+
     if requirements.get("require_finding_mapping") is not None:
         unmapped = [
             item
@@ -2744,6 +2756,22 @@ def _red_team_campaign_record_covers_cell(item: Mapping[str, Any], cell: Mapping
     return all(cell.get(dimension) in set(values) for dimension, values in required.items())
 
 
+def _red_team_campaign_record_has_executed_evidence(item: Mapping[str, Any]) -> bool:
+    def _has_any(*fields: str) -> bool:
+        for field in fields:
+            if field in item and item.get(field) not in (None, "", [], {}):
+                return True
+        return False
+
+    has_attack_case = _has_any("attack_case_id", "attack_id", "case_id", "scenario_id")
+    has_input = _has_any("attack_prompt", "input", "prompt", "request", "payload")
+    has_output = _has_any("assistant_output", "output", "response", "transcript")
+    has_tool_calls = any(field in item for field in ("tool_calls", "tools", "tool_results"))
+    has_verdict = _has_any("verdict", "status", "outcome") or item.get("passed") is not None
+    has_logs = _has_any("logs", "raw_log", "events", "transcript", "log_path", "trace_id", "path")
+    return all([has_attack_case, has_input, has_output, has_tool_calls, has_verdict, has_logs])
+
+
 def _red_team_campaign_required_cells(payload: Mapping[str, Any]) -> List[Dict[str, Any]]:
     dimensions = [
         sorted(
@@ -2832,6 +2860,7 @@ def _red_team_campaign_matrix_summary_from_payload(payload: Mapping[str, Any]) -
     coverage_matrix: List[Dict[str, Any]] = []
     missing_coverage_cells: List[Dict[str, Any]] = []
     missing_run_artifact_cells: List[Dict[str, Any]] = []
+    missing_executed_cells: List[Dict[str, Any]] = []
     missing_mitigation_cells: List[Dict[str, Any]] = []
     mapped_finding_ids: set[str] = set()
     for cell in required_cells:
@@ -2857,6 +2886,15 @@ def _red_team_campaign_matrix_summary_from_payload(payload: Mapping[str, Any]) -
             for item in artifacts
             if item.get("id") and _red_team_campaign_record_covers_cell(item, cell)
         )
+        executed_evidence_ids = sorted(
+            {
+                str(item.get("id"))
+                for item in [*runs, *artifacts]
+                if item.get("id")
+                and _red_team_campaign_record_covers_cell(item, cell)
+                and _red_team_campaign_record_has_executed_evidence(item)
+            }
+        )
         finding_ids = sorted(
             str(item.get("id"))
             for item in findings
@@ -2875,12 +2913,14 @@ def _red_team_campaign_matrix_summary_from_payload(payload: Mapping[str, Any]) -
             "run_ids": run_ids,
             "passed_run_ids": passed_run_ids,
             "artifact_ids": artifact_ids,
+            "executed_evidence_ids": executed_evidence_ids,
             "finding_ids": finding_ids,
             "mitigation_ids": mitigation_ids,
             "has_scenario": bool(scenario_ids),
             "has_run": bool(run_ids),
             "has_passed_run": bool(passed_run_ids),
             "has_artifact": bool(artifact_ids),
+            "has_executed_evidence": bool(executed_evidence_ids),
             "has_finding": bool(finding_ids),
             "has_mitigation": bool(mitigation_ids),
         }
@@ -2895,6 +2935,8 @@ def _red_team_campaign_matrix_summary_from_payload(payload: Mapping[str, Any]) -
             missing_coverage_cells.append(_red_team_campaign_missing_cell(cell, coverage_missing))
         if not artifact_ids:
             missing_run_artifact_cells.append(_red_team_campaign_missing_cell(cell, ["artifact"]))
+        if not executed_evidence_ids:
+            missing_executed_cells.append(_red_team_campaign_missing_cell(cell, ["executed_evidence"]))
         if not mitigation_ids:
             missing_mitigation_cells.append(_red_team_campaign_missing_cell(cell, ["mitigation"]))
     unmapped_findings = [
@@ -2913,6 +2955,7 @@ def _red_team_campaign_matrix_summary_from_payload(payload: Mapping[str, Any]) -
         "coverage_cell_count": len(coverage_matrix),
         "covered_cell_count": sum(1 for cell in coverage_matrix if cell.get("has_scenario") and cell.get("has_passed_run")),
         "artifact_bound_cell_count": sum(1 for cell in coverage_matrix if cell.get("has_artifact")),
+        "executed_cell_count": sum(1 for cell in coverage_matrix if cell.get("has_executed_evidence")),
         "finding_bound_cell_count": sum(1 for cell in coverage_matrix if cell.get("has_finding")),
         "finding_mapped_count": len(mapped_finding_ids),
         "unmapped_finding_count": len(unmapped_findings),
@@ -2920,6 +2963,7 @@ def _red_team_campaign_matrix_summary_from_payload(payload: Mapping[str, Any]) -
         "coverage_matrix": coverage_matrix,
         "missing_coverage_cells": missing_coverage_cells,
         "missing_run_artifact_cells": missing_run_artifact_cells,
+        "missing_executed_cells": missing_executed_cells,
         "unmapped_findings": unmapped_findings,
         "missing_mitigation_cells": missing_mitigation_cells,
     }
@@ -2931,6 +2975,7 @@ def _merge_red_team_campaign_matrix_fields(
     coverage_cells: Dict[str, Dict[str, Any]],
     missing_coverage_cells: Dict[str, Dict[str, Any]],
     missing_run_artifact_cells: Dict[str, Dict[str, Any]],
+    missing_executed_cells: Dict[str, Dict[str, Any]],
     unmapped_findings: Dict[str, Dict[str, Any]],
     missing_mitigation_cells: Dict[str, Dict[str, Any]],
 ) -> None:
@@ -2940,6 +2985,8 @@ def _merge_red_team_campaign_matrix_fields(
         missing_coverage_cells[_red_team_campaign_cell_id(cell)] = cell
     for cell in _red_team_campaign_cell_list(source, "missing_run_artifact_cells", "runs_without_artifacts"):
         missing_run_artifact_cells[_red_team_campaign_cell_id(cell)] = cell
+    for cell in _red_team_campaign_cell_list(source, "missing_executed_cells", "cells_without_executed_evidence"):
+        missing_executed_cells[_red_team_campaign_cell_id(cell)] = cell
     for item in _as_list(source.get("unmapped_findings")):
         finding = _as_dict(item)
         finding_id = str(finding.get("id") or "")
@@ -2962,6 +3009,7 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
     coverage_cells: Dict[str, Dict[str, Any]] = {}
     missing_coverage_cells: Dict[str, Dict[str, Any]] = {}
     missing_run_artifact_cells: Dict[str, Dict[str, Any]] = {}
+    missing_executed_cells: Dict[str, Dict[str, Any]] = {}
     unmapped_findings: Dict[str, Dict[str, Any]] = {}
     missing_mitigation_cells: Dict[str, Dict[str, Any]] = {}
     summary: Dict[str, Any] = {
@@ -2981,6 +3029,7 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
         "coverage_cell_count": 0,
         "covered_cell_count": 0,
         "artifact_bound_cell_count": 0,
+        "executed_cell_count": 0,
         "finding_bound_cell_count": 0,
         "finding_mapped_count": 0,
         "unmapped_finding_count": 0,
@@ -3006,6 +3055,7 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
                 "coverage_cell_count",
                 "covered_cell_count",
                 "artifact_bound_cell_count",
+                "executed_cell_count",
                 "finding_bound_cell_count",
                 "finding_mapped_count",
                 "unmapped_finding_count",
@@ -3027,6 +3077,7 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
                 coverage_cells=coverage_cells,
                 missing_coverage_cells=missing_coverage_cells,
                 missing_run_artifact_cells=missing_run_artifact_cells,
+                missing_executed_cells=missing_executed_cells,
                 unmapped_findings=unmapped_findings,
                 missing_mitigation_cells=missing_mitigation_cells,
             )
@@ -3078,6 +3129,7 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
                 "coverage_cell_count",
                 "covered_cell_count",
                 "artifact_bound_cell_count",
+                "executed_cell_count",
                 "finding_bound_cell_count",
                 "finding_mapped_count",
                 "unmapped_finding_count",
@@ -3089,6 +3141,7 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
                 coverage_cells=coverage_cells,
                 missing_coverage_cells=missing_coverage_cells,
                 missing_run_artifact_cells=missing_run_artifact_cells,
+                missing_executed_cells=missing_executed_cells,
                 unmapped_findings=unmapped_findings,
                 missing_mitigation_cells=missing_mitigation_cells,
             )
@@ -3114,6 +3167,10 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
         missing_run_artifact_cells[key]
         for key in sorted(missing_run_artifact_cells)
     ]
+    summary["missing_executed_cells"] = [
+        missing_executed_cells[key]
+        for key in sorted(missing_executed_cells)
+    ]
     summary["unmapped_findings"] = [
         unmapped_findings[key]
         for key in sorted(unmapped_findings)
@@ -3135,6 +3192,10 @@ def _merge_red_team_campaign_summaries(payloads: Sequence[Mapping[str, Any]]) ->
         summary["artifact_bound_cell_count"] = max(
             summary["artifact_bound_cell_count"],
             sum(1 for cell in coverage_cells.values() if cell.get("has_artifact")),
+        )
+        summary["executed_cell_count"] = max(
+            summary["executed_cell_count"],
+            sum(1 for cell in coverage_cells.values() if cell.get("has_executed_evidence")),
         )
         summary["finding_bound_cell_count"] = max(
             summary["finding_bound_cell_count"],

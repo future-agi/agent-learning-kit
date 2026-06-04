@@ -895,11 +895,13 @@ def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
         "scenario_ids": ["scenario_prompt"],
         "passed_run_ids": ["run_prompt"],
         "artifact_ids": ["artifact_prompt"],
+        "executed_evidence_ids": ["artifact_prompt"],
         "finding_ids": ["finding_prompt"],
         "mitigation_ids": ["mitigation_prompt"],
         "has_scenario": True,
         "has_passed_run": True,
         "has_artifact": True,
+        "has_executed_evidence": True,
         "has_finding": True,
         "has_mitigation": True,
     }
@@ -929,6 +931,7 @@ def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
             "coverage_cell_count": 1,
             "covered_cell_count": 1,
             "artifact_bound_cell_count": 1,
+            "executed_cell_count": 1,
             "finding_bound_cell_count": 1,
             "finding_mapped_count": 1,
             "unmapped_finding_count": 0,
@@ -936,6 +939,7 @@ def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
             "coverage_matrix": [complete_cell],
             "missing_coverage_cells": [],
             "missing_run_artifact_cells": [],
+            "missing_executed_cells": [],
             "unmapped_findings": [],
             "missing_mitigation_cells": [],
         },
@@ -944,6 +948,7 @@ def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
         "red_team_campaign_quality": {
             "require_attack_surface_matrix": True,
             "require_run_artifacts": True,
+            "require_executed_run_evidence": True,
             "require_finding_mapping": True,
             "require_mitigation_mapping": True,
             "required_attack_matrix_cells": [
@@ -983,13 +988,15 @@ def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
         **broken_campaign["summary"],
         "covered_cell_count": 0,
         "artifact_bound_cell_count": 0,
+        "executed_cell_count": 0,
         "finding_bound_cell_count": 0,
         "finding_mapped_count": 0,
         "unmapped_finding_count": 1,
         "mitigation_bound_cell_count": 0,
-        "coverage_matrix": [{**complete_cell, "finding_ids": [], "has_scenario": False, "has_passed_run": False, "has_artifact": False, "has_finding": False, "has_mitigation": False}],
+        "coverage_matrix": [{**complete_cell, "finding_ids": [], "executed_evidence_ids": [], "has_scenario": False, "has_passed_run": False, "has_artifact": False, "has_executed_evidence": False, "has_finding": False, "has_mitigation": False}],
         "missing_coverage_cells": [broken_cell],
         "missing_run_artifact_cells": [{**broken_cell, "missing": ["artifact"]}],
+        "missing_executed_cells": [{**broken_cell, "missing": ["executed_evidence"]}],
         "unmapped_findings": [
             {
                 "id": "finding_prompt",
@@ -1018,6 +1025,7 @@ def test_evaluate_agent_report_scores_red_team_campaign_matrix_bindings():
     assert failing_scores["red_team_campaign_quality"] < 1.0
     assert "red_team_attack_surface_cell_missing" in finding_types
     assert "red_team_run_artifact_missing" in finding_types
+    assert "red_team_run_evidence_missing" in finding_types
     assert "red_team_finding_mapping_missing" in finding_types
     assert "red_team_mitigation_mapping_missing" in finding_types
 
