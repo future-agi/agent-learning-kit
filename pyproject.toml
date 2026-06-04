@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-learning-kit"
+version = "0.1.0"
+description = "Unified Future AGI SDK for agent learning workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Future AGI", email = "hello@futureagi.io" }]
+keywords = [
+  "ai-agents",
+  "agent-testing",
+  "agent-simulation",
+  "agent-evaluation",
+  "agent-optimization",
+  "red-teaming",
+  "future-agi",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+simulate = ["agent-simulate>=0.1.3"]
+evaluation = ["ai-evaluation>=1.1.0"]
+optimize = ["agent-opt>=0.1.0"]
+trinity = [
+  "agent-simulate>=0.1.3",
+  "ai-evaluation>=1.1.0",
+  "agent-opt>=0.1.0",
+]
+all = [
+  "agent-simulate>=0.1.3",
+  "ai-evaluation>=1.1.0",
+  "agent-opt>=0.1.0",
+]
+
+[project.scripts]
+agent-learn = "agent_learning.cli:main"
+
+[project.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com"
+Repository = "https://github.com/future-agi/agent-learning-kit"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_learning"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
