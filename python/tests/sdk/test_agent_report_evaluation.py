@@ -4773,6 +4773,143 @@ def test_evaluate_agent_report_scores_optimizer_society_trace_quality():
     } <= finding_types
 
 
+def test_evaluate_agent_report_scores_manifest_optimization_quality():
+    optimization = {
+        "kind": "manifest_optimization",
+        "final_score": 0.96,
+        "threshold": 0.9,
+        "passed": True,
+        "best_candidate_id": "candidate_bandit",
+        "best_config": {
+            "simulation": {
+                "environments": [
+                    {"data": {"selected_optimizer": "bandit"}}
+                ]
+            }
+        },
+        "search_paths": ["simulation.environments.0.data"],
+        "metrics": {"optimizer_portfolio_quality": 1.0},
+        "history": [
+            {
+                "candidate_id": "candidate_seed",
+                "score": 0.32,
+                "patch": {"simulation": {"environments": [{"data": {"selected_optimizer": "seed"}}]}},
+                "metrics": {"optimizer_portfolio_quality": 0.25},
+                "findings": [{"type": "optimizer_portfolio_final_score_low"}],
+            },
+            {
+                "candidate_id": "candidate_bandit",
+                "score": 0.96,
+                "patch": {"simulation": {"environments": [{"data": {"selected_optimizer": "bandit"}}]}},
+                "metrics": {"optimizer_portfolio_quality": 1.0},
+                "findings": [],
+            },
+        ],
+    }
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Optimize the manifest."},
+                    {
+                        "role": "assistant",
+                        "content": "Optimization selected the bandit manifest candidate.",
+                    },
+                ],
+                "artifacts": [
+                    {
+                        "type": "trace",
+                        "metadata": {"kind": "manifest_optimization"},
+                        "data": optimization,
+                    }
+                ],
+                "metadata": {"manifest_optimization": optimization},
+            }
+        ]
+    }
+    config = {
+        "required_manifest_optimization": [
+            "manifest_optimization",
+            "final_score",
+            "threshold",
+            "best_candidate",
+            "best_config",
+            "history",
+            "candidate",
+            "patch",
+            "metric",
+            "search_path",
+            "optimizer_portfolio_quality",
+        ],
+        "manifest_optimization_quality": {
+            "min_final_score": 0.9,
+            "min_history_count": 2,
+            "min_candidate_count": 2,
+            "min_patch_count": 2,
+            "min_metric_count": 1,
+            "max_findings": 1,
+            "required_search_paths": ["simulation.environments.0.data"],
+            "required_metrics": ["optimizer_portfolio_quality"],
+            "require_passed": True,
+            "require_best_candidate": True,
+            "require_best_config": True,
+            "require_history": True,
+            "require_candidate_patches": True,
+            "require_metrics": True,
+            "require_search_paths": True,
+        },
+    }
+
+    result = evaluate_agent_report(report, config=config)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert scores["manifest_optimization_coverage"] == 1.0
+    assert scores["manifest_optimization_quality"] == 1.0
+
+    weak = {
+        **optimization,
+        "final_score": 0.31,
+        "passed": False,
+        "best_candidate_id": "",
+        "best_config": {},
+        "search_paths": [],
+        "metrics": {},
+        "history": [
+            {
+                "candidate_id": "candidate_seed",
+                "score": 0.31,
+                "patch": {},
+                "metrics": {},
+                "findings": [{"type": "optimizer_portfolio_final_score_low"}],
+            }
+        ],
+    }
+    report["results"][0]["artifacts"][0]["data"] = weak
+    report["results"][0]["metadata"]["manifest_optimization"] = weak
+
+    failing = evaluate_agent_report(report, config=config)
+    failing_scores = {metric.name: metric.score for metric in failing.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing.findings}
+
+    assert failing_scores["manifest_optimization_coverage"] < 1.0
+    assert failing_scores["manifest_optimization_quality"] < 1.0
+    assert {
+        "missing_manifest_optimization_key",
+        "manifest_optimization_final_score_low",
+        "manifest_optimization_candidate_count_low",
+        "manifest_optimization_patch_count_low",
+        "manifest_optimization_metric_count_low",
+        "manifest_optimization_search_path_missing",
+        "manifest_optimization_metric_missing",
+        "manifest_optimization_not_passed",
+        "manifest_optimization_best_candidate_missing",
+        "manifest_optimization_best_config_missing",
+        "manifest_optimization_candidate_patches_missing",
+        "manifest_optimization_metrics_missing",
+        "manifest_optimization_search_paths_missing",
+    } <= finding_types
+
+
 def test_evaluate_agent_report_scores_optimizer_backend_portfolio_quality():
     portfolio = {
         "kind": "optimizer_backend_portfolio",

@@ -211,6 +211,8 @@ class AgentReportEvalConfig(BaseModel):
     optimizer_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_optimizer_portfolio: List[str] = Field(default_factory=list)
     optimizer_portfolio_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_manifest_optimization: List[str] = Field(default_factory=list)
+    manifest_optimization_quality: Dict[str, Any] = Field(default_factory=dict)
     required_agent_memory_lineage: List[str] = Field(default_factory=list)
     agent_memory_lineage_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
@@ -438,6 +440,8 @@ class AgentReportEvaluator:
                 *_optimizer_trace_quality_metrics(report_context, config),
                 *_optimizer_portfolio_coverage_metrics(report_context, config),
                 *_optimizer_portfolio_quality_metrics(report_context, config),
+                *_manifest_optimization_coverage_metrics(report_context, config),
+                *_manifest_optimization_quality_metrics(report_context, config),
                 *_agent_memory_lineage_coverage_metrics(report_context, config),
                 *_agent_memory_lineage_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -19544,6 +19548,375 @@ def _optimizer_trace_quality_metric(
             "observed": observed,
         },
     )
+
+
+def _normalize_manifest_optimization_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _manifest_optimization_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    for artifact in _as_list(context.get("artifacts", [])):
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_manifest_optimization(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        event_name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_manifest_optimization(payload, metadata):
+            payloads.append(payload)
+        elif "manifest_optimization" in event_type or "manifest_optimization" in event_name:
+            payloads.append({"kind": "manifest_optimization", **payload})
+    metadata = _as_dict(context.get("metadata", {}))
+    state = _as_dict(metadata.get("environment_state"))
+    state_payload = _as_dict(state.get("manifest_optimization"))
+    if state_payload:
+        payloads.append(state_payload)
+    direct_payload = _as_dict(metadata.get("manifest_optimization"))
+    if direct_payload:
+        payloads.append(direct_payload)
+    return _dedupe_manifest_optimization_payloads(payloads)
+
+
+def _looks_like_manifest_optimization(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    if kind in {"manifest_optimization", "agent_simulate_manifest_optimization"}:
+        return True
+    return (
+        "final_score" in data
+        and ("history" in data or "best_candidate_id" in data)
+        and ("best_config" in data or "search_paths" in data)
+    )
+
+
+def _manifest_optimization_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    final_score: Optional[float] = None
+    threshold: Optional[float] = None
+    best_candidate_id = ""
+    search_paths: set[str] = set()
+    metric_names: set[str] = set()
+    candidate_ids: set[str] = set()
+    patch_count = 0
+    finding_count = 0
+    history_count = 0
+    best_config: Dict[str, Any] = {}
+    passed = False
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        final_score = _max_optional_float(final_score, payload_dict.get("final_score"))
+        threshold = _max_optional_float(threshold, payload_dict.get("threshold"))
+        best_candidate_id = best_candidate_id or str(payload_dict.get("best_candidate_id") or "")
+        best_config = best_config or _as_dict(payload_dict.get("best_config"))
+        passed = passed or bool(payload_dict.get("passed"))
+        search_paths.update(str(path) for path in _as_list(payload_dict.get("search_paths")) if str(path))
+        for name in _as_dict(payload_dict.get("metrics")).keys():
+            metric_names.add(str(name))
+        for finding in _as_list(payload_dict.get("findings")):
+            if isinstance(finding, Mapping):
+                finding_count += 1
+
+        history = [_as_dict(item) for item in _as_list(payload_dict.get("history")) if _as_dict(item)]
+        history_count += len(history)
+        for record in history:
+            candidate_id = str(record.get("candidate_id") or "")
+            if candidate_id:
+                candidate_ids.add(candidate_id)
+            patch = _as_dict(record.get("patch") or record.get("candidate_patch"))
+            if patch:
+                patch_count += 1
+            search_paths.update(str(path) for path in _as_list(record.get("search_paths")) if str(path))
+            for name in _as_dict(record.get("metrics")).keys():
+                metric_names.add(str(name))
+            for finding in _as_list(record.get("findings")):
+                if isinstance(finding, Mapping):
+                    finding_count += 1
+
+    if final_score is not None and threshold is not None:
+        passed = passed or final_score >= threshold
+
+    return {
+        "final_score": final_score,
+        "threshold": threshold,
+        "best_candidate_id": best_candidate_id or None,
+        "best_config": best_config,
+        "history_count": history_count,
+        "candidate_count": len(candidate_ids),
+        "patch_count": patch_count,
+        "metric_count": len(metric_names),
+        "finding_count": finding_count,
+        "search_paths": sorted(search_paths),
+        "metric_names": sorted(metric_names),
+        "passed": passed,
+        "has_final_score": final_score is not None,
+        "has_threshold": threshold is not None,
+        "has_best_candidate": bool(best_candidate_id),
+        "has_best_config": bool(best_config),
+        "has_history": history_count > 0,
+        "has_candidate_patches": patch_count > 0,
+        "has_metrics": bool(metric_names),
+        "has_findings": finding_count > 0,
+        "has_search_paths": bool(search_paths),
+    }
+
+
+def _manifest_optimization_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    summary = _manifest_optimization_summary(
+        _manifest_optimization_payloads_from_context(context)
+    )
+    if summary["has_final_score"]:
+        observed.add("final_score")
+    if summary["has_threshold"]:
+        observed.add("threshold")
+    if summary["has_best_candidate"]:
+        observed.update({"best_candidate", "best_candidate_id"})
+    if summary["has_best_config"]:
+        observed.add("best_config")
+    if summary["has_history"]:
+        observed.update({"history", "candidate"})
+    if summary["has_candidate_patches"]:
+        observed.update({"patch", "candidate_patch"})
+    if summary["has_metrics"]:
+        observed.update({"metric", "metrics"})
+    if summary["has_findings"]:
+        observed.update({"finding", "findings"})
+    if summary["has_search_paths"]:
+        observed.update({"search_path", "search_paths"})
+    if summary["passed"]:
+        observed.add("passed")
+    for path in summary["search_paths"]:
+        observed.add(path)
+    for metric_name in summary["metric_names"]:
+        observed.add(_normalize_manifest_optimization_key(metric_name))
+    if observed:
+        observed.update({"manifest_optimization", "optimization_result"})
+    return observed
+
+
+def _manifest_optimization_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_manifest_optimization and not _manifest_optimization_payloads_from_context(context):
+        return []
+    return [_manifest_optimization_coverage_metric(context, config)]
+
+
+def _manifest_optimization_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_manifest_optimization_key(key)
+        for key in config.required_manifest_optimization
+    ]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="manifest_optimization_coverage",
+            score=1.0,
+            reason="No required manifest optimization keys provided.",
+        )
+    observed = _manifest_optimization_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="manifest_optimization_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required manifest optimization evidence observed."
+            if not missing
+            else f"Missing manifest optimization evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_manifest_optimization_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _manifest_optimization_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.manifest_optimization_quality:
+        return []
+    return [
+        _manifest_optimization_quality_metric(
+            context,
+            config.manifest_optimization_quality,
+        )
+    ]
+
+
+def _manifest_optimization_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _manifest_optimization_summary(_manifest_optimization_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for config_key, observed_key, finding_type in (
+        ("min_history_count", "history_count", "manifest_optimization_history_count_low"),
+        ("min_candidate_count", "candidate_count", "manifest_optimization_candidate_count_low"),
+        ("min_patch_count", "patch_count", "manifest_optimization_patch_count_low"),
+        ("min_metric_count", "metric_count", "manifest_optimization_metric_count_low"),
+    ):
+        expected = _as_int(requirements.get(config_key))
+        if expected is None:
+            continue
+        actual = _as_int(observed.get(observed_key)) or 0
+        _append_manifest_optimization_check(
+            checks,
+            findings,
+            check=config_key,
+            expected=expected,
+            actual=actual,
+            match=actual >= expected,
+            finding_type=finding_type,
+        )
+
+    min_final_score = _as_float(
+        requirements.get("min_final_score")
+        or requirements.get("required_final_score")
+    )
+    if min_final_score is not None:
+        actual_score = _as_float(observed.get("final_score"))
+        _append_manifest_optimization_check(
+            checks,
+            findings,
+            check="min_final_score",
+            expected=min_final_score,
+            actual=actual_score,
+            match=(actual_score or 0.0) >= min_final_score,
+            finding_type="manifest_optimization_final_score_low",
+        )
+
+    max_findings = _as_int(requirements.get("max_findings"))
+    if max_findings is not None:
+        actual_findings = _as_int(observed.get("finding_count")) or 0
+        _append_manifest_optimization_check(
+            checks,
+            findings,
+            check="max_findings",
+            expected=max_findings,
+            actual=actual_findings,
+            match=actual_findings <= max_findings,
+            finding_type="manifest_optimization_findings_high",
+        )
+
+    for path in _string_list(requirements.get("required_search_paths") or requirements.get("search_paths")):
+        _append_manifest_optimization_check(
+            checks,
+            findings,
+            check="search_path",
+            expected=path,
+            actual=observed["search_paths"],
+            match=path in observed["search_paths"],
+            finding_type="manifest_optimization_search_path_missing",
+        )
+
+    for metric in _string_list(requirements.get("required_metrics") or requirements.get("metrics")):
+        normalized = _normalize_manifest_optimization_key(metric)
+        _append_manifest_optimization_check(
+            checks,
+            findings,
+            check="metric",
+            expected=normalized,
+            actual=observed["metric_names"],
+            match=normalized in {
+                _normalize_manifest_optimization_key(name)
+                for name in observed["metric_names"]
+            },
+            finding_type="manifest_optimization_metric_missing",
+        )
+
+    for key, field, finding_type in (
+        ("require_passed", "passed", "manifest_optimization_not_passed"),
+        ("require_best_candidate", "has_best_candidate", "manifest_optimization_best_candidate_missing"),
+        ("require_best_config", "has_best_config", "manifest_optimization_best_config_missing"),
+        ("require_history", "has_history", "manifest_optimization_history_missing"),
+        ("require_candidate_patches", "has_candidate_patches", "manifest_optimization_candidate_patches_missing"),
+        ("require_metrics", "has_metrics", "manifest_optimization_metrics_missing"),
+        ("require_findings", "has_findings", "manifest_optimization_findings_missing"),
+        ("require_search_paths", "has_search_paths", "manifest_optimization_search_paths_missing"),
+    ):
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        _append_manifest_optimization_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=observed[field],
+            match=observed[field] is required,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="manifest_optimization_quality",
+            score=1.0,
+            reason="No manifest optimization quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="manifest_optimization_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} manifest optimization quality check(s) matched.",
+        details={"checks": checks, "findings": findings, "observed": observed},
+    )
+
+
+def _append_manifest_optimization_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "manifest_optimization_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _dedupe_manifest_optimization_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        if not payload_dict:
+            continue
+        key = json.dumps(payload_dict, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload_dict)
+    return deduped
 
 
 def _optimizer_portfolio_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
