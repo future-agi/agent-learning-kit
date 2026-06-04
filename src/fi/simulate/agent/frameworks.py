@@ -20,6 +20,7 @@ class FrameworkAdapterSpec:
 
 FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
     # Text/chat orchestration
+    "custom": FrameworkAdapterSpec("custom", None, "auto", notes="Bring-your-own framework adapter."),
     "callable": FrameworkAdapterSpec("callable", None, "agent_input", notes="Plain Python callable."),
     "langchain": FrameworkAdapterSpec("langchain", "ainvoke", "dict", notes="LangChain Runnable/Chain."),
     "langgraph": FrameworkAdapterSpec("langgraph", "ainvoke", "dict", notes="LangGraph compiled graph."),
@@ -77,7 +78,12 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
 
 
 def supported_frameworks() -> list[str]:
-    """Return names accepted by wrap_framework."""
+    """Return built-in framework preset names.
+
+    ``wrap_framework`` also accepts unknown framework names as custom adapters
+    when the caller supplies method/input-mode overrides or the generic wrapper
+    can infer a callable method.
+    """
 
     return sorted(FRAMEWORK_PRESETS)
 
@@ -95,7 +101,7 @@ def wrap_framework(
     runtime_metadata: Optional[Dict[str, Any]] = None,
 ) -> AgentWrapper:
     """
-    Wrap a known framework by name without importing that framework.
+    Wrap a known or custom framework by name without importing that framework.
 
     Presets are intentionally thin. They encode the most common method/payload
     shape while leaving escape hatches for custom method, input_mode, and
@@ -103,13 +109,24 @@ def wrap_framework(
     """
 
     key = framework.lower().replace("-", "_")
-    if key not in FRAMEWORK_PRESETS:
-        raise ValueError(
-            f"Unsupported framework preset '{framework}'. Use GenericAgentWrapper "
-            f"or one of: {', '.join(supported_frameworks())}."
+    spec = FRAMEWORK_PRESETS.get(key)
+    if spec is None:
+        return GenericAgentWrapper(
+            agent,
+            method=method,
+            input_mode=input_mode or "auto",
+            output_key=output_key,
+            system_prompt=system_prompt,
+            metadata={
+                "framework": key,
+                "modality": str((metadata or {}).get("modality") or "text"),
+                "adapter": "custom",
+                **(metadata or {}),
+            },
+            trace_runtime=trace_runtime,
+            runtime_metadata=runtime_metadata,
         )
 
-    spec = FRAMEWORK_PRESETS[key]
     return GenericAgentWrapper(
         agent,
         method=method or spec.method,

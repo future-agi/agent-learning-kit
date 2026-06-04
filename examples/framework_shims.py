@@ -66,6 +66,20 @@ class LocalLiveKitAgent:
         }
 
 
+class LocalCustomRefundOrchestrator:
+    def execute_task(self, payload: dict) -> dict:
+        assert payload["metadata"]["framework"] == "custom_refund_orchestrator"
+        assert payload["metadata"]["cookbook"] == "multi-framework-simulation"
+        return {
+            "content": (
+                "Custom refund orchestrator approved the task through a "
+                "bring-your-own framework adapter."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "custom_refund_orchestrator"},
+        }
+
+
 def build_langchain_agent() -> LocalLangChainRunnable:
     return LocalLangChainRunnable()
 
@@ -80,3 +94,7 @@ def build_pipecat_pipeline() -> LocalPipecatPipeline:
 
 def build_livekit_agent() -> LocalLiveKitAgent:
     return LocalLiveKitAgent()
+
+
+def build_custom_refund_orchestrator() -> LocalCustomRefundOrchestrator:
+    return LocalCustomRefundOrchestrator()

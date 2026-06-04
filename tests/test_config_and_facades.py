@@ -157,6 +157,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert {
         "langchain",
         "langgraph",
+        "custom",
         "livekit",
         "pipecat",
     } <= set(simulate.supported_frameworks())

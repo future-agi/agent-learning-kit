@@ -32,6 +32,13 @@
       "path": "framework_livekit_manifest.json",
       "no_eval": true,
       "name": "suite-livekit-realtime-agent"
+    },
+    {
+      "id": "custom-refund-orchestrator",
+      "command": "run",
+      "path": "framework_custom_manifest.json",
+      "no_eval": true,
+      "name": "suite-custom-refund-orchestrator"
     }
   ]
 }

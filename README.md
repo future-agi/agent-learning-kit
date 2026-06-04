@@ -75,6 +75,8 @@ agent-learn optimize examples/multimodal_image_optimization.json \
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
+agent-learn run examples/framework_custom_manifest.json --no-eval \
+  --output artifacts/framework-custom.json
 agent-learn suite examples/regression_artifact_suite.json \
   --output artifacts/regression-artifact-suite.json
 agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
@@ -136,9 +138,11 @@ Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
-LangGraph, Pipecat, and LiveKit-style agents through the same manifest framework
-adapter path, proving text and voice framework shims can be simulated without
-adding framework-specific runtime dependencies.
+LangGraph, Pipecat, LiveKit-style, and custom proprietary agents through the
+same manifest framework adapter path, proving text and voice framework shims can
+be simulated without adding framework-specific runtime dependencies. Unknown
+framework names are accepted as custom adapters when the manifest supplies the
+target method/input mode, as shown in `framework_custom_manifest.json`.
 
 The `artifact_task_eval_suite.json` example evaluates a saved
 `agent-learning.run.v1` task artifact as first-class evidence. Its `artifact`

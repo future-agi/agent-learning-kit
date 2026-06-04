@@ -183,6 +183,7 @@ def test_shipped_examples_execute_through_unified_cli(
         assert {
             "autogen",
             "crewai",
+            "custom_refund_orchestrator",
             "langchain",
             "langgraph",
             "livekit",
@@ -242,12 +243,13 @@ def test_shipped_examples_execute_through_unified_cli(
             if child["id"] == "multi-framework-adapter-suite"
         )
         assert nested["kind"] == "agent-learning.suite.v1"
-        assert nested["result"]["summary"]["commands"] == {"run": 4}
+        assert nested["result"]["summary"]["commands"] == {"run": 5}
         assert [child["id"] for child in nested["result"]["children"]] == [
             "langchain-runnable",
             "langgraph-state-graph",
             "pipecat-voice-pipeline",
             "livekit-realtime-agent",
+            "custom-refund-orchestrator",
         ]
     if command in {"run", "eval", "redteam"}:
         assert payload["summary"]["case_count"] >= 1
@@ -430,7 +432,7 @@ def test_multi_framework_simulation_suite_runs_framework_adapters(
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["kind"] == "agent-learning.suite.v1"
     assert payload["status"] == "passed"
-    assert payload["summary"]["commands"] == {"run": 4}
+    assert payload["summary"]["commands"] == {"run": 5}
     assert payload["summary"]["score"] == pytest.approx(1.0)
 
     expected = {
@@ -438,6 +440,12 @@ def test_multi_framework_simulation_suite_runs_framework_adapters(
         "langgraph-state-graph": ("langgraph", "ainvoke", "dict", "text"),
         "pipecat-voice-pipeline": ("pipecat", "process", "dict", "voice"),
         "livekit-realtime-agent": ("livekit", "respond", "text", "voice"),
+        "custom-refund-orchestrator": (
+            "custom_refund_orchestrator",
+            "execute_task",
+            "dict",
+            "text",
+        ),
     }
     assert set(expected) == {child["id"] for child in payload["children"]}
     for child in payload["children"]:
