@@ -44,6 +44,8 @@ agent-learn optimize-eval examples/eval_suite_optimization.json \
 agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
 agent-learn redteam examples/redteam_manifest.json --output artifacts/redteam.json
 agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json
+agent-learn optimize examples/world_framework_memory_optimization.json \
+  --output artifacts/world-framework-memory-optimization.json
 agent-learn doctor
 ```
 
@@ -57,3 +59,7 @@ outputs for CI.
 
 This package now contains the actual `fi.simulate`, `fi.evals`, and `fi.opt`
 engine code while keeping `agent_learning.*` as the public API.
+
+The `world_framework_memory_optimization.json` example optimizes a
+LangGraph-style world orchestration across framework trace, retrieval, memory
+lineage, and multi-agent review evidence.

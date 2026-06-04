@@ -9,6 +9,7 @@ _SIMULATE_EXTRA = "simulate"
 
 _SIMULATE_EXPORTS = {
     "AgentInput": "fi.simulate",
+    "AgentMemoryLineageEnvironment": "fi.simulate",
     "AgentResponse": "fi.simulate",
     "AgentWrapper": "fi.simulate",
     "EnvironmentAdapter": "fi.simulate",
@@ -16,7 +17,9 @@ _SIMULATE_EXPORTS = {
     "FrameworkTraceEnvironment": "fi.simulate",
     "LocalTextEngine": "fi.simulate.simulation.engines",
     "MultiAgentRoomEnvironment": "fi.simulate",
+    "OrchestrationTraceEnvironment": "fi.simulate",
     "Persona": "fi.simulate",
+    "RetrievalMemoryEnvironment": "fi.simulate",
     "Scenario": "fi.simulate",
     "ScriptedAgentWrapper": "fi.simulate",
     "TestReport": "fi.simulate",
@@ -24,6 +27,7 @@ _SIMULATE_EXPORTS = {
     "ToolMockEnvironment": "fi.simulate",
     "VoiceEnvironment": "fi.simulate",
     "WorldContractEnvironment": "fi.simulate",
+    "WorldOrchestrationReplayEnvironment": "fi.simulate",
     "normalize_framework_trace_events": "fi.simulate",
     "normalize_mcp_tool_session_export": "fi.simulate",
     "supported_frameworks": "fi.simulate",

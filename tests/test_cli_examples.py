@@ -92,3 +92,72 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["optimization"]["best_config"]
     if command in {"run", "eval", "redteam"}:
         assert payload["summary"]["case_count"] >= 1
+
+
+def test_world_framework_memory_optimization_example_runs_evidence_gates(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
+        "real-local-world-framework-key",
+    )
+
+    output_path = tmp_path / "world-framework-memory.json"
+    junit_path = tmp_path / "world-framework-memory.junit.xml"
+    sarif_path = tmp_path / "world-framework-memory.sarif.json"
+    markdown_path = tmp_path / "world-framework-memory.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "world_framework_memory_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.84
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    env_types = [
+        environment["type"]
+        for environment in payload["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == [
+        "world_orchestration_replay",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    metrics = best_history["metrics"]
+    for metric in (
+        "orchestration_flow_quality",
+        "world_contract_quality",
+        "retrieval_context_quality",
+        "agent_memory_lineage_quality",
+        "multi_agent_coordination_quality",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    assert json.loads(sarif_path.read_text(encoding="utf-8"))["version"] == "2.1.0"
+    assert "world-framework-memory-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )

@@ -22,18 +22,21 @@ from fi.simulate import (
     FileEnvironment,
     FrameworkImportManifestEnvironment,
     FrameworkTraceEnvironment,
+    MultiAgentRoomEnvironment,
     ObservabilityReplayEnvironment,
     OptimizerPortfolioEnvironment,
     OptimizerTraceEnvironment,
     Persona,
     RedTeamCampaignEnvironment,
     RedTeamReadinessEnvironment,
+    RetrievalMemoryEnvironment,
     Scenario,
     TestRunner,
     ToolFaultInjectionEnvironment,
     ToolMockEnvironment,
     WorkspaceRunEnvironment,
     WorldContractEnvironment,
+    WorldOrchestrationReplayEnvironment,
     normalize_optimizer_society_trace,
 )
 from fi.simulate.evaluation import evaluate_agent_report
@@ -169,6 +172,7 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "framework_import",
         "framework_trace",
         "mock_tools",
+        "multi_agent_room",
         "observability_replay",
         "optimizer_backend_portfolio",
         "optimizer_portfolio",
@@ -178,11 +182,13 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "red_team_readiness",
         "redteam_campaign",
         "redteam_readiness",
+        "retrieval_memory",
         "tool_fault",
         "tool_fault_injection",
         "tool_mock",
         "workspace_run_manifest",
         "world_contract",
+        "world_orchestration_replay",
     }
 )
 
@@ -602,8 +608,14 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_file_environment(payload))
         elif env_type == "world_contract":
             environments.append(_build_world_contract_environment(payload))
+        elif env_type == "world_orchestration_replay":
+            environments.append(_build_world_orchestration_replay_environment(payload))
         elif env_type == "framework_trace":
             environments.append(_build_framework_trace_environment(payload, base_dir))
+        elif env_type == "retrieval_memory":
+            environments.append(_build_retrieval_memory_environment(payload))
+        elif env_type == "multi_agent_room":
+            environments.append(_build_multi_agent_room_environment(payload))
         elif env_type in {"adversarial_attack_pack", "adversarial_pack"}:
             environments.append(_build_adversarial_environment(payload))
         elif env_type in {"red_team_campaign", "redteam_campaign"}:
@@ -725,6 +737,78 @@ def _build_framework_trace_environment(
         adapter_required_mappings=dict(source.get("adapter_required_mappings") or {}),
         state=dict(source.get("state") or {}),
         metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_world_orchestration_replay_environment(
+    payload: Mapping[str, Any],
+) -> WorldOrchestrationReplayEnvironment:
+    source = dict(payload)
+    return WorldOrchestrationReplayEnvironment(
+        orchestration_trace=source.get("orchestration_trace")
+        or source.get("workflow")
+        or source.get("trace"),
+        world_attack_replay=source.get("world_attack_replay"),
+        world_contract=source.get("world_contract")
+        or source.get("contract")
+        or source.get("world"),
+        attack_pack=source.get("attack_pack")
+        or source.get("adversarial")
+        or source.get("attacks"),
+        framework=str(source.get("framework") or "traceai"),
+        records=_coerce_list(source.get("records") or source.get("events")),
+        nodes=_coerce_list(source.get("nodes")),
+        edges=_coerce_list(source.get("edges")),
+        steps=_coerce_list(source.get("steps")),
+        orchestration_state=dict(source.get("state") or {}),
+        include_blocked_tools=bool(source.get("include_blocked_tools", True)),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_retrieval_memory_environment(
+    payload: Mapping[str, Any],
+) -> RetrievalMemoryEnvironment:
+    source = dict(payload)
+    documents = (
+        source.get("documents")
+        or source.get("docs")
+        or source.get("knowledge_base")
+        or source.get("sources")
+        or {}
+    )
+    if not documents:
+        raise ManifestError("retrieval_memory environment requires data.documents")
+    return RetrievalMemoryEnvironment(
+        documents,
+        memory=dict(source.get("memory") or {}),
+        top_k=int(source.get("top_k") or 3),
+        require_current=bool(source.get("require_current", True)),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_multi_agent_room_environment(
+    payload: Mapping[str, Any],
+) -> MultiAgentRoomEnvironment:
+    source = dict(payload)
+    participants = (
+        source.get("participants")
+        or source.get("agents")
+        or source.get("roles")
+        or {}
+    )
+    if not participants:
+        raise ManifestError("multi_agent_room environment requires data.participants")
+    return MultiAgentRoomEnvironment(
+        participants,
+        handoff_contracts=source.get("handoff_contracts")
+        or source.get("contracts"),
+        expected_handoffs=_coerce_list(source.get("expected_handoffs")),
+        expected_reviews=_coerce_list(source.get("expected_reviews")),
+        expected_reconciliation=dict(source.get("expected_reconciliation") or {}),
+        state=dict(source.get("state") or {}),
+        allow_unknown_roles=bool(source.get("allow_unknown_roles", True)),
     )
 
 

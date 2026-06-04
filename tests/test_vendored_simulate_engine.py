@@ -236,6 +236,11 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
     assert {"world_contract", "framework_trace"} <= set(
         simulate.supported_manifest_environment_types()
     )
+    assert {
+        "multi_agent_room",
+        "retrieval_memory",
+        "world_orchestration_replay",
+    } <= set(simulate.supported_manifest_environment_types())
 
     result = asyncio.run(simulate.run_manifest_file(manifest_path, no_eval=True))
 
