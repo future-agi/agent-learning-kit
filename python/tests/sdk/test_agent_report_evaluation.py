@@ -885,6 +885,225 @@ def test_evaluate_agent_report_scores_red_team_campaign_coverage_and_quality():
     assert "red_team_open_high_findings_high" in finding_types
 
 
+def test_evaluate_agent_report_scores_red_team_readiness_gate():
+    readiness = {
+        "kind": "red_team_readiness",
+        "name": "support-agent-red-team-readiness",
+        "target": {"agent": "support-agent", "environment": "staging"},
+        "framework_import": {"kind": "framework_import_manifest", "summary": {"has_target": True}},
+        "red_team_campaign": {"kind": "red_team_campaign", "summary": {"has_target": True}},
+        "workspace_run": {"kind": "workspace_run_manifest", "summary": {"has_repository": True}},
+        "trust_boundary": {"kind": "agent_trust_boundary_model", "summary": {"has_sandbox": True}},
+        "control_plane": {"kind": "agent_control_plane", "summary": {"has_rollback": True}},
+        "observability": {"traces": ["trace_readiness"], "webhooks": ["red_team_readiness.completed"]},
+        "artifacts": [{"id": "readiness", "type": "readiness_report", "signals": ["artifact"]}],
+        "signals": [
+            "red_team_readiness",
+            "preflight",
+            "gate",
+            "framework_import_ready",
+            "red_team_campaign_ready",
+            "workspace_run_ready",
+            "trust_boundary_ready",
+            "control_plane_ready",
+            "owasp_agentic_ai",
+            "trace_export",
+            "event_stream",
+            "approval",
+            "rollback",
+            "sandbox",
+        ],
+        "summary": {
+            "has_target": True,
+            "has_framework_import": True,
+            "has_red_team_campaign": True,
+            "has_workspace_run": True,
+            "has_trust_boundary": True,
+            "has_control_plane": True,
+            "has_observability": True,
+            "has_artifacts": True,
+            "framework_import_ready": True,
+            "red_team_campaign_ready": True,
+            "workspace_run_ready": True,
+            "trust_boundary_ready": True,
+            "control_plane_ready": True,
+            "ready_component_count": 5,
+            "ready_components": [
+                "control_plane",
+                "framework_import",
+                "red_team_campaign",
+                "trust_boundary",
+                "workspace_run",
+            ],
+            "failed_components": [],
+            "artifact_count": 4,
+            "observability_hook_count": 6,
+            "blocking_gap_count": 0,
+            "blocking_gaps": [],
+            "observed_evidence": [
+                "artifact",
+                "control_plane",
+                "control_plane_ready",
+                "framework_import",
+                "framework_import_ready",
+                "observability",
+                "red_team_campaign",
+                "red_team_campaign_ready",
+                "target",
+                "trust_boundary",
+                "trust_boundary_ready",
+                "workspace_run",
+                "workspace_run_ready",
+            ],
+            "observed_signals": [
+                "approval",
+                "event_stream",
+                "owasp_agentic_ai",
+                "preflight",
+                "red_team_readiness",
+                "rollback",
+                "sandbox",
+                "trace_export",
+            ],
+            "missing_required_evidence": [],
+            "missing_required_signals": [],
+        },
+    }
+    config = {
+        "required_red_team_readiness": [
+            "red_team_readiness",
+            "target",
+            "framework_import_ready",
+            "red_team_campaign_ready",
+            "workspace_run_ready",
+            "trust_boundary_ready",
+            "control_plane_ready",
+            "observability",
+            "artifact",
+            "owasp_agentic_ai",
+            "trace_export",
+            "approval",
+            "rollback",
+            "sandbox",
+        ],
+        "red_team_readiness_quality": {
+            "required_evidence": [
+                "target",
+                "framework_import_ready",
+                "red_team_campaign_ready",
+                "workspace_run_ready",
+                "trust_boundary_ready",
+                "control_plane_ready",
+                "observability",
+                "artifact",
+            ],
+            "required_signals": ["owasp_agentic_ai", "trace_export", "approval", "rollback", "sandbox"],
+            "required_ready_components": [
+                "framework_import",
+                "red_team_campaign",
+                "workspace_run",
+                "trust_boundary",
+                "control_plane",
+            ],
+            "require_target": True,
+            "require_framework_import": True,
+            "require_framework_import_ready": True,
+            "require_red_team_campaign": True,
+            "require_red_team_campaign_ready": True,
+            "require_workspace_run": True,
+            "require_workspace_run_ready": True,
+            "require_trust_boundary": True,
+            "require_trust_boundary_ready": True,
+            "require_control_plane": True,
+            "require_control_plane_ready": True,
+            "require_observability": True,
+            "require_artifacts": True,
+            "min_ready_components": 5,
+            "min_artifact_count": 4,
+            "min_observability_hooks": 6,
+            "max_blocking_gaps": 0,
+        },
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Readiness gate is green."}],
+                "tool_calls": [
+                    {"id": "status", "name": "red_team_readiness_status", "arguments": {}},
+                    {"id": "evidence", "name": "list_red_team_readiness_evidence", "arguments": {}},
+                    {"id": "gaps", "name": "list_red_team_readiness_gaps", "arguments": {}},
+                ],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "red_team_readiness"}, "data": readiness}],
+                "metadata": {"environment_state": {"red_team_readiness": readiness}},
+            }
+        ]
+    }
+
+    result = evaluate_agent_report(report, config=config, threshold=0.9)
+    scores = {metric.name: metric.score for metric in result.cases[0].metrics}
+
+    assert result.passed is True
+    assert scores["red_team_readiness_coverage"] == 1.0
+    assert scores["red_team_readiness_quality"] == 1.0
+
+    weak_readiness = copy.deepcopy(readiness)
+    weak_readiness["signals"] = ["red_team_readiness", "preflight"]
+    weak_readiness["framework_import"] = {}
+    weak_readiness["workspace_run"] = {}
+    weak_readiness["summary"] = {
+        **weak_readiness["summary"],
+        "has_framework_import": False,
+        "has_workspace_run": False,
+        "framework_import_ready": False,
+        "workspace_run_ready": False,
+        "ready_component_count": 3,
+        "ready_components": ["control_plane", "red_team_campaign", "trust_boundary"],
+        "failed_components": ["framework_import", "workspace_run"],
+        "artifact_count": 1,
+        "observability_hook_count": 1,
+        "blocking_gap_count": 4,
+        "blocking_gaps": [
+            "framework_import_missing",
+            "framework_import_not_ready",
+            "workspace_run_missing",
+            "workspace_run_not_ready",
+        ],
+        "observed_evidence": [
+            "control_plane_ready",
+            "red_team_campaign_ready",
+            "target",
+            "trust_boundary_ready",
+        ],
+        "observed_signals": ["preflight", "red_team_readiness"],
+        "missing_required_evidence": ["framework_import_ready", "workspace_run_ready"],
+        "missing_required_signals": ["approval", "rollback", "sandbox", "trace_export"],
+    }
+    weak_report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "Readiness gate has unresolved gaps."}],
+                "artifacts": [{"type": "trace", "metadata": {"kind": "red_team_readiness"}, "data": weak_readiness}],
+                "metadata": {"environment_state": {"red_team_readiness": weak_readiness}},
+            }
+        ]
+    }
+
+    failing_result = evaluate_agent_report(weak_report, config=config, threshold=0.95)
+    failing_scores = {metric.name: metric.score for metric in failing_result.cases[0].metrics}
+    finding_types = {finding.get("type") for finding in failing_result.findings}
+
+    assert failing_result.passed is False
+    assert failing_scores["red_team_readiness_coverage"] < 1.0
+    assert failing_scores["red_team_readiness_quality"] < 1.0
+    assert "missing_red_team_readiness_key" in finding_types
+    assert "red_team_readiness_framework_import_missing" in finding_types
+    assert "red_team_readiness_framework_import_not_ready" in finding_types
+    assert "red_team_readiness_workspace_run_missing" in finding_types
+    assert "red_team_readiness_workspace_run_not_ready" in finding_types
+    assert "red_team_readiness_blocking_gap_count_high" in finding_types
+    assert "red_team_readiness_signal_missing" in finding_types
+
+
 def test_evaluate_agent_report_scores_framework_import_manifest_coverage_and_quality():
     manifest = {
         "kind": "framework_import_manifest",

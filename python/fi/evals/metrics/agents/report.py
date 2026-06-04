@@ -181,6 +181,8 @@ class AgentReportEvalConfig(BaseModel):
     adversarial_resilience: Dict[str, Any] = Field(default_factory=dict)
     required_red_team_campaign: List[str] = Field(default_factory=list)
     red_team_campaign_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_red_team_readiness: List[str] = Field(default_factory=list)
+    red_team_readiness_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
     required_framework_import: List[str] = Field(default_factory=list)
     framework_import_quality: Dict[str, Any] = Field(default_factory=dict)
@@ -394,6 +396,8 @@ class AgentReportEvaluator:
                 _adversarial_resilience_metric(report_context, config),
                 *_red_team_campaign_coverage_metrics(report_context, config),
                 *_red_team_campaign_quality_metrics(report_context, config),
+                *_red_team_readiness_coverage_metrics(report_context, config),
+                *_red_team_readiness_quality_metrics(report_context, config),
                 _secret_leakage_metric(report_context, config),
                 _memory_integrity_metric(report_context, config),
                 _tool_argument_schema_metric(report_context, config),
@@ -2688,6 +2692,492 @@ def _append_red_team_campaign_check(
                 "actual": actual,
             }
         )
+
+
+def _red_team_readiness_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_red_team_readiness and not _red_team_readiness_payloads_from_context(context):
+        return []
+    return [_red_team_readiness_coverage_metric(context, config)]
+
+
+def _red_team_readiness_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [_normalize_red_team_readiness_key(key) for key in config.required_red_team_readiness]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="red_team_readiness_coverage",
+            score=1.0,
+            reason="No required red-team readiness keys provided.",
+        )
+    observed = _red_team_readiness_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="red_team_readiness_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required red-team readiness evidence observed."
+            if not missing
+            else f"Missing red-team readiness evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_red_team_readiness_key", "metric": "red_team_readiness_coverage", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _red_team_readiness_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.red_team_readiness_quality:
+        return []
+    return [_red_team_readiness_quality_metric(context, config.red_team_readiness_quality)]
+
+
+def _red_team_readiness_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    summary = _merge_red_team_readiness_summaries(_red_team_readiness_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for field, summary_key, finding_type in [
+        ("min_ready_components", "ready_component_count", "red_team_readiness_ready_component_count_low"),
+        ("min_artifact_count", "artifact_count", "red_team_readiness_artifact_count_low"),
+        ("min_observability_hooks", "observability_hook_count", "red_team_readiness_observability_low"),
+    ]:
+        minimum = _as_int(requirements.get(field))
+        if minimum is not None:
+            _append_red_team_readiness_check(
+                checks,
+                findings,
+                check=field,
+                expected=minimum,
+                actual=summary.get(summary_key, 0),
+                match=(summary.get(summary_key, 0) or 0) >= minimum,
+                finding_type=finding_type,
+            )
+
+    maximum = _as_int(requirements.get("max_blocking_gaps"))
+    if maximum is not None:
+        _append_red_team_readiness_check(
+            checks,
+            findings,
+            check="max_blocking_gaps",
+            expected=maximum,
+            actual=summary.get("blocking_gap_count", 0),
+            match=(summary.get("blocking_gap_count", 0) or 0) <= maximum,
+            finding_type="red_team_readiness_blocking_gap_count_high",
+        )
+
+    for field, summary_key, finding_type in [
+        ("require_target", "has_target", "red_team_readiness_target_missing"),
+        ("require_framework_import", "has_framework_import", "red_team_readiness_framework_import_missing"),
+        ("require_framework_import_ready", "framework_import_ready", "red_team_readiness_framework_import_not_ready"),
+        ("require_red_team_campaign", "has_red_team_campaign", "red_team_readiness_campaign_missing"),
+        ("require_red_team_campaign_ready", "red_team_campaign_ready", "red_team_readiness_campaign_not_ready"),
+        ("require_workspace_run", "has_workspace_run", "red_team_readiness_workspace_run_missing"),
+        ("require_workspace_run_ready", "workspace_run_ready", "red_team_readiness_workspace_run_not_ready"),
+        ("require_trust_boundary", "has_trust_boundary", "red_team_readiness_trust_boundary_missing"),
+        ("require_trust_boundary_ready", "trust_boundary_ready", "red_team_readiness_trust_boundary_not_ready"),
+        ("require_control_plane", "has_control_plane", "red_team_readiness_control_plane_missing"),
+        ("require_control_plane_ready", "control_plane_ready", "red_team_readiness_control_plane_not_ready"),
+        ("require_observability", "has_observability", "red_team_readiness_observability_missing"),
+        ("require_artifacts", "has_artifacts", "red_team_readiness_artifacts_missing"),
+    ]:
+        if requirements.get(field) is None:
+            continue
+        required = bool(requirements.get(field))
+        actual = bool(summary.get(summary_key))
+        _append_red_team_readiness_check(
+            checks,
+            findings,
+            check=field,
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type=finding_type,
+        )
+
+    for item in _string_list(requirements.get("required_evidence") or requirements.get("evidence")):
+        normalized = _normalize_red_team_readiness_key(item)
+        _append_red_team_readiness_check(
+            checks,
+            findings,
+            check="required_evidence",
+            expected=normalized,
+            actual=summary["observed_evidence"],
+            match=normalized in set(summary["observed_evidence"]),
+            finding_type="red_team_readiness_evidence_missing",
+        )
+
+    for item in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_red_team_readiness_key(item)
+        _append_red_team_readiness_check(
+            checks,
+            findings,
+            check="required_signal",
+            expected=normalized,
+            actual=summary["observed_signals"],
+            match=normalized in set(summary["observed_signals"]),
+            finding_type="red_team_readiness_signal_missing",
+        )
+
+    for item in _string_list(requirements.get("required_ready_components") or requirements.get("ready_components")):
+        normalized = _normalize_red_team_readiness_key(item)
+        _append_red_team_readiness_check(
+            checks,
+            findings,
+            check="required_ready_component",
+            expected=normalized,
+            actual=summary["ready_components"],
+            match=normalized in set(summary["ready_components"]),
+            finding_type="red_team_readiness_ready_component_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="red_team_readiness_quality",
+            score=1.0,
+            reason="No red-team readiness quality checks were configured.",
+        )
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="red_team_readiness_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} red-team readiness quality check(s) matched.",
+        details={"checks": checks, "findings": findings, "observed": summary},
+    )
+
+
+def _red_team_readiness_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("red_team_readiness"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("red_team_readiness"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_red_team_readiness(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_red_team_readiness(payload, metadata):
+            payloads.append(payload)
+        elif "red_team_readiness" in event_type:
+            payloads.append({"kind": "red_team_readiness", "events": [_as_dict(event)]})
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        key = json.dumps(payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload)
+    return deduped
+
+
+def _red_team_readiness_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _red_team_readiness_payloads_from_context(context):
+        observed.update({"red_team_readiness", "readiness", "preflight", "gate"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_red_team_readiness_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for key in ("observed_evidence", "observed_signals", "ready_components"):
+            observed.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(summary.get(key))
+                if _normalize_red_team_readiness_key(item)
+            )
+        for summary_key, signal in [
+            ("has_target", "target"),
+            ("has_framework_import", "framework_import"),
+            ("framework_import_ready", "framework_import_ready"),
+            ("has_red_team_campaign", "red_team_campaign"),
+            ("red_team_campaign_ready", "red_team_campaign_ready"),
+            ("has_workspace_run", "workspace_run"),
+            ("workspace_run_ready", "workspace_run_ready"),
+            ("has_trust_boundary", "trust_boundary"),
+            ("trust_boundary_ready", "trust_boundary_ready"),
+            ("has_control_plane", "control_plane"),
+            ("control_plane_ready", "control_plane_ready"),
+            ("has_observability", "observability"),
+            ("has_artifacts", "artifact"),
+        ]:
+            if summary.get(summary_key):
+                observed.add(signal)
+        for child_key in (
+            "framework_import",
+            "red_team_campaign",
+            "workspace_run",
+            "trust_boundary",
+            "control_plane",
+        ):
+            child = _as_dict(payload.get(child_key))
+            observed.update(_red_team_readiness_child_observed(child))
+        for artifact in _as_list(payload.get("artifacts", [])):
+            artifact_dict = _as_dict(artifact)
+            observed.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(artifact_dict.get("signals"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            artifact_type = _normalize_red_team_readiness_key(artifact_dict.get("type") or artifact_dict.get("kind"))
+            if artifact_type:
+                observed.add(artifact_type)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "red_team_readiness_status",
+            "list_red_team_readiness_evidence",
+            "list_red_team_readiness_gaps",
+        }:
+            observed.add("red_team_readiness")
+            if "evidence" in name:
+                observed.add("evidence")
+            if "gaps" in name:
+                observed.add("gap")
+    return {item for item in observed if item}
+
+
+def _red_team_readiness_child_observed(payload: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    if not payload:
+        return observed
+    kind = _normalize_red_team_readiness_key(payload.get("kind"))
+    if kind:
+        observed.add(kind)
+    for signal in _as_list(payload.get("signals", [])):
+        normalized = _normalize_red_team_readiness_key(signal)
+        if normalized:
+            observed.add(normalized)
+    summary = _as_dict(payload.get("summary"))
+    for key in (
+        "observed_frameworks",
+        "observed_export_types",
+        "observed_signals",
+        "observed_taxonomies",
+        "observed_attack_types",
+        "observed_surfaces",
+        "observed_channels",
+        "observed_providers",
+        "frameworks",
+        "red_team_taxonomies",
+        "present_controls",
+        "present_categories",
+        "controls",
+        "artifact_types",
+        "command_ids",
+    ):
+        observed.update(
+            _normalize_red_team_readiness_key(item)
+            for item in _as_list(summary.get(key))
+            if _normalize_red_team_readiness_key(item)
+        )
+    return {item for item in observed if item}
+
+
+def _looks_like_red_team_readiness(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "red_team_readiness" or (
+        "framework_import" in data
+        and "red_team_campaign" in data
+        and ("workspace_run" in data or "trust_boundary" in data or "control_plane" in data)
+    )
+
+
+def _merge_red_team_readiness_summaries(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    ready_components: set[str] = set()
+    failed_components: set[str] = set()
+    blocking_gaps: set[str] = set()
+    observed_evidence: set[str] = set()
+    observed_signals: set[str] = set()
+    missing_required_evidence: set[str] = set()
+    missing_required_signals: set[str] = set()
+    summary: Dict[str, Any] = {
+        "has_target": False,
+        "has_framework_import": False,
+        "has_red_team_campaign": False,
+        "has_workspace_run": False,
+        "has_trust_boundary": False,
+        "has_control_plane": False,
+        "has_observability": False,
+        "has_artifacts": False,
+        "framework_import_ready": False,
+        "red_team_campaign_ready": False,
+        "workspace_run_ready": False,
+        "trust_boundary_ready": False,
+        "control_plane_ready": False,
+        "artifact_count": 0,
+        "observability_hook_count": 0,
+    }
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        payload_summary = _as_dict(payload_dict.get("summary"))
+        if payload_summary:
+            for key in [
+                "has_target",
+                "has_framework_import",
+                "has_red_team_campaign",
+                "has_workspace_run",
+                "has_trust_boundary",
+                "has_control_plane",
+                "has_observability",
+                "has_artifacts",
+                "framework_import_ready",
+                "red_team_campaign_ready",
+                "workspace_run_ready",
+                "trust_boundary_ready",
+                "control_plane_ready",
+            ]:
+                summary[key] = summary[key] or bool(payload_summary.get(key))
+            summary["artifact_count"] += _as_int(payload_summary.get("artifact_count")) or 0
+            summary["observability_hook_count"] += _as_int(payload_summary.get("observability_hook_count")) or 0
+            ready_components.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(payload_summary.get("ready_components"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            failed_components.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(payload_summary.get("failed_components"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            blocking_gaps.update(str(item) for item in _as_list(payload_summary.get("blocking_gaps")) if item)
+            observed_evidence.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(payload_summary.get("observed_evidence"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            observed_signals.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(payload_summary.get("observed_signals"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            missing_required_evidence.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(payload_summary.get("missing_required_evidence"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            missing_required_signals.update(
+                _normalize_red_team_readiness_key(item)
+                for item in _as_list(payload_summary.get("missing_required_signals"))
+                if _normalize_red_team_readiness_key(item)
+            )
+            continue
+
+        for payload_key, summary_key in [
+            ("target", "has_target"),
+            ("framework_import", "has_framework_import"),
+            ("red_team_campaign", "has_red_team_campaign"),
+            ("workspace_run", "has_workspace_run"),
+            ("trust_boundary", "has_trust_boundary"),
+            ("control_plane", "has_control_plane"),
+            ("observability", "has_observability"),
+        ]:
+            if _as_dict(payload_dict.get(payload_key)):
+                summary[summary_key] = True
+                observed_evidence.add(payload_key)
+        artifacts = _as_list(payload_dict.get("artifacts"))
+        summary["artifact_count"] += len(artifacts)
+        summary["has_artifacts"] = summary["has_artifacts"] or bool(artifacts)
+        if summary["has_artifacts"]:
+            observed_evidence.add("artifact")
+
+    for key, component in [
+        ("framework_import_ready", "framework_import"),
+        ("red_team_campaign_ready", "red_team_campaign"),
+        ("workspace_run_ready", "workspace_run"),
+        ("trust_boundary_ready", "trust_boundary"),
+        ("control_plane_ready", "control_plane"),
+    ]:
+        if summary[key]:
+            ready_components.add(component)
+            observed_evidence.add(f"{component}_ready")
+
+    for key, evidence in [
+        ("has_target", "target"),
+        ("has_framework_import", "framework_import"),
+        ("has_red_team_campaign", "red_team_campaign"),
+        ("has_workspace_run", "workspace_run"),
+        ("has_trust_boundary", "trust_boundary"),
+        ("has_control_plane", "control_plane"),
+        ("has_observability", "observability"),
+        ("has_artifacts", "artifact"),
+    ]:
+        if summary[key]:
+            observed_evidence.add(evidence)
+
+    observed_signals.update(observed_evidence)
+    observed_signals.update({"red_team_readiness", "readiness", "preflight", "gate"})
+    blocking_gaps.update(f"missing_evidence:{item}" for item in missing_required_evidence)
+    blocking_gaps.update(f"missing_signal:{item}" for item in missing_required_signals)
+    summary["ready_components"] = sorted(item for item in ready_components if item)
+    summary["ready_component_count"] = len(summary["ready_components"])
+    summary["failed_components"] = sorted(item for item in failed_components if item)
+    summary["blocking_gaps"] = sorted(item for item in blocking_gaps if item)
+    summary["blocking_gap_count"] = len(summary["blocking_gaps"])
+    summary["observed_evidence"] = sorted(item for item in observed_evidence if item)
+    summary["observed_signals"] = sorted(item for item in observed_signals if item)
+    summary["missing_required_evidence"] = sorted(item for item in missing_required_evidence if item)
+    summary["missing_required_signals"] = sorted(item for item in missing_required_signals if item)
+    summary["has_observability"] = summary["has_observability"] or summary["observability_hook_count"] > 0
+    summary["has_artifacts"] = summary["has_artifacts"] or summary["artifact_count"] > 0
+    return summary
+
+
+def _append_red_team_readiness_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "red_team_readiness_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_red_team_readiness_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
 def _framework_import_coverage_metrics(
