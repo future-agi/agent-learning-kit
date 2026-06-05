@@ -32,6 +32,8 @@ FRAMEWORKS = [
         "trace": {
             "span_id": "langchain_runnable",
             "span_name": "RunnableSequence.ainvoke",
+            "input": "support workflow",
+            "output": "completed",
             "signals": ["model", "tool", "chain"],
         },
     },
@@ -39,19 +41,21 @@ FRAMEWORKS = [
         "id": "langgraph-state-graph",
         "framework": "langgraph",
         "factory": "build_langgraph_agent",
-        "persona": {"name": "Ravi", "role": "framework-owner"},
+        "persona": {"name": "Riya", "role": "orchestration-owner"},
         "situation": (
-            "Ravi needs a LangGraph-style state graph simulated through the "
+            "Riya needs a LangGraph-style state graph simulated through the "
             "generic framework adapter."
         ),
         "outcome": (
-            "The LangGraph-style graph completes with framework runtime trace "
-            "evidence."
+            "The LangGraph-style graph completes with stateful framework "
+            "runtime trace evidence."
         ),
         "trace": {
-            "span_id": "langgraph_graph",
-            "span_name": "StateGraph.ainvoke",
-            "signals": ["graph", "tool", "state"],
+            "span_id": "langgraph_node",
+            "span_name": "refund_graph.ainvoke",
+            "input": "refund workflow",
+            "output": "completed",
+            "signals": ["model", "tool", "state"],
         },
     },
     {
@@ -71,6 +75,8 @@ FRAMEWORKS = [
         "trace": {
             "span_id": "pipecat_pipeline",
             "span_name": "pipeline.process",
+            "input": "voice handoff",
+            "output": "completed",
             "signals": ["voice", "frame", "tool"],
         },
     },
@@ -91,6 +97,8 @@ FRAMEWORKS = [
         "trace": {
             "span_id": "livekit_room_agent",
             "span_name": "agent.respond",
+            "input": "voice room message",
+            "output": "completed",
             "signals": ["voice", "room", "tool"],
         },
     },
@@ -112,6 +120,8 @@ FRAMEWORKS = [
         "trace": {
             "span_id": "custom_refund_orchestrator",
             "span_name": "CustomRefundOrchestrator.execute_task",
+            "input": "refund workflow",
+            "output": "approved",
             "signals": ["planner", "tool", "policy"],
         },
     },
@@ -148,8 +158,8 @@ def build_framework_manifests() -> dict[str, dict[str, Any]]:
                     {
                         "id": trace["span_id"],
                         "name": trace["span_name"],
-                        "input": "support workflow",
-                        "output": "completed",
+                        "input": trace["input"],
+                        "output": trace["output"],
                         "tool_calls": [{"name": "framework_trace_status"}],
                         "signals": trace["signals"],
                     }

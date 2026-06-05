@@ -1811,6 +1811,69 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
     )
     assert manifests["custom-refund-orchestrator"]["agent"]["input_mode"] == "dict"
     assert manifests["pipecat-voice-pipeline"]["simulation"]["modality"] == "voice"
+    assert manifests["livekit-realtime-agent"]["simulation"]["modality"] == "voice"
+    for manifest_id in (
+        "langchain-runnable",
+        "langgraph-state-graph",
+        "custom-refund-orchestrator",
+    ):
+        assert "modality" not in manifests[manifest_id]["simulation"]
+    expected_trace = {
+        "langchain-runnable": (
+            "langchain",
+            "langchain_runnable",
+            "RunnableSequence.ainvoke",
+            "support workflow",
+            "completed",
+            ["model", "tool", "chain"],
+        ),
+        "langgraph-state-graph": (
+            "langgraph",
+            "langgraph_node",
+            "refund_graph.ainvoke",
+            "refund workflow",
+            "completed",
+            ["model", "tool", "state"],
+        ),
+        "pipecat-voice-pipeline": (
+            "pipecat",
+            "pipecat_pipeline",
+            "pipeline.process",
+            "voice handoff",
+            "completed",
+            ["voice", "frame", "tool"],
+        ),
+        "livekit-realtime-agent": (
+            "livekit",
+            "livekit_room_agent",
+            "agent.respond",
+            "voice room message",
+            "completed",
+            ["voice", "room", "tool"],
+        ),
+        "custom-refund-orchestrator": (
+            "custom_refund_orchestrator",
+            "custom_refund_orchestrator",
+            "CustomRefundOrchestrator.execute_task",
+            "refund workflow",
+            "approved",
+            ["planner", "tool", "policy"],
+        ),
+    }
+    for manifest_id, trace_expectation in expected_trace.items():
+        framework, span_id, span_name, span_input, span_output, signals = (
+            trace_expectation
+        )
+        trace = manifests[manifest_id]["simulation"]["environments"][0]["data"]
+        span = trace["spans"][0]
+        assert trace["framework"] == framework
+        assert span["id"] == span_id
+        assert span["name"] == span_name
+        assert span["input"] == span_input
+        assert span["output"] == span_output
+        assert span["signals"] == signals
+        assert trace["adapter_required_signals"] == signals
+        assert trace["adapter_required_mappings"] == {"tool": ["tool_name"]}
 
     output_path = tmp_path / "sdk-multi-framework-result.json"
     result = module.run(output_path)
@@ -1844,6 +1907,25 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
         assert runtime["summary"]["methods"] == [method]
         assert runtime["summary"]["input_modes"] == [input_mode]
         assert runtime["summary"]["tool_call_count"] == 1
+        trace = child["result"]["report"]["results"][0]["metadata"][
+            "environment_state"
+        ]["framework_trace"]
+        _framework, span_id, span_name, span_input, span_output, signals = (
+            expected_trace[child["id"]]
+        )
+        span = trace["spans"][0]
+        assert trace["framework"] == framework
+        assert span["id"] == span_id
+        assert span["name"] == span_name
+        assert span["input"] == span_input
+        assert span["output"] == span_output
+        assert set(signals) <= set(span["signals"])
+        assert set(trace["adapter_conformance"]["required_signals"]) == set(signals)
+        assert set(trace["adapter_conformance"]["observed_signals"]) >= set(signals)
+        assert trace["adapter_conformance"]["required_mappings"] == {
+            "tool": ["tool_name"]
+        }
+        assert trace["adapter_conformance"]["passed"] is True
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
