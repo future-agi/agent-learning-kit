@@ -1135,6 +1135,94 @@ def build_social_memory_framework_run_manifest(
     return manifest
 
 
+def build_multi_agent_framework_handoff_run_manifest(
+    *,
+    name: str,
+    handoff: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    export_source_base_dir: Optional[str | Path] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct multi-agent framework handoff simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_multi_agent_framework_handoff_optimization_manifest(
+            name=name,
+            handoff_candidates=[list(handoff)] if handoff else None,
+            evaluation_config=evaluation_config,
+            agent=agent,
+            scenario=scenario,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    selected_environments = (
+        [_multi_agent_framework_handoff_environment(item) for item in handoff]
+        if handoff is not None
+        else copy.deepcopy(default_environments)
+    )
+    if export_source_base_dir is not None:
+        selected_environments = _resolve_environment_export_sources(
+            selected_environments,
+            export_source_base_dir,
+        )
+    if not selected_environments:
+        raise ValueError("handoff must contain at least one environment")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(selected_environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": (
+                "agent_learning.simulate."
+                "build_multi_agent_framework_handoff_run_manifest"
+            ),
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -2039,6 +2127,51 @@ def _framework_trace_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     return {"type": "framework_trace", "data": copied}
 
 
+def _multi_agent_framework_handoff_environment(
+    item: Mapping[str, Any],
+) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"framework_trace", "multi_agent_room"}:
+        if copied.get("data") is not None:
+            return copied
+        environment_type = str(copied.pop("type"))
+        return {"type": environment_type, "data": copied}
+    if copied.get("framework_trace") is not None:
+        return {"type": "framework_trace", "data": copied["framework_trace"]}
+    if copied.get("multi_agent_room") is not None:
+        return {"type": "multi_agent_room", "data": copied["multi_agent_room"]}
+    if copied.get("participants") is not None or copied.get("handoff_contracts") is not None:
+        return {"type": "multi_agent_room", "data": copied}
+    return {"type": "framework_trace", "data": copied}
+
+
+def _resolve_environment_export_sources(
+    environments: Sequence[Mapping[str, Any]],
+    base_dir: str | Path,
+) -> list[dict[str, Any]]:
+    root = Path(base_dir).expanduser().resolve()
+    resolved = [copy.deepcopy(dict(item)) for item in environments]
+    for environment in resolved:
+        data = environment.get("data")
+        if not isinstance(data, dict):
+            continue
+        for key in ("export_source", "source"):
+            source = data.get(key)
+            if _is_relative_file_source(source):
+                data[key] = str((root / str(source)).resolve())
+    return resolved
+
+
+def _is_relative_file_source(source: Any) -> bool:
+    if not isinstance(source, str):
+        return False
+    if not source or "://" in source:
+        return False
+    if source.lstrip().startswith(("{", "[")):
+        return False
+    return not Path(source).expanduser().is_absolute()
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -2106,6 +2239,7 @@ __all__ = [
     "build_manifest_agent_callback",
     "build_manifest_environments",
     "build_multimodal_image_run_manifest",
+    "build_multi_agent_framework_handoff_run_manifest",
     "build_multi_framework_suite_manifest",
     "build_realtime_run_manifest",
     "build_social_memory_framework_run_manifest",

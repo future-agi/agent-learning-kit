@@ -402,6 +402,10 @@ AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_framework_handoff_optimization.py \
   artifacts/sdk-multi-agent-framework-handoff-optimization.json
 
+AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_multi_agent_framework_handoff_simulation.py \
+  artifacts/sdk-multi-agent-framework-handoff-simulation.json
+
 AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_optimizer_governance_optimization.py \
   artifacts/sdk-optimizer-governance-optimization.json
@@ -604,6 +608,14 @@ The same harness is available from Python through
 `examples/sdk_multi_agent_framework_handoff_optimization.py`, which search
 weak, partial, and complete framework-transcript plus multi-agent-room bundles
 with the evolutionary optimizer.
+For direct, non-optimizer simulation,
+`simulate.build_multi_agent_framework_handoff_run_manifest()` and
+`examples/sdk_multi_agent_framework_handoff_simulation.py` run the verified
+OpenAI Agents, AutoGen, CrewAI, LangGraph, and `multi_agent_room` handoff
+evidence as a normal `agent-learning.run.v1` artifact. The SDK helper can also
+resolve relative transcript export sources against an explicit
+`export_source_base_dir`, so generated manifests remain runnable from CI
+artifact directories.
 
 The `optimizer_governance_optimization.json` example optimizes an optimizer
 society trace, making multi-interaction search auditable. It verifies roles,

@@ -105,6 +105,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
     assert optimize.optimize_multi_agent_framework_handoff is not None
+    assert simulate.build_multi_agent_framework_handoff_run_manifest is not None
     assert optimize.build_multimodal_image_optimization_manifest is not None
     assert optimize.optimize_multimodal_image is not None
     assert simulate.build_multimodal_image_run_manifest is not None
@@ -1340,6 +1341,213 @@ def test_sdk_multi_agent_framework_handoff_optimization_example_runs(
         for checkpoint in observed["checkpoints"]
     }
     assert observed["errors"] == []
+
+
+def test_sdk_multi_agent_framework_handoff_simulation_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_SIMULATION_KEY",
+        "real-local-sdk-multi-agent-framework-handoff-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_multi_agent_framework_handoff_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_framework_handoff_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert "optimization" not in manifest
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_SIMULATION_KEY"
+    ]
+    assert manifest["agent"]["type"] == "scripted"
+    assert len(manifest["agent"]["responses"]) == 3
+    assert manifest["simulation"]["engine"] == "local_text"
+    assert manifest["simulation"]["min_turns"] == 3
+    assert manifest["simulation"]["max_turns"] == 3
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [environment["type"] for environment in manifest["simulation"]["environments"]] == [
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "multi_agent_room",
+    ]
+    framework_sources = [
+        (environment["data"]["framework"], environment["data"]["export_source"])
+        for environment in manifest["simulation"]["environments"]
+        if environment["type"] == "framework_trace"
+    ]
+    assert [framework for framework, _ in framework_sources] == [
+        "openai_agents",
+        "autogen",
+        "crewai",
+        "langgraph",
+    ]
+    for _, source in framework_sources:
+        assert Path(source).is_absolute()
+        assert Path(source).exists()
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["required_multi_agent_roles"] == [
+        "planner",
+        "retriever",
+        "critic",
+    ]
+    assert eval_config["required_tools"] == [
+        "framework_trace_status",
+        "room_status",
+        "handoff",
+        "request_review",
+        "reconcile",
+    ]
+    assert {
+        "framework_trace",
+        "openai_agents",
+        "autogen",
+        "crewai",
+        "langgraph",
+    } <= set(eval_config["required_framework_trace"])
+    assert {
+        "trace",
+        "role",
+        "handoff",
+        "review_requested",
+        "reconciled",
+    } <= set(eval_config["required_multi_agent_trace"])
+    assert eval_config["framework_transcript_quality"]["required_sessions"] == [
+        "refund-thread-2026"
+    ]
+    assert eval_config["framework_transcript_quality"][
+        "required_checkpoint_ids"
+    ] == ["ckpt-retrieval"]
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_multi_agent_framework_handoff_run_manifest(
+        name="custom-multi-agent-framework-handoff-simulation",
+        handoff=[
+            {
+                "framework_trace": {
+                    "framework": "custom_framework",
+                    "events": [{"speaker": "planner", "method": "message"}],
+                }
+            },
+            {
+                "type": "multi_agent_room",
+                "participants": {
+                    "planner": {"name": "planner"},
+                    "critic": {"name": "critic"},
+                },
+            },
+        ],
+        min_turns=1,
+    )
+    assert custom_manifest["simulation"]["environments"] == [
+        {
+            "type": "framework_trace",
+            "data": {
+                "framework": "custom_framework",
+                "events": [{"speaker": "planner", "method": "message"}],
+            },
+        },
+        {
+            "type": "multi_agent_room",
+            "data": {
+                "participants": {
+                    "planner": {"name": "planner"},
+                    "critic": {"name": "critic"},
+                },
+            },
+        },
+    ]
+
+    output_path = tmp_path / "sdk-multi-agent-framework-handoff-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == (
+        "sdk-multi-agent-framework-handoff-simulation"
+    )
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-multi-agent-framework-handoff-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.99
+    for metric in (
+        "framework_transcript_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "framework_trace_coverage",
+        "task_completion",
+        "trajectory_score",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"framework_trace", "multi_agent"}
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+    transcript_metric = next(
+        metric
+        for metric in report_case["evaluation"]["agent_report"]["metrics"]
+        if metric["name"] == "framework_transcript_quality"
+    )
+    observed = transcript_metric["details"]["observed"]
+    assert set(observed["speaker_sequence"]) >= {
+        "triage_agent",
+        "retrieval_agent",
+        "critic_agent",
+        "planner",
+        "researcher",
+        "reviewer",
+        "manager",
+        "analyst",
+        "qa",
+        "retriever",
+        "critic",
+    }
+    assert {handoff["to"] for handoff in observed["handoffs"] if handoff.get("to")} >= {
+        "retrieval_agent",
+        "critic_agent",
+        "researcher",
+        "reviewer",
+        "analyst",
+        "qa",
+        "retriever",
+        "critic",
+    }
+    assert [checkpoint["id"] for checkpoint in observed["checkpoints"]] == [
+        "ckpt-retrieval"
+    ]
+    assert observed["errors"] == []
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "triage_agent.handoff",
+        "planner.handoff",
+        "manager.crew_handoff",
+        "checkpoint.saved",
+        "room_ready",
+        "handoff",
+        "review_requested",
+        "reconciled",
+        "room_status_state_update",
+    } <= event_names
+    assert len(report_case["events"]) >= 25
 
 
 def test_sdk_optimizer_governance_optimization_example_runs(
