@@ -87,6 +87,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_agent_control_plane is not None
     assert optimize.build_autonomous_redteam_task_world_optimization_manifest is not None
     assert optimize.optimize_autonomous_redteam_task_world is not None
+    assert simulate.build_autonomous_redteam_task_world_run_manifest is not None
     assert optimize.build_browser_cua_optimization_manifest is not None
     assert optimize.optimize_browser_cua is not None
     assert optimize.build_eval_suite_optimization_manifest is not None
@@ -3238,6 +3239,177 @@ def test_sdk_autonomous_redteam_task_world_optimization_example_runs(
         "status",
         "verify",
     ]
+
+
+def test_sdk_autonomous_redteam_task_world_simulation_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_SIMULATION_KEY",
+        "real-local-sdk-autonomous-redteam-task-world-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_autonomous_redteam_task_world_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_autonomous_redteam_task_world_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["min_turns"] == 4
+    assert manifest["simulation"]["max_turns"] == 4
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "structured_artifact",
+        "domain_package",
+        "world_attack_replay",
+        "autonomy_loop",
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert len(config["required_tools"]) == 18
+    assert config["world_contract_quality"]["required_transitions"] == [
+        "authenticate_user",
+        "approve_refund",
+    ]
+    assert config["adversarial_resilience"]["blocked_tools"] == [
+        "exfiltrate_canary"
+    ]
+    assert config["expected_autonomy_skills"][0]["name"] == (
+        "refund-redteam-runbook"
+    )
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_autonomous_redteam_task_world_run_manifest(
+        name="custom-autonomous-redteam-task-world-simulation",
+        redteam_world=[
+            {
+                "type": "structured_artifact",
+                "domain": "custom_support",
+                "artifacts": {"policy": {"data": {"approved": True}}},
+            },
+            {
+                "world_contract": {"name": "custom-world"},
+                "attack_pack": {"attacks": []},
+            },
+            {
+                "goal": "record safe autonomous red-team replay",
+                "required_stages": ["observe", "act", "verify"],
+            },
+        ],
+        min_turns=1,
+    )
+    custom_environments = custom_manifest["simulation"]["environments"]
+    assert custom_environments == [
+        {
+            "type": "structured_artifact",
+            "data": {
+                "domain": "custom_support",
+                "artifacts": {"policy": {"data": {"approved": True}}},
+            },
+        },
+        {
+            "type": "world_attack_replay",
+            "data": {
+                "world_contract": {"name": "custom-world"},
+                "attack_pack": {"attacks": []},
+            },
+        },
+        {
+            "type": "autonomy_loop",
+            "data": {
+                "goal": "record safe autonomous red-team replay",
+                "required_stages": ["observe", "act", "verify"],
+            },
+        },
+    ]
+
+    output_path = tmp_path / "sdk-autonomous-redteam-task-world-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == (
+        "sdk-autonomous-redteam-task-world-simulation"
+    )
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-autonomous-redteam-task-world-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    for metric in (
+        "artifact_semantics_quality",
+        "artifact_grounding_quality",
+        "domain_package_quality",
+        "world_contract_coverage",
+        "world_contract_quality",
+        "adversarial_resilience",
+        "autonomy_loop_coverage",
+        "autonomy_loop_quality",
+        "tool_argument_schema",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {
+        "adversarial",
+        "autonomy_loop",
+        "domain_packages",
+        "structured_artifacts",
+        "world_attack_replay",
+        "world_contract",
+    }
+    assert state["structured_artifacts"]["ids"] == ["approval_policy"]
+    assert state["domain_packages"]["ids"] == ["refund_case"]
+    world_summary = state["world_attack_replay"]["summary"]
+    assert world_summary["world_terminal_status"] == "success"
+    assert world_summary["completed_required_transition_count"] == 2
+    assert world_summary["invariant_violation_count"] == 0
+    assert world_summary["attack_count"] == 2
+    assert world_summary["canary_count"] == 1
+    contract_summary = state["world_contract"]["summary"]
+    assert contract_summary["terminal_status"] == "success"
+    assert contract_summary["success_condition_pass_count"] == 1
+    assert state["autonomy_loop"]["stages_observed"] == [
+        "act",
+        "memory",
+        "observe",
+        "orient",
+        "plan",
+        "reflect",
+        "skill",
+        "status",
+        "verify",
+    ]
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "structured_artifacts_ready",
+        "domain_packages_ready",
+        "world_attack_replay_ready",
+        "world_contract_ready",
+        "adversarial_pack_ready",
+        "world_attack_replay_status",
+        "apply_world_transition_state_update",
+        "read_adversarial_file",
+        "verify_outcome_state_update",
+        "write_memory_state_update",
+        "store_skill_state_update",
+    } <= event_names
 
 
 def test_sdk_multimodal_image_optimization_example_runs(
