@@ -333,13 +333,16 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "diagnose_agent_report_evaluation",
         "SimulateManifestOptimizationProblem",
         "SimulateEvalSuiteOptimizationProblem",
-        "problem_from_simulate_manifest",
-        "problem_from_eval_suite",
-        "optimize_simulate_manifest",
-        "deep_merge",
-        "set_path",
-    ):
-        assert getattr(agent_optimize, name) is getattr(fi_opt, name)
+            "SimulateSuiteOptimizationProblem",
+            "problem_from_simulate_manifest",
+            "problem_from_eval_suite",
+            "optimize_simulate_manifest",
+            "deep_merge",
+            "set_path",
+        ):
+            assert getattr(agent_optimize, name) is getattr(fi_opt, name)
+    assert agent_optimize.problem_from_agent_learning_suite_file is not None
+    assert agent_optimize.optimize_suite_file is not None
     for name in (
         "RandomSearchOptimizer",
         "BayesianSearchOptimizer",
@@ -372,6 +375,7 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     }
     assert agent_optimize.ManifestOptimizationProblem is fi_opt.ManifestOptimizationProblem
     assert agent_optimize.EvalSuiteOptimizationProblem is fi_opt.EvalSuiteOptimizationProblem
+    assert agent_optimize.SuiteOptimizationProblem is fi_opt.SuiteOptimizationProblem
     assert agent_optimize.ManifestOptimizationProblem is (
         fi_opt_simulate.ManifestOptimizationProblem
     )
@@ -645,6 +649,112 @@ def test_eval_suite_optimizer_runs_local_agent_report_eval_without_services():
     assert best_history.metadata["report"]["metadata"]["routing_mode"] == (
         "tool_grounded"
     )
+
+
+def test_agent_learning_suite_optimizer_searches_whole_suite_jobs():
+    suite = {
+        "version": "agent-learning.suite.v1",
+        "name": "agent-learning-kit-suite-optimization",
+        "required_capabilities": {
+            "commands": ["suite"],
+            "frameworks": ["langchain", "langgraph"],
+        },
+        "jobs": [
+            {
+                "id": "framework-breadth",
+                "command": "run",
+                "path": "framework_langchain_manifest.json",
+            }
+        ],
+        "optimization": {
+            "threshold": 1.0,
+            "target": {
+                "name": "suite-framework-breadth",
+                "layers": ["harness", "framework", "evaluator"],
+                "base_config": {
+                    "jobs": [
+                        {
+                            "id": "framework-breadth",
+                            "command": "run",
+                            "path": "framework_langchain_manifest.json",
+                        }
+                    ]
+                },
+                "search_space": {
+                    "jobs.0": [
+                        {
+                            "id": "framework-breadth",
+                            "command": "run",
+                            "path": "framework_langchain_manifest.json",
+                        },
+                        {
+                            "id": "framework-breadth",
+                            "command": "suite",
+                            "path": "multi_framework_simulation_suite.json",
+                        },
+                    ]
+                },
+            },
+            "optimizer": {
+                "max_candidates": 3,
+                "include_seed": True,
+                "auto_diagnose": False,
+            },
+        },
+    }
+    original = copy.deepcopy(suite)
+    observed_commands = []
+
+    def run_suite(candidate_suite, candidate):
+        command = candidate_suite["jobs"][0]["command"]
+        observed_commands.append(command)
+        if command == "suite":
+            return {
+                "kind": "agent-learning.suite.v1",
+                "status": "passed",
+                "exit_code": 0,
+                "summary": {
+                    "score": 1.0,
+                    "job_count": 1,
+                    "executed_count": 1,
+                    "capability_gate_passed": True,
+                    "capabilities": {
+                        "commands": ["suite"],
+                        "frameworks": ["langchain", "langgraph"],
+                    },
+                },
+            }
+        return {
+            "kind": "agent-learning.suite.v1",
+            "status": "failed",
+            "exit_code": 1,
+            "summary": {
+                "score": 1.0,
+                "job_count": 1,
+                "executed_count": 1,
+                "capability_gate_passed": False,
+                "missing_required_capabilities": {"commands": ["suite"]},
+            },
+        }
+
+    problem = agent_optimize.SuiteOptimizationProblem.from_suite(
+        suite,
+        run_suite=run_suite,
+    )
+
+    result = problem.optimize()
+
+    assert suite == original
+    assert "optimization" not in problem.base_suite
+    assert observed_commands == ["run", "suite"]
+    assert result.final_score == pytest.approx(1.0)
+    assert result.best_candidate.get_path("jobs.0.command") == "suite"
+    best_history = max(result.history, key=lambda item: item.average_score)
+    assert best_history.metadata["candidate_suite"]["jobs"][0]["path"] == (
+        "multi_framework_simulation_suite.json"
+    )
+    assert best_history.metadata["candidate_patch"]["jobs.0"]["command"] == "suite"
+    assert best_history.metadata["report_summary"]["capability_gate_passed"] is True
 
 
 def test_eval_facade_runs_autoeval_template_and_local_metric_without_services():

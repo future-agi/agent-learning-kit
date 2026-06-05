@@ -12,6 +12,7 @@ from xml.sax.saxutils import escape
 
 
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
+AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 
 _CHILD_COMMANDS = {
     "baseline",
@@ -27,6 +28,7 @@ _CHILD_COMMANDS = {
     "redteam",
     "optimize",
     "optimize_eval",
+    "optimize_suite",
 }
 
 
@@ -41,6 +43,14 @@ class SuiteRunOptions:
     max_candidates: Optional[int] = None
     dry_run: bool = False
     fail_fast: bool = False
+
+
+@dataclass(frozen=True)
+class SuiteOptimizationOptions:
+    name: Optional[str] = None
+    threshold: Optional[float] = None
+    max_candidates: Optional[int] = None
+    dry_run: bool = False
 
 
 def load_suite_file(path: str | Path) -> dict[str, Any]:
@@ -459,6 +469,117 @@ def run_suite(
     )
 
 
+def optimize_suite_file(
+    path: str | Path,
+    *,
+    options: Optional[SuiteOptimizationOptions] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Load and optimize a full Agent Learning suite."""
+
+    suite_path = Path(path).expanduser().resolve()
+    suite = load_suite_file(suite_path)
+    return optimize_suite(
+        suite,
+        suite_path=suite_path,
+        options=_merge_optimization_options(
+            options,
+            name=name,
+            threshold=threshold,
+            max_candidates=max_candidates,
+            dry_run=dry_run,
+        ),
+    )
+
+
+def optimize_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    options: Optional[SuiteOptimizationOptions] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Optimize a mixed Agent Learning suite and return a unified artifact."""
+
+    started = time.time()
+    opts = _merge_optimization_options(
+        options,
+        name=name,
+        threshold=threshold,
+        max_candidates=max_candidates,
+        dry_run=dry_run,
+    )
+    suite_path = Path(suite_path).expanduser().resolve()
+    base_dir = _suite_base_dir(suite_path)
+    runtime_suite = copy.deepcopy(dict(suite))
+    if opts.name:
+        runtime_suite["name"] = opts.name
+    if opts.threshold is not None:
+        runtime_suite.setdefault("optimization", {})["threshold"] = opts.threshold
+    if opts.max_candidates is not None:
+        runtime_suite.setdefault("optimization", {}).setdefault(
+            "optimizer", {}
+        )["max_candidates"] = opts.max_candidates
+
+    prepared = _prepare_suite(runtime_suite, base_dir=base_dir)
+    validate_suite_env(prepared, suite_path=suite_path)
+    cli = _optimization_cli()
+    optimization = cli._optimization_config(prepared)
+    target_config = cli._target_config(optimization)
+    optimizer_config = cli._optimizer_config(optimization)
+    if opts.dry_run:
+        return {
+            "schema_version": "agent-simulate.cli.v1",
+            "kind": AGENT_LEARNING_SUITE_OPTIMIZATION_KIND,
+            "name": str(prepared.get("name") or suite_path.stem),
+            "status": "passed",
+            "exit_code": 0,
+            "dry_run": True,
+            "summary": {
+                "job_count": len(_suite_jobs(prepared)),
+                "required_env": required_suite_env(prepared, suite_path=suite_path),
+                "search_path_count": len(target_config.get("search_space", {})),
+                "max_candidates": optimizer_config.get("max_candidates"),
+            },
+            "duration_seconds": round(time.time() - started, 4),
+        }
+
+    try:
+        from fi.opt import problem_from_agent_learning_suite
+    except Exception as exc:  # pragma: no cover - optional dependency clarity
+        raise SuiteError("agent-opt is required for suite optimization.") from exc
+
+    problem = problem_from_agent_learning_suite(
+        prepared,
+        suite_path=suite_path,
+        name=str(prepared.get("name") or suite_path.stem),
+    )
+    optimization_result = problem.optimize()
+    payload = cli._optimization_result(
+        manifest=prepared,
+        optimization_result=optimization_result,
+        threshold=float(optimization.get("threshold", 1.0)),
+        duration_seconds=round(time.time() - started, 4),
+    )
+    payload["kind"] = AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
+    payload["suite"] = _suite_descriptor(prepared)
+    payload["optimization"]["source"] = "agent_learning_suite"
+    if "manifest_optimization" in payload["optimization"]:
+        artifact = copy.deepcopy(payload["optimization"]["manifest_optimization"])
+        artifact["kind"] = "agent_learning_suite_optimization"
+        artifact["source"] = "agent_learning_suite"
+        payload["optimization"]["suite_optimization"] = artifact
+    payload["summary"]["job_count"] = len(_suite_jobs(prepared))
+    payload["summary"]["child_command_count"] = _suite_job_command_counts(prepared)
+    return payload
+
+
 def render_junit(result: Mapping[str, Any]) -> str:
     name = escape(str(result.get("name") or "agent-learning-suite"))
     children = list(result.get("children") or result.get("jobs") or [])
@@ -789,6 +910,19 @@ def _execute_child_payload(
         )
         payload["kind"] = AGENT_LEARNING_EVAL_OPTIMIZATION_KIND
         return payload
+    if command == "optimize_suite":
+        from agent_learning import optimize
+        from agent_learning.cli import AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
+
+        payload = optimize.optimize_suite_file(
+            path,
+            name=_job_name(job),
+            threshold=_job_threshold(job, suite_options),
+            max_candidates=_job_max_candidates(job, suite_options),
+            dry_run=_job_dry_run(job, suite_options),
+        )
+        payload["kind"] = AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
+        return payload
     if command == "baseline":
         from agent_learning import simulate
 
@@ -955,6 +1089,31 @@ def _suite_result(
         "findings": suite_findings,
         "duration_seconds": duration_seconds,
     }
+
+
+def _suite_descriptor(suite: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "version": suite.get("version") or AGENT_LEARNING_SUITE_KIND,
+        "name": suite.get("name"),
+        "job_count": len(_suite_jobs(suite)),
+        "jobs": [
+            {
+                "id": job.get("id"),
+                "command": job.get("command"),
+                "path": job.get("path"),
+            }
+            for job in _suite_jobs(suite)
+        ],
+        "required_capabilities": _suite_required_capabilities(suite),
+    }
+
+
+def _suite_job_command_counts(suite: Mapping[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for job in _suite_jobs(suite):
+        command = str(job.get("command") or "unknown")
+        counts[command] = counts.get(command, 0) + 1
+    return counts
 
 
 def _suite_capability_summary(children: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1315,6 +1474,9 @@ def _normalize_command(value: Any) -> str:
         "red_team": "redteam",
         "optimization": "optimize",
         "optimizeeval": "optimize_eval",
+        "optimizesuite": "optimize_suite",
+        "suite_optimization": "optimize_suite",
+        "suite_optimizer": "optimize_suite",
         "subsuite": "suite",
         "sub_suite": "suite",
         "promotion": "promote_to_regression",
@@ -1440,6 +1602,31 @@ def _merge_options(
     )
 
 
+def _merge_optimization_options(
+    options: Optional[SuiteOptimizationOptions],
+    *,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> SuiteOptimizationOptions:
+    base = options or SuiteOptimizationOptions()
+    return SuiteOptimizationOptions(
+        name=name if name is not None else base.name,
+        threshold=threshold if threshold is not None else base.threshold,
+        max_candidates=(
+            max_candidates if max_candidates is not None else base.max_candidates
+        ),
+        dry_run=dry_run if dry_run is not None else base.dry_run,
+    )
+
+
+def _optimization_cli() -> Any:
+    import importlib
+
+    return importlib.import_module("fi.simulate.cli")
+
+
 def _load_json_or_yaml(path: Path) -> Any:
     if path.suffix.lower() in {".yaml", ".yml"}:
         try:
@@ -1530,7 +1717,9 @@ def _md_cell(value: Any) -> str:
 
 __all__ = [
     "AGENT_LEARNING_SUITE_KIND",
+    "AGENT_LEARNING_SUITE_OPTIMIZATION_KIND",
     "SuiteError",
+    "SuiteOptimizationOptions",
     "SuiteRunOptions",
     "build_regression_artifact_suite_manifest",
     "build_suite_manifest",
@@ -1538,6 +1727,8 @@ __all__ = [
     "load_suite",
     "load_suite_file",
     "missing_suite_env",
+    "optimize_suite",
+    "optimize_suite_file",
     "render_junit",
     "render_markdown",
     "render_sarif",

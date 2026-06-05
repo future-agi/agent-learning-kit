@@ -55,6 +55,15 @@ EXAMPLES = PROJECT_ROOT / "examples"
             None,
         ),
         (
+            "optimize-suite",
+            "suite_optimization.json",
+            "agent-learning.suite-optimization.v1",
+            [
+                "AGENT_LEARNING_SUITE_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+            ],
+        ),
+        (
             "suite",
             "agent_learning_suite.json",
             "agent-learning.suite.v1",
@@ -76,6 +85,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_SUITE_OPT_EXAMPLE_KEY",
             ],
         ),
         (
@@ -138,6 +148,12 @@ def test_shipped_examples_execute_through_unified_cli(
     if command == "optimize-eval":
         assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
         assert payload["optimization"]["best_config"]
+    if command == "optimize-suite":
+        assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
+        assert payload["optimization"]["best_config"]["jobs"][0]["command"] == "suite"
+        assert payload["optimization"]["suite_optimization"]["source"] == (
+            "agent_learning_suite"
+        )
     if command == "eval" and example == "artifact_task_eval_suite.json":
         assert payload["summary"]["assertion_count"] == 8
         case = payload["eval_suite"]["cases"][0]
@@ -163,8 +179,8 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["metric_averages"]["world_contract_quality"] >= 0.9
         assert payload["source"]["path"].endswith("task_evidence.json")
     if command == "suite":
-        assert payload["summary"]["job_count"] == 21
-        assert payload["summary"]["passed_count"] == 21
+        assert payload["summary"]["job_count"] == 22
+        assert payload["summary"]["passed_count"] == 22
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -175,6 +191,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "eval_artifact",
             "optimize",
             "optimize_eval",
+            "optimize_suite",
             "redteam",
             "run",
             "suite",
@@ -187,6 +204,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent_learning.redteam.v1",
             "agent_learning.run.v1",
             "agent_learning.suite.v1",
+            "agent_learning.suite_optimization.v1",
         }
         assert {
             "adversarial_attack_pack",
@@ -224,9 +242,11 @@ def test_shipped_examples_execute_through_unified_cli(
             "custom_refund_orchestrator",
             "langchain",
             "langgraph",
+            "llamaindex",
             "livekit",
             "openai_agents",
             "pipecat",
+            "pydantic_ai",
         } <= set(
             capabilities["frameworks"]
         )
@@ -252,6 +272,7 @@ def test_shipped_examples_execute_through_unified_cli(
         assert [child["command"] for child in payload["children"]] == [
             "run",
             "suite",
+            "optimize_suite",
             "optimize",
             "optimize",
             "eval",
@@ -280,6 +301,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent-learning.redteam.v1",
             "agent-learning.eval-optimization.v1",
             "agent-learning.optimization.v1",
+            "agent-learning.suite-optimization.v1",
         }
         nested = next(
             child

@@ -14,6 +14,7 @@ LEGACY_SOURCE_TREES = (
         PROJECT_ROOT / "src" / "fi" / "opt",
         {
             Path("components.py"),
+            Path("__init__.py"),
             Path("integrations/simulate.py"),
             Path("optimizers/agent.py"),
         },

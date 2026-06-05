@@ -94,6 +94,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.OptimizationTarget is not None
     assert simulate.build_agent_control_plane_run_manifest is not None
     assert optimize.optimize_eval_suite_file is not None
+    assert optimize.optimize_suite_file is not None
+    assert optimize.problem_from_agent_learning_suite_file is not None
     assert optimize.build_agent_control_plane_optimization_manifest is not None
     assert optimize.optimize_agent_control_plane is not None
     assert optimize.build_autonomous_redteam_task_world_optimization_manifest is not None
@@ -153,6 +155,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.write_eval_suite_file is not None
     assert evals.write_task_evidence_file is not None
     assert suite.run_suite_file is not None
+    assert suite.optimize_suite_file is not None
     assert suite.build_suite_manifest is not None
     assert suite.build_regression_artifact_suite_manifest is not None
     assert suite.build_trinity_suite_manifest is not None
@@ -2818,6 +2821,53 @@ def test_sdk_regression_artifact_suite_example_runs(monkeypatch, tmp_path):
     assert promoted_envs[0]["type"] == "adversarial_attack_pack"
     assert promoted_envs[0]["data"]["attacks"]
     assert result["children"][4]["result"]["summary"]["replay_pass_rate"] == 1.0
+
+
+def test_sdk_suite_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_SUITE_OPT_EXAMPLE_KEY",
+        "real-local-sdk-suite-opt-key",
+    )
+    monkeypatch.setenv(
+        "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+        "real-local-multi-framework-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_suite_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_suite_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_suite()
+    assert manifest["version"] == "agent-learning.suite.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_SUITE_OPT_EXAMPLE_KEY",
+        "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+    ]
+    assert manifest["jobs"][0]["command"] == "run"
+    assert manifest["optimization"]["target"]["search_space"]["jobs.0"][1][
+        "command"
+    ] == "suite"
+
+    output_path = tmp_path / "sdk-suite-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.suite-optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert "jobs.0" in result["summary"]["search_paths"]
+    assert result["summary"]["job_count"] == 1
+    assert result["optimization"]["best_config"]["jobs"][0]["command"] == "suite"
+    assert result["optimization"]["suite_optimization"]["source"] == (
+        "agent_learning_suite"
+    )
 
 
 def test_eval_suite_builder_and_sdk_cookbook_runs(monkeypatch, tmp_path):

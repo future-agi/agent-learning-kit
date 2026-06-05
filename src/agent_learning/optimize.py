@@ -63,6 +63,7 @@ _FI_OPT_EXPORT_NAMES = (
     "build_optimizer_society_trace",
     "load_agent_report_replay_cases",
     "ManifestOptimizationProblem",
+    "SuiteOptimizationProblem",
     "diagnose_agent_report_evaluation",
     "export_agent_deployment",
     "load_agent_observability_feedback",
@@ -77,10 +78,14 @@ _FI_OPT_EXPORT_NAMES = (
     "triage_futureagi_registry_replay_pack_regression",
     "OptimizationLayer",
     "OptimizationTarget",
+    "optimize_agent_learning_suite",
+    "optimize_agent_learning_suite_file",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_simulate_manifest",
     "optimize_simulate_manifest_file",
+    "problem_from_agent_learning_suite",
+    "problem_from_agent_learning_suite_file",
     "problem_from_eval_suite",
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest",
@@ -94,6 +99,7 @@ _FI_OPT_EXPORT_NAMES = (
     "SimulationEvaluator",
     "SimulateEvalSuiteOptimizationProblem",
     "SimulateManifestOptimizationProblem",
+    "SimulateSuiteOptimizationProblem",
     "schedule_futureagi_registry_replay_optimization",
     "deep_merge",
     "EvaluationResult",
@@ -219,6 +225,10 @@ def _manifest() -> Any:
 
 def _suite() -> Any:
     return optional_module("fi.simulate.suite", "simulate")
+
+
+def _agent_learning_suite() -> Any:
+    return optional_module("agent_learning.suite", "trinity")
 
 
 def diagnose_text(*args: Any, **kwargs: Any) -> Any:
@@ -8652,6 +8662,58 @@ def optimize_eval_suite(
     )
 
 
+def optimize_suite_file(
+    path: str | Path,
+    *,
+    options: Optional[Any] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    return _agent_learning_suite().optimize_suite_file(
+        path,
+        options=options,
+        name=name,
+        threshold=threshold,
+        max_candidates=max_candidates,
+        dry_run=dry_run,
+    )
+
+
+def optimize_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    options: Optional[Any] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    return _agent_learning_suite().optimize_suite(
+        suite,
+        suite_path=suite_path,
+        options=options,
+        name=name,
+        threshold=threshold,
+        max_candidates=max_candidates,
+        dry_run=dry_run,
+    )
+
+
+optimize_agent_learning_suite = optimize_suite
+optimize_agent_learning_suite_file = optimize_suite_file
+
+
+def problem_from_agent_learning_suite_file(*args: Any, **kwargs: Any) -> Any:
+    return _opt().problem_from_agent_learning_suite_file(*args, **kwargs)
+
+
+def problem_from_agent_learning_suite(*args: Any, **kwargs: Any) -> Any:
+    return _opt().problem_from_agent_learning_suite(*args, **kwargs)
+
+
 def problem_from_eval_suite_file(*args: Any, **kwargs: Any) -> Any:
     return _opt().problem_from_eval_suite_file(*args, **kwargs)
 
@@ -8700,6 +8762,8 @@ __all__ = [
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_eval_suite_response",
+    "optimize_agent_learning_suite",
+    "optimize_agent_learning_suite_file",
     "optimize_artifact_evidence",
     "optimize_agent_control_plane",
     "optimize_agent_integration",
@@ -8720,7 +8784,11 @@ __all__ = [
     "optimize_redteam_campaign",
     "optimize_social_memory_framework",
     "optimize_task",
+    "optimize_suite",
+    "optimize_suite_file",
     "optimize_workspace_observability",
+    "problem_from_agent_learning_suite",
+    "problem_from_agent_learning_suite_file",
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",

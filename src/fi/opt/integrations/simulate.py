@@ -267,6 +267,134 @@ class SimulateEvalSuiteOptimizationProblem:
 EvalSuiteOptimizationProblem = SimulateEvalSuiteOptimizationProblem
 
 
+@dataclass
+class SimulateSuiteOptimizationProblem:
+    """
+    Bridge promptfoo-style Agent Learning suites into AgentOptimizer search.
+
+    This is the suite-level counterpart to ``SimulateManifestOptimizationProblem``
+    and ``SimulateEvalSuiteOptimizationProblem``: candidate configs are merged
+    into a full Agent Learning suite, then the whole mixed workflow can be
+    scored across simulation, eval, red-team, nested suites, and optimization
+    children. It is the optimizer primitive for trajectory-level trinity gates,
+    not isolated prompt/provider edits.
+    """
+
+    base_suite: Mapping[str, Any]
+    target: OptimizationTarget
+    run_suite: Callable[[Mapping[str, Any], AgentCandidate], Any]
+    score_suite: Optional[ManifestScorer] = None
+    threshold: float = 1.0
+    optimizer_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    optimizer_cls: Type[Any] = AgentOptimizer
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_suite(
+        cls,
+        suite: Mapping[str, Any],
+        *,
+        run_suite: Callable[[Mapping[str, Any], AgentCandidate], Any],
+        score_suite: Optional[ManifestScorer] = None,
+        name: Optional[str] = None,
+        threshold: Optional[float] = None,
+    ) -> "SimulateSuiteOptimizationProblem":
+        optimization = _require_mapping(
+            suite.get("optimization"),
+            "suite.optimization",
+        )
+        target_config = _target_config(optimization)
+        optimizer_kwargs = _optimizer_kwargs(
+            _optional_mapping(optimization.get("optimizer"))
+        )
+        optimizer_cls = _optimizer_cls(_optional_mapping(optimization.get("optimizer")))
+        base_suite = copy.deepcopy(dict(suite))
+        base_suite.pop("optimization", None)
+        suite_name = str(name or suite.get("name") or "agent-learning-suite")
+        target_metadata = copy.deepcopy(dict(target_config.get("metadata") or {}))
+        target_metadata.setdefault("source", "agent_learning_suite")
+        target_metadata.setdefault("suite_name", suite_name)
+        return cls(
+            base_suite=base_suite,
+            target=OptimizationTarget(
+                name=str(target_config.get("name") or suite_name),
+                layers=_layers(target_config.get("layers")),
+                base_config=copy.deepcopy(dict(target_config["base_config"])),
+                search_space=_search_space(target_config["search_space"]),
+                metadata=target_metadata,
+            ),
+            run_suite=run_suite,
+            score_suite=score_suite or _score_agent_learning_suite,
+            threshold=float(
+                threshold
+                if threshold is not None
+                else optimization.get("threshold", 1.0)
+            ),
+            optimizer_kwargs=optimizer_kwargs,
+            optimizer_cls=optimizer_cls,
+            metadata={
+                "source": "agent_learning_suite",
+                "suite_name": suite_name,
+                "optimizer_algorithm": _optimizer_algorithm_name(optimizer_cls),
+            },
+        )
+
+    def candidate_suite(self, candidate: AgentCandidate) -> dict[str, Any]:
+        return deep_merge(
+            copy.deepcopy(dict(self.base_suite)),
+            copy.deepcopy(candidate.config),
+        )
+
+    def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
+        candidate_suite = self.candidate_suite(candidate)
+        result = _run_sync(self.run_suite(candidate_suite, candidate))
+        score_source = result
+        if self.score_suite is not None:
+            score_source = _run_sync(
+                self.score_suite(candidate_suite, result, candidate)
+            )
+
+        metadata = {
+            **dict(self.metadata),
+            "candidate_suite": copy.deepcopy(candidate_suite),
+            "candidate_patch": copy.deepcopy(candidate.patch),
+            "patch": copy.deepcopy(candidate.patch),
+            "report": copy.deepcopy(result),
+            "report_summary": copy.deepcopy(_mapping_summary(result)),
+            "search_paths": list(candidate.metadata.get("search_paths", [])),
+        }
+        return _candidate_evaluation_from_value(
+            score_source,
+            candidate,
+            report=result,
+            metadata=metadata,
+        )
+
+    def build_optimizer(
+        self,
+        optimizer_cls: Optional[Type[Any]] = None,
+        **optimizer_kwargs: Any,
+    ) -> Any:
+        optimizer_cls = optimizer_cls or self.optimizer_cls
+        kwargs = {**dict(self.optimizer_kwargs), **optimizer_kwargs}
+        kwargs = _filter_optimizer_kwargs(optimizer_cls, kwargs)
+        return optimizer_cls(
+            target=self.target,
+            evaluate_candidate=self.evaluate_candidate,
+            **kwargs,
+        )
+
+    def optimize(
+        self,
+        optimizer_cls: Optional[Type[Any]] = None,
+        **optimizer_kwargs: Any,
+    ) -> OptimizationResult:
+        return self.build_optimizer(optimizer_cls, **optimizer_kwargs).optimize()
+
+
+SuiteOptimizationProblem = SimulateSuiteOptimizationProblem
+
+
 def problem_from_simulate_manifest(
     manifest: Mapping[str, Any],
     *,
@@ -400,6 +528,76 @@ def optimize_eval_suite_file(
     )
 
 
+def problem_from_agent_learning_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    name: Optional[str] = None,
+) -> SimulateSuiteOptimizationProblem:
+    """Build a full Agent Learning suite optimization problem."""
+
+    run_agent_learning_suite = _agent_learning_suite_attr("run_suite")
+    suite_path = _agent_learning_suite_file_like_path(suite_path)
+
+    def run_suite(candidate_suite: Mapping[str, Any], candidate: AgentCandidate) -> Any:
+        return run_agent_learning_suite(candidate_suite, suite_path=suite_path)
+
+    return SimulateSuiteOptimizationProblem.from_suite(
+        suite,
+        run_suite=run_suite,
+        score_suite=_score_agent_learning_suite,
+        name=name,
+    )
+
+
+def problem_from_agent_learning_suite_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+) -> SimulateSuiteOptimizationProblem:
+    """Load an Agent Learning suite file and build an optimization problem."""
+
+    load_suite_file = _agent_learning_suite_attr("load_suite_file")
+    suite_path = Path(path).expanduser().resolve()
+    return problem_from_agent_learning_suite(
+        load_suite_file(suite_path),
+        suite_path=suite_path,
+        name=name,
+    )
+
+
+def optimize_agent_learning_suite(
+    suite: Mapping[str, Any],
+    *,
+    suite_path: str | Path = ".",
+    name: Optional[str] = None,
+    optimizer_cls: Optional[Type[Any]] = None,
+    **optimizer_kwargs: Any,
+) -> OptimizationResult:
+    """Optimize an in-memory Agent Learning suite."""
+
+    return problem_from_agent_learning_suite(
+        suite,
+        suite_path=suite_path,
+        name=name,
+    ).optimize(optimizer_cls=optimizer_cls, **optimizer_kwargs)
+
+
+def optimize_agent_learning_suite_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+    optimizer_cls: Optional[Type[Any]] = None,
+    **optimizer_kwargs: Any,
+) -> OptimizationResult:
+    """Optimize an Agent Learning suite file."""
+
+    return problem_from_agent_learning_suite_file(path, name=name).optimize(
+        optimizer_cls=optimizer_cls,
+        **optimizer_kwargs,
+    )
+
+
 def deep_merge(base: Any, patch: Any) -> Any:
     if isinstance(base, dict) and isinstance(patch, Mapping):
         for key, value in patch.items():
@@ -518,6 +716,48 @@ def _metadata_from_value(value: Any) -> dict[str, Any]:
     if isinstance(metadata, Mapping):
         return copy.deepcopy(dict(metadata))
     return {}
+
+
+def _mapping_summary(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        summary = value.get("summary")
+        if isinstance(summary, Mapping):
+            return copy.deepcopy(dict(summary))
+    return {}
+
+
+def _score_agent_learning_suite(
+    candidate_suite: Mapping[str, Any],
+    result: Any,
+    candidate: AgentCandidate,
+) -> dict[str, Any]:
+    summary = _mapping_summary(result)
+    raw_score = _score_from_value(result)
+    score = float(raw_score if raw_score is not None else 0.0)
+    if isinstance(result, Mapping):
+        status = str(result.get("status") or "")
+        exit_code = int(result.get("exit_code", 1) or 0)
+        capability_gate = bool(
+            summary.get("capability_gate_passed")
+            if "capability_gate_passed" in summary
+            else True
+        )
+        executed = float(summary.get("executed_count") or 0.0)
+        job_count = float(summary.get("job_count") or executed or 1.0)
+        execution_score = executed / job_count if job_count else score
+        if status != "passed" or exit_code != 0:
+            score = min(score, execution_score)
+        if not capability_gate:
+            score = min(score, 0.5)
+    return {
+        "score": round(score, 4),
+        "reason": str(result.get("status") if isinstance(result, Mapping) else ""),
+        "metadata": {
+            "suite_summary": summary,
+            "candidate_suite_name": candidate_suite.get("name"),
+            "candidate_id": candidate.id,
+        },
+    }
 
 
 def _target_config(optimization: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -690,6 +930,13 @@ def _suite_file_like_path(path: str | Path) -> Path:
     return resolved
 
 
+def _agent_learning_suite_file_like_path(path: str | Path) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    if resolved.is_dir():
+        return resolved / "agent_learning_suite.json"
+    return resolved
+
+
 def _public_eval_suite_runner() -> Callable[[Mapping[str, Any], AgentCandidate], Any]:
     run_eval_suite = _simulate_sdk_attr("run_eval_suite")
     suite_path = Path.cwd() / "eval_suite.json"
@@ -700,6 +947,21 @@ def _public_eval_suite_runner() -> Callable[[Mapping[str, Any], AgentCandidate],
     return run_suite
 
 
+def _agent_learning_suite_attr(name: str) -> Any:
+    try:
+        from agent_learning import suite as agent_learning_suite
+    except Exception as exc:  # pragma: no cover - optional dependency clarity
+        raise RuntimeError(
+            "agent-learning-kit is required for Agent Learning suite optimization."
+        ) from exc
+    try:
+        return getattr(agent_learning_suite, name)
+    except AttributeError as exc:  # pragma: no cover - version clarity
+        raise RuntimeError(
+            f"agent-learning-kit with `agent_learning.suite.{name}` is required."
+        ) from exc
+
+
 __all__ = [
     "EvalSuiteOptimizationProblem",
     "ManifestOptimizationProblem",
@@ -707,11 +969,17 @@ __all__ = [
     "ManifestScorer",
     "SimulateEvalSuiteOptimizationProblem",
     "SimulateManifestOptimizationProblem",
+    "SimulateSuiteOptimizationProblem",
+    "SuiteOptimizationProblem",
     "deep_merge",
+    "optimize_agent_learning_suite",
+    "optimize_agent_learning_suite_file",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_simulate_manifest",
     "optimize_simulate_manifest_file",
+    "problem_from_agent_learning_suite",
+    "problem_from_agent_learning_suite_file",
     "problem_from_eval_suite",
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest",

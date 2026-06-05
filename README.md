@@ -80,6 +80,8 @@ agent-learn optimize examples/multimodal_image_optimization.json \
 agent-learn suite examples/agent_learning_suite.json --output artifacts/suite.json
 agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
+agent-learn optimize-suite examples/suite_optimization.json \
+  --output artifacts/suite-optimization.json
 agent-learn run examples/framework_custom_manifest.json --no-eval \
   --output artifacts/framework-custom.json
 agent-learn optimize examples/custom_framework_optimization.json \
@@ -107,7 +109,8 @@ optimization, a saved task artifact fixture, and `manifests/suite.json` as the
 single CI entrypoint.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
-`agent-learn optimize`, `agent-learn optimize-eval`, and `agent-learn suite`
+`agent-learn optimize`, `agent-learn optimize-eval`,
+`agent-learn optimize-suite`, and `agent-learn suite`
 write Agent Learning Kit artifact kinds
 (`agent-learning.run.v1`, `agent-learning.eval.v1`,
 `agent-learning.redteam.v1`, `agent-learning.optimization.v1`, and
@@ -142,9 +145,9 @@ LangGraph-style world orchestration across framework trace, retrieval, memory
 lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
-one manifest runs simulation, the nested multi-framework adapter suite, eval,
-artifact-task eval, direct artifact-report eval, artifact-evidence optimization,
-red-team, eval-suite
+one manifest runs simulation, the nested multi-framework adapter suite,
+suite-level optimization over that nested suite, eval, artifact-task eval,
+direct artifact-report eval, artifact-evidence optimization, red-team, eval-suite
 optimization, world/framework/memory optimization, voice/streaming optimization, red-team optimization,
 workspace/observability optimization, agent-integration optimization,
 multi-agent framework handoff optimization, optimizer-governance optimization,
@@ -162,6 +165,10 @@ the executed child artifacts, `agent-learn suite` fails the run and records the
 missing capability in JSON, JUnit, SARIF, and Markdown outputs.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
+`agent-learn optimize-suite` and `suite.optimize_suite()` search over the suite
+itself: the `suite_optimization.json` and `sdk_suite_optimization.py` cookbooks
+start from a single-framework run job and select the nested 10-framework suite
+because only that candidate satisfies the required framework/capability gate.
 
 SDK users can also build the same composed CI entrypoint without hand-writing
 suite JSON:
@@ -528,6 +535,11 @@ AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_SIMULATION_KEY=... \
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
   artifacts/sdk-multi-framework-simulation.json
+
+AGENT_LEARNING_SDK_SUITE_OPT_EXAMPLE_KEY=... \
+AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_suite_optimization.py \
+  artifacts/sdk-suite-optimization.json
 
 AGENT_LEARNING_SDK_TRINITY_SUITE_KEY=... \
   PYTHONPATH=src python examples/sdk_trinity_suite.py \

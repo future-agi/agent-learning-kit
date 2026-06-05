@@ -18,6 +18,7 @@ AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
+AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 
 
 SIMULATE_COMMANDS = {
@@ -53,6 +54,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _optimize(args[1:])
     if command == "optimize-eval":
         return _optimize_eval(args[1:])
+    if command == "optimize-suite":
+        return _optimize_suite(args[1:])
     if command == "suite":
         return _suite(args[1:])
     if command in {"eval-cli", "fi"}:
@@ -628,6 +631,57 @@ def _suite(args: Sequence[str]) -> int:
     return int(payload.get("exit_code", 0))
 
 
+def _optimize_suite(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn optimize-suite",
+        description=(
+            "Optimize a promptfoo-style Agent Learning suite across simulation, "
+            "eval, red-team, nested suite, and optimization jobs."
+        ),
+    )
+    _add_suite_optimization_args(parser)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import simulate, suite
+    except Exception as exc:
+        print(
+            "agent-learn optimize-suite requires `agent-learning-kit[trinity]`.",
+            file=sys.stderr,
+        )
+        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+        return 2
+
+    suite_path = Path(parsed.suite).expanduser().resolve()
+    try:
+        manifest = suite.load_suite_file(suite_path)
+        payload = suite.optimize_suite_file(
+            suite_path,
+            name=parsed.name,
+            threshold=parsed.threshold,
+            max_candidates=parsed.max_candidates,
+            dry_run=bool(parsed.dry_run),
+        )
+    except Exception as exc:
+        print(f"agent-learn optimize-suite: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
+    written = _write_result_outputs(
+        payload,
+        manifest,
+        parsed,
+        suite_path,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
+    )
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
 def _add_manifest_optimization_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("manifest", help="Path to a JSON/YAML optimization manifest.")
     parser.add_argument(
@@ -1044,6 +1098,66 @@ def _add_suite_args(parser: argparse.ArgumentParser) -> None:
         "--fail-fast",
         action="store_true",
         help="Stop after the first failing child job.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+
+
+def _add_suite_optimization_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("suite", help="Path to a JSON/YAML Agent Learning suite.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help=(
+            "Write JSON output to this path. .xml paths are treated as JUnit; "
+            ".sarif paths as SARIF."
+        ),
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write compact JUnit XML output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 findings output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown report output.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Override optimization.threshold.",
+    )
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=None,
+        help="Override optimization.optimizer.max_candidates.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the suite optimization run name.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate suite/search space without executing optimization.",
     )
     parser.add_argument(
         "--quiet",
@@ -1875,8 +1989,8 @@ def _help(error: Optional[str] = None) -> int:
         nargs="?",
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
-            "compare, baseline, promote-to-regression, optimize-eval, suite, "
-            "eval-cli, init"
+            "compare, baseline, promote-to-regression, optimize-eval, "
+            "optimize-suite, suite, eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)
