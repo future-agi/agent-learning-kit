@@ -713,6 +713,88 @@ def build_workspace_observability_run_manifest(
     return manifest
 
 
+def build_agent_control_plane_run_manifest(
+    *,
+    name: str,
+    control_plane: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    framework: str = "agent_learning_kit",
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 5,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct agent trust-boundary/control-plane simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_agent_control_plane_optimization_manifest(
+            name=name,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            framework=framework,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    environments = (
+        [_agent_control_plane_environment(item) for item in control_plane]
+        if control_plane is not None
+        else copy.deepcopy(default_environments)
+    )
+    if not environments:
+        raise ValueError("control_plane must contain at least one environment")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_agent_control_plane_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -1512,6 +1594,22 @@ def _workspace_observability_environment(item: Mapping[str, Any]) -> dict[str, A
     return {"type": "workspace_run_manifest", "data": copied}
 
 
+def _agent_control_plane_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"agent_trust_boundary", "agent_control_plane"}:
+        if copied.get("data") is not None:
+            return copied
+        environment_type = copied.pop("type")
+        return {"type": environment_type, "data": copied}
+    if copied.get("agent_trust_boundary") is not None:
+        return {"type": "agent_trust_boundary", "data": copied["agent_trust_boundary"]}
+    if copied.get("agent_control_plane") is not None:
+        return {"type": "agent_control_plane", "data": copied["agent_control_plane"]}
+    if copied.get("actions") is not None or copied.get("budgets") is not None:
+        return {"type": "agent_control_plane", "data": copied}
+    return {"type": "agent_trust_boundary", "data": copied}
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -1569,6 +1667,7 @@ __all__ = [
     "AGENT_LEARNING_RUN_KIND",
     "AGENT_LEARNING_SUITE_KIND",
     "apply_manifest_env",
+    "build_agent_control_plane_run_manifest",
     "build_agent_integration_run_manifest",
     "build_eval_suite_manifest",
     "build_browser_cua_run_manifest",

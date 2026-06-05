@@ -421,6 +421,10 @@ AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
   artifacts/sdk-agent-control-plane-optimization.json
 
+AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_agent_control_plane_simulation.py \
+  artifacts/sdk-agent-control-plane-simulation.json
+
 AGENT_LEARNING_SDK_BROWSER_CUA_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_browser_cua_optimization.py \
   artifacts/sdk-browser-cua-optimization.json
@@ -622,6 +626,11 @@ The same gate is available from Python through
 `examples/sdk_agent_control_plane_optimization.py`, which search weak versus
 hardened `agent_trust_boundary` plus `agent_control_plane` candidates as one
 `simulation.environments` bundle.
+For direct, non-optimizer simulation,
+`simulate.build_agent_control_plane_run_manifest()` and
+`examples/sdk_agent_control_plane_simulation.py` run the hardened trust-boundary
+plus runtime control-plane evidence as a normal `agent-learning.run.v1`
+artifact.
 
 The `browser_cua_optimization.json` example optimizes a browser/computer-use
 red-team harness. It verifies selector-drift recovery, refreshed screenshots,

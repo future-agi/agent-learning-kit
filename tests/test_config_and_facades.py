@@ -81,6 +81,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.QuickSecurityCheck is fi_code_security.QuickSecurityCheck
     assert redteam.DualJudge is fi_code_security.DualJudge
     assert optimize.OptimizationTarget is not None
+    assert simulate.build_agent_control_plane_run_manifest is not None
     assert optimize.optimize_eval_suite_file is not None
     assert optimize.build_agent_control_plane_optimization_manifest is not None
     assert optimize.optimize_agent_control_plane is not None
@@ -2467,6 +2468,141 @@ def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path
     assert control_summary["gaps"] == []
     assert control_summary["has_kill_switch"] is True
     assert control_summary["has_drift_detection"] is True
+
+
+def test_sdk_agent_control_plane_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_SIMULATION_KEY",
+        "real-local-sdk-agent-control-plane-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_agent_control_plane_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_agent_control_plane_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["min_turns"] == 5
+    assert manifest["simulation"]["max_turns"] == 5
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "agent_trust_boundary",
+        "agent_control_plane",
+    ]
+    trust_data = manifest["simulation"]["environments"][0]["data"]
+    control_data = manifest["simulation"]["environments"][1]["data"]
+    assert trust_data["framework"] == "agent_learning_kit"
+    assert control_data["framework"] == "agent_learning_kit"
+    assert len(trust_data["controls"]) == 11
+    assert len(control_data["controls"]) == 11
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert len(config["agent_trust_boundary_quality"]["required_controls"]) == 11
+    assert len(config["agent_control_plane_quality"]["required_controls"]) == 11
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_agent_control_plane_run_manifest(
+        name="custom-agent-control-plane-simulation",
+        control_plane=[
+            {
+                "type": "agent_trust_boundary",
+                "framework": "custom_runtime",
+                "controls": [{"name": "secret_scope"}],
+            },
+            {
+                "type": "agent_control_plane",
+                "framework": "custom_runtime",
+                "controls": [{"name": "budget_guard"}],
+                "actions": [{"name": "halt"}],
+            },
+        ],
+        min_turns=1,
+    )
+    custom_environments = custom_manifest["simulation"]["environments"]
+    assert custom_environments[0] == {
+        "type": "agent_trust_boundary",
+        "data": {
+            "framework": "custom_runtime",
+            "controls": [{"name": "secret_scope"}],
+        },
+    }
+    assert custom_environments[1] == {
+        "type": "agent_control_plane",
+        "data": {
+            "framework": "custom_runtime",
+            "controls": [{"name": "budget_guard"}],
+            "actions": [{"name": "halt"}],
+        },
+    }
+
+    output_path = tmp_path / "sdk-agent-control-plane-simulation-result.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    written_result = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-agent-control-plane-simulation"
+    assert written_result["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-agent-control-plane-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "agent_trust_boundary_coverage",
+        "agent_trust_boundary_quality",
+        "agent_control_plane_coverage",
+        "agent_control_plane_quality",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"agent_trust_boundary_model", "agent_control_plane"}
+    trust_summary = state["agent_trust_boundary_model"]["summary"]
+    assert trust_summary["control_count"] == 11
+    assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+    assert trust_summary["high_risk_unmitigated_count"] == 0
+    assert trust_summary["gaps"] == []
+    assert trust_summary["has_secret_handling"] is True
+    control_summary = state["agent_control_plane"]["summary"]
+    assert control_summary["control_count"] == 11
+    assert control_summary["required_control_rate"] == pytest.approx(1.0)
+    assert control_summary["exceeded_budget_count"] == 0
+    assert control_summary["high_risk_uncontained_count"] == 0
+    assert control_summary["gaps"] == []
+    assert control_summary["has_kill_switch"] is True
+    assert control_summary["has_drift_detection"] is True
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "agent_trust_boundary_ready",
+        "agent_trust_boundary_status",
+        "agent_trust_gaps_listed",
+        "agent_trust_assets_listed",
+        "agent_trust_tools_listed",
+        "agent_trust_surfaces_listed",
+        "agent_trust_control_inspected",
+        "agent_control_plane_ready",
+        "agent_control_plane_status",
+        "agent_control_gaps_listed",
+        "agent_control_actions_listed",
+        "agent_control_action_inspected",
+        "agent_control_budgets_listed",
+        "agent_control_incidents_listed",
+    } <= event_names
 
 
 def test_sdk_browser_cua_optimization_example_runs(monkeypatch, tmp_path):
