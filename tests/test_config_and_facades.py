@@ -304,6 +304,63 @@ def test_facades_expose_unified_agent_learning_modules():
     assert scan.blocked_by
 
 
+def test_eval_facade_exposes_public_deep_submodule_aliases():
+    from agent_learning.evals.autoeval import AutoEvalPipeline
+    from agent_learning.evals.core.prompt_generator import generate_grading_criteria
+    from agent_learning.evals.feedback import FeedbackCollector
+    from agent_learning.evals.framework import blocking_evaluator
+    from agent_learning.evals.framework.backends import ThreadPoolBackend
+    from agent_learning.evals.framework.resilience import RetryConfig
+    from agent_learning.evals.guardrails import Guardrails
+    from agent_learning.evals.guardrails.scanners import RegexPattern, RegexScanner
+    from agent_learning.evals.guardrails.scanners.base import BaseScanner
+    from agent_learning.evals.llm import LiteLLMProvider
+    from agent_learning.evals.local import LocalEvaluator
+    from agent_learning.evals.metrics.base_metric import BaseMetric
+    from agent_learning.evals.metrics.code_security import CodeSecurityScore
+    from agent_learning.evals.otel import setup_tracing
+    from agent_learning.evals.streaming import StreamingEvaluator
+    from agent_learning.evals import (
+        coherence_scorer,
+        pii_scorer,
+        toxicity_scorer,
+    )
+    from fi.evals.autoeval import AutoEvalPipeline as VendoredAutoEvalPipeline
+    from fi.evals.feedback import FeedbackCollector as VendoredFeedbackCollector
+    from fi.evals.framework.backends import (
+        ThreadPoolBackend as VendoredThreadPoolBackend,
+    )
+    from fi.evals.guardrails import Guardrails as VendoredGuardrails
+    from fi.evals.local import LocalEvaluator as VendoredLocalEvaluator
+    from fi.evals.metrics.code_security import (
+        CodeSecurityScore as VendoredCodeSecurityScore,
+    )
+    from fi.evals.streaming import coherence_scorer as VendoredCoherenceScorer
+    from fi.evals.streaming import pii_scorer as VendoredPiiScorer
+    from fi.evals.streaming import StreamingEvaluator as VendoredStreamingEvaluator
+    from fi.evals.streaming import toxicity_scorer as VendoredToxicityScorer
+
+    assert AutoEvalPipeline is VendoredAutoEvalPipeline
+    assert FeedbackCollector is VendoredFeedbackCollector
+    assert ThreadPoolBackend is VendoredThreadPoolBackend
+    assert Guardrails is VendoredGuardrails
+    assert LocalEvaluator is VendoredLocalEvaluator
+    assert CodeSecurityScore is VendoredCodeSecurityScore
+    assert StreamingEvaluator is VendoredStreamingEvaluator
+    assert callable(generate_grading_criteria)
+    assert callable(blocking_evaluator)
+    assert RetryConfig is not None
+    assert RegexScanner is not None
+    assert RegexPattern is not None
+    assert BaseScanner is not None
+    assert LiteLLMProvider is not None
+    assert BaseMetric is not None
+    assert callable(setup_tracing)
+    assert toxicity_scorer is VendoredToxicityScorer
+    assert pii_scorer is VendoredPiiScorer
+    assert coherence_scorer is VendoredCoherenceScorer
+
+
 def test_optional_module_error_uses_unified_install_guidance():
     with pytest.raises(RuntimeError) as exc_info:
         optional_module("agent_learning_missing_engine_for_test", "simulate")

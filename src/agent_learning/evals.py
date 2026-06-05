@@ -6,6 +6,7 @@ import time
 from typing import Any, Mapping, Optional, Sequence
 
 from ._facade import optional_module
+from ._module_alias import install_lazy_module_aliases
 from ._schema import public_payload
 
 _EVAL_EXTRA = "evaluation"
@@ -173,6 +174,32 @@ _LOCAL_EVAL_EXPORT_NAMES = (
     "LocalLLMFactory",
 )
 
+_STREAMING_EXPORT_NAMES = (
+    "ChunkResult",
+    "EarlyStopCondition",
+    "EarlyStopReason",
+    "StreamingConfig",
+    "StreamingEvalResult",
+    "StreamingState",
+    "BufferState",
+    "ChunkBuffer",
+    "EarlyStopPolicy",
+    "PolicyState",
+    "EvalSpec",
+    "StreamingEvaluator",
+    "toxicity_scorer",
+    "safety_scorer",
+    "pii_scorer",
+    "jailbreak_scorer",
+    "coherence_scorer",
+    "quality_scorer",
+    "safety_composite_scorer",
+    "quality_composite_scorer",
+    "create_keyword_scorer",
+    "create_pattern_scorer",
+    "CompositeScorer",
+)
+
 _METRIC_EXPORT_NAMES = (
     "AggregatedMetric",
     "BLEUScore",
@@ -291,6 +318,7 @@ _HALLUCINATION_EXPORT_NAMES = (
 _EVAL_EXPORTS = {name: "fi.evals" for name in _FI_EVAL_EXPORT_NAMES}
 _EVAL_EXPORTS.update({name: "fi.evals.autoeval" for name in _AUTOEVAL_EXPORT_NAMES})
 _EVAL_EXPORTS.update({name: "fi.evals.local" for name in _LOCAL_EVAL_EXPORT_NAMES})
+_EVAL_EXPORTS.update({name: "fi.evals.streaming" for name in _STREAMING_EXPORT_NAMES})
 _EVAL_EXPORTS["AgentReportEvaluator"] = "fi.evals.metrics.agents"
 for _name in _METRIC_EXPORT_NAMES:
     _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics")
@@ -302,6 +330,47 @@ for _name in _STRUCTURED_METRIC_EXPORT_NAMES:
     _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics")
 for _name in _HALLUCINATION_EXPORT_NAMES:
     _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics.hallucination")
+
+_EVAL_SUBMODULE_ALIASES = {
+    "autoeval": "fi.evals.autoeval",
+    "core": "fi.evals.core",
+    "core.prompt_generator": "fi.evals.core.prompt_generator",
+    "feedback": "fi.evals.feedback",
+    "framework": "fi.evals.framework",
+    "framework.backends": "fi.evals.framework.backends",
+    "framework.resilience": "fi.evals.framework.resilience",
+    "guardrails": "fi.evals.guardrails",
+    "guardrails.backends": "fi.evals.guardrails.backends",
+    "guardrails.backends.base": "fi.evals.guardrails.backends.base",
+    "guardrails.scanners": "fi.evals.guardrails.scanners",
+    "guardrails.scanners.base": "fi.evals.guardrails.scanners.base",
+    "llm": "fi.evals.llm",
+    "local": "fi.evals.local",
+    "metrics": "fi.evals.metrics",
+    "metrics.agents": "fi.evals.metrics.agents",
+    "metrics.base_metric": "fi.evals.metrics.base_metric",
+    "metrics.code_security": "fi.evals.metrics.code_security",
+    "metrics.function_calling": "fi.evals.metrics.function_calling",
+    "metrics.hallucination": "fi.evals.metrics.hallucination",
+    "metrics.llm_as_judges": "fi.evals.metrics.llm_as_judges",
+    "metrics.rag": "fi.evals.metrics.rag",
+    "metrics.structured": "fi.evals.metrics.structured",
+    "otel": "fi.evals.otel",
+    "streaming": "fi.evals.streaming",
+}
+_EVAL_PACKAGE_ALIASES = {
+    alias
+    for alias in _EVAL_SUBMODULE_ALIASES
+    if "." not in alias or any(
+        child.startswith(f"{alias}.") for child in _EVAL_SUBMODULE_ALIASES
+    )
+}
+
+install_lazy_module_aliases(
+    __name__,
+    _EVAL_SUBMODULE_ALIASES,
+    package_aliases=_EVAL_PACKAGE_ALIASES,
+)
 
 
 def _evals() -> Any:
