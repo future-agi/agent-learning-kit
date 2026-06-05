@@ -330,14 +330,22 @@ def test_eval_facade_exposes_public_deep_submodule_aliases():
     from agent_learning.evals.feedback import FeedbackCollector
     from agent_learning.evals.framework import blocking_evaluator
     from agent_learning.evals.framework.backends import ThreadPoolBackend
+    from agent_learning.evals.framework.backends.thread_pool import (
+        ThreadPoolBackend as LeafThreadPoolBackend,
+    )
     from agent_learning.evals.framework.resilience import RetryConfig
     from agent_learning.evals.guardrails import Guardrails
     from agent_learning.evals.guardrails.scanners import RegexPattern, RegexScanner
     from agent_learning.evals.guardrails.scanners.base import BaseScanner
+    from agent_learning.evals.guardrails.scanners.regex import (
+        RegexScanner as LeafRegexScanner,
+    )
     from agent_learning.evals.llm import LiteLLMProvider
     from agent_learning.evals.local import LocalEvaluator
+    from agent_learning.evals.metrics.agents.report import evaluate_agent_report
     from agent_learning.evals.metrics.base_metric import BaseMetric
     from agent_learning.evals.metrics.code_security import CodeSecurityScore
+    from agent_learning.evals.metrics.structured.json_validation import JSONValidation
     from agent_learning.evals.otel import setup_tracing
     from agent_learning.evals.streaming import StreamingEvaluator
     from agent_learning.evals import (
@@ -352,8 +360,14 @@ def test_eval_facade_exposes_public_deep_submodule_aliases():
     )
     from fi.evals.guardrails import Guardrails as VendoredGuardrails
     from fi.evals.local import LocalEvaluator as VendoredLocalEvaluator
+    from fi.evals.metrics.agents.report import (
+        evaluate_agent_report as VendoredEvaluateAgentReport,
+    )
     from fi.evals.metrics.code_security import (
         CodeSecurityScore as VendoredCodeSecurityScore,
+    )
+    from fi.evals.metrics.structured.json_validation import (
+        JSONValidation as VendoredJSONValidation,
     )
     from fi.evals.streaming import coherence_scorer as VendoredCoherenceScorer
     from fi.evals.streaming import pii_scorer as VendoredPiiScorer
@@ -363,14 +377,18 @@ def test_eval_facade_exposes_public_deep_submodule_aliases():
     assert AutoEvalPipeline is VendoredAutoEvalPipeline
     assert FeedbackCollector is VendoredFeedbackCollector
     assert ThreadPoolBackend is VendoredThreadPoolBackend
+    assert LeafThreadPoolBackend is VendoredThreadPoolBackend
     assert Guardrails is VendoredGuardrails
     assert LocalEvaluator is VendoredLocalEvaluator
     assert CodeSecurityScore is VendoredCodeSecurityScore
+    assert JSONValidation is VendoredJSONValidation
+    assert evaluate_agent_report is VendoredEvaluateAgentReport
     assert StreamingEvaluator is VendoredStreamingEvaluator
     assert callable(generate_grading_criteria)
     assert callable(blocking_evaluator)
     assert RetryConfig is not None
     assert RegexScanner is not None
+    assert LeafRegexScanner is RegexScanner
     assert RegexPattern is not None
     assert BaseScanner is not None
     assert LiteLLMProvider is not None

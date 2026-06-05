@@ -10,7 +10,7 @@ from fi.simulate.environment import (
     _normalize_agent_integration_provider_name,
     normalize_agent_integration_manifest,
 )
-from fi.evals.metrics.agents.report import (
+from agent_learning.evals.metrics.agents.report import (
     _normalize_agent_integration_provider as normalize_report_provider,
     evaluate_agent_report,
 )
