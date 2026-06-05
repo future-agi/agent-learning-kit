@@ -425,6 +425,10 @@ AGENT_LEARNING_SDK_BROWSER_CUA_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_browser_cua_optimization.py \
   artifacts/sdk-browser-cua-optimization.json
 
+AGENT_LEARNING_SDK_BROWSER_CUA_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_browser_cua_simulation.py \
+  artifacts/sdk-browser-cua-simulation.json
+
 AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_integration_optimization.py \
   artifacts/sdk-agent-integration-optimization.json
@@ -609,6 +613,11 @@ The same harness is available from Python through
 `optimize.build_browser_cua_optimization_manifest()` and
 `examples/sdk_browser_cua_optimization.py`, which search weak versus hardened
 browser/CUA replay candidates as one `simulation.environments` bundle.
+For direct, non-optimizer simulation, `simulate.build_browser_cua_run_manifest()`
+and `examples/sdk_browser_cua_simulation.py` run the hardened browser/CUA replay
+as a normal `agent-learning.run.v1` artifact with selector fallback,
+mutation-pack, storage/runtime, network, visual grounding, and
+prompt-injection-safety evidence.
 
 The `framework_certification_optimization.json` example optimizes a framework
 certification harness before rollout or migration. It verifies lifecycle

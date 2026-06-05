@@ -426,6 +426,95 @@ def build_realtime_run_manifest(
     return manifest
 
 
+def build_browser_cua_run_manifest(
+    *,
+    name: str,
+    browser: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    allowed_domains: Sequence[str] = ("shop.example.test",),
+    url: str = "https://shop.example.test/checkout",
+    confirmation_url: str = "https://shop.example.test/confirmation",
+    order_id: str = "ord_123",
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct browser/CUA simulation manifest.
+
+    This is the SDK run counterpart to the browser/CUA optimization cookbook:
+    it exercises browser snapshots, selector drift, mutation packs, storage,
+    runtime, network, visual grounding, and prompt-injection surfaces as one
+    local simulation without requiring an optimizer run.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = _agent_optimize.build_browser_cua_optimization_manifest(
+        name=name,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        allowed_domains=allowed_domains,
+        url=url,
+        confirmation_url=confirmation_url,
+        order_id=order_id,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        target_metadata=metadata,
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    environments = (
+        [_browser_cua_environment(browser)]
+        if browser is not None
+        else copy.deepcopy(default_environments)
+    )
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "modality": "cua",
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_browser_cua_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -1187,6 +1276,20 @@ def _framework_default_method(framework: str) -> str:
     return defaults.get(framework, "run")
 
 
+def _browser_cua_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"browser", "browser_cua", "cua", "computer_use"}:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("browser_cua") is not None:
+        return {"type": "browser_cua", "data": copied["browser_cua"]}
+    if copied.get("browser") is not None:
+        return {"type": "browser", "data": copied["browser"]}
+    if copied.get("mutation_pack") is not None or copied.get("prompt_injections") is not None:
+        return {"type": "browser_cua", "data": copied}
+    return {"type": "browser", "data": copied}
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -1245,6 +1348,7 @@ __all__ = [
     "AGENT_LEARNING_SUITE_KIND",
     "apply_manifest_env",
     "build_eval_suite_manifest",
+    "build_browser_cua_run_manifest",
     "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",

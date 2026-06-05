@@ -58,6 +58,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.build_realtime_run_manifest is not None
+    assert simulate.build_browser_cua_run_manifest is not None
     assert simulate.write_manifest_file is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
@@ -2555,6 +2556,93 @@ def test_sdk_browser_cua_optimization_example_runs(monkeypatch, tmp_path):
     assert replay["selector"] == "button[data-testid='place-order-safe']"
     assert replay["success"] is True
     assert replay["prompt_injection_touched"] is False
+
+
+def test_sdk_browser_cua_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_BROWSER_CUA_SIMULATION_KEY",
+        "real-local-sdk-browser-cua-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_browser_cua_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_browser_cua_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_BROWSER_CUA_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["modality"] == "cua"
+    assert manifest["simulation"]["min_turns"] == 4
+    assert manifest["simulation"]["max_turns"] == 4
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "browser_cua"
+    ]
+    browser_data = manifest["simulation"]["environments"][0]["data"]
+    assert browser_data["url"] == "https://shop.example.test/checkout"
+    assert len(browser_data["mutation_pack"]["mutations"]) == 2
+    assert browser_data["metadata"]["trace_provider"] == "local_browser_cua"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert "selector_alias" in config["required_browser_trace"]
+    assert config["expected_browser_state"]["checkout_complete"] is True
+
+    output_path = tmp_path / "sdk-browser-cua-simulation-result.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    written_result = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-browser-cua-simulation"
+    assert written_result["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-browser-cua-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "browser_action_safety",
+        "browser_action_outcome",
+        "browser_grounding_quality",
+        "browser_mutation_resilience",
+        "browser_trace_coverage",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"browser"}
+    browser = state["browser"]
+    assert browser["checkout_complete"] is True
+    assert browser["order_id"] == "ord_123"
+    assert browser["url"] == "https://shop.example.test/confirmation"
+    assert browser["mutation_pack"]["summary"]["mutation_count"] == 2
+    assert browser["storage_state"]["cookies"][0]["value"] == "ok"
+    assert browser["runtime_summary"]["error_count"] == 0
+    replay = browser["action_replay"][0]
+    assert replay["mutation_id"] == "selector_drift_checkout"
+    assert replay["mutation_type"] == "selector_alias"
+    assert replay["selector"] == "button[data-testid='place-order-safe']"
+    assert replay["success"] is True
+    assert replay["prompt_injection_touched"] is False
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "browser_ready",
+        "browser_mutations",
+        "browser_click",
+        "browser_storage",
+        "browser_runtime",
+        "browser_network",
+    } <= event_names
 
 
 def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
