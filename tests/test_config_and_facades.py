@@ -110,6 +110,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_realtime_stack is not None
     assert optimize.build_redteam_optimization_manifest is not None
     assert optimize.optimize_redteam_campaign is not None
+    assert optimize.build_social_memory_framework_optimization_manifest is not None
+    assert optimize.optimize_social_memory_framework is not None
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
     assert evals.build_eval_suite_manifest is not None
@@ -442,6 +444,104 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert best_history["report"]["results"][0]["metadata"]["environment_state"][
         "framework_runtime"
     ]["summary"]["tool_call_count"] == 1
+
+
+def test_sdk_social_memory_framework_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY",
+        "real-local-sdk-social-memory-framework-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_social_memory_framework_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_social_memory_framework_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "framework",
+        "orchestration",
+        "memory",
+        "evaluator",
+    ]
+    assert manifest["optimization"]["optimizer"]["algorithm"] == "social_memory"
+    agents = manifest["optimization"]["target"]["search_space"]["agent"]
+    assert [agent["method"] for agent in agents] == ["run", "execute_task"]
+    assert [agent["input_mode"] for agent in agents] == ["text", "dict"]
+    env_candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert env_candidates[1][0]["data"]["spans"][0]["signals"] == [
+        "planner",
+        "tool",
+        "policy",
+    ]
+
+    output_path = tmp_path / "sdk-social-memory-framework-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_agent = result["optimization"]["best_config"]["agent"]
+    assert best_agent["framework"] == "custom_refund_orchestrator"
+    assert best_agent["method"] == "execute_task"
+    assert best_agent["input_mode"] == "dict"
+    best_env = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_env["data"]["spans"][0]["signals"] == ["planner", "tool", "policy"]
+
+    trace = result["optimization"]["optimizer_trace"]
+    assert trace["optimizer"] == "AgentSocialMemoryOptimizer"
+    assert {role["name"] for role in trace["roles"]} >= {
+        "seed",
+        "smriti",
+        "sangha",
+        "dharma_steward",
+    }
+    best_proposal = next(
+        proposal
+        for proposal in trace["proposals"]
+        if proposal["candidate_id"] == trace["best_candidate_id"]
+    )
+    assert best_proposal["role"] == "sangha"
+    assert set(best_proposal["patch"]) == {"agent", "simulation.environments"}
+    assert trace["summary"]["has_synthesis"] is True
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["proposal_role"] == "sangha"
+    assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_runtime_coverage"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["framework_runtime"]["summary"]["methods"] == ["execute_task"]
+    assert state["framework_runtime"]["summary"]["input_modes"] == ["dict"]
+    assert state["framework_runtime"]["summary"]["tool_call_count"] == 1
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
 
 
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):

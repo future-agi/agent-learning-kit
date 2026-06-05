@@ -243,6 +243,10 @@ then synthesizes the high-credit adapter patch and framework-trace patch into a
 `sangha` best candidate. The emitted optimizer society trace records the social
 roles (`smriti`, `arjuna`, `vidura`, `sangha`, `dharma_steward`), proposal
 rounds, role credit, governance checks, and the final synthesized patch.
+The same adapter synthesis is available from Python through
+`optimize.build_social_memory_framework_optimization_manifest()` and
+`examples/sdk_social_memory_framework_optimization.py`, which generate the
+adapter candidates, trace candidates, and social-memory optimizer config.
 
 SDK users can build the same kind of runnable framework optimization manifest
 without hand-writing JSON:
@@ -420,6 +424,10 @@ AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_optimization.py \
   artifacts/sdk-framework-certification-optimization.json
+
+AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_social_memory_framework_optimization.py \
+  artifacts/sdk-social-memory-framework-optimization.json
 
 AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_autonomous_redteam_task_world_optimization.py \

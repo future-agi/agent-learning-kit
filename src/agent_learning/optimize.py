@@ -2046,6 +2046,106 @@ def optimize_optimizer_governance(
     )
 
 
+def build_social_memory_framework_optimization_manifest(
+    *,
+    name: str,
+    framework: str = "custom_refund_orchestrator",
+    target: str = "framework_shims.py:build_custom_refund_orchestrator",
+    adapter_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a social-memory framework adapter optimization manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not target:
+        raise ValueError("target is required")
+
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in adapter_candidates]
+        if adapter_candidates is not None
+        else _default_social_memory_framework_agents(
+            framework=framework,
+            target=target,
+        )
+    )
+    if not agents:
+        raise ValueError("adapter_candidates must contain at least one candidate")
+
+    env_candidates = (
+        [[_social_memory_framework_environment(item) for item in candidate] for candidate in environment_candidates]
+        if environment_candidates is not None
+        else _default_social_memory_framework_environment_candidates(framework)
+    )
+    if not env_candidates:
+        raise ValueError("environment_candidates must contain at least one candidate")
+    for index, candidate in enumerate(env_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"environment_candidates[{index}] must not be empty")
+
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_social_memory_framework_evaluation_config(framework)
+    )
+
+    return build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agents,
+        evaluation_config=config,
+        scenario=scenario or _default_social_memory_framework_scenario(name),
+        environment_candidates=env_candidates,
+        required_env=required_env,
+        optimizer=optimizer or _default_social_memory_framework_optimizer(),
+        threshold=threshold,
+        layers=("framework", "orchestration", "memory", "evaluator"),
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns if max_turns is not None else min_turns,
+        auto_execute_tools=True,
+        target_metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_social_memory_framework_optimization_manifest"
+            ),
+            "task_kind": "social_memory_framework",
+            "framework": framework,
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+
+
+def optimize_social_memory_framework(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a social-memory framework optimization manifest."""
+
+    manifest = build_social_memory_framework_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -4386,6 +4486,175 @@ def _default_optimizer_governance_evaluation_config() -> dict[str, Any]:
             "optimizer_trace_quality": 10.0,
             "tool_selection_accuracy": 2.0,
             "final_response_quality": 2.0,
+        },
+    }
+
+
+def _default_social_memory_framework_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Mira", "role": "framework-adapter-owner"},
+                "situation": (
+                    "Use social-memory synthesis to optimize a proprietary "
+                    "framework adapter from weak runtime evidence into a "
+                    "complete traceable execution contract."
+                ),
+                "outcome": (
+                    "The selected adapter invokes execute_task with dict input, "
+                    "emits framework_trace_status tool evidence, and preserves "
+                    "planner/tool/policy trace signals."
+                ),
+            }
+        ],
+    }
+
+
+def _default_social_memory_framework_agents(
+    *,
+    framework: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    base = {
+        "type": "framework",
+        "framework": framework,
+        "target": target,
+        "factory": True,
+        "trace_runtime": True,
+        "metadata": {"cookbook": "multi-framework-simulation"},
+    }
+    return [
+        {**copy.deepcopy(base), "method": "run", "input_mode": "text"},
+        {**copy.deepcopy(base), "method": "execute_task", "input_mode": "dict"},
+    ]
+
+
+def _default_social_memory_framework_environment_candidates(
+    framework: str,
+) -> list[list[dict[str, Any]]]:
+    return [
+        [
+            {
+                "type": "framework_trace",
+                "data": {
+                    "framework": framework,
+                    "spans": [
+                        {
+                            "id": framework,
+                            "name": "CustomRefundOrchestrator.run",
+                            "input": "refund workflow",
+                            "output": "queued",
+                            "tool_calls": [],
+                            "signals": ["planner"],
+                        }
+                    ],
+                    "adapter_required_signals": ["planner", "tool", "policy"],
+                    "adapter_required_mappings": {"tool": ["tool_name"]},
+                },
+            }
+        ],
+        [
+            {
+                "type": "framework_trace",
+                "data": {
+                    "framework": framework,
+                    "spans": [
+                        {
+                            "id": framework,
+                            "name": "CustomRefundOrchestrator.execute_task",
+                            "input": "refund workflow",
+                            "output": "approved",
+                            "tool_calls": [{"name": "framework_trace_status"}],
+                            "signals": ["planner", "tool", "policy"],
+                        }
+                    ],
+                    "adapter_required_signals": ["planner", "tool", "policy"],
+                    "adapter_required_mappings": {"tool": ["tool_name"]},
+                },
+            }
+        ],
+    ]
+
+
+def _social_memory_framework_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") == "framework_trace":
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("framework_trace") is not None:
+        return {"type": "framework_trace", "data": copied["framework_trace"]}
+    return {"type": "framework_trace", "data": copied}
+
+
+def _default_social_memory_framework_optimizer() -> dict[str, Any]:
+    return {
+        "algorithm": "social_memory",
+        "max_rounds": 3,
+        "beam_width": 3,
+        "max_proposals_per_round": 8,
+        "target_score": 0.99,
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+
+
+def _default_social_memory_framework_evaluation_config(
+    framework: str,
+) -> dict[str, Any]:
+    required_tools = ["framework_trace_status"]
+    return {
+        "task_description": (
+            "Optimize a proprietary custom framework adapter with "
+            "social-memory synthesis across runtime and trace evidence."
+        ),
+        "expected_result": (
+            "The selected candidate runs execute_task with dict input, emits "
+            "framework_trace_status tool evidence, records a complete "
+            "framework trace, and preserves a clean custom_refund_orchestrator "
+            "runtime contract."
+        ),
+        "required_tools": required_tools,
+        "available_tools": required_tools,
+        "success_criteria": [
+            f"{framework} runtime trace is present",
+            "execute_task is the invoked adapter method",
+            "dict is the invoked adapter input mode",
+            "framework_trace_status tool evidence is emitted",
+            "planner, tool, and policy framework trace signals are all present",
+        ],
+        "required_framework_trace": [
+            "framework_trace",
+            framework,
+            "planner",
+            "tool",
+            "policy",
+            "framework_trace_status",
+        ],
+        "required_framework_runtime": [
+            "framework_runtime",
+            "method",
+            "input",
+            "output",
+            "tool",
+            "metadata",
+        ],
+        "framework_runtime_contract": {
+            "framework": framework,
+            "method": "execute_task",
+            "input_mode": "dict",
+            "required_tools": required_tools,
+            "required_signals": ["method", "input", "output", "tool", "metadata"],
+            "max_error_count": 0,
+            "min_invocation_count": 1,
+        },
+        "metric_weights": {
+            "framework_runtime_contract": 10.0,
+            "framework_runtime_coverage": 5.0,
+            "framework_trace_coverage": 5.0,
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 1.0,
+            "final_response_quality": 1.0,
         },
     }
 
@@ -7667,6 +7936,7 @@ __all__ = [
     "build_orchestration_optimization_manifest",
     "build_realtime_optimization_manifest",
     "build_redteam_optimization_manifest",
+    "build_social_memory_framework_optimization_manifest",
     "build_task_optimization_manifest",
     "build_workspace_observability_optimization_manifest",
     "optimize_eval_suite",
@@ -7687,6 +7957,7 @@ __all__ = [
     "optimize_orchestration_stack",
     "optimize_realtime_stack",
     "optimize_redteam_campaign",
+    "optimize_social_memory_framework",
     "optimize_task",
     "optimize_workspace_observability",
     "problem_from_eval_suite_file",
