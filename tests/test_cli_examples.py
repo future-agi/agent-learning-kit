@@ -664,12 +664,19 @@ def test_agent_learn_init_optimize_scaffold_uses_unified_cli(
     optimization_card = json.loads(
         optimization_report.read_text(encoding="utf-8")
     )["report"]["optimizer_replay"]
+    optimization_diagnosis = json.loads(
+        optimization_report.read_text(encoding="utf-8")
+    )["report"]["harness_diagnosis"]
     assert optimization_card["kind"] == "optimization_result"
     assert optimization_card["source_manifest_path"] == str(manifest_path)
     assert {action["id"] for action in optimization_card["actions"]} >= {
         "rerun_optimization",
         "promote_to_regression",
         "report_artifact",
+    }
+    assert {"tooling", "verification"} <= {
+        layer["layer"]
+        for layer in optimization_diagnosis["layers"]
     }
 
     exit_code = main([
@@ -1250,7 +1257,15 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "passed"
     assert "optimization_replay" in report["summary"]["sections"]
+    assert "harness_diagnosis" in report["summary"]["sections"]
     replay_card = report["report"]["optimizer_replay"]
+    diagnosis = report["report"]["harness_diagnosis"]
+    assert diagnosis["kind"] == "harness_layer_diagnosis"
+    assert "observability" in diagnosis["primary_layers"]
+    assert {
+        "https://arxiv.org/abs/2606.06324",
+        "https://arxiv.org/abs/2606.05922",
+    } <= set(diagnosis["research_sources"])
     assert replay_card["kind"] == "promotion_manifest"
     assert replay_card["promotion_kind"] == "optimized_manifest"
     assert replay_card["source"]["status"] == "passed"
@@ -1291,6 +1306,7 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     )
     report_markdown = report_markdown_path.read_text(encoding="utf-8")
     assert "## Optimization Replay" in report_markdown
+    assert "## Harness Diagnosis" in report_markdown
     assert "Promotion kind" in report_markdown
     assert "optimized_manifest" in report_markdown
     assert "### Promoted Manifest" in report_markdown
@@ -1351,6 +1367,12 @@ def test_custom_framework_optimization_example_runs_adapter_search(
 
     replay_report = json.loads(replay_report_path.read_text(encoding="utf-8"))
     replay_report_card = replay_report["report"]["replay"]
+    diagnosis_card = replay_report["report"]["harness_diagnosis"]
+    assert diagnosis_card["kind"] == "harness_layer_diagnosis"
+    assert {"observability", "verification"} <= {
+        layer["layer"]
+        for layer in diagnosis_card["layers"]
+    }
     assert replay_report_card["kind"] == "replay_metrics"
     assert replay_report_card["manifest_count"] == 1
     assert replay_report_card["replay_pass_rate"] == pytest.approx(1.0)

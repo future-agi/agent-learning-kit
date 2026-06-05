@@ -1167,6 +1167,11 @@ def test_sdk_optimization_lifecycle_example_runs(monkeypatch, tmp_path):
             "optimizer_replay"
         ]["actions"]
     }
+    diagnosis_card = result["artifacts"]["promotion_report"]["report"][
+        "harness_diagnosis"
+    ]
+    assert diagnosis_card["kind"] == "harness_layer_diagnosis"
+    assert "observability" in diagnosis_card["primary_layers"]
     assert {
         "recreate_promotion",
         "replay_promoted_manifest",

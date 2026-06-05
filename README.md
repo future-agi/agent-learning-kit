@@ -133,6 +133,12 @@ optimization, task/world optimization, a saved task artifact fixture, and
 `suite.run_optimization_lifecycle_file()` expose the same lifecycle from the
 SDK; `examples/sdk_optimization_lifecycle.py` writes the task/world optimize
 manifest, runs the lifecycle, and verifies promotion plus replay artifacts.
+Optimization, promotion, and replay reports also include a structured
+`harness_diagnosis` card and `## Harness Diagnosis` Markdown section. The card
+maps observed search paths, weak metrics, environment types, findings, and
+replay status onto execution/tooling/context/lifecycle/observability/
+verification/governance layers, then suggests deterministic repair operators
+for the implicated harness layers.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

@@ -2317,6 +2317,9 @@ def _report_result(
     replay_card = _replay_report_card(source, source_path=source_path)
     if replay_card is not None:
         report_payload["replay"] = replay_card
+    harness_diagnosis = _harness_diagnosis_card(source)
+    if harness_diagnosis is not None:
+        report_payload["harness_diagnosis"] = harness_diagnosis
     return {
         "schema_version": CLI_SCHEMA_VERSION,
         "kind": "agent-simulate.report.v1",
@@ -2584,6 +2587,292 @@ def _replay_manifest_report_card(item: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _harness_diagnosis_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    evidence = _harness_diagnosis_evidence(result)
+    if not any(evidence.values()):
+        return None
+    layer_records = _harness_layer_records(evidence)
+    if not layer_records:
+        return None
+    return {
+        "kind": "harness_layer_diagnosis",
+        "taxonomy": "execution_tooling_context_lifecycle_observability_verification_governance",
+        "source_kind": result.get("kind"),
+        "status": result.get("status"),
+        "primary_layers": [
+            item["layer"]
+            for item in sorted(
+                layer_records,
+                key=lambda value: (
+                    -float(value.get("confidence") or 0.0),
+                    str(value.get("layer") or ""),
+                ),
+            )[:3]
+        ],
+        "layers": layer_records,
+        "repair_operators": _harness_repair_operators(layer_records),
+        "research_sources": [
+            "https://arxiv.org/abs/2606.06324",
+            "https://arxiv.org/abs/2606.05922",
+            "https://arxiv.org/abs/2606.06284",
+            "https://arxiv.org/abs/2606.06473",
+        ],
+    }
+
+
+def _harness_diagnosis_evidence(result: Mapping[str, Any]) -> Dict[str, List[str]]:
+    evidence: Dict[str, List[str]] = {
+        "search_paths": [],
+        "patch_paths": [],
+        "metric_names": [],
+        "weak_metric_names": [],
+        "environment_types": [],
+        "finding_types": [],
+        "statuses": [],
+    }
+    summary = dict(result.get("summary") or {})
+    evidence["search_paths"].extend(_coerce_list(summary.get("search_paths")))
+    evidence["statuses"].append(str(result.get("status") or ""))
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        best_config = optimization.get("best_config")
+        history = [
+            item
+            for item in _coerce_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        for item in history:
+            evidence["patch_paths"].extend(
+                _patch_leaf_paths(item.get("patch") or item.get("candidate_patch"))
+            )
+            metrics = dict(item.get("metrics") or {})
+            evidence["weak_metric_names"].extend(
+                key
+                for key, value in metrics.items()
+                if (_float_or_none(value) is not None and float(value) < 1.0)
+            )
+        source_manifest = optimization.get("source_manifest")
+        if isinstance(source_manifest, Mapping):
+            evidence["environment_types"].extend(_redteam_environment_types(source_manifest))
+        if isinstance(best_config, Mapping):
+            evidence["environment_types"].extend(_redteam_environment_types(best_config))
+
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        evidence["environment_types"].extend(_redteam_environment_types(manifest))
+        metadata = manifest.get("metadata")
+        regression = (
+            metadata.get("regression")
+            if isinstance(metadata, Mapping)
+            and isinstance(metadata.get("regression"), Mapping)
+            else {}
+        )
+        evidence["search_paths"].extend(_coerce_list(regression.get("search_paths")))
+        evidence["statuses"].append(str(regression.get("source_status") or ""))
+
+    replay = result.get("replay")
+    if isinstance(replay, Mapping):
+        evidence["environment_types"].append("replay")
+        evidence["metric_names"].append("replay_pass_rate")
+        for item in _coerce_list(replay.get("manifests")):
+            if not isinstance(item, Mapping):
+                continue
+            evidence["statuses"].append(str(item.get("status") or ""))
+            summary_metrics = dict(dict(item.get("summary") or {}).get("metric_averages") or {})
+            evidence["weak_metric_names"].extend(
+                key
+                for key, value in summary_metrics.items()
+                if (_float_or_none(value) is not None and float(value) < 1.0)
+            )
+            evidence["finding_types"].extend(
+                str(finding.get("type") or finding.get("metric") or "")
+                for finding in _coerce_list(item.get("findings"))
+                if isinstance(finding, Mapping)
+            )
+
+    result_metrics = _result_metric_averages(result)
+    if not isinstance(optimization, Mapping) and not isinstance(replay, Mapping):
+        evidence["metric_names"].extend(result_metrics)
+    evidence["weak_metric_names"].extend(
+        key
+        for key, value in result_metrics.items()
+        if float(value) < 1.0
+    )
+    evidence["finding_types"].extend(
+        str(finding.get("type") or finding.get("metric") or "")
+        for finding in _result_findings(result)
+    )
+    return {
+        key: _unique_strings(value)
+        for key, value in evidence.items()
+    }
+
+
+def _harness_layer_records(evidence: Mapping[str, Sequence[str]]) -> List[Dict[str, Any]]:
+    candidates = [
+        *evidence.get("search_paths", []),
+        *evidence.get("metric_names", []),
+        *evidence.get("weak_metric_names", []),
+        *evidence.get("environment_types", []),
+        *evidence.get("finding_types", []),
+    ]
+    records = []
+    for layer, definition in _HARNESS_LAYER_DEFINITIONS.items():
+        signals = [
+            signal
+            for signal in candidates
+            if _harness_signal_matches_layer(signal, definition["keywords"])
+        ]
+        if not signals:
+            continue
+        weak_signals = [
+            signal
+            for signal in evidence.get("weak_metric_names", [])
+            if _harness_signal_matches_layer(signal, definition["keywords"])
+        ]
+        status = "needs_attention" if weak_signals else "verified"
+        confidence = min(1.0, 0.35 + 0.15 * len(_unique_strings(signals)))
+        records.append(
+            {
+                "layer": layer,
+                "status": status,
+                "confidence": round(confidence, 4),
+                "signals": _unique_strings(signals)[:12],
+                "weak_signals": _unique_strings(weak_signals)[:8],
+                "responsibility": definition["responsibility"],
+            }
+        )
+    return records
+
+
+def _harness_signal_matches_layer(signal: Any, keywords: Sequence[str]) -> bool:
+    text = str(signal or "").lower().replace("-", "_")
+    return any(keyword in text for keyword in keywords)
+
+
+def _harness_repair_operators(
+    layer_records: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    operators = []
+    for record in layer_records:
+        layer = str(record.get("layer") or "")
+        definition = _HARNESS_LAYER_DEFINITIONS.get(layer)
+        if definition is None:
+            continue
+        operators.append(
+            {
+                "layer": layer,
+                "operator": definition["repair_operator"],
+                "status": "recommended"
+                if record.get("status") == "needs_attention"
+                else "validated",
+                "evidence": _coerce_list(record.get("weak_signals"))
+                or _coerce_list(record.get("signals"))[:3],
+            }
+        )
+    return operators
+
+
+_HARNESS_LAYER_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "execution": {
+        "keywords": [
+            "execution",
+            "runtime",
+            "framework_runtime",
+            "sandbox",
+            "import",
+            "portability",
+            "lifecycle",
+        ],
+        "responsibility": "Runtime, sandbox, adapter invocation, and executable framework behavior.",
+        "repair_operator": "repair_runtime_adapter_or_execution_contract",
+    },
+    "tooling": {
+        "keywords": [
+            "tool",
+            "tool_calls",
+            "tool_selection",
+            "tool_execution",
+            "mcp",
+            "action",
+        ],
+        "responsibility": "Tool discovery, schemas, call selection, and causal next-action exposure.",
+        "repair_operator": "minimize_and_verify_tool_frontier",
+    },
+    "context": {
+        "keywords": [
+            "context",
+            "memory",
+            "retrieval",
+            "lineage",
+            "persistent_state",
+            "prompt",
+        ],
+        "responsibility": "Prompt, retrieved context, session state, and persistent memory evidence.",
+        "repair_operator": "repair_context_memory_lineage",
+    },
+    "lifecycle": {
+        "keywords": [
+            "lifecycle",
+            "orchestration",
+            "multi_agent",
+            "handoff",
+            "turn",
+            "termination",
+            "resume",
+        ],
+        "responsibility": "Execution flow, retries, handoffs, multi-agent coordination, and termination.",
+        "repair_operator": "repair_orchestration_flow_or_termination_gate",
+    },
+    "observability": {
+        "keywords": [
+            "observability",
+            "trace",
+            "streaming",
+            "voice",
+            "replay",
+            "transcript",
+            "logs",
+            "provenance",
+        ],
+        "responsibility": "Trace, replay, transcript, log, cost, and provenance capture.",
+        "repair_operator": "add_trace_provenance_or_replay_capture",
+    },
+    "verification": {
+        "keywords": [
+            "verification",
+            "evaluator",
+            "evaluation",
+            "eval",
+            "assert",
+            "world_contract",
+            "success_condition",
+            "regression",
+            "replay_pass_rate",
+            "score",
+        ],
+        "responsibility": "Readiness checks, world/eval assertions, regression replay, and pass/fail gates.",
+        "repair_operator": "tighten_verification_and_regression_gate",
+    },
+    "governance": {
+        "keywords": [
+            "governance",
+            "policy",
+            "security",
+            "permission",
+            "credential",
+            "secret",
+            "red_team",
+            "adversarial",
+            "trust_boundary",
+        ],
+        "responsibility": "Permissions, security policy, credentials, trust boundaries, and audit controls.",
+        "repair_operator": "repair_policy_permission_or_secret_boundary",
+    },
+}
+
+
 def _optimization_result_actions(
     *,
     source_path: Path,
@@ -2808,6 +3097,8 @@ def _markdown_sections(result: Mapping[str, Any]) -> List[str]:
         sections.append("optimization")
     if _has_optimization_replay_card(result):
         sections.append("optimization_replay")
+    if _has_harness_diagnosis_card(result):
+        sections.append("harness_diagnosis")
     if result.get("baseline") is not None:
         sections.append("baseline")
     if _result_metric_averages(result) or dict(result.get("compare") or {}).get("metrics"):
@@ -2853,6 +3144,8 @@ def _result_markdown(
         lines.extend(_optimization_markdown(result))
     if "optimization_replay" in sections:
         lines.extend(_optimization_replay_markdown(result))
+    if "harness_diagnosis" in sections:
+        lines.extend(_harness_diagnosis_markdown(result))
     if "baseline" in sections:
         lines.extend(_baseline_markdown(result))
     if "metrics" in sections:
@@ -2992,6 +3285,80 @@ def _has_optimization_replay_card(result: Mapping[str, Any]) -> bool:
         if isinstance(metadata, Mapping) and isinstance(metadata.get("regression"), Mapping):
             return True
     return False
+
+
+def _has_harness_diagnosis_card(result: Mapping[str, Any]) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("harness_diagnosis"), Mapping):
+        return True
+    return _harness_diagnosis_card(result) is not None
+
+
+def _harness_diagnosis_markdown(result: Mapping[str, Any]) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = report.get("harness_diagnosis") if isinstance(report, Mapping) else None
+    if not isinstance(card, Mapping):
+        card = _harness_diagnosis_card(result)
+    if not isinstance(card, Mapping):
+        return []
+    rows = [
+        [
+            layer.get("layer"),
+            layer.get("status"),
+            layer.get("confidence"),
+            _join_values(layer.get("signals")),
+            _join_values(layer.get("weak_signals")),
+        ]
+        for layer in _coerce_list(card.get("layers"))
+        if isinstance(layer, Mapping)
+    ]
+    operator_rows = [
+        [
+            item.get("layer"),
+            item.get("operator"),
+            item.get("status"),
+            _join_values(item.get("evidence")),
+        ]
+        for item in _coerce_list(card.get("repair_operators"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## Harness Diagnosis",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Primary layers", _join_values(card.get("primary_layers"))),
+                ("Research sources", _join_values(card.get("research_sources"))),
+            ]
+        ),
+        "",
+    ]
+    if rows:
+        lines.extend(
+            [
+                "### Harness Layers",
+                "",
+                *_markdown_table(
+                    ["Layer", "Status", "Confidence", "Signals", "Weak signals"],
+                    rows,
+                ),
+                "",
+            ]
+        )
+    if operator_rows:
+        lines.extend(
+            [
+                "### Repair Operators",
+                "",
+                *_markdown_table(
+                    ["Layer", "Operator", "Status", "Evidence"],
+                    operator_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
 
 
 def _optimization_replay_markdown(result: Mapping[str, Any]) -> List[str]:
