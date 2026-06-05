@@ -624,7 +624,11 @@ tool-delta evidence.
 The `redteam_campaign_optimization.json` example optimizes an adversarial
 attack-pack, campaign matrix, readiness, observability, and mitigation harness
 through `agent-learn optimize`, selecting the candidate with clean red-team
-campaign and readiness gates.
+campaign and readiness gates. The optimizer uses deterministic
+`simulation_evidence` scoring for the readiness preflight, so target,
+framework-import, campaign, workspace-run, trust-boundary, control-plane,
+observability, artifact, and blocking-gap evidence must all close before the
+harness scores as ready.
 
 The `redteam_autogen_optimization.json` example starts from
 `redteam.auto_generate: true` and optimizes the declared attack/surface matrix;

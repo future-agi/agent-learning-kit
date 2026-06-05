@@ -1003,13 +1003,120 @@
       },
       "metadata": {
         "source": "agent-learning-kit",
-        "cookbook": "redteam-campaign-optimization"
+        "cookbook": "redteam-campaign-optimization",
+        "research_sources": [
+          {
+            "title": "Co-RedTeam: Orchestrated Security Discovery and Exploitation with LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.02164",
+            "used_for": "multi-agent red-team workflows with execution-grounded iteration and memory"
+          },
+          {
+            "title": "AgentLAB: Benchmarking LLM Agents against Long-Horizon Attacks",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.16901",
+            "used_for": "long-horizon, tool-enabled attack coverage across realistic environments"
+          },
+          {
+            "title": "T-MAP: Red-Teaming LLM Agents with Trajectory-aware Evolutionary Search",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.22341",
+            "used_for": "trajectory-level tool interaction evidence instead of prompt-only red teaming"
+          },
+          {
+            "title": "A Red Teaming Framework for Evaluating Robustness of AI-enabled SOAR Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.17075",
+            "used_for": "high-fidelity enterprise security orchestration simulation"
+          },
+          {
+            "title": "LITMUS: Benchmarking Behavioral Jailbreaks of LLM Agents in Real OS Environments",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.10779",
+            "used_for": "semantic plus physical verification and rollback readiness"
+          }
+        ],
+        "original_synthesis": "Red-team readiness is scored as a deterministic preflight contract: target, framework import, campaign, workspace run, trust boundary, control plane, observability, artifacts, and zero blocking gaps must close before red-team optimization is trusted."
       }
     },
     "optimizer": {
       "max_candidates": 3,
       "include_seed": true,
       "auto_diagnose": false
+    },
+    "scoring": {
+      "method": "simulation_evidence",
+      "enabled": true,
+      "layers": [
+        "red_team_readiness"
+      ],
+      "required_tools": [
+        "adversarial_pack_status",
+        "red_team_campaign_status",
+        "list_red_team_campaign_gaps",
+        "red_team_readiness_status",
+        "list_red_team_readiness_evidence",
+        "list_red_team_readiness_gaps"
+      ],
+      "required_red_team_readiness": [
+        "red_team_readiness",
+        "target",
+        "framework_import_ready",
+        "red_team_campaign_ready",
+        "workspace_run_ready",
+        "trust_boundary_ready",
+        "control_plane_ready",
+        "observability",
+        "artifact",
+        "agent_learning_kit",
+        "local_cli"
+      ],
+      "red_team_readiness_quality": {
+        "require_target": true,
+        "require_framework_import": true,
+        "require_framework_import_ready": true,
+        "require_red_team_campaign": true,
+        "require_red_team_campaign_ready": true,
+        "require_workspace_run": true,
+        "require_workspace_run_ready": true,
+        "require_trust_boundary": true,
+        "require_trust_boundary_ready": true,
+        "require_control_plane": true,
+        "require_control_plane_ready": true,
+        "require_observability": true,
+        "require_artifacts": true,
+        "min_ready_components": 5,
+        "min_artifact_count": 3,
+        "min_observability_hooks": 3,
+        "max_blocking_gaps": 0,
+        "required_evidence": [
+          "target",
+          "framework_import_ready",
+          "red_team_campaign_ready",
+          "workspace_run_ready",
+          "trust_boundary_ready",
+          "control_plane_ready",
+          "observability",
+          "artifact"
+        ],
+        "required_signals": [
+          "agent_learning_kit",
+          "local_cli",
+          "red_team_campaign",
+          "workspace_run"
+        ],
+        "required_ready_components": [
+          "framework_import",
+          "red_team_campaign",
+          "workspace_run",
+          "trust_boundary",
+          "control_plane"
+        ]
+      },
+      "weights": {
+        "red_team_readiness": 6.0,
+        "tool_coverage": 1.0
+      }
     }
   }
 }

@@ -11,6 +11,7 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "tool_coverage": 1.0,
     "framework_trace": 2.0,
     "framework_import": 2.0,
+    "red_team_readiness": 3.0,
     "runtime_semantics": 1.0,
     "world_contract": 3.0,
     "world_orchestration_replay": 3.0,
@@ -29,9 +30,9 @@ def score_simulation_evidence(
 
     The scorer intentionally stays deterministic. It consumes the environment
     evidence emitted by simulate engines (``metadata.environment_state``) and
-    turns framework trace, framework-import readiness, runtime semantic,
-    memory-lineage, orchestration, tool, and world-contract evidence into a
-    single optimizer-grade score.
+    turns framework trace, framework-import readiness, red-team readiness,
+    runtime semantic, memory-lineage, orchestration, tool, and world-contract
+    evidence into a single optimizer-grade score.
     """
 
     cfg = copy.deepcopy(dict(config or {}))
@@ -76,6 +77,15 @@ def score_simulation_evidence(
     if _should_score("framework_import", layers, env_states, cfg):
         components.append(
             _score_framework_import_manifest(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
+    if _should_score("red_team_readiness", layers, env_states, cfg):
+        components.append(
+            _score_red_team_readiness(
                 env_states,
                 cfg=cfg,
                 manifest_config=manifest_config,
@@ -150,6 +160,7 @@ def score_simulation_evidence(
                     "AgentTrace/provenance 2026: process evidence beats final-answer-only scoring.",
                     "Runtime-persistence 2026: framework runtime semantics are part of trace validity.",
                     "VeRO 2026: harness optimization needs versioned rewards and structured observations.",
+                    "Agent red-team 2026: readiness evidence must cover target, campaign, runtime, controls, and observability.",
                 ],
             }
         },
@@ -386,6 +397,86 @@ def _score_framework_import_manifest(
             "framework import evidence is portable and gap-free"
             if score >= 0.99
             else "framework import evidence incomplete"
+        ),
+        "details": {
+            "matched_required": coverage_matched,
+            "missing_required": coverage_missing,
+            "checks": checks,
+            "blocking_gaps": blocking_gaps,
+            "summary": copy.deepcopy(summary),
+        },
+    }
+
+
+def _score_red_team_readiness(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "red_team_readiness")
+    if not payload:
+        return _missing_component(
+            "red_team_readiness",
+            "No red_team_readiness environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("red_team_readiness_quality"),
+        manifest_config.get("red_team_readiness_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    signals = {_norm(item) for item in _as_list(payload.get("signals")) if _norm(item)}
+    observed = _red_team_readiness_observed(summary, signals)
+    required_readiness = {
+        _norm(item)
+        for item in _configured_list(
+            "required_red_team_readiness",
+            cfg,
+            manifest_config,
+        )
+        if _norm(item)
+    }
+    coverage_matched = sorted(required_readiness & observed)
+    coverage_missing = sorted(required_readiness - observed)
+    coverage_score = (
+        len(coverage_matched) / len(required_readiness)
+        if required_readiness
+        else (1.0 if observed else 0.0)
+    )
+
+    checks: list[dict[str, Any]] = []
+    _append_red_team_readiness_count_checks(checks, summary, quality)
+    _append_red_team_readiness_boolean_checks(checks, summary, quality)
+    _append_red_team_readiness_required_checks(
+        checks,
+        summary,
+        quality=quality,
+        payload=payload,
+    )
+    quality_score = (
+        sum(1 for check in checks if check["match"]) / len(checks)
+        if checks
+        else 1.0
+    )
+    blocking_gaps = {
+        "blocking_gaps": _as_list(summary.get("blocking_gaps")),
+        "missing_required_evidence": _as_list(summary.get("missing_required_evidence")),
+        "missing_required_signals": _as_list(summary.get("missing_required_signals")),
+        "failed_components": _as_list(summary.get("failed_components")),
+    }
+    gap_count = sum(len(values) for values in blocking_gaps.values()) + len(
+        coverage_missing
+    )
+    gap_score = 1.0 if gap_count == 0 else 0.0
+    score = round(0.35 * coverage_score + 0.45 * quality_score + 0.20 * gap_score, 4)
+    return {
+        "name": "red_team_readiness",
+        "score": score,
+        "reason": (
+            "red-team readiness gate is complete and gap-free"
+            if score >= 0.99
+            else "red-team readiness evidence incomplete"
         ),
         "details": {
             "matched_required": coverage_matched,
@@ -653,6 +744,15 @@ def _should_score(
             "byo_framework",
             "byo_framework_import",
         },
+        "red_team_readiness": {
+            "red_team_readiness",
+            "redteam_readiness",
+            "readiness",
+            "preflight",
+            "security",
+            "red_team",
+            "redteam",
+        },
         "world": {"world", "environment"},
         "orchestration": {"orchestration", "multi_agent"},
         "memory": {"memory", "retrieval"},
@@ -670,6 +770,12 @@ def _should_score(
             "framework_import_manifest" in keys
             or bool(cfg.get("framework_import_quality"))
             or bool(cfg.get("required_framework_import"))
+        )
+    if layer == "red_team_readiness":
+        return (
+            "red_team_readiness" in keys
+            or bool(cfg.get("red_team_readiness_quality"))
+            or bool(cfg.get("required_red_team_readiness"))
         )
     if layer == "world":
         return "world_contract" in keys
@@ -712,6 +818,158 @@ def _framework_import_observed(
         observed.add("framework_import")
         observed.add("framework_import_manifest")
     return {item for item in observed if item}
+
+
+def _red_team_readiness_observed(
+    summary: Mapping[str, Any],
+    signals: set[str],
+) -> set[str]:
+    observed = set(signals)
+    for key in ("observed_evidence", "observed_signals", "ready_components"):
+        observed.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+    for boolean_key, signal in (
+        ("has_target", "target"),
+        ("has_framework_import", "framework_import"),
+        ("framework_import_ready", "framework_import_ready"),
+        ("has_red_team_campaign", "red_team_campaign"),
+        ("red_team_campaign_ready", "red_team_campaign_ready"),
+        ("has_workspace_run", "workspace_run"),
+        ("workspace_run_ready", "workspace_run_ready"),
+        ("has_trust_boundary", "trust_boundary"),
+        ("trust_boundary_ready", "trust_boundary_ready"),
+        ("has_control_plane", "control_plane"),
+        ("control_plane_ready", "control_plane_ready"),
+        ("has_observability", "observability"),
+        ("has_artifacts", "artifact"),
+    ):
+        if summary.get(boolean_key):
+            observed.add(signal)
+    if summary:
+        observed.update({"red_team_readiness", "readiness", "preflight", "gate"})
+    return {item for item in observed if item}
+
+
+def _append_red_team_readiness_count_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for requirement, observed_key in (
+        ("min_ready_components", "ready_component_count"),
+        ("min_artifact_count", "artifact_count"),
+        ("min_observability_hooks", "observability_hook_count"),
+    ):
+        minimum = _int_or_none(quality.get(requirement))
+        if minimum is None:
+            continue
+        actual = int(summary.get(observed_key, 0) or 0)
+        checks.append(
+            {
+                "check": requirement,
+                "expected": minimum,
+                "actual": actual,
+                "match": actual >= minimum,
+            }
+        )
+    maximum = _int_or_none(quality.get("max_blocking_gaps"))
+    if maximum is not None:
+        actual = int(summary.get("blocking_gap_count", 0) or 0)
+        checks.append(
+            {
+                "check": "max_blocking_gaps",
+                "expected": maximum,
+                "actual": actual,
+                "match": actual <= maximum,
+            }
+        )
+
+
+def _append_red_team_readiness_boolean_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for requirement, summary_key in (
+        ("require_target", "has_target"),
+        ("require_framework_import", "has_framework_import"),
+        ("require_framework_import_ready", "framework_import_ready"),
+        ("require_red_team_campaign", "has_red_team_campaign"),
+        ("require_red_team_campaign_ready", "red_team_campaign_ready"),
+        ("require_workspace_run", "has_workspace_run"),
+        ("require_workspace_run_ready", "workspace_run_ready"),
+        ("require_trust_boundary", "has_trust_boundary"),
+        ("require_trust_boundary_ready", "trust_boundary_ready"),
+        ("require_control_plane", "has_control_plane"),
+        ("require_control_plane_ready", "control_plane_ready"),
+        ("require_observability", "has_observability"),
+        ("require_artifacts", "has_artifacts"),
+    ):
+        if requirement not in quality:
+            continue
+        expected = bool(quality.get(requirement))
+        actual = bool(summary.get(summary_key))
+        checks.append(
+            {
+                "check": requirement,
+                "expected": expected,
+                "actual": actual,
+                "match": actual is expected,
+            }
+        )
+
+
+def _append_red_team_readiness_required_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    *,
+    quality: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    requirement_specs = (
+        (
+            "required_evidence",
+            "evidence",
+            "observed_evidence",
+            "required_evidence",
+        ),
+        (
+            "required_signals",
+            "signals",
+            "observed_signals",
+            "required_signal",
+        ),
+        (
+            "required_ready_components",
+            "ready_components",
+            "ready_components",
+            "required_ready_component",
+        ),
+    )
+    for primary, alias, observed_key, check_name in requirement_specs:
+        required = {
+            _norm(item)
+            for item in (
+                _as_list(quality.get(primary) or quality.get(alias))
+                or _as_list(payload.get(primary))
+            )
+            if _norm(item)
+        }
+        if not required:
+            continue
+        observed = {
+            _norm(item)
+            for item in _as_list(summary.get(observed_key))
+            if _norm(item)
+        }
+        for item in sorted(required):
+            checks.append(
+                {
+                    "check": check_name,
+                    "expected": item,
+                    "actual": sorted(observed),
+                    "match": item in observed,
+                }
+            )
 
 
 def _append_framework_import_count_checks(

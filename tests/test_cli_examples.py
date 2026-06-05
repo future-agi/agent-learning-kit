@@ -1247,6 +1247,8 @@ def test_redteam_campaign_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,
 ):
+    from agent_learning import optimize
+
     monkeypatch.setenv(
         "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
         "real-local-redteam-opt-key",
@@ -1277,6 +1279,17 @@ def test_redteam_campaign_optimization_example_runs_evidence_gates(
     assert payload["summary"]["optimization_score"] >= 0.9
     assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
     assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    manifest = json.loads(
+        (EXAMPLES / "redteam_campaign_optimization.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["optimization"]["scoring"]["method"] == "simulation_evidence"
+    assert manifest["optimization"]["scoring"]["layers"] == [
+        "red_team_readiness"
+    ]
+    assert {item["year"] for item in manifest["optimization"]["target"]["metadata"]["research_sources"]} == {2026}
 
     best_config = payload["optimization"]["best_config"]
     env_types = [
@@ -1311,6 +1324,37 @@ def test_redteam_campaign_optimization_example_runs_evidence_gates(
         "tool_selection_accuracy",
     ):
         assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    readiness_summary = state["red_team_readiness"]["summary"]
+    assert readiness_summary["ready_components"] == [
+        "control_plane",
+        "framework_import",
+        "red_team_campaign",
+        "trust_boundary",
+        "workspace_run",
+    ]
+    assert readiness_summary["blocking_gaps"] == []
+    assert readiness_summary["blocking_gap_count"] == 0
+
+    candidate = optimize.AgentCandidate.from_config(
+        payload["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "red_team_readiness": 1.0,
+    }
 
     assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
     sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
