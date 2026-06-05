@@ -2610,6 +2610,7 @@ def _harness_diagnosis_card(
     layer_records = _harness_layer_records(evidence)
     if not layer_records:
         return None
+    repair_operators = _harness_repair_operators(layer_records)
     card = {
         "kind": "harness_layer_diagnosis",
         "taxonomy": "execution_tooling_context_lifecycle_observability_verification_governance",
@@ -2627,7 +2628,7 @@ def _harness_diagnosis_card(
             )[:3]
         ],
         "layers": layer_records,
-        "repair_operators": _harness_repair_operators(layer_records),
+        "repair_operators": repair_operators,
         "research_sources": [
             "https://arxiv.org/abs/2606.06324",
             "https://arxiv.org/abs/2606.05922",
@@ -2635,11 +2636,18 @@ def _harness_diagnosis_card(
             "https://arxiv.org/abs/2606.06473",
         ],
     }
+    rollout_plan = _harness_retrospective_rollout_plan(
+        result,
+        layer_records=layer_records,
+        repair_operators=repair_operators,
+    )
+    if rollout_plan is not None:
+        card["retrospective_rollout_plan"] = rollout_plan
     card["actions"] = _harness_diagnosis_actions(
         result=result,
         source_path=source_path,
         layer_records=layer_records,
-        repair_operators=card["repair_operators"],
+        repair_operators=repair_operators,
     )
     return card
 
@@ -2796,6 +2804,297 @@ def _harness_repair_operators(
             }
         )
     return operators
+
+
+def _harness_retrospective_rollout_plan(
+    result: Mapping[str, Any],
+    *,
+    layer_records: Sequence[Mapping[str, Any]],
+    repair_operators: Sequence[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    optimization = result.get("optimization")
+    if not isinstance(optimization, Mapping):
+        return None
+    history = [
+        dict(item)
+        for item in _coerce_list(optimization.get("history"))
+        if isinstance(item, Mapping)
+    ]
+    if not history:
+        return None
+
+    summary = dict(result.get("summary") or {})
+    search_paths = _unique_strings(
+        [
+            *_coerce_list(summary.get("search_paths")),
+            *_coerce_list(optimization.get("search_paths")),
+        ]
+    )
+    best_candidate_id = _string_or_none(
+        optimization.get("best_candidate_id") or summary.get("best_candidate_id")
+    )
+    lineage = _harness_candidate_lineage(
+        history,
+        best_candidate_id=best_candidate_id,
+        layer_records=layer_records,
+    )
+    if not lineage:
+        return None
+    selected = next((item for item in lineage if item.get("selected")), None)
+    if selected is None:
+        selected = max(
+            lineage,
+            key=lambda item: (
+                float(item.get("score") or 0.0),
+                str(item.get("candidate_id") or ""),
+            ),
+        )
+    selected_candidate_id = _string_or_none(selected.get("candidate_id"))
+    weak_metric_names = _unique_strings(
+        weak
+        for item in lineage
+        for weak in _coerce_list(item.get("weak_metric_names"))
+    )
+    repair_frontier = _harness_repair_frontier(
+        lineage,
+        layer_records=layer_records,
+        repair_operators=repair_operators,
+    )
+    target_layers = _unique_strings(
+        [
+            *(
+                str(item.get("layer"))
+                for item in repair_frontier
+                if item.get("status") == "needs_attention" and item.get("layer")
+            ),
+            *(
+                str(layer)
+                for layer in _coerce_list(selected.get("repair_layers"))
+                if layer
+            ),
+        ]
+    )
+    if not target_layers:
+        target_layers = _harness_target_layers(layer_records)
+
+    rollout_steps = [
+        {
+            "id": "replay_selected_candidate",
+            "label": "Replay selected candidate against the same harness metrics.",
+            "candidate_id": selected_candidate_id,
+            "target_layers": target_layers,
+            "evidence": _unique_strings(
+                [
+                    *_coerce_list(selected.get("patch_paths")),
+                    *_coerce_list(selected.get("metric_names"))[:5],
+                ]
+            ),
+        },
+        {
+            "id": "repair_weak_layers",
+            "label": "Apply repair operators only to layers with weak metric evidence.",
+            "target_layers": [
+                str(item.get("layer"))
+                for item in repair_frontier
+                if item.get("status") == "needs_attention" and item.get("layer")
+            ],
+            "evidence": weak_metric_names,
+        },
+        {
+            "id": "promote_or_hold",
+            "label": "Promote only when the selected candidate clears threshold and replay.",
+            "candidate_id": selected_candidate_id,
+            "target_layers": target_layers,
+            "evidence": _unique_strings(
+                [
+                    str(optimization.get("final_score") or summary.get("optimization_score") or ""),
+                    str(summary.get("threshold") or optimization.get("threshold") or ""),
+                ]
+            ),
+        },
+    ]
+    return {
+        "kind": "retrospective_harness_rollout_plan",
+        "method": "evidence_calibrated_candidate_lineage",
+        "status": "ready",
+        "selected_candidate_id": selected_candidate_id,
+        "best_candidate_id": best_candidate_id,
+        "selected_score": selected.get("score"),
+        "candidate_count": len(lineage),
+        "weak_metric_names": weak_metric_names,
+        "search_paths": search_paths,
+        "target_layers": target_layers,
+        "candidate_lineage": lineage,
+        "repair_frontier": repair_frontier,
+        "rollout_steps": rollout_steps,
+        "research_sources": [
+            "https://arxiv.org/abs/2606.05922",
+            "https://arxiv.org/abs/2606.06284",
+            "https://arxiv.org/abs/2606.06473",
+        ],
+    }
+
+
+def _harness_candidate_lineage(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    best_candidate_id: Optional[str],
+    layer_records: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    seed_score = _float_or_none(history[0].get("score")) if history else None
+    previous_score: Optional[float] = None
+    lineage: List[Dict[str, Any]] = []
+    for index, item in enumerate(history):
+        candidate_id = str(item.get("candidate_id") or f"candidate_{index}")
+        score = _float_or_none(item.get("score"))
+        patch_paths = _patch_leaf_paths(item.get("patch") or item.get("candidate_patch"))
+        metrics = {
+            str(key): value
+            for key, value in dict(item.get("metrics") or {}).items()
+            if _float_or_none(value) is not None
+        }
+        metric_names = sorted(metrics)
+        weak_metric_names = sorted(
+            key
+            for key, value in metrics.items()
+            if (_float_or_none(value) is not None and float(value) < 1.0)
+        )
+        signal_candidates = _unique_strings(
+            [
+                *patch_paths,
+                *metric_names,
+                *weak_metric_names,
+                *_coerce_list(item.get("search_paths")),
+                item.get("proposal_role"),
+                item.get("proposal_reason"),
+            ]
+        )
+        repair_layers = _harness_layers_for_signals(
+            signal_candidates,
+            layer_records=layer_records,
+        )
+        score_delta_from_previous = (
+            round(score - previous_score, 6)
+            if score is not None and previous_score is not None
+            else None
+        )
+        score_delta_from_seed = (
+            round(score - seed_score, 6)
+            if score is not None and seed_score is not None
+            else None
+        )
+        if score is not None:
+            previous_score = score
+        lineage.append(
+            {
+                "candidate_id": candidate_id,
+                "round": item.get("proposal_round", index),
+                "selected": bool(best_candidate_id and candidate_id == best_candidate_id),
+                "score": score,
+                "score_delta_from_previous": score_delta_from_previous,
+                "score_delta_from_seed": score_delta_from_seed,
+                "evaluation_score": item.get("evaluation_score"),
+                "evaluation_passed": item.get("evaluation_passed"),
+                "patch_paths": patch_paths,
+                "metric_names": metric_names,
+                "weak_metric_names": weak_metric_names,
+                "repair_layers": repair_layers,
+                "proposal_role": item.get("proposal_role"),
+                "proposal_reason": item.get("proposal_reason"),
+                "evidence_signal_count": len(signal_candidates),
+            }
+        )
+    return lineage
+
+
+def _harness_layers_for_signals(
+    signals: Sequence[Any],
+    *,
+    layer_records: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    layers = []
+    for record in layer_records:
+        layer = str(record.get("layer") or "")
+        definition = _HARNESS_LAYER_DEFINITIONS.get(layer)
+        if definition is None:
+            continue
+        if any(
+            _harness_signal_matches_layer(signal, definition["keywords"])
+            for signal in signals
+        ):
+            layers.append(layer)
+    return _unique_strings(layers)
+
+
+def _harness_repair_frontier(
+    lineage: Sequence[Mapping[str, Any]],
+    *,
+    layer_records: Sequence[Mapping[str, Any]],
+    repair_operators: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    frontier = []
+    for operator in repair_operators:
+        layer = str(operator.get("layer") or "")
+        if not layer:
+            continue
+        definition = _HARNESS_LAYER_DEFINITIONS.get(layer, {})
+        layer_candidates = [
+            item
+            for item in lineage
+            if layer in set(_coerce_list(item.get("repair_layers")))
+        ]
+        weak_metric_names = _unique_strings(
+            metric
+            for item in layer_candidates
+            for metric in _coerce_list(item.get("weak_metric_names"))
+            if _harness_signal_matches_layer(metric, definition.get("keywords", []))
+        )
+        patch_paths = _unique_strings(
+            path
+            for item in layer_candidates
+            for path in _coerce_list(item.get("patch_paths"))
+            if _harness_signal_matches_layer(path, definition.get("keywords", []))
+        )
+        layer_record = next(
+            (record for record in layer_records if record.get("layer") == layer),
+            {},
+        )
+        frontier.append(
+            {
+                "layer": layer,
+                "operator": operator.get("operator"),
+                "status": "needs_attention"
+                if weak_metric_names or layer_record.get("status") == "needs_attention"
+                else "validated",
+                "candidate_ids": _unique_strings(
+                    str(item.get("candidate_id"))
+                    for item in layer_candidates
+                    if item.get("candidate_id")
+                ),
+                "weak_metric_names": weak_metric_names,
+                "patch_paths": patch_paths,
+                "evidence": _unique_strings(
+                    [
+                        *_coerce_list(operator.get("evidence")),
+                        *weak_metric_names,
+                        *patch_paths,
+                    ]
+                ),
+            }
+        )
+    return sorted(
+        frontier,
+        key=lambda item: (
+            0 if item.get("status") == "needs_attention" else 1,
+            str(item.get("layer") or ""),
+        ),
+    )
+
+
+def _string_or_none(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    return str(value)
 
 
 def _harness_diagnosis_actions(
@@ -5679,6 +5978,51 @@ def _harness_diagnosis_markdown(
         for item in _coerce_list(card.get("repair_operators"))
         if isinstance(item, Mapping)
     ]
+    rollout_plan = (
+        card.get("retrospective_rollout_plan")
+        if isinstance(card.get("retrospective_rollout_plan"), Mapping)
+        else None
+    )
+    lineage_rows: List[List[Any]] = []
+    frontier_rows: List[List[Any]] = []
+    rollout_step_rows: List[List[Any]] = []
+    if isinstance(rollout_plan, Mapping):
+        lineage_rows = [
+            [
+                item.get("candidate_id"),
+                item.get("selected"),
+                item.get("score"),
+                item.get("score_delta_from_seed"),
+                _join_values(item.get("repair_layers")),
+                _join_values(item.get("weak_metric_names")),
+                _join_values(item.get("patch_paths")),
+            ]
+            for item in _coerce_list(rollout_plan.get("candidate_lineage"))
+            if isinstance(item, Mapping)
+        ]
+        frontier_rows = [
+            [
+                item.get("layer"),
+                item.get("operator"),
+                item.get("status"),
+                _join_values(item.get("candidate_ids")),
+                _join_values(item.get("weak_metric_names")),
+                _join_values(item.get("patch_paths")),
+            ]
+            for item in _coerce_list(rollout_plan.get("repair_frontier"))
+            if isinstance(item, Mapping)
+        ]
+        rollout_step_rows = [
+            [
+                item.get("id"),
+                item.get("label"),
+                item.get("candidate_id"),
+                _join_values(item.get("target_layers")),
+                _join_values(item.get("evidence")),
+            ]
+            for item in _coerce_list(rollout_plan.get("rollout_steps"))
+            if isinstance(item, Mapping)
+        ]
     action_rows = [
         [
             item.get("id"),
@@ -5721,6 +6065,75 @@ def _harness_diagnosis_markdown(
                 *_markdown_table(
                     ["Layer", "Operator", "Status", "Evidence"],
                     operator_rows,
+                ),
+                "",
+            ]
+        )
+    if isinstance(rollout_plan, Mapping):
+        lines.extend(
+            [
+                "### Retrospective Rollout Plan",
+                "",
+                *_key_value_table(
+                    [
+                        ("Method", rollout_plan.get("method")),
+                        ("Status", rollout_plan.get("status")),
+                        ("Selected candidate", rollout_plan.get("selected_candidate_id")),
+                        ("Candidate count", rollout_plan.get("candidate_count")),
+                        ("Weak metrics", _join_values(rollout_plan.get("weak_metric_names"))),
+                        ("Target layers", _join_values(rollout_plan.get("target_layers"))),
+                    ]
+                ),
+                "",
+            ]
+        )
+    if lineage_rows:
+        lines.extend(
+            [
+                "### Candidate Lineage",
+                "",
+                *_markdown_table(
+                    [
+                        "Candidate",
+                        "Selected",
+                        "Score",
+                        "Delta from seed",
+                        "Repair layers",
+                        "Weak metrics",
+                        "Patch paths",
+                    ],
+                    lineage_rows,
+                ),
+                "",
+            ]
+        )
+    if frontier_rows:
+        lines.extend(
+            [
+                "### Repair Frontier",
+                "",
+                *_markdown_table(
+                    [
+                        "Layer",
+                        "Operator",
+                        "Status",
+                        "Candidates",
+                        "Weak metrics",
+                        "Patch paths",
+                    ],
+                    frontier_rows,
+                ),
+                "",
+            ]
+        )
+    if rollout_step_rows:
+        lines.extend(
+            [
+                "### Rollout Steps",
+                "",
+                *_markdown_table(
+                    ["Step", "Label", "Candidate", "Target layers", "Evidence"],
+                    rollout_step_rows,
                 ),
                 "",
             ]

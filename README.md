@@ -160,6 +160,14 @@ diagnosis actions, including follow-up report, rerun, promotion, and replay
 commands, with `target_layers`, `repair_operators`, and relevant search paths
 attached so CLI users, SDK callers, CI, and Future AGI UI cards can move from
 diagnosis to a reproducible next step without inventing ad hoc commands.
+Diagnosis reports also add
+`report.harness_diagnosis.retrospective_rollout_plan`, a
+`retrospective_harness_rollout_plan` produced with
+`evidence_calibrated_candidate_lineage`. The plan records the
+`selected_candidate_id`, `candidate_count`, `weak_metric_names`,
+`target_layers`, `candidate_lineage`, `repair_frontier`, and `rollout_steps`,
+and renders Markdown sections named `Retrospective Rollout Plan`,
+`Candidate Lineage`, `Repair Frontier`, and `Rollout Steps`.
 Red-team run artifacts and reports also include a `redteam_strategy` card plus
 `## Red Team Strategy` Markdown. The card maps attack types, surfaces,
 channels, providers, frameworks, campaign coverage, and risk focus into a

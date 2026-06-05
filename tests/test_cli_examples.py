@@ -1182,6 +1182,10 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     )
 
     output_path = tmp_path / "custom-framework-optimization.json"
+    optimization_report_path = tmp_path / "custom-framework-optimization-result-report.json"
+    optimization_report_markdown_path = (
+        tmp_path / "custom-framework-optimization-result-report.md"
+    )
     promotion_path = tmp_path / "custom-framework-optimization-promotion.json"
     manifest_path = tmp_path / "custom-framework-optimization-regression.json"
     report_path = tmp_path / "custom-framework-optimization-report.json"
@@ -1257,6 +1261,59 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     assert "custom-framework-adapter-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
+
+    exit_code = main([
+        "report",
+        str(output_path),
+        "--output",
+        str(optimization_report_path),
+        "--markdown",
+        str(optimization_report_markdown_path),
+    ])
+    assert exit_code == 0
+
+    optimization_report = json.loads(
+        optimization_report_path.read_text(encoding="utf-8")
+    )
+    diagnosis = optimization_report["report"]["harness_diagnosis"]
+    rollout_plan = diagnosis["retrospective_rollout_plan"]
+    assert rollout_plan["kind"] == "retrospective_harness_rollout_plan"
+    assert rollout_plan["method"] == "evidence_calibrated_candidate_lineage"
+    assert rollout_plan["selected_candidate_id"] == payload["summary"][
+        "best_candidate_id"
+    ]
+    assert rollout_plan["candidate_count"] == len(payload["optimization"]["history"])
+    assert "framework_runtime_contract" in rollout_plan["weak_metric_names"]
+    assert {"execution", "observability", "verification"} <= set(
+        rollout_plan["target_layers"]
+    )
+    selected_lineage = next(
+        item
+        for item in rollout_plan["candidate_lineage"]
+        if item["selected"]
+    )
+    assert selected_lineage["candidate_id"] == payload["summary"]["best_candidate_id"]
+    assert selected_lineage["score_delta_from_seed"] > 0
+    assert "agent.method" in selected_lineage["patch_paths"]
+    execution_frontier = next(
+        item
+        for item in rollout_plan["repair_frontier"]
+        if item["layer"] == "execution"
+    )
+    assert execution_frontier["status"] == "needs_attention"
+    assert "framework_runtime_contract" in execution_frontier["weak_metric_names"]
+    assert {step["id"] for step in rollout_plan["rollout_steps"]} == {
+        "replay_selected_candidate",
+        "repair_weak_layers",
+        "promote_or_hold",
+    }
+    optimization_report_markdown = optimization_report_markdown_path.read_text(
+        encoding="utf-8"
+    )
+    assert "### Retrospective Rollout Plan" in optimization_report_markdown
+    assert "### Candidate Lineage" in optimization_report_markdown
+    assert "### Repair Frontier" in optimization_report_markdown
+    assert "evidence_calibrated_candidate_lineage" in optimization_report_markdown
 
     exit_code = main([
         "promote-to-regression",
