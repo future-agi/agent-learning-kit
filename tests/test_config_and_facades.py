@@ -110,6 +110,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_orchestration_stack is not None
     assert optimize.build_realtime_optimization_manifest is not None
     assert optimize.optimize_realtime_stack is not None
+    assert optimize.build_redteam_autogen_optimization_manifest is not None
+    assert optimize.optimize_redteam_autogen is not None
     assert optimize.build_redteam_optimization_manifest is not None
     assert optimize.optimize_redteam_campaign is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
@@ -1919,6 +1921,90 @@ def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_history["metrics"]["red_team_campaign_quality"] == pytest.approx(1.0)
     assert best_history["metrics"]["adversarial_resilience"] >= 0.9
+
+
+def test_sdk_redteam_autogen_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_AUTOGEN_EXAMPLE_KEY",
+        "real-local-sdk-redteam-autogen-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_redteam_autogen_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_autogen_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_AUTOGEN_EXAMPLE_KEY"
+    ]
+    assert manifest["redteam"]["auto_generate"] is True
+    assert manifest["redteam"]["target"] == {
+        "agent": "support-agent",
+        "environment": "ci",
+    }
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "redteam.attacks",
+        "redteam.surfaces",
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "harness",
+        "security",
+        "evaluator",
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["adversarial_resilience"]["expected_attack_count"] == 4
+    assert config["red_team_campaign_quality"]["required_attack_matrix_cells"] == [
+        "prompt_injection|tool|chat|local_cli",
+        "prompt_injection|memory|chat|local_cli",
+        "credential_exfiltration|tool|chat|local_cli",
+        "credential_exfiltration|memory|chat|local_cli",
+    ]
+
+    output_path = tmp_path / "sdk-redteam-autogen-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.97
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_config = result["optimization"]["best_config"]
+    assert best_config["redteam"]["attacks"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert best_config["redteam"]["surfaces"] == ["tool", "memory"]
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"] == {
+        "redteam.attacks": [
+            "prompt_injection",
+            "credential_exfiltration",
+        ],
+        "redteam.surfaces": ["tool", "memory"],
+    }
+    metrics = best_history["metrics"]
+    assert metrics["adversarial_resilience"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_coverage"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
+    assert metrics["tool_selection_accuracy"] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) >= {"adversarial", "red_team_campaign"}
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 4
+    assert campaign_summary["coverage_cell_count"] == 4
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
 
 
 def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):

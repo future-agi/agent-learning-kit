@@ -401,6 +401,10 @@ AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_optimization.py \
   artifacts/sdk-redteam-optimization.json
 
+AGENT_LEARNING_SDK_REDTEAM_AUTOGEN_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_autogen_optimization.py \
+  artifacts/sdk-redteam-autogen-optimization.json
+
 AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
@@ -488,6 +492,11 @@ The `redteam_autogen_optimization.json` example starts from
 `redteam.auto_generate: true` and optimizes the declared attack/surface matrix;
 each candidate regenerates local adversarial attack-pack and campaign evidence
 before scoring.
+The same generated-matrix workflow is available from Python through
+`optimize.build_redteam_autogen_optimization_manifest()` and
+`examples/sdk_redteam_autogen_optimization.py`, which starts from a tool-only
+prompt-injection seed and searches the tool-plus-memory prompt-injection plus
+credential-exfiltration campaign.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It
