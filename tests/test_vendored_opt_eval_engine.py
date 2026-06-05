@@ -188,6 +188,9 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_local_evals = _assert_vendored_module("fi.evals.local")
     fi_opt = _assert_vendored_module("fi.opt")
     fi_optimizers = _assert_vendored_module("fi.opt.optimizers")
+    fi_opt_base = _assert_vendored_module("fi.opt.base")
+    fi_opt_datamappers = _assert_vendored_module("fi.opt.datamappers")
+    fi_opt_generators = _assert_vendored_module("fi.opt.generators")
     fi_opt_simulate = _assert_vendored_module("fi.opt.integrations.simulate")
     fi_agent_metrics = _assert_vendored_module("fi.evals.metrics.agents")
 
@@ -266,6 +269,25 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "CouncilAgentOptimizer",
     ):
         assert getattr(agent_optimize, name) is getattr(fi_optimizers, name)
+    assert set(fi_opt_base.__all__) <= set(agent_optimize.__all__)
+    assert set(fi_opt_datamappers.__all__) <= set(agent_optimize.__all__)
+    assert set(fi_opt_generators.__all__) <= set(agent_optimize.__all__)
+    for name in (
+        "BaseDataMapper",
+        "BaseGenerator",
+        "BaseOptimizer",
+        "Evaluator",
+    ):
+        assert getattr(agent_optimize, name) is getattr(fi_opt_base, name)
+    assert agent_optimize.BasicDataMapper is fi_opt_datamappers.BasicDataMapper
+    assert agent_optimize.LiteLLMGenerator is fi_opt_generators.LiteLLMGenerator
+    mapper = agent_optimize.BasicDataMapper(
+        {"answer": "generated_output", "question": "prompt"}
+    )
+    assert mapper.map("approved", {"prompt": "Can we refund?"}) == {
+        "answer": "approved",
+        "question": "Can we refund?",
+    }
     assert agent_optimize.ManifestOptimizationProblem is fi_opt.ManifestOptimizationProblem
     assert agent_optimize.EvalSuiteOptimizationProblem is fi_opt.EvalSuiteOptimizationProblem
     assert agent_optimize.ManifestOptimizationProblem is (

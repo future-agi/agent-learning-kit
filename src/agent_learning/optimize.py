@@ -141,8 +141,28 @@ _OPTIMIZER_EXPORT_NAMES = (
     "SocietySearchStrategy",
 )
 
+_OPTIMIZER_BASE_EXPORT_NAMES = (
+    "BaseDataMapper",
+    "BaseGenerator",
+    "BaseOptimizer",
+    "Evaluator",
+)
+
+_DATAMAPPER_EXPORT_NAMES = ("BasicDataMapper",)
+
+_GENERATOR_EXPORT_NAMES = ("LiteLLMGenerator",)
+
 _OPTIMIZE_EXPORTS = {name: "fi.opt" for name in _FI_OPT_EXPORT_NAMES}
 _OPTIMIZE_EXPORTS.update({name: "fi.opt.optimizers" for name in _OPTIMIZER_EXPORT_NAMES})
+_OPTIMIZE_EXPORTS.update(
+    {name: "fi.opt.base" for name in _OPTIMIZER_BASE_EXPORT_NAMES}
+)
+_OPTIMIZE_EXPORTS.update(
+    {name: "fi.opt.datamappers" for name in _DATAMAPPER_EXPORT_NAMES}
+)
+_OPTIMIZE_EXPORTS.update(
+    {name: "fi.opt.generators" for name in _GENERATOR_EXPORT_NAMES}
+)
 
 _DEFAULT_AGENT_INTEGRATION_PROVIDERS = (
     "livekit",
