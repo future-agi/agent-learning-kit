@@ -2295,7 +2295,7 @@ def _report_result(
     findings = _result_findings(source)
     error_findings = [finding for finding in findings if _sarif_level(finding) == "error"]
     score = _optional_primary_score(source)
-    sections = _markdown_sections(source)
+    sections = _markdown_sections(source, source_path=source_path)
     report_name = name or f"{source_name}-report"
     markdown = _result_markdown(
         source,
@@ -2317,7 +2317,7 @@ def _report_result(
     replay_card = _replay_report_card(source, source_path=source_path)
     if replay_card is not None:
         report_payload["replay"] = replay_card
-    harness_diagnosis = _harness_diagnosis_card(source)
+    harness_diagnosis = _harness_diagnosis_card(source, source_path=source_path)
     if harness_diagnosis is not None:
         report_payload["harness_diagnosis"] = harness_diagnosis
     return {
@@ -2587,17 +2587,22 @@ def _replay_manifest_report_card(item: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _harness_diagnosis_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+def _harness_diagnosis_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
     evidence = _harness_diagnosis_evidence(result)
     if not any(evidence.values()):
         return None
     layer_records = _harness_layer_records(evidence)
     if not layer_records:
         return None
-    return {
+    card = {
         "kind": "harness_layer_diagnosis",
         "taxonomy": "execution_tooling_context_lifecycle_observability_verification_governance",
         "source_kind": result.get("kind"),
+        "source_path": str(source_path),
         "status": result.get("status"),
         "primary_layers": [
             item["layer"]
@@ -2618,6 +2623,13 @@ def _harness_diagnosis_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any
             "https://arxiv.org/abs/2606.06473",
         ],
     }
+    card["actions"] = _harness_diagnosis_actions(
+        result=result,
+        source_path=source_path,
+        layer_records=layer_records,
+        repair_operators=card["repair_operators"],
+    )
+    return card
 
 
 def _harness_diagnosis_evidence(result: Mapping[str, Any]) -> Dict[str, List[str]]:
@@ -2772,6 +2784,193 @@ def _harness_repair_operators(
             }
         )
     return operators
+
+
+def _harness_diagnosis_actions(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    layer_records: Sequence[Mapping[str, Any]],
+    repair_operators: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    target_layers = _harness_target_layers(layer_records)
+    actions = [
+        _diagnosis_cli_action(
+            _cli_action(
+                "report_harness_diagnosis",
+                "Report Harness Diagnosis",
+                [
+                    "agent-learn",
+                    "report",
+                    str(source_path),
+                    "--output",
+                    "artifacts/harness-diagnosis-report.json",
+                    "--markdown",
+                    "artifacts/harness-diagnosis-report.md",
+                ],
+            ),
+            target_layers=target_layers,
+            repair_operators=repair_operators,
+        )
+    ]
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        source_manifest_path = optimization.get("source_manifest_path")
+        if source_manifest_path:
+            actions.append(
+                _diagnosis_cli_action(
+                    _cli_action(
+                        "rerun_optimization_for_diagnosed_layers",
+                        "Rerun Optimization For Diagnosed Layers",
+                        [
+                            "agent-learn",
+                            "optimize",
+                            str(source_manifest_path),
+                            "--output",
+                            "artifacts/diagnosed-layer-optimization.json",
+                            "--markdown",
+                            "artifacts/diagnosed-layer-optimization.md",
+                        ],
+                    ),
+                    target_layers=target_layers,
+                    repair_operators=repair_operators,
+                    search_paths=_unique_strings(
+                        _coerce_list(dict(result.get("summary") or {}).get("search_paths"))
+                    ),
+                )
+            )
+        actions.append(
+            _diagnosis_cli_action(
+                _cli_action(
+                    "promote_diagnosed_regression",
+                    "Promote Diagnosed Regression",
+                    [
+                        "agent-learn",
+                        "promote-to-regression",
+                        str(source_path),
+                        "--output",
+                        "artifacts/diagnosed-promotion.json",
+                        "--manifest",
+                        "artifacts/diagnosed-regression.json",
+                        "--min-level",
+                        "note",
+                        "--max-findings",
+                        "1",
+                    ],
+                ),
+                target_layers=target_layers,
+                repair_operators=repair_operators,
+            )
+        )
+
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        manifest_filename = f"{_slug(manifest.get('name'), default='diagnosed-regression')}.json"
+        actions.append(
+            _diagnosis_cli_action(
+                _cli_action(
+                    "replay_diagnosed_regression",
+                    "Replay Diagnosed Regression",
+                    [
+                        "agent-learn",
+                        "replay",
+                        "{{manifest_path}}",
+                        "--output",
+                        "artifacts/diagnosed-replay.json",
+                        "--junit",
+                        "artifacts/diagnosed-replay.junit.xml",
+                        "--sarif",
+                        "artifacts/diagnosed-replay.sarif.json",
+                        "--markdown",
+                        "artifacts/diagnosed-replay.md",
+                    ],
+                    inputs=[
+                        {
+                            "name": "manifest_path",
+                            "label": "Diagnosed regression manifest",
+                            "default": f"artifacts/{manifest_filename}",
+                        }
+                    ],
+                ),
+                target_layers=target_layers,
+                repair_operators=repair_operators,
+            )
+        )
+
+    replay = result.get("replay")
+    if isinstance(replay, Mapping):
+        manifest_paths = [
+            str(item.get("path"))
+            for item in _coerce_list(replay.get("manifests"))
+            if isinstance(item, Mapping) and item.get("path") not in (None, "")
+        ]
+        if manifest_paths:
+            actions.append(
+                _diagnosis_cli_action(
+                    _cli_action(
+                        "rerun_diagnosed_replay",
+                        "Rerun Diagnosed Replay",
+                        [
+                            "agent-learn",
+                            "replay",
+                            *manifest_paths,
+                            "--output",
+                            "artifacts/diagnosed-replay.json",
+                            "--junit",
+                            "artifacts/diagnosed-replay.junit.xml",
+                            "--sarif",
+                            "artifacts/diagnosed-replay.sarif.json",
+                            "--markdown",
+                            "artifacts/diagnosed-replay.md",
+                        ],
+                    ),
+                    target_layers=target_layers,
+                    repair_operators=repair_operators,
+                )
+            )
+    return actions
+
+
+def _harness_target_layers(
+    layer_records: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    needs_attention = [
+        str(record.get("layer"))
+        for record in layer_records
+        if record.get("status") == "needs_attention" and record.get("layer")
+    ]
+    if needs_attention:
+        return _unique_strings(needs_attention)
+    return [
+        str(record.get("layer"))
+        for record in sorted(
+            layer_records,
+            key=lambda value: (
+                -float(value.get("confidence") or 0.0),
+                str(value.get("layer") or ""),
+            ),
+        )[:3]
+        if record.get("layer")
+    ]
+
+
+def _diagnosis_cli_action(
+    action: Dict[str, Any],
+    *,
+    target_layers: Sequence[str],
+    repair_operators: Sequence[Mapping[str, Any]],
+    search_paths: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    action["target_layers"] = _unique_strings(target_layers)
+    action["repair_operators"] = [
+        dict(item)
+        for item in repair_operators
+        if item.get("layer") in set(action["target_layers"])
+    ]
+    if search_paths:
+        action["search_paths"] = _unique_strings(search_paths)
+    return action
 
 
 _HARNESS_LAYER_DEFINITIONS: Dict[str, Dict[str, Any]] = {
@@ -3085,7 +3284,7 @@ def _shell_token(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def _markdown_sections(result: Mapping[str, Any]) -> List[str]:
+def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[str]:
     sections = ["summary"]
     if result.get("replay") is not None:
         sections.append("replay")
@@ -3097,7 +3296,7 @@ def _markdown_sections(result: Mapping[str, Any]) -> List[str]:
         sections.append("optimization")
     if _has_optimization_replay_card(result):
         sections.append("optimization_replay")
-    if _has_harness_diagnosis_card(result):
+    if _has_harness_diagnosis_card(result, source_path=source_path):
         sections.append("harness_diagnosis")
     if result.get("baseline") is not None:
         sections.append("baseline")
@@ -3117,7 +3316,7 @@ def _result_markdown(
     score: Optional[float] = None,
     findings: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> str:
-    sections = list(sections or _markdown_sections(result))
+    sections = list(sections or _markdown_sections(result, source_path=source_path))
     findings = list(findings if findings is not None else _result_findings(result))
     score = _optional_primary_score(result) if score is None else score
     summary = dict(result.get("summary") or {})
@@ -3145,7 +3344,7 @@ def _result_markdown(
     if "optimization_replay" in sections:
         lines.extend(_optimization_replay_markdown(result))
     if "harness_diagnosis" in sections:
-        lines.extend(_harness_diagnosis_markdown(result))
+        lines.extend(_harness_diagnosis_markdown(result, source_path=source_path))
     if "baseline" in sections:
         lines.extend(_baseline_markdown(result))
     if "metrics" in sections:
@@ -3287,18 +3486,26 @@ def _has_optimization_replay_card(result: Mapping[str, Any]) -> bool:
     return False
 
 
-def _has_harness_diagnosis_card(result: Mapping[str, Any]) -> bool:
+def _has_harness_diagnosis_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
     report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
     if isinstance(report.get("harness_diagnosis"), Mapping):
         return True
-    return _harness_diagnosis_card(result) is not None
+    return _harness_diagnosis_card(result, source_path=source_path) is not None
 
 
-def _harness_diagnosis_markdown(result: Mapping[str, Any]) -> List[str]:
+def _harness_diagnosis_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
     report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
     card = report.get("harness_diagnosis") if isinstance(report, Mapping) else None
     if not isinstance(card, Mapping):
-        card = _harness_diagnosis_card(result)
+        card = _harness_diagnosis_card(result, source_path=source_path)
     if not isinstance(card, Mapping):
         return []
     rows = [
@@ -3321,6 +3528,16 @@ def _harness_diagnosis_markdown(result: Mapping[str, Any]) -> List[str]:
         ]
         for item in _coerce_list(card.get("repair_operators"))
         if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            _join_values(item.get("target_layers")),
+            item.get("command"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping) and item.get("kind") == "cli"
     ]
     lines = [
         "## Harness Diagnosis",
@@ -3354,6 +3571,18 @@ def _harness_diagnosis_markdown(result: Mapping[str, Any]) -> List[str]:
                 *_markdown_table(
                     ["Layer", "Operator", "Status", "Evidence"],
                     operator_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Diagnosis Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Target layers", "Command"],
+                    action_rows,
                 ),
                 "",
             ]

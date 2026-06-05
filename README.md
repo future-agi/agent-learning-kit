@@ -138,7 +138,11 @@ Optimization, promotion, and replay reports also include a structured
 maps observed search paths, weak metrics, environment types, findings, and
 replay status onto execution/tooling/context/lifecycle/observability/
 verification/governance layers, then suggests deterministic repair operators
-for the implicated harness layers.
+for the implicated harness layers. The same card now emits executable
+diagnosis actions, including follow-up report, rerun, promotion, and replay
+commands, with `target_layers`, `repair_operators`, and relevant search paths
+attached so CLI users, SDK callers, CI, and Future AGI UI cards can move from
+diagnosis to a reproducible next step without inventing ad hoc commands.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

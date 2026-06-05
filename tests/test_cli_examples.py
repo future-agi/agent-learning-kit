@@ -678,6 +678,22 @@ def test_agent_learn_init_optimize_scaffold_uses_unified_cli(
         layer["layer"]
         for layer in optimization_diagnosis["layers"]
     }
+    optimization_action_ids = {
+        action["id"]
+        for action in optimization_diagnosis["actions"]
+    }
+    assert {
+        "report_harness_diagnosis",
+        "rerun_optimization_for_diagnosed_layers",
+        "promote_diagnosed_regression",
+    } <= optimization_action_ids
+    assert {"verification"} <= set(
+        next(
+            action
+            for action in optimization_diagnosis["actions"]
+            if action["id"] == "rerun_optimization_for_diagnosed_layers"
+        )["target_layers"]
+    )
 
     exit_code = main([
         "promote-to-regression",
@@ -1307,6 +1323,8 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     report_markdown = report_markdown_path.read_text(encoding="utf-8")
     assert "## Optimization Replay" in report_markdown
     assert "## Harness Diagnosis" in report_markdown
+    assert "### Diagnosis Actions" in report_markdown
+    assert "replay_diagnosed_regression" in report_markdown
     assert "Promotion kind" in report_markdown
     assert "optimized_manifest" in report_markdown
     assert "### Promoted Manifest" in report_markdown
@@ -1373,6 +1391,10 @@ def test_custom_framework_optimization_example_runs_adapter_search(
         layer["layer"]
         for layer in diagnosis_card["layers"]
     }
+    assert {
+        "report_harness_diagnosis",
+        "rerun_diagnosed_replay",
+    } <= {action["id"] for action in diagnosis_card["actions"]}
     assert replay_report_card["kind"] == "replay_metrics"
     assert replay_report_card["manifest_count"] == 1
     assert replay_report_card["replay_pass_rate"] == pytest.approx(1.0)
