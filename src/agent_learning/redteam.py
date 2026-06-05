@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from ._facade import optional_module
+from ._schema import public_payload
 
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
 _SIMULATE_EXTRA = "simulate"
@@ -492,9 +493,7 @@ def __dir__() -> list[str]:
 
 
 def _public_redteam_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    result = copy.deepcopy(dict(payload))
-    result["kind"] = AGENT_LEARNING_REDTEAM_KIND
-    return result
+    return public_payload(payload, kind=AGENT_LEARNING_REDTEAM_KIND)
 
 
 def _default_redteam_scenario(name: str) -> dict[str, Any]:

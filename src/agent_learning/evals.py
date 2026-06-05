@@ -6,8 +6,11 @@ import time
 from typing import Any, Mapping, Optional, Sequence
 
 from ._facade import optional_module
+from ._schema import public_payload
 
 _EVAL_EXTRA = "evaluation"
+AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
+AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_ARTIFACT_EVALUATION_KIND = "agent-learning.artifact-evaluation.v1"
 AGENT_LEARNING_TASK_EVIDENCE_KIND = "agent-learning.task-evidence.v1"
 
@@ -677,13 +680,14 @@ def run_eval_suite_file(
     threshold: Optional[float] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _suite().run_eval_suite_file(
+    payload = _suite().run_eval_suite_file(
         path,
         options=options,
         name=name,
         threshold=threshold,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_KIND)
 
 
 def run_eval_suite(
@@ -692,7 +696,8 @@ def run_eval_suite(
     suite_path: str | Path = ".",
     options: Optional[Any] = None,
 ) -> dict[str, Any]:
-    return _suite().run_eval_suite(suite, suite_path=suite_path, options=options)
+    payload = _suite().run_eval_suite(suite, suite_path=suite_path, options=options)
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_KIND)
 
 
 def optimize_eval_suite_file(
@@ -704,7 +709,7 @@ def optimize_eval_suite_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _suite().optimize_eval_suite_file(
+    payload = _suite().optimize_eval_suite_file(
         path,
         options=options,
         name=name,
@@ -712,6 +717,7 @@ def optimize_eval_suite_file(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_OPTIMIZATION_KIND)
 
 
 def __getattr__(name: str) -> Any:

@@ -11,11 +11,11 @@
       "replay"
     ],
     "result_kinds": [
-      "agent_simulate.baseline.v1",
-      "agent_simulate.compare.v1",
-      "agent_simulate.report.v1",
-      "agent_simulate.regression_promotion.v1",
-      "agent_simulate.replay.v1"
+      "agent_learning.baseline.v1",
+      "agent_learning.compare.v1",
+      "agent_learning.report.v1",
+      "agent_learning.regression_promotion.v1",
+      "agent_learning.replay.v1"
     ],
     "metrics": [
       "compare_score_delta",

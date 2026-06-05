@@ -1,5 +1,5 @@
 {
-  "version": "agent-simulate.eval.v1",
+  "version": "agent-learning.eval.v1",
   "name": "local-eval-suite-optimization",
   "providers": [
     {

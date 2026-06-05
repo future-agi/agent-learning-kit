@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 from xml.sax.saxutils import escape
 
+from ._schema import AGENT_LEARNING_CLI_SCHEMA_VERSION, public_payload
+
 
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
 AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
@@ -364,11 +366,11 @@ def build_regression_artifact_suite_manifest(
                 "replay",
             ],
             "result_kinds": [
-                "agent_simulate.baseline.v1",
-                "agent_simulate.compare.v1",
-                "agent_simulate.report.v1",
-                "agent_simulate.regression_promotion.v1",
-                "agent_simulate.replay.v1",
+                "agent_learning.baseline.v1",
+                "agent_learning.compare.v1",
+                "agent_learning.report.v1",
+                "agent_learning.regression_promotion.v1",
+                "agent_learning.replay.v1",
             ],
             "metrics": [
                 "compare_score_delta",
@@ -458,7 +460,7 @@ def run_suite(
         if int(child.get("exit_code", 1)) != 0 and opts.fail_fast:
             break
 
-    return _suite_result(
+    payload = _suite_result(
         suite=runtime_suite,
         suite_path=suite_path,
         children=children,
@@ -467,6 +469,7 @@ def run_suite(
         fail_fast=opts.fail_fast,
         duration_seconds=round(time.time() - started, 4),
     )
+    return public_payload(payload, kind=AGENT_LEARNING_SUITE_KIND)
 
 
 def optimize_suite_file(
@@ -534,8 +537,8 @@ def optimize_suite(
     target_config = cli._target_config(optimization)
     optimizer_config = cli._optimizer_config(optimization)
     if opts.dry_run:
-        return {
-            "schema_version": "agent-simulate.cli.v1",
+        return public_payload({
+            "schema_version": AGENT_LEARNING_CLI_SCHEMA_VERSION,
             "kind": AGENT_LEARNING_SUITE_OPTIMIZATION_KIND,
             "name": str(prepared.get("name") or suite_path.stem),
             "status": "passed",
@@ -548,7 +551,7 @@ def optimize_suite(
                 "max_candidates": optimizer_config.get("max_candidates"),
             },
             "duration_seconds": round(time.time() - started, 4),
-        }
+        }, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
     try:
         from fi.opt import problem_from_agent_learning_suite
@@ -577,7 +580,7 @@ def optimize_suite(
         payload["optimization"]["suite_optimization"] = artifact
     payload["summary"]["job_count"] = len(_suite_jobs(prepared))
     payload["summary"]["child_command_count"] = _suite_job_command_counts(prepared)
-    return payload
+    return public_payload(payload, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
 
 def render_junit(result: Mapping[str, Any]) -> str:

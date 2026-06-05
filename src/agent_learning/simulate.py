@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from ._facade import optional_module
+from ._schema import public_payload
 
 _SIMULATE_EXTRA = "simulate"
 
@@ -208,6 +209,8 @@ _SIMULATE_EXPORTS.update(
 
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
+AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
+AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
 
 
 def _manifest() -> Any:
@@ -1952,7 +1955,7 @@ async def run_manifest_file(
     no_eval: Optional[bool] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return await _manifest().run_manifest_file(
+    payload = await _manifest().run_manifest_file(
         path,
         options=options,
         name=name,
@@ -1960,6 +1963,7 @@ async def run_manifest_file(
         no_eval=no_eval,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_RUN_KIND)
 
 
 async def run_manifest(
@@ -1972,7 +1976,7 @@ async def run_manifest(
     no_eval: Optional[bool] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return await _manifest().run_manifest(
+    payload = await _manifest().run_manifest(
         manifest,
         manifest_path=manifest_path,
         options=options,
@@ -1981,6 +1985,7 @@ async def run_manifest(
         no_eval=no_eval,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_RUN_KIND)
 
 
 def optimize_manifest_file(
@@ -1992,7 +1997,7 @@ def optimize_manifest_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _manifest().optimize_manifest_file(
+    payload = _manifest().optimize_manifest_file(
         path,
         options=options,
         name=name,
@@ -2000,6 +2005,29 @@ def optimize_manifest_file(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def optimize_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    name: Optional[str] = None,
+    threshold: Optional[float] = None,
+    max_candidates: Optional[int] = None,
+    dry_run: Optional[bool] = None,
+) -> dict[str, Any]:
+    payload = _manifest().optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=name,
+        threshold=threshold,
+        max_candidates=max_candidates,
+        dry_run=dry_run,
+    )
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
 def render_junit(result: Mapping[str, Any]) -> str:
@@ -2023,7 +2051,7 @@ def render_markdown(
 
 
 def create_baseline_file(path: str | Path, *, name: Optional[str] = None) -> dict[str, Any]:
-    return _manifest().create_baseline_file(path, name=name)
+    return public_payload(_manifest().create_baseline_file(path, name=name))
 
 
 def create_baseline(
@@ -2032,11 +2060,8 @@ def create_baseline(
     source_path: str | Path = ".",
     name: Optional[str] = None,
 ) -> dict[str, Any]:
-    return _manifest().create_baseline(
-        source,
-        source_path=source_path,
-        name=name,
-    )
+    payload = _manifest().create_baseline(source, source_path=source_path, name=name)
+    return public_payload(payload)
 
 
 def compare_result_files(
@@ -2049,7 +2074,7 @@ def compare_result_files(
     min_metric_delta: Optional[float] = None,
     name: Optional[str] = None,
 ) -> dict[str, Any]:
-    return _manifest().compare_result_files(
+    payload = _manifest().compare_result_files(
         baseline_path,
         current_path,
         min_score_delta=min_score_delta,
@@ -2058,6 +2083,7 @@ def compare_result_files(
         min_metric_delta=min_metric_delta,
         name=name,
     )
+    return public_payload(payload)
 
 
 def compare_results(
@@ -2072,7 +2098,7 @@ def compare_results(
     min_metric_delta: Optional[float] = None,
     name: Optional[str] = None,
 ) -> dict[str, Any]:
-    return _manifest().compare_results(
+    payload = _manifest().compare_results(
         baseline,
         current,
         baseline_path=baseline_path,
@@ -2083,10 +2109,11 @@ def compare_results(
         min_metric_delta=min_metric_delta,
         name=name,
     )
+    return public_payload(payload)
 
 
 def render_report_file(path: str | Path, *, name: Optional[str] = None) -> dict[str, Any]:
-    return _manifest().render_report_file(path, name=name)
+    return public_payload(_manifest().render_report_file(path, name=name))
 
 
 def render_report(
@@ -2095,7 +2122,8 @@ def render_report(
     source_path: str | Path = ".",
     name: Optional[str] = None,
 ) -> dict[str, Any]:
-    return _manifest().render_report(source, source_path=source_path, name=name)
+    payload = _manifest().render_report(source, source_path=source_path, name=name)
+    return public_payload(payload)
 
 
 def promote_to_regression_file(
@@ -2106,13 +2134,14 @@ def promote_to_regression_file(
     max_findings: int = 25,
     required_env: Sequence[str] = (),
 ) -> dict[str, Any]:
-    return _manifest().promote_to_regression_file(
+    payload = _manifest().promote_to_regression_file(
         path,
         name=name,
         min_level=min_level,
         max_findings=max_findings,
         required_env=required_env,
     )
+    return public_payload(payload)
 
 
 def promote_to_regression(
@@ -2124,7 +2153,7 @@ def promote_to_regression(
     max_findings: int = 25,
     required_env: Sequence[str] = (),
 ) -> dict[str, Any]:
-    return _manifest().promote_to_regression(
+    payload = _manifest().promote_to_regression(
         source,
         source_path=source_path,
         name=name,
@@ -2132,6 +2161,7 @@ def promote_to_regression(
         max_findings=max_findings,
         required_env=required_env,
     )
+    return public_payload(payload)
 
 
 def replay_manifests(
@@ -2141,12 +2171,13 @@ def replay_manifests(
     dry_run: bool = False,
     fail_fast: bool = False,
 ) -> dict[str, Any]:
-    return _manifest().replay_manifests(
+    payload = _manifest().replay_manifests(
         manifests,
         name=name,
         dry_run=dry_run,
         fail_fast=fail_fast,
     )
+    return public_payload(payload)
 
 
 def load_eval_suite_file(path: str | Path) -> dict[str, Any]:
@@ -2188,13 +2219,14 @@ def run_eval_suite_file(
     threshold: Optional[float] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _suite().run_eval_suite_file(
+    payload = _suite().run_eval_suite_file(
         path,
         options=options,
         name=name,
         threshold=threshold,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_KIND)
 
 
 def run_eval_suite(
@@ -2203,11 +2235,12 @@ def run_eval_suite(
     suite_path: str | Path = ".",
     options: Optional[Any] = None,
 ) -> dict[str, Any]:
-    return _suite().run_eval_suite(suite, suite_path=suite_path, options=options)
+    payload = _suite().run_eval_suite(suite, suite_path=suite_path, options=options)
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_KIND)
 
 
 def public_result(result: Mapping[str, Any]) -> dict[str, Any]:
-    return _manifest().public_result(result)
+    return public_payload(_manifest().public_result(result))
 
 
 def wrap_agent(*args: Any, **kwargs: Any) -> Any:

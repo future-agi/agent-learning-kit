@@ -1,5 +1,5 @@
 {
-  "schema_version": "agent-simulate.cli.v1",
+  "schema_version": "agent-learning.cli.v1",
   "name": "redteam-finding-source",
   "status": "failed",
   "exit_code": 1,
@@ -24,7 +24,7 @@
       "local_cli"
     ],
     "frameworks": [
-      "agent_simulate"
+      "agent_learning_kit"
     ]
   },
   "evaluation": {

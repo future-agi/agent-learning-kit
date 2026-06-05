@@ -15,7 +15,7 @@ REQUIRED_ENV = "AGENT_LEARNING_SDK_REGRESSION_ARTIFACT_SUITE_KEY"
 
 def passing_result(name: str) -> dict[str, Any]:
     return {
-        "schema_version": "agent-simulate.cli.v1",
+        "schema_version": "agent-learning.cli.v1",
         "name": name,
         "status": "passed",
         "exit_code": 0,

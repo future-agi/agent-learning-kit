@@ -6,8 +6,12 @@ from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from ._facade import optional_module
+from ._schema import public_payload
 
 _OPTIMIZE_EXTRA = "optimize"
+AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
+AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
+AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -254,7 +258,7 @@ def optimize_manifest_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _manifest().optimize_manifest_file(
+    payload = _manifest().optimize_manifest_file(
         path,
         options=options,
         name=name,
@@ -262,6 +266,7 @@ def optimize_manifest_file(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
 def optimize_manifest(
@@ -274,7 +279,7 @@ def optimize_manifest(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _manifest().optimize_manifest(
+    payload = _manifest().optimize_manifest(
         manifest,
         manifest_path=manifest_path,
         options=options,
@@ -283,6 +288,7 @@ def optimize_manifest(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
 def build_task_optimization_manifest(
@@ -11961,7 +11967,7 @@ def optimize_eval_suite_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _suite().optimize_eval_suite_file(
+    payload = _suite().optimize_eval_suite_file(
         path,
         options=options,
         name=name,
@@ -11969,6 +11975,7 @@ def optimize_eval_suite_file(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_OPTIMIZATION_KIND)
 
 
 def optimize_eval_suite(
@@ -11981,7 +11988,7 @@ def optimize_eval_suite(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _suite().optimize_eval_suite(
+    payload = _suite().optimize_eval_suite(
         suite,
         suite_path=suite_path,
         options=options,
@@ -11990,6 +11997,7 @@ def optimize_eval_suite(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_EVAL_OPTIMIZATION_KIND)
 
 
 def optimize_suite_file(
@@ -12001,7 +12009,7 @@ def optimize_suite_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _agent_learning_suite().optimize_suite_file(
+    payload = _agent_learning_suite().optimize_suite_file(
         path,
         options=options,
         name=name,
@@ -12009,6 +12017,7 @@ def optimize_suite_file(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
 
 def optimize_suite(
@@ -12021,7 +12030,7 @@ def optimize_suite(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> dict[str, Any]:
-    return _agent_learning_suite().optimize_suite(
+    payload = _agent_learning_suite().optimize_suite(
         suite,
         suite_path=suite_path,
         options=options,
@@ -12030,6 +12039,7 @@ def optimize_suite(
         max_candidates=max_candidates,
         dry_run=dry_run,
     )
+    return public_payload(payload, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
 
 optimize_agent_learning_suite = optimize_suite

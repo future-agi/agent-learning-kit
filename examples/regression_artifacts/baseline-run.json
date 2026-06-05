@@ -1,5 +1,5 @@
 {
-  "schema_version": "agent-simulate.cli.v1",
+  "schema_version": "agent-learning.cli.v1",
   "name": "baseline-run",
   "status": "passed",
   "exit_code": 0,

@@ -516,7 +516,7 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
         manifest_path=PROJECT_ROOT / "examples" / "sdk-framework-optimization.json",
     )
 
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.95
     best_agent = result["optimization"]["best_config"]["agent"]
@@ -585,7 +585,7 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.95
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -738,7 +738,7 @@ def test_sdk_social_memory_framework_simulation_example_runs(
     assert generated_manifest["name"] == "sdk-social-memory-framework-simulation"
     assert generated_manifest["agent"]["target"] == module.TARGET
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-social-memory-framework-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -921,7 +921,7 @@ def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
         manifest_path=PROJECT_ROOT / "examples" / "sdk-task-world-optimization.json",
     )
 
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.95
     best_agent = result["optimization"]["best_config"]["agent"]
@@ -1194,7 +1194,7 @@ def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-orchestration-simulation"
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-orchestration-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -1453,7 +1453,7 @@ def test_optimize_facade_builds_and_runs_multi_agent_coordination_manifest(
         manifest_path=PROJECT_ROOT / "examples" / "sdk-multi-agent.json",
     )
 
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.9
     best_config = result["optimization"]["best_config"]
@@ -1601,7 +1601,7 @@ def test_sdk_multi_agent_simulation_example_runs(monkeypatch, tmp_path):
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-multi-agent-coordination-simulation"
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-multi-agent-coordination-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -1704,7 +1704,7 @@ def test_sdk_multi_agent_framework_handoff_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.99
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -1903,7 +1903,7 @@ def test_sdk_multi_agent_framework_handoff_simulation_example_runs(
         "sdk-multi-agent-framework-handoff-simulation"
     )
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-multi-agent-framework-handoff-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -2033,7 +2033,7 @@ def test_sdk_optimizer_governance_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.98
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -2160,7 +2160,7 @@ def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path)
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-optimizer-governance-simulation"
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-optimizer-governance-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -2422,7 +2422,7 @@ def test_sdk_memory_simulation_example_runs(monkeypatch, tmp_path):
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-memory-simulation"
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-memory-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -2678,7 +2678,7 @@ def test_sdk_realtime_voice_simulation_example_runs(monkeypatch, tmp_path):
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["name"] == (
         "sdk-realtime-voice-simulation"
     )
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-realtime-voice-simulation"
     assert result["status"] == "passed"
     case = result["report"]["results"][0]
@@ -2955,7 +2955,7 @@ def test_eval_suite_builder_and_sdk_cookbook_runs(monkeypatch, tmp_path):
         "agent-learning.eval.v1"
     )
     assert json.loads(wrapper_path.read_text(encoding="utf-8"))["required_env"] == []
-    assert result["kind"] == "agent-simulate.eval.v1"
+    assert result["kind"] == "agent-learning.eval.v1"
     assert result["status"] == "passed"
     assert result["summary"]["score"] == pytest.approx(1.0)
     assert result["summary"]["assertion_count"] == 2
@@ -3368,7 +3368,7 @@ def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
         manifest_path=PROJECT_ROOT / "examples" / "sdk-redteam-optimization.json",
     )
 
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.9
     best_config = result["optimization"]["best_config"]
@@ -3476,7 +3476,7 @@ def test_sdk_redteam_autogen_optimization_example_runs(monkeypatch, tmp_path):
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.97
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -3740,7 +3740,7 @@ def test_sdk_long_horizon_redteam_optimization_example_runs(monkeypatch, tmp_pat
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.95
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -3841,7 +3841,7 @@ def test_sdk_redteam_society_optimization_example_runs(monkeypatch, tmp_path):
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.96
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -3989,7 +3989,7 @@ def test_sdk_redteam_causal_attribution_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.96
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -4308,7 +4308,7 @@ def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path
 
     assert output_path.exists()
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.98
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -4430,7 +4430,7 @@ def test_sdk_agent_control_plane_simulation_example_runs(monkeypatch, tmp_path):
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-agent-control-plane-simulation"
     assert written_result["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-agent-control-plane-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -4530,7 +4530,7 @@ def test_sdk_browser_cua_optimization_example_runs(monkeypatch, tmp_path):
 
     assert output_path.exists()
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.98
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -4616,7 +4616,7 @@ def test_sdk_browser_cua_simulation_example_runs(monkeypatch, tmp_path):
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-browser-cua-simulation"
     assert written_result["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-browser-cua-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -4721,7 +4721,7 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
 
     assert output_path.exists()
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.98
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -4857,7 +4857,7 @@ def test_sdk_agent_integration_simulation_example_runs(monkeypatch, tmp_path):
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-agent-integration-simulation"
     assert written_result["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-agent-integration-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -4977,7 +4977,7 @@ def test_sdk_framework_certification_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.98
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -5130,7 +5130,7 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-framework-certification-simulation"
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-framework-certification-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -5249,7 +5249,7 @@ def test_sdk_autonomous_redteam_task_world_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] == pytest.approx(1.0)
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -5413,7 +5413,7 @@ def test_sdk_autonomous_redteam_task_world_simulation_example_runs(
         "sdk-autonomous-redteam-task-world-simulation"
     )
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-autonomous-redteam-task-world-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -5537,7 +5537,7 @@ def test_sdk_multimodal_image_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] == pytest.approx(1.0)
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -5682,7 +5682,7 @@ def test_sdk_multimodal_image_simulation_example_runs(
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-multimodal-image-simulation"
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-multimodal-image-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -5774,7 +5774,7 @@ def test_sdk_workspace_observability_optimization_example_runs(
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.9
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
@@ -5867,7 +5867,7 @@ def test_sdk_workspace_observability_simulation_example_runs(
     assert generated_manifest_path.exists()
     assert generated_manifest["name"] == "sdk-workspace-observability-simulation"
     assert written_result["status"] == "passed"
-    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["name"] == "sdk-workspace-observability-simulation"
     assert result["status"] == "passed"
     assert result["summary"]["evaluation_passed"] is True
@@ -6172,7 +6172,7 @@ def test_agent_learn_eval_runs_unified_command_and_writes_artifacts(tmp_path):
     suite_path.write_text(
         json.dumps(
             {
-                "version": "agent-simulate.eval.v1",
+                "version": "agent-learning.eval.v1",
                 "name": "agent-learning-kit-eval",
                 "providers": [{"id": "echo", "type": "echo"}],
                 "prompts": [{"id": "support", "template": "{{question}}"}],
@@ -6221,7 +6221,7 @@ def test_agent_learn_suite_fails_missing_required_capability(tmp_path):
     eval_path.write_text(
         json.dumps(
             {
-                "version": "agent-simulate.eval.v1",
+                "version": "agent-learning.eval.v1",
                 "name": "agent-learning-kit-capability-eval",
                 "providers": [{"id": "echo", "type": "echo"}],
                 "prompts": [{"id": "support", "template": "{{question}}"}],
@@ -6303,7 +6303,7 @@ def test_agent_learn_suite_runs_regression_artifact_jobs(tmp_path):
     markdown_path = tmp_path / "regression-suite-result.md"
 
     result_payload = {
-        "schema_version": "agent-simulate.cli.v1",
+        "schema_version": "agent-learning.cli.v1",
         "name": "agent-learning-regression-source",
         "status": "passed",
         "exit_code": 0,
@@ -6396,11 +6396,11 @@ def test_agent_learn_suite_runs_regression_artifact_jobs(tmp_path):
                         "replay",
                     ],
                     "result_kinds": [
-                        "agent_simulate.baseline.v1",
-                        "agent_simulate.compare.v1",
-                        "agent_simulate.report.v1",
-                        "agent_simulate.regression_promotion.v1",
-                        "agent_simulate.replay.v1",
+                        "agent_learning.baseline.v1",
+                        "agent_learning.compare.v1",
+                        "agent_learning.report.v1",
+                        "agent_learning.regression_promotion.v1",
+                        "agent_learning.replay.v1",
                     ],
                     "metrics": ["compare_score_delta", "replay_pass_rate"],
                 },
@@ -6727,7 +6727,7 @@ def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp
     suite_path.write_text(
         json.dumps(
             {
-                "version": "agent-simulate.eval.v1",
+                "version": "agent-learning.eval.v1",
                 "name": "agent-learning-kit-eval-optimization",
                 "providers": [
                     {"id": "scripted", "type": "scripted", "response": failing_response}

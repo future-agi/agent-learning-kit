@@ -472,11 +472,11 @@ def test_regression_artifact_suite_example_runs_artifact_lifecycle(tmp_path):
         "replay",
     ]
     assert {child["kind"] for child in payload["children"]} == {
-        "agent-simulate.baseline.v1",
-        "agent-simulate.compare.v1",
-        "agent-simulate.report.v1",
-        "agent-simulate.regression_promotion.v1",
-        "agent-simulate.replay.v1",
+        "agent-learning.baseline.v1",
+        "agent-learning.compare.v1",
+        "agent-learning.report.v1",
+        "agent-learning.regression-promotion.v1",
+        "agent-learning.replay.v1",
     }
     assert payload["children"][3]["result"]["summary"]["promoted_finding_count"] == 1
     assert payload["children"][4]["result"]["summary"]["replay_pass_rate"] == 1.0
