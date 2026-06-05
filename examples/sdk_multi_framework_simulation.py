@@ -59,6 +59,111 @@ FRAMEWORKS = [
         },
     },
     {
+        "id": "llamaindex-chat-engine",
+        "framework": "llamaindex",
+        "factory": "build_llamaindex_chat_engine",
+        "persona": {"name": "Ishan", "role": "retrieval-agent-owner"},
+        "situation": (
+            "Ishan needs a LlamaIndex-style chat engine simulated through the "
+            "generic framework adapter."
+        ),
+        "outcome": (
+            "The LlamaIndex-style chat engine completes with retrieval "
+            "framework runtime trace evidence."
+        ),
+        "trace": {
+            "span_id": "llamaindex_chat_engine",
+            "span_name": "chat_engine.achat",
+            "input": "retrieval workflow",
+            "output": "completed",
+            "signals": ["retrieval", "index", "tool"],
+        },
+    },
+    {
+        "id": "openai-agents-runner",
+        "framework": "openai_agents",
+        "factory": "build_openai_agents_runner",
+        "persona": {"name": "Omar", "role": "agent-sdk-owner"},
+        "situation": (
+            "Omar needs an OpenAI Agents-style runner simulated through the "
+            "generic framework adapter."
+        ),
+        "outcome": (
+            "The OpenAI Agents-style runner completes with handoff framework "
+            "runtime trace evidence."
+        ),
+        "trace": {
+            "span_id": "openai_agents_runner",
+            "span_name": "Runner.run",
+            "input": "handoff workflow",
+            "output": "completed",
+            "signals": ["agent", "handoff", "tool"],
+        },
+    },
+    {
+        "id": "autogen-agent-chat",
+        "framework": "autogen",
+        "factory": "build_autogen_agent",
+        "persona": {"name": "Tara", "role": "multi-agent-owner"},
+        "situation": (
+            "Tara needs an AutoGen-style agent chat simulated through the "
+            "generic framework adapter."
+        ),
+        "outcome": (
+            "The AutoGen-style agent chat completes with group conversation "
+            "runtime trace evidence."
+        ),
+        "trace": {
+            "span_id": "autogen_agent_chat",
+            "span_name": "AgentChat.run",
+            "input": "groupchat workflow",
+            "output": "completed",
+            "signals": ["agent", "groupchat", "tool"],
+        },
+    },
+    {
+        "id": "crewai-crew",
+        "framework": "crewai",
+        "factory": "build_crewai_crew",
+        "persona": {"name": "Leela", "role": "crew-owner"},
+        "situation": (
+            "Leela needs a CrewAI-style crew simulated through the generic "
+            "framework adapter."
+        ),
+        "outcome": (
+            "The CrewAI-style crew completes with manager and worker runtime "
+            "trace evidence."
+        ),
+        "trace": {
+            "span_id": "crewai_crew",
+            "span_name": "Crew.kickoff",
+            "input": "crew workflow",
+            "output": "completed",
+            "signals": ["crew", "role", "tool"],
+        },
+    },
+    {
+        "id": "pydantic-ai-agent",
+        "framework": "pydantic_ai",
+        "factory": "build_pydantic_ai_agent",
+        "persona": {"name": "Sana", "role": "typed-agent-owner"},
+        "situation": (
+            "Sana needs a PydanticAI-style typed agent simulated through the "
+            "generic framework adapter."
+        ),
+        "outcome": (
+            "The PydanticAI-style agent completes with typed output framework "
+            "runtime trace evidence."
+        ),
+        "trace": {
+            "span_id": "pydantic_ai_agent",
+            "span_name": "Agent.run",
+            "input": "typed workflow",
+            "output": "completed",
+            "signals": ["agent", "schema", "tool"],
+        },
+    },
+    {
         "id": "pipecat-voice-pipeline",
         "framework": "pipecat",
         "factory": "build_pipecat_pipeline",

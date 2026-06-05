@@ -39,6 +39,72 @@ class LocalLangGraphApp:
         }
 
 
+class LocalLlamaIndexChatEngine:
+    async def achat(self, text: str) -> dict:
+        assert text
+        return {
+            "content": (
+                "LlamaIndex-style chat engine completed retrieval-grounded "
+                "answering with framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "llamaindex"},
+        }
+
+
+class LocalOpenAIAgentsRunner:
+    def run(self, text: str) -> dict:
+        assert text
+        return {
+            "content": (
+                "OpenAI Agents-style runner completed the handoff task with "
+                "framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "openai_agents"},
+        }
+
+
+class LocalAutoGenAgent:
+    def run(self, text: str) -> dict:
+        assert text
+        return {
+            "content": (
+                "AutoGen-style agent chat completed the group task with "
+                "framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "autogen"},
+        }
+
+
+class LocalCrewAICrew:
+    def kickoff(self, payload: dict) -> dict:
+        assert payload["metadata"]["framework"] == "crewai"
+        assert payload["metadata"]["cookbook"] == "multi-framework-simulation"
+        return {
+            "content": (
+                "CrewAI-style crew completed manager and worker coordination "
+                "with framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "crewai"},
+        }
+
+
+class LocalPydanticAIAgent:
+    def run(self, text: str) -> dict:
+        assert text
+        return {
+            "content": (
+                "PydanticAI-style agent completed typed task execution with "
+                "framework trace evidence."
+            ),
+            "tool_calls": _tool_calls(),
+            "metadata": {"framework_conformance": "pydantic_ai"},
+        }
+
+
 class LocalPipecatPipeline:
     def process(self, payload: dict) -> dict:
         assert payload["metadata"]["framework"] == "pipecat"
@@ -98,6 +164,26 @@ def build_langchain_agent() -> LocalLangChainRunnable:
 
 def build_langgraph_agent() -> LocalLangGraphApp:
     return LocalLangGraphApp()
+
+
+def build_llamaindex_chat_engine() -> LocalLlamaIndexChatEngine:
+    return LocalLlamaIndexChatEngine()
+
+
+def build_openai_agents_runner() -> LocalOpenAIAgentsRunner:
+    return LocalOpenAIAgentsRunner()
+
+
+def build_autogen_agent() -> LocalAutoGenAgent:
+    return LocalAutoGenAgent()
+
+
+def build_crewai_crew() -> LocalCrewAICrew:
+    return LocalCrewAICrew()
+
+
+def build_pydantic_ai_agent() -> LocalPydanticAIAgent:
+    return LocalPydanticAIAgent()
 
 
 def build_pipecat_pipeline() -> LocalPipecatPipeline:

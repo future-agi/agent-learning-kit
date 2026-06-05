@@ -20,6 +20,41 @@
       "name": "suite-langgraph-state-graph"
     },
     {
+      "id": "llamaindex-chat-engine",
+      "command": "run",
+      "path": "framework_llamaindex_manifest.json",
+      "no_eval": true,
+      "name": "suite-llamaindex-chat-engine"
+    },
+    {
+      "id": "openai-agents-runner",
+      "command": "run",
+      "path": "framework_openai_agents_manifest.json",
+      "no_eval": true,
+      "name": "suite-openai-agents-runner"
+    },
+    {
+      "id": "autogen-agent-chat",
+      "command": "run",
+      "path": "framework_autogen_manifest.json",
+      "no_eval": true,
+      "name": "suite-autogen-agent-chat"
+    },
+    {
+      "id": "crewai-crew",
+      "command": "run",
+      "path": "framework_crewai_manifest.json",
+      "no_eval": true,
+      "name": "suite-crewai-crew"
+    },
+    {
+      "id": "pydantic-ai-agent",
+      "command": "run",
+      "path": "framework_pydantic_ai_manifest.json",
+      "no_eval": true,
+      "name": "suite-pydantic-ai-agent"
+    },
+    {
       "id": "pipecat-voice-pipeline",
       "command": "run",
       "path": "framework_pipecat_manifest.json",

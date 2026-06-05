@@ -185,11 +185,13 @@ result = suite.run_suite(manifest, suite_path="examples/sdk_trinity_suite.json")
 ```
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
-LangGraph, Pipecat, LiveKit-style, and custom proprietary agents through the
-same manifest framework adapter path, proving text and voice framework shims can
-be simulated without adding framework-specific runtime dependencies. Unknown
-framework names are accepted as custom adapters when the manifest supplies the
-target method/input mode, as shown in `framework_custom_manifest.json`.
+LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI, Pipecat,
+LiveKit-style, and custom proprietary agents through the same manifest
+framework adapter path, proving text, voice, retrieval, handoff, groupchat,
+crew, typed-output, and custom framework shims can be simulated without adding
+framework-specific runtime dependencies. Unknown framework names are accepted as
+custom adapters when the manifest supplies the target method/input mode, as
+shown in `framework_custom_manifest.json`.
 
 SDK users can build the same framework simulations without hand-writing run
 manifests:

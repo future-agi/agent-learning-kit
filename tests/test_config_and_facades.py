@@ -2944,6 +2944,11 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
     assert set(manifests) == {
         "langchain-runnable",
         "langgraph-state-graph",
+        "llamaindex-chat-engine",
+        "openai-agents-runner",
+        "autogen-agent-chat",
+        "crewai-crew",
+        "pydantic-ai-agent",
         "pipecat-voice-pipeline",
         "livekit-realtime-agent",
         "custom-refund-orchestrator",
@@ -2976,6 +2981,46 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
             "refund workflow",
             "completed",
             ["model", "tool", "state"],
+        ),
+        "llamaindex-chat-engine": (
+            "llamaindex",
+            "llamaindex_chat_engine",
+            "chat_engine.achat",
+            "retrieval workflow",
+            "completed",
+            ["retrieval", "index", "tool"],
+        ),
+        "openai-agents-runner": (
+            "openai_agents",
+            "openai_agents_runner",
+            "Runner.run",
+            "handoff workflow",
+            "completed",
+            ["agent", "handoff", "tool"],
+        ),
+        "autogen-agent-chat": (
+            "autogen",
+            "autogen_agent_chat",
+            "AgentChat.run",
+            "groupchat workflow",
+            "completed",
+            ["agent", "groupchat", "tool"],
+        ),
+        "crewai-crew": (
+            "crewai",
+            "crewai_crew",
+            "Crew.kickoff",
+            "crew workflow",
+            "completed",
+            ["crew", "role", "tool"],
+        ),
+        "pydantic-ai-agent": (
+            "pydantic_ai",
+            "pydantic_ai_agent",
+            "Agent.run",
+            "typed workflow",
+            "completed",
+            ["agent", "schema", "tool"],
         ),
         "pipecat-voice-pipeline": (
             "pipecat",
@@ -3024,11 +3069,16 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
     assert result["kind"] == "agent-learning.suite.v1"
     assert result["status"] == "passed"
-    assert result["summary"]["commands"] == {"run": 5}
+    assert result["summary"]["commands"] == {"run": 10}
     assert result["summary"]["score"] == pytest.approx(1.0)
     expected = {
         "langchain-runnable": ("langchain", "ainvoke", "dict", "text"),
         "langgraph-state-graph": ("langgraph", "ainvoke", "dict", "text"),
+        "llamaindex-chat-engine": ("llamaindex", "achat", "text", "text"),
+        "openai-agents-runner": ("openai_agents", "run", "text", "text"),
+        "autogen-agent-chat": ("autogen", "run", "text", "text"),
+        "crewai-crew": ("crewai", "kickoff", "dict", "text"),
+        "pydantic-ai-agent": ("pydantic_ai", "run", "text", "text"),
         "pipecat-voice-pipeline": ("pipecat", "process", "dict", "voice"),
         "livekit-realtime-agent": ("livekit", "respond", "text", "voice"),
         "custom-refund-orchestrator": (

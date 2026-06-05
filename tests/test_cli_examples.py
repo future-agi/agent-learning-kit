@@ -287,10 +287,15 @@ def test_shipped_examples_execute_through_unified_cli(
             if child["id"] == "multi-framework-adapter-suite"
         )
         assert nested["kind"] == "agent-learning.suite.v1"
-        assert nested["result"]["summary"]["commands"] == {"run": 5}
+        assert nested["result"]["summary"]["commands"] == {"run": 10}
         assert [child["id"] for child in nested["result"]["children"]] == [
             "langchain-runnable",
             "langgraph-state-graph",
+            "llamaindex-chat-engine",
+            "openai-agents-runner",
+            "autogen-agent-chat",
+            "crewai-crew",
+            "pydantic-ai-agent",
             "pipecat-voice-pipeline",
             "livekit-realtime-agent",
             "custom-refund-orchestrator",
@@ -782,12 +787,17 @@ def test_multi_framework_simulation_suite_runs_framework_adapters(
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["kind"] == "agent-learning.suite.v1"
     assert payload["status"] == "passed"
-    assert payload["summary"]["commands"] == {"run": 5}
+    assert payload["summary"]["commands"] == {"run": 10}
     assert payload["summary"]["score"] == pytest.approx(1.0)
 
     expected = {
         "langchain-runnable": ("langchain", "ainvoke", "dict", "text"),
         "langgraph-state-graph": ("langgraph", "ainvoke", "dict", "text"),
+        "llamaindex-chat-engine": ("llamaindex", "achat", "text", "text"),
+        "openai-agents-runner": ("openai_agents", "run", "text", "text"),
+        "autogen-agent-chat": ("autogen", "run", "text", "text"),
+        "crewai-crew": ("crewai", "kickoff", "dict", "text"),
+        "pydantic-ai-agent": ("pydantic_ai", "run", "text", "text"),
         "pipecat-voice-pipeline": ("pipecat", "process", "dict", "voice"),
         "livekit-realtime-agent": ("livekit", "respond", "text", "voice"),
         "custom-refund-orchestrator": (
