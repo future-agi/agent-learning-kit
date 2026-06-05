@@ -433,6 +433,10 @@ AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_autonomous_redteam_task_world_optimization.py \
   artifacts/sdk-autonomous-redteam-task-world-optimization.json
 
+AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_multimodal_image_optimization.py \
+  artifacts/sdk-multimodal-image-optimization.json
+
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
   artifacts/sdk-multi-framework-simulation.json
@@ -598,3 +602,7 @@ The `multimodal_image_optimization.json` example optimizes a local vision
 fixture harness. It verifies image artifacts, image inspection tools, structured
 OCR/layout evidence, artifact grounding, artifact semantics, and trajectory
 multimodal faithfulness before approving an image-grounded refund.
+The same harness is available from Python through
+`optimize.build_multimodal_image_optimization_manifest()` and
+`examples/sdk_multimodal_image_optimization.py`, which search weak versus
+hardened image evidence as one `simulation.environments` bundle.

@@ -96,6 +96,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
     assert optimize.optimize_multi_agent_framework_handoff is not None
+    assert optimize.build_multimodal_image_optimization_manifest is not None
+    assert optimize.optimize_multimodal_image is not None
     assert optimize.build_optimizer_governance_optimization_manifest is not None
     assert optimize.optimize_optimizer_governance is not None
     assert optimize.build_task_optimization_manifest is not None
@@ -2495,6 +2497,100 @@ def test_sdk_autonomous_redteam_task_world_optimization_example_runs(
         "status",
         "verify",
     ]
+
+
+def test_sdk_multimodal_image_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_EXAMPLE_KEY",
+        "real-local-sdk-multimodal-image-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_multimodal_image_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multimodal_image_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "perception",
+        "evaluator",
+        "harness",
+    ]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    assert [env["type"] for env in candidates[0]] == ["image"]
+    assert [env["type"] for env in candidates[1]] == ["multimodal_image"]
+    receipt = candidates[1][0]["data"]["images"]["receipt_image"]
+    assert receipt["data"]["layout"] == {
+        "merchant": "Contoso",
+        "total": "$42.00",
+        "status": "paid",
+    }
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["artifact_grounding_checks"][0]["artifact_id"] == (
+        "receipt_image"
+    )
+    assert config["trajectory_templates"][0]["multimodal"]["claims"][0][
+        "support_terms"
+    ] == ["Contoso", "$42.00", "paid"]
+
+    output_path = tmp_path / "sdk-multimodal-image-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    assert {
+        name: score
+        for name, score in best_history["metrics"].items()
+        if score < 1.0
+    } == {}
+    for metric in (
+        "artifact_coverage",
+        "artifact_grounding_quality",
+        "artifact_semantics_quality",
+        "agent_goal_accuracy",
+        "multimodal_faithfulness",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state == {
+        "images": {
+            "ids": ["receipt_image"],
+            "last_inspected": "receipt_image",
+            "vision_harness": "receipt_grounding",
+        }
+    }
 
 
 def test_sdk_workspace_observability_optimization_example_runs(

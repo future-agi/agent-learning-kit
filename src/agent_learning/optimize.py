@@ -2146,6 +2146,123 @@ def optimize_social_memory_framework(
     )
 
 
+def build_multimodal_image_optimization_manifest(
+    *,
+    name: str,
+    image_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a multimodal image-grounding optimization manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+
+    environment_candidates = (
+        [[_multimodal_image_environment(item) for item in candidate] for candidate in image_candidates]
+        if image_candidates is not None
+        else [
+            _seed_multimodal_image_candidate(),
+            _hardened_multimodal_image_candidate(),
+        ]
+    )
+    if not environment_candidates:
+        raise ValueError("image_candidates must contain at least one candidate")
+    for index, candidate in enumerate(environment_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"image_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": environment_candidates}
+    agent_config = copy.deepcopy(dict(agent or _default_multimodal_image_agent()))
+    max_turns_value = int(
+        max_turns
+        if max_turns is not None
+        else _max_agent_response_count([agent_config], min_turns)
+    )
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_multimodal_image_evaluation_config()
+    )
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(
+            dict(scenario or _default_multimodal_image_scenario(name))
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": ["perception", "evaluator", "harness"],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_multimodal_image_optimization_manifest"
+                    ),
+                    "task_kind": "multimodal_image",
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_multimodal_image(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a multimodal image-grounding optimization manifest."""
+
+    manifest = build_multimodal_image_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -4656,6 +4773,208 @@ def _default_social_memory_framework_evaluation_config(
             "task_completion": 1.0,
             "final_response_quality": 1.0,
         },
+    }
+
+
+def _default_multimodal_image_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Nia", "role": "vision-eval-owner"},
+                "situation": (
+                    "Optimize a receipt image grounding harness before "
+                    "approving a refund from multimodal evidence."
+                ),
+                "outcome": (
+                    "The selected candidate proves OCR/layout semantics, image "
+                    "artifact grounding, required tool use, and multimodal "
+                    "trajectory faithfulness."
+                ),
+            }
+        ],
+    }
+
+
+def _default_multimodal_image_agent() -> dict[str, Any]:
+    final_text = (
+        "Because therefore receipt image shows paid Contoso receipt total "
+        "$42.00 approve refund."
+    )
+    turn_text = (
+        "because therefore receipt image shows paid Contoso receipt total "
+        "$42.00 approve refund."
+    )
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": f"First, {turn_text}",
+                "tool_calls": [
+                    {"id": "list_images", "name": "list_images", "arguments": {}},
+                    {
+                        "id": "inspect_receipt",
+                        "name": "inspect_image",
+                        "arguments": {"id": "receipt_image"},
+                    },
+                ],
+            },
+            {"content": f"Next, {turn_text}", "tool_calls": []},
+            {"content": final_text, "tool_calls": []},
+        ],
+    }
+
+
+def _multimodal_image_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"image", "images", "vision", "multimodal_image"}:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("multimodal_image") is not None:
+        return {"type": "multimodal_image", "data": copied["multimodal_image"]}
+    if copied.get("image") is not None:
+        return {"type": "image", "data": copied["image"]}
+    return {"type": "multimodal_image", "data": copied}
+
+
+def _seed_multimodal_image_candidate() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "image",
+            "data": {
+                "images": {
+                    "receipt_image": {
+                        "uri": _TINY_PNG_URI,
+                        "description": (
+                            "Weak receipt image fixture without OCR or labels."
+                        ),
+                        "metadata": {"candidate": "weak"},
+                    }
+                }
+            },
+        }
+    ]
+
+
+def _hardened_multimodal_image_candidate() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "multimodal_image",
+            "data": {
+                "images": {
+                    "receipt_image": {
+                        "uri": _TINY_PNG_URI,
+                        "description": (
+                            "Contoso receipt image: total $42.00, status paid, "
+                            "refund eligible."
+                        ),
+                        "labels": [
+                            "receipt",
+                            "Contoso",
+                            "total $42.00",
+                            "paid",
+                            "refund eligible",
+                        ],
+                        "data": {
+                            "ocr_text": "Contoso receipt total $42.00 paid",
+                            "layout": {
+                                "merchant": "Contoso",
+                                "total": "$42.00",
+                                "status": "paid",
+                            },
+                            "risk": {"tampering_detected": False},
+                        },
+                        "metadata": {
+                            "candidate": "hardened",
+                            "id": "receipt_image",
+                            "kind": "receipt_image",
+                            "source": "local_fixture",
+                        },
+                    }
+                },
+                "state": {"vision_harness": "receipt_grounding"},
+            },
+        }
+    ]
+
+
+def _default_multimodal_image_evaluation_config() -> dict[str, Any]:
+    final_text = (
+        "Because therefore receipt image shows paid Contoso receipt total "
+        "$42.00 approve refund."
+    )
+    return {
+        "task_description": final_text,
+        "expected_result": final_text,
+        "success_criteria": [
+            "receipt image",
+            "paid Contoso receipt",
+            "total is $42.00",
+            "approve refund",
+        ],
+        "required_tools": ["list_images", "inspect_image"],
+        "available_tools": ["list_images", "inspect_image"],
+        "required_artifact_types": ["image"],
+        "artifact_grounding_checks": [
+            {
+                "id": "receipt_image_grounding",
+                "artifact_id": "receipt_image",
+                "artifact_type": "image",
+                "answer_terms": ["paid Contoso receipt", "$42.00"],
+                "support_terms": ["Contoso", "$42.00", "paid"],
+                "forbidden_answer_terms": ["$420.00", "unpaid"],
+                "require_all_answer_terms": True,
+                "require_all_support_terms": True,
+            }
+        ],
+        "artifact_semantic_checks": [
+            {
+                "id": "receipt_image_semantics",
+                "artifact_id": "receipt_image",
+                "artifact_type": "image",
+                "expected_fields": {
+                    "ocr_text": "Contoso receipt total $42.00 paid",
+                    "layout": {
+                        "merchant": "Contoso",
+                        "total": "$42.00",
+                        "status": "paid",
+                    },
+                },
+                "answer_fields": {
+                    "layout.merchant": ["Contoso"],
+                    "layout.total": ["$42.00"],
+                    "layout.status": ["paid"],
+                },
+                "forbidden_answer_terms": ["$420.00", "unpaid"],
+            }
+        ],
+        "trajectory_templates": [
+            {
+                "name": "receipt-image-faithfulness",
+                "goal": {
+                    "final_contains": [
+                        "receipt image",
+                        "paid Contoso receipt",
+                        "total $42.00",
+                        "approve refund",
+                    ],
+                    "final_not_contains": ["$420.00", "unpaid"],
+                },
+                "multimodal": {
+                    "required_artifacts": [
+                        {"id": "receipt_image", "type": "image"}
+                    ],
+                    "claims": [
+                        {
+                            "artifact_id": "receipt_image",
+                            "artifact_type": "image",
+                            "claim": "paid Contoso receipt total $42.00",
+                            "support_terms": ["Contoso", "$42.00", "paid"],
+                        }
+                    ],
+                },
+            }
+        ],
     }
 
 
@@ -7932,6 +8251,7 @@ __all__ = [
     "build_memory_optimization_manifest",
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
+    "build_multimodal_image_optimization_manifest",
     "build_optimizer_governance_optimization_manifest",
     "build_orchestration_optimization_manifest",
     "build_realtime_optimization_manifest",
@@ -7953,6 +8273,7 @@ __all__ = [
     "optimize_memory_layer",
     "optimize_multi_agent_framework_handoff",
     "optimize_multi_agent_coordination",
+    "optimize_multimodal_image",
     "optimize_optimizer_governance",
     "optimize_orchestration_stack",
     "optimize_realtime_stack",
