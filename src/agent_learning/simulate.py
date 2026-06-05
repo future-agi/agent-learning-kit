@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from ._facade import optional_module
+from ._module_alias import install_lazy_module_aliases
 from ._schema import public_payload
 
 _SIMULATE_EXTRA = "simulate"
@@ -208,6 +209,53 @@ _SIMULATE_EXPORTS.update(
         "LiveKitEngine": "fi.simulate.simulation.engines",
         "LocalTextEngine": "fi.simulate.simulation.engines",
     }
+)
+
+_SIMULATE_SUBMODULE_ALIASES = {
+    "agent": "fi.simulate.agent",
+    "agent.definition": "fi.simulate.agent.definition",
+    "agent.frameworks": "fi.simulate.agent.frameworks",
+    "agent.generic": "fi.simulate.agent.generic",
+    "agent.mocks": "fi.simulate.agent.mocks",
+    "agent.wrapper": "fi.simulate.agent.wrapper",
+    "agent.wrappers": "fi.simulate.agent.wrappers",
+    "agent.wrappers.anthropic": "fi.simulate.agent.wrappers.anthropic",
+    "agent.wrappers.gemini": "fi.simulate.agent.wrappers.gemini",
+    "agent.wrappers.langchain": "fi.simulate.agent.wrappers.langchain",
+    "agent.wrappers.openai": "fi.simulate.agent.wrappers.openai",
+    "cli": "fi.simulate.cli",
+    "environment": "fi.simulate.environment",
+    "evaluation": "fi.simulate.evaluation",
+    "evaluation.ai_eval": "fi.simulate.evaluation.ai_eval",
+    "manifest": "fi.simulate.manifest",
+    "recording": "fi.simulate.recording",
+    "recording.room_recorder": "fi.simulate.recording.room_recorder",
+    "simulation": "fi.simulate.simulation",
+    "simulation.engines": "fi.simulate.simulation.engines",
+    "simulation.engines.base": "fi.simulate.simulation.engines.base",
+    "simulation.engines.cloud": "fi.simulate.simulation.engines.cloud",
+    "simulation.engines.livekit": "fi.simulate.simulation.engines.livekit",
+    "simulation.engines.local_text": "fi.simulate.simulation.engines.local_text",
+    "simulation.generator": "fi.simulate.simulation.generator",
+    "simulation.models": "fi.simulate.simulation.models",
+    "simulation.runner": "fi.simulate.simulation.runner",
+    "simulation.synthetic": "fi.simulate.simulation.synthetic",
+    "suite": "fi.simulate.suite",
+    "utils": "fi.simulate.utils",
+    "utils.routes": "fi.simulate.utils.routes",
+}
+_SIMULATE_PACKAGE_ALIASES = {
+    alias
+    for alias in _SIMULATE_SUBMODULE_ALIASES
+    if "." not in alias or any(
+        child.startswith(f"{alias}.") for child in _SIMULATE_SUBMODULE_ALIASES
+    )
+}
+
+install_lazy_module_aliases(
+    __name__,
+    _SIMULATE_SUBMODULE_ALIASES,
+    package_aliases=_SIMULATE_PACKAGE_ALIASES,
 )
 
 AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"

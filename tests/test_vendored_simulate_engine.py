@@ -189,8 +189,27 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
         "fi.simulate.manifest",
         "fi.simulate.suite",
         "fi.simulate.simulation.engines.local_text",
+        "agent_learning.simulate.environment",
+        "agent_learning.simulate.manifest",
+        "agent_learning.simulate.suite",
+        "agent_learning.simulate.simulation.engines.local_text",
+        "agent_learning.simulate.agent.definition",
     ):
         assert _module_path(module_name).is_relative_to(FI_ROOT)
+
+    from agent_learning.simulate.agent.definition import AgentDefinition
+    from agent_learning.simulate.environment import WorldContractEnvironment
+    from agent_learning.simulate.manifest import load_manifest_file
+    from agent_learning.simulate.simulation.engines.local_text import LocalTextEngine
+    from agent_learning.simulate.suite import run_eval_suite
+
+    assert AgentDefinition is simulate.AgentDefinition
+    assert WorldContractEnvironment is simulate.WorldContractEnvironment
+    assert LocalTextEngine is simulate.LocalTextEngine
+    assert load_manifest_file.__module__ == "fi.simulate.manifest"
+    assert run_eval_suite.__module__ == "fi.simulate.suite"
+    assert callable(simulate.load_manifest_file)
+    assert callable(simulate.run_eval_suite)
 
     for exported in (
         simulate.AgentResponse,
