@@ -3724,7 +3724,7 @@ def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_p
 
 
 def test_sdk_persistent_state_redteam_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import optimize
+    from agent_learning import optimize, simulate
 
     assert optimize.build_persistent_state_redteam_optimization_manifest is not None
     assert optimize.optimize_persistent_state_redteam is not None
@@ -3829,6 +3829,30 @@ def test_sdk_persistent_state_redteam_optimization_example_runs(monkeypatch, tmp
     assert summary["incorporation_rate"] == 0.0
     assert summary["activation_rate"] == 0.0
     assert summary["e2e_attack_success_rate"] == 0.0
+
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=output_path,
+        min_level="note",
+        max_findings=1,
+        required_env=["AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_REGRESSION_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == "persistent_state_optimization"
+    assert promotion["summary"]["promoted_finding_count"] == 0
+    assert promotion["summary"]["promoted_manifest_count"] == 1
+    promoted_manifest = promotion["manifest"]
+    assert promoted_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_REGRESSION_KEY"
+    ]
+    promoted_env = promoted_manifest["simulation"]["environments"][0]
+    assert promoted_env["type"] == "persistent_state_attack"
+    assert promoted_env["data"]["metadata"]["profile"] == "hardened"
+    promoted_quality = promoted_manifest["evaluation"]["agent_report"]["config"][
+        "persistent_state_attack_quality"
+    ]
+    assert promoted_quality["min_case_count"] == 2
+    assert promoted_quality["max_e2e_attack_success_rate"] == 0.0
 
 
 def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path):

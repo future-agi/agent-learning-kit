@@ -1641,6 +1641,129 @@ def test_persistent_state_redteam_optimization_example_selects_hardened_policy(
     )
 
 
+def test_persistent_state_redteam_optimization_promotes_replayable_regression(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_PERSISTENT_REDTEAM_OPT_EXAMPLE_KEY",
+        "real-local-persistent-redteam-opt-key",
+    )
+
+    output_path = tmp_path / "persistent-state-redteam-optimization.json"
+    promotion_path = tmp_path / "persistent-state-redteam-promotion.json"
+    manifest_path = tmp_path / "persistent-state-redteam-regression.json"
+    replay_path = tmp_path / "persistent-state-redteam-replay.json"
+    junit_path = tmp_path / "persistent-state-redteam-replay.junit.xml"
+    sarif_path = tmp_path / "persistent-state-redteam-replay.sarif.json"
+    markdown_path = tmp_path / "persistent-state-redteam-replay.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "persistent_state_redteam_optimization.json"),
+        "--output",
+        str(output_path),
+    ])
+    assert exit_code == 0
+
+    exit_code = main([
+        "promote-to-regression",
+        str(output_path),
+        "--output",
+        str(promotion_path),
+        "--manifest",
+        str(manifest_path),
+        "--min-level",
+        "note",
+        "--max-findings",
+        "1",
+        "--required-env",
+        "AGENT_LEARNING_PERSISTENT_REDTEAM_REGRESSION_KEY",
+    ])
+    assert exit_code == 0
+
+    promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == "persistent_state_optimization"
+    assert promotion["summary"]["promoted_finding_count"] == 0
+    assert promotion["summary"]["promoted_manifest_count"] == 1
+    assert promotion["summary"]["best_profile"] == "hardened"
+    assert promotion["summary"]["write_success_rate"] == pytest.approx(0.0)
+    assert promotion["summary"]["incorporation_rate"] == pytest.approx(0.0)
+    assert promotion["summary"]["activation_rate"] == pytest.approx(0.0)
+    assert promotion["summary"]["e2e_attack_success_rate"] == pytest.approx(0.0)
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_PERSISTENT_REDTEAM_REGRESSION_KEY"
+    ]
+    env = manifest["simulation"]["environments"][0]
+    assert env["type"] == "persistent_state_attack"
+    assert env["data"]["metadata"]["profile"] == "hardened"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == [
+        "persistent_state_attack_status",
+        "list_persistent_state_writes",
+        "list_persistent_state_incorporations",
+        "list_persistent_state_activations",
+        "list_persistent_state_gaps",
+    ]
+    assert {
+        "persistent_state_attack",
+        "stored_prompt_injection",
+        "cross_session",
+        "session_reset",
+        "write_stage",
+        "incorporation_stage",
+        "activation_stage",
+        "provenance",
+        "memory",
+    } <= set(config["required_persistent_state_attack"])
+    quality = config["persistent_state_attack_quality"]
+    assert quality["min_case_count"] == 1
+    assert quality["max_written_count"] == 0
+    assert quality["max_incorporated_count"] == 0
+    assert quality["max_activated_count"] == 0
+    assert quality["max_e2e_attack_success_rate"] == 0.0
+    assert quality["require_session_reset"] is True
+    assert quality["require_no_missing_provenance"] is True
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_PERSISTENT_REDTEAM_REGRESSION_KEY",
+        "real-local-persistent-redteam-regression-key",
+    )
+    exit_code = main([
+        "replay",
+        str(manifest_path),
+        "--output",
+        str(replay_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+    assert exit_code == 0
+
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    assert replay["status"] == "passed"
+    assert replay["summary"]["replay_pass_rate"] == pytest.approx(1.0)
+    child = replay["replay"]["manifests"][0]
+    assert child["command"] == "run"
+    metrics = child["summary"]["metric_averages"]
+    assert metrics["persistent_state_attack_coverage"] == pytest.approx(1.0)
+    assert metrics["persistent_state_attack_quality"] == pytest.approx(1.0)
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "persistent-state-redteam-regression" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_redteam_society_optimization_example_selects_council(
     tmp_path,
     monkeypatch,
