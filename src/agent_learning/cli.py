@@ -14,6 +14,7 @@ from ._schema import normalize_public_payload
 
 AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
 AGENT_LEARNING_ARTIFACT_EVAL_KIND = "agent-learning.artifact-evaluation.v1"
+AGENT_LEARNING_ACTION_RUN_KIND = "agent-learning.action-run.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_KIND = "agent-learning.optimization.v1"
 AGENT_LEARNING_REDTEAM_KIND = "agent-learning.redteam.v1"
@@ -1966,6 +1967,7 @@ def _agent_learning_suite_manifest(
                 "run",
                 "eval",
                 "eval_artifact",
+                "action_run",
                 "redteam",
                 "optimize_eval",
                 "optimize",
@@ -1974,6 +1976,7 @@ def _agent_learning_suite_manifest(
                 AGENT_LEARNING_RUN_KIND,
                 AGENT_LEARNING_EVAL_KIND,
                 AGENT_LEARNING_ARTIFACT_EVAL_KIND,
+                AGENT_LEARNING_ACTION_RUN_KIND,
                 AGENT_LEARNING_REDTEAM_KIND,
                 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND,
                 AGENT_LEARNING_OPTIMIZATION_KIND,
@@ -2009,6 +2012,20 @@ def _agent_learning_suite_manifest(
                 "path": "../fixtures/task_artifacts/refund_task_run.json",
                 "config": "artifact_task_eval_config.json",
                 "name": f"{suite_name}-direct-artifact",
+            },
+            {
+                "id": "artifact-action-report",
+                "command": "action-run",
+                "path": "../fixtures/task_artifacts/refund_task_run.json",
+                "action_id": "report_orchestration_strategy",
+                "cwd": "../artifacts/action-loop/workspace",
+                "name": f"{suite_name}-artifact-action-report",
+                "output": "../../artifacts/action-loop/action-run.json",
+                "outputs": {
+                    "junit": "../../artifacts/action-loop/action-run.junit.xml",
+                    "sarif": "../../artifacts/action-loop/action-run.sarif.json",
+                    "markdown": "../../artifacts/action-loop/action-run.md",
+                },
             },
             {
                 "id": "agent-red-team",

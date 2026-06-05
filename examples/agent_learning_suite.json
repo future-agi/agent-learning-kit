@@ -29,6 +29,7 @@
       "optimize_suite",
       "eval",
       "eval_artifact",
+      "action_run",
       "redteam",
       "optimize_eval",
       "optimize"
@@ -39,6 +40,7 @@
       "agent-learning.suite-optimization.v1",
       "agent-learning.eval.v1",
       "agent-learning.artifact-evaluation.v1",
+      "agent-learning.action-run.v1",
       "agent-learning.redteam.v1",
       "agent-learning.eval-optimization.v1",
       "agent-learning.optimization.v1"
@@ -160,6 +162,20 @@
       "path": "fixtures/task_artifacts/refund_task_run.json",
       "config": "artifact_task_eval_config.json",
       "name": "suite-direct-artifact-report-eval"
+    },
+    {
+      "id": "artifact-action-report",
+      "command": "action-run",
+      "path": "fixtures/task_artifacts/refund_task_run.json",
+      "action_id": "report_orchestration_strategy",
+      "cwd": "artifacts/action-loop/workspace",
+      "name": "suite-artifact-action-report",
+      "output": "../../artifacts/action-loop/action-run.json",
+      "outputs": {
+        "junit": "../../artifacts/action-loop/action-run.junit.xml",
+        "sarif": "../../artifacts/action-loop/action-run.sarif.json",
+        "markdown": "../../artifacts/action-loop/action-run.md"
+      }
     },
     {
       "id": "agent-red-team",

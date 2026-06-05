@@ -3085,13 +3085,16 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         "eval",
         "eval",
         "eval_artifact",
+        "action_run",
         "optimize_eval",
         "redteam",
         "optimize_eval",
         "optimize",
     ]
-    assert suite_manifest["jobs"][4]["id"] == "artifact-evidence-optimizer"
-    assert suite_manifest["jobs"][4]["path"] == "artifact_task_optimization_suite.json"
+    assert suite_manifest["jobs"][4]["id"] == "artifact-action-report"
+    assert suite_manifest["jobs"][4]["action_id"] == "report_orchestration_strategy"
+    assert suite_manifest["jobs"][5]["id"] == "artifact-evidence-optimizer"
+    assert suite_manifest["jobs"][5]["path"] == "artifact_task_optimization_suite.json"
     assert suite_manifest["jobs"][-1]["path"] == (
         "world_framework_memory_optimization.json"
     )
@@ -3103,8 +3106,8 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
     assert result["kind"] == "agent-learning.suite.v1"
     assert result["summary"]["score"] == pytest.approx(1.0)
-    assert result["summary"]["job_count"] == 8
-    assert result["summary"]["passed_count"] == 8
+    assert result["summary"]["job_count"] == 9
+    assert result["summary"]["passed_count"] == 9
     assert result["summary"]["capability_gate_passed"] is True
     assert {
         child["kind"]
@@ -3113,10 +3116,24 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         "agent-learning.run.v1",
         "agent-learning.eval.v1",
         "agent-learning.artifact-evaluation.v1",
+        "agent-learning.action-run.v1",
         "agent-learning.redteam.v1",
         "agent-learning.eval-optimization.v1",
         "agent-learning.optimization.v1",
     }
+    action_child = next(
+        child
+        for child in result["children"]
+        if child["id"] == "artifact-action-report"
+    )
+    assert action_child["kind"] == "agent-learning.action-run.v1"
+    assert action_child["status"] == "passed"
+    assert action_child["result"]["summary"]["action_id"] == (
+        "report_orchestration_strategy"
+    )
+    assert action_child["result"]["summary"]["output_completion_rate"] == pytest.approx(
+        1.0,
+    )
     optimizer_child = next(
         child
         for child in result["children"]

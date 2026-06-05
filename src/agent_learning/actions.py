@@ -56,8 +56,14 @@ def extract_actions(
 def get_action(
     artifact: Mapping[str, Any],
     action_id: str,
+    *,
+    source_path: str | Path = ".",
 ) -> Optional[dict[str, Any]]:
-    actions = action_catalog(artifact, action_id=action_id)["actions"]
+    actions = action_catalog(
+        artifact,
+        source_path=source_path,
+        action_id=action_id,
+    )["actions"]
     return actions[0] if actions else None
 
 
@@ -71,7 +77,7 @@ def run_action(
     dry_run: bool = False,
     name: Optional[str] = None,
 ) -> dict[str, Any]:
-    action = get_action(artifact, action_id)
+    action = get_action(artifact, action_id, source_path=source_path)
     if action is None:
         raise ValueError(f"action not found: {action_id}")
     command_args = _resolved_command_args(action, inputs or {})

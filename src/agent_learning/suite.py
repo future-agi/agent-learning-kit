@@ -180,6 +180,8 @@ def build_trinity_suite_manifest(
     redteam_path: str | Path,
     eval_optimization_path: str | Path,
     optimization_path: str | Path,
+    artifact_action_id: str | None = "report_orchestration_strategy",
+    artifact_action_cwd: str | Path | None = "artifacts/action-loop/workspace",
     artifact_optimization_path: str | Path | None = None,
     artifact_eval_config_path: str | Path | None = None,
     required_env: Sequence[str] = (),
@@ -221,6 +223,23 @@ def build_trinity_suite_manifest(
             "name": f"{suite_name}-direct-artifact",
         },
     ]
+    if artifact_action_id:
+        action_job = {
+            "id": "artifact-action-report",
+            "command": "action-run",
+            "path": _suite_path_text(artifact_report_path),
+            "action_id": str(artifact_action_id),
+            "name": f"{suite_name}-artifact-action-report",
+            "output": "../../artifacts/action-loop/action-run.json",
+            "outputs": {
+                "junit": "../../artifacts/action-loop/action-run.junit.xml",
+                "sarif": "../../artifacts/action-loop/action-run.sarif.json",
+                "markdown": "../../artifacts/action-loop/action-run.md",
+            },
+        }
+        if artifact_action_cwd is not None:
+            action_job["cwd"] = _suite_path_text(artifact_action_cwd)
+        jobs.append(action_job)
     if artifact_optimization_path is not None:
         jobs.append(
             {
@@ -267,6 +286,7 @@ def build_trinity_suite_manifest(
                 "run",
                 "eval",
                 "eval_artifact",
+                "action_run",
                 "redteam",
                 "optimize_eval",
                 "optimize",
@@ -275,6 +295,7 @@ def build_trinity_suite_manifest(
                 "agent-learning.run.v1",
                 "agent-learning.eval.v1",
                 "agent-learning.artifact-evaluation.v1",
+                "agent-learning.action-run.v1",
                 "agent-learning.redteam.v1",
                 "agent-learning.eval-optimization.v1",
                 "agent-learning.optimization.v1",

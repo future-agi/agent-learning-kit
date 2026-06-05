@@ -216,14 +216,15 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["metric_averages"]["world_contract_quality"] >= 0.9
         assert payload["source"]["path"].endswith("task_evidence.json")
     if command == "suite":
-        assert payload["summary"]["job_count"] == 23
-        assert payload["summary"]["passed_count"] == 23
+        assert payload["summary"]["job_count"] == 24
+        assert payload["summary"]["passed_count"] == 24
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
         capabilities = payload["summary"]["capabilities"]
         required_capabilities = payload["summary"]["required_capabilities"]
         assert set(capabilities["commands"]) == {
+            "action_run",
             "eval",
             "eval_artifact",
             "optimize",
@@ -234,6 +235,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "suite",
         }
         assert set(capabilities["result_kinds"]) == {
+            "agent_learning.action_run.v1",
             "agent_learning.eval.v1",
             "agent_learning.artifact_evaluation.v1",
             "agent_learning.eval_optimization.v1",
@@ -318,6 +320,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "eval",
             "eval",
             "eval_artifact",
+            "action_run",
             "redteam",
             "run",
             "optimize_eval",
@@ -339,11 +342,35 @@ def test_shipped_examples_execute_through_unified_cli(
             "agent-learning.suite.v1",
             "agent-learning.eval.v1",
             "agent-learning.artifact-evaluation.v1",
+            "agent-learning.action-run.v1",
             "agent-learning.redteam.v1",
             "agent-learning.eval-optimization.v1",
             "agent-learning.optimization.v1",
             "agent-learning.suite-optimization.v1",
         }
+        action_child = next(
+            child
+            for child in payload["children"]
+            if child["id"] == "artifact-action-report"
+        )
+        assert action_child["kind"] == "agent-learning.action-run.v1"
+        assert action_child["status"] == "passed"
+        assert action_child["result"]["summary"]["action_id"] == (
+            "report_orchestration_strategy"
+        )
+        assert action_child["result"]["summary"]["output_completion_rate"] == (
+            pytest.approx(1.0)
+        )
+        assert set(action_child["result"]["logs"]) == {
+            "stdout",
+            "stderr",
+            "stdout_bytes",
+            "stderr_bytes",
+        }
+        assert any(
+            path.endswith("artifacts/action-loop/action-run.json")
+            for path in action_child["outputs_written"]
+        )
         nested = next(
             child
             for child in payload["children"]
@@ -889,8 +916,8 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert suite["kind"] == "agent-learning.suite.v1"
     assert suite["status"] == "passed"
     assert suite["summary"]["score"] == pytest.approx(1.0)
-    assert suite["summary"]["job_count"] == 7
-    assert suite["summary"]["passed_count"] == 7
+    assert suite["summary"]["job_count"] == 8
+    assert suite["summary"]["passed_count"] == 8
     assert suite["summary"]["failed_count"] == 0
     assert suite["summary"]["capability_gate_passed"] is True
     assert {
@@ -900,10 +927,28 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
         "agent-learning.run.v1",
         "agent-learning.eval.v1",
         "agent-learning.artifact-evaluation.v1",
+        "agent-learning.action-run.v1",
         "agent-learning.redteam.v1",
         "agent-learning.eval-optimization.v1",
         "agent-learning.optimization.v1",
     }
+    action_child = next(
+        child
+        for child in suite["children"]
+        if child["id"] == "artifact-action-report"
+    )
+    assert action_child["kind"] == "agent-learning.action-run.v1"
+    assert action_child["status"] == "passed"
+    assert action_child["result"]["summary"]["action_id"] == (
+        "report_orchestration_strategy"
+    )
+    assert action_child["result"]["summary"]["output_completion_rate"] == pytest.approx(
+        1.0,
+    )
+    assert any(
+        path.endswith("artifacts/action-loop/action-run.json")
+        for path in action_child["outputs_written"]
+    )
     assert 'failures="0"' in suite_junit.read_text(encoding="utf-8")
     assert json.loads(suite_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
     assert "refund-agent-trinity-suite" in suite_markdown.read_text(

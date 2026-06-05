@@ -143,8 +143,9 @@ manifest is written under `regressions/` with the public
 CI, and Future AGI UI cards from the same evidence. The all preset generates a
 self-contained trinity workspace with local run, promptfoo-style eval,
 structured artifact eval, direct artifact-report eval, red-team, eval-suite
-optimization, task/world optimization, a saved task artifact fixture, and
-`manifests/suite.json` as the single CI entrypoint.
+optimization, task/world optimization, a fixture-backed artifact action-run,
+child action evidence under `artifacts/action-loop/`, a saved task artifact
+fixture, and `manifests/suite.json` as the single CI entrypoint.
 `suite.build_optimization_lifecycle_plan()` and
 `suite.run_optimization_lifecycle_file()` expose the same lifecycle from the
 SDK; `examples/sdk_optimization_lifecycle.py` writes the task/world optimize
@@ -287,6 +288,7 @@ manifest = suite.build_trinity_suite_manifest(
     eval_path="eval_suite.json",
     artifact_eval_path="artifact_task_eval_suite.json",
     artifact_report_path="fixtures/task_artifacts/refund_task_run.json",
+    artifact_action_id="report_orchestration_strategy",
     artifact_eval_config_path="artifact_task_eval_config.json",
     artifact_optimization_path="artifact_task_optimization_suite.json",
     redteam_path="redteam_manifest.json",
