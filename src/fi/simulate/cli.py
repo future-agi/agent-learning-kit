@@ -2317,6 +2317,9 @@ def _report_result(
     replay_card = _replay_report_card(source, source_path=source_path)
     if replay_card is not None:
         report_payload["replay"] = replay_card
+    redteam_strategy = _redteam_strategy_card(source, source_path=source_path)
+    if redteam_strategy is not None:
+        report_payload["redteam_strategy"] = redteam_strategy
     harness_diagnosis = _harness_diagnosis_card(source, source_path=source_path)
     if harness_diagnosis is not None:
         report_payload["harness_diagnosis"] = harness_diagnosis
@@ -3290,6 +3293,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("replay")
     if result.get("redteam") is not None:
         sections.append("redteam")
+    if _has_redteam_strategy_card(result, source_path=source_path):
+        sections.append("redteam_strategy")
     if result.get("compare") is not None:
         sections.append("compare")
     if result.get("optimization") is not None:
@@ -3337,6 +3342,8 @@ def _result_markdown(
         lines.extend(_replay_markdown(result))
     if "redteam" in sections:
         lines.extend(_redteam_markdown(result))
+    if "redteam_strategy" in sections:
+        lines.extend(_redteam_strategy_markdown(result, source_path=source_path))
     if "compare" in sections:
         lines.extend(_compare_markdown(result))
     if "optimization" in sections:
@@ -3417,6 +3424,415 @@ def _redteam_markdown(result: Mapping[str, Any]) -> List[str]:
         *_key_value_table(rows),
         "",
     ]
+
+
+def _has_redteam_strategy_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("redteam_strategy"), Mapping):
+        return True
+    return _redteam_strategy_card(result, source_path=source_path) is not None
+
+
+def _redteam_strategy_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    existing = result.get("redteam_strategy")
+    if not isinstance(existing, Mapping):
+        report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+        existing = report.get("redteam_strategy") if isinstance(report, Mapping) else None
+    existing_card = copy.deepcopy(dict(existing)) if isinstance(existing, Mapping) else {}
+    existing_manifest_path = existing_card.get("source_manifest_path")
+    if source_manifest_path is None and existing_manifest_path not in (None, ""):
+        source_manifest_path = Path(str(existing_manifest_path))
+
+    summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
+    redteam = dict(result.get("redteam") or summary.get("redteam") or existing_card.get("redteam") or {})
+    if not redteam and not existing_card:
+        return None
+
+    campaign_summary = _redteam_campaign_summary(result)
+    attack_types = _unique_strings(
+        _coerce_list(redteam.get("attack_types") or redteam.get("attacks") or existing_card.get("attack_types"))
+    )
+    surfaces = _unique_strings(_coerce_list(redteam.get("surfaces") or existing_card.get("surfaces")))
+    channels = _unique_strings(_coerce_list(redteam.get("channels") or existing_card.get("channels"))) or ["chat"]
+    providers = _unique_strings(_coerce_list(redteam.get("providers") or existing_card.get("providers"))) or ["local_cli"]
+    frameworks = _unique_strings(_coerce_list(redteam.get("frameworks") or existing_card.get("frameworks")))
+    signals = _unique_strings(_coerce_list(redteam.get("signals") or existing_card.get("signals")))
+    if not attack_types or not surfaces:
+        return None
+
+    strategy_cells = _redteam_strategy_cells(
+        attack_types=attack_types,
+        surfaces=surfaces,
+        channels=channels,
+        providers=providers,
+    )
+    missing_coverage_cells = _unique_strings(
+        _coerce_list(campaign_summary.get("missing_coverage_cells"))
+    )
+    missing_executed_cells = _unique_strings(
+        _coerce_list(campaign_summary.get("missing_executed_cells"))
+    )
+    missing_cells = set(missing_coverage_cells) | set(missing_executed_cells)
+    strategy_cell_count = len(strategy_cells)
+    coverage_cell_count = _int_or_none(campaign_summary.get("coverage_cell_count"))
+    executed_cell_count = _int_or_none(campaign_summary.get("executed_cell_count"))
+    coverage_ratio = _bounded_ratio(coverage_cell_count, strategy_cell_count)
+    execution_ratio = _bounded_ratio(executed_cell_count, strategy_cell_count)
+    error_findings = int(_float_or_none(redteam.get("error_finding_count")) or 0)
+    status = (
+        "needs_attention"
+        if error_findings or missing_cells or (coverage_ratio is not None and coverage_ratio < 1.0)
+        else "covered"
+    )
+
+    card = {
+        "kind": "redteam_strategy_map",
+        "taxonomy": "strategy_response_multiplex_campaign",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "attack_types": attack_types,
+        "surfaces": surfaces,
+        "channels": channels,
+        "providers": providers,
+        "frameworks": frameworks,
+        "signals": signals,
+        "strategy_cell_count": strategy_cell_count,
+        "coverage_cell_count": coverage_cell_count if coverage_cell_count is not None else strategy_cell_count,
+        "executed_cell_count": executed_cell_count,
+        "coverage_ratio": coverage_ratio if coverage_ratio is not None else 1.0,
+        "execution_ratio": execution_ratio,
+        "missing_coverage_cells": missing_coverage_cells,
+        "missing_executed_cells": missing_executed_cells,
+        "risk_focus": _redteam_risk_focus(attack_types),
+        "strategy_families": _redteam_strategy_families(
+            attack_types=attack_types,
+            surfaces=surfaces,
+            channels=channels,
+            providers=providers,
+            frameworks=frameworks,
+            missing_cells=missing_cells,
+        ),
+        "multiplex_edges": _redteam_strategy_edges(
+            attack_types=attack_types,
+            surfaces=surfaces,
+            channels=channels,
+            providers=providers,
+        ),
+        "sample_cells": strategy_cells[:50],
+        "truncated_cells": max(0, strategy_cell_count - 50),
+        "research_sources": [
+            "https://arxiv.org/abs/2604.18976",
+            "https://arxiv.org/abs/2602.03117",
+            "https://arxiv.org/abs/2604.04989",
+            "https://arxiv.org/abs/2605.17075",
+        ],
+    }
+    if source_manifest_path is not None:
+        card["source_manifest_path"] = str(source_manifest_path)
+    card["actions"] = _redteam_strategy_actions(
+        source_path=source_path,
+        source_manifest_path=source_manifest_path,
+        status=status,
+    )
+    return card
+
+
+def _redteam_campaign_summary(result: Mapping[str, Any]) -> Dict[str, Any]:
+    state = _redteam_environment_state(result)
+    for key in ("red_team_campaign", "redteam_campaign"):
+        campaign = state.get(key)
+        if isinstance(campaign, Mapping):
+            summary = campaign.get("summary")
+            if isinstance(summary, Mapping):
+                return dict(summary)
+    return {}
+
+
+def _redteam_environment_state(result: Mapping[str, Any]) -> Dict[str, Any]:
+    state = result.get("state")
+    if isinstance(state, Mapping):
+        return dict(state)
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    for item in _coerce_list(report.get("results")):
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        environment_state = metadata.get("environment_state")
+        if isinstance(environment_state, Mapping):
+            return dict(environment_state)
+    return {}
+
+
+def _redteam_strategy_cells(
+    *,
+    attack_types: Sequence[str],
+    surfaces: Sequence[str],
+    channels: Sequence[str],
+    providers: Sequence[str],
+) -> List[str]:
+    cells: List[str] = []
+    for attack_type in attack_types:
+        for surface in surfaces:
+            for channel in channels:
+                for provider in providers:
+                    cells.append("|".join([attack_type, surface, channel, provider]))
+    return cells
+
+
+def _redteam_strategy_families(
+    *,
+    attack_types: Sequence[str],
+    surfaces: Sequence[str],
+    channels: Sequence[str],
+    providers: Sequence[str],
+    frameworks: Sequence[str],
+    missing_cells: set[str],
+) -> List[Dict[str, Any]]:
+    families = []
+    for attack_type in attack_types:
+        cells = _redteam_strategy_cells(
+            attack_types=[attack_type],
+            surfaces=surfaces,
+            channels=channels,
+            providers=providers,
+        )
+        families.append(
+            {
+                "id": f"strategy_{_slug(attack_type, default='attack')}",
+                "attack_type": attack_type,
+                "surfaces": list(surfaces),
+                "channels": list(channels),
+                "providers": list(providers),
+                "frameworks": list(frameworks),
+                "risk_focus": _redteam_risk_focus([attack_type]),
+                "strategy_cell_count": len(cells),
+                "missing_cell_count": sum(1 for cell in cells if cell in missing_cells),
+                "status": "needs_attention" if any(cell in missing_cells for cell in cells) else "covered",
+            }
+        )
+    return families
+
+
+def _redteam_strategy_edges(
+    *,
+    attack_types: Sequence[str],
+    surfaces: Sequence[str],
+    channels: Sequence[str],
+    providers: Sequence[str],
+) -> List[Dict[str, str]]:
+    edges: List[Dict[str, str]] = []
+    for attack_type in attack_types:
+        for surface in surfaces:
+            edges.append(
+                {
+                    "from": f"attack:{attack_type}",
+                    "to": f"surface:{surface}",
+                    "type": "attack_surface",
+                }
+            )
+    for surface in surfaces:
+        for channel in channels:
+            edges.append(
+                {
+                    "from": f"surface:{surface}",
+                    "to": f"channel:{channel}",
+                    "type": "surface_channel",
+                }
+            )
+    for channel in channels:
+        for provider in providers:
+            edges.append(
+                {
+                    "from": f"channel:{channel}",
+                    "to": f"provider:{provider}",
+                    "type": "channel_provider",
+                }
+            )
+    return edges[:100]
+
+
+def _redteam_risk_focus(attack_types: Sequence[str]) -> List[str]:
+    focus: List[str] = []
+    mapping = {
+        "credential": "secret_protection",
+        "secret": "secret_protection",
+        "exfiltration": "secret_protection",
+        "prompt_injection": "instruction_integrity",
+        "indirect": "context_trust",
+        "context": "context_trust",
+        "memory": "memory_integrity",
+        "tool": "tool_control",
+        "authorization": "authorization_boundary",
+        "cost": "resource_abuse",
+        "objective": "objective_integrity",
+        "intent": "objective_integrity",
+        "task": "objective_integrity",
+        "jailbreak": "policy_boundary",
+        "bypass": "policy_boundary",
+    }
+    for attack_type in attack_types:
+        key = _redteam_slug(attack_type)
+        for token, value in mapping.items():
+            if token in key:
+                focus.append(value)
+    return _unique_strings(focus) or ["general_agent_resilience"]
+
+
+def _redteam_strategy_actions(
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path],
+    status: str,
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_redteam_strategy",
+            "Report Red-Team Strategy",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/redteam-strategy-report.json",
+                "--markdown",
+                "artifacts/redteam-strategy-report.md",
+            ],
+        )
+    ]
+    if source_manifest_path is not None:
+        actions.append(
+            _cli_action(
+                "rerun_redteam_campaign",
+                "Rerun Red-Team Campaign",
+                [
+                    "agent-learn",
+                    "redteam",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/redteam-rerun.json",
+                    "--junit",
+                    "artifacts/redteam-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/redteam-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/redteam-rerun.md",
+                ],
+            )
+        )
+    actions.append(
+        _cli_action(
+            "optimize_redteam_strategy",
+            "Optimize Red-Team Strategy",
+            [
+                "agent-learn",
+                "optimize",
+                "{{optimization_manifest_path}}",
+                "--output",
+                "artifacts/redteam-strategy-optimization.json",
+                "--markdown",
+                "artifacts/redteam-strategy-optimization.md",
+            ],
+            inputs=[
+                {
+                    "name": "optimization_manifest_path",
+                    "label": "Red-team optimization manifest",
+                    "default": "manifests/redteam-optimization.json",
+                }
+            ],
+        )
+    )
+    for action in actions:
+        action["strategy_status"] = status
+    return actions
+
+
+def _redteam_strategy_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = report.get("redteam_strategy") if isinstance(report, Mapping) else None
+    if not isinstance(card, Mapping):
+        card = _redteam_strategy_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+    family_rows = [
+        [
+            item.get("attack_type"),
+            item.get("status"),
+            item.get("strategy_cell_count"),
+            item.get("missing_cell_count"),
+            _join_values(item.get("risk_focus")),
+        ]
+        for item in _coerce_list(card.get("strategy_families"))
+        if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("strategy_status"),
+            item.get("command"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping) and item.get("kind") == "cli"
+    ]
+    lines = [
+        "## Red Team Strategy",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Status", card.get("status")),
+                ("Strategy cells", card.get("strategy_cell_count")),
+                ("Coverage cells", card.get("coverage_cell_count")),
+                ("Executed cells", card.get("executed_cell_count")),
+                ("Coverage ratio", card.get("coverage_ratio")),
+                ("Execution ratio", card.get("execution_ratio")),
+                ("Risk focus", _join_values(card.get("risk_focus"))),
+                ("Research sources", _join_values(card.get("research_sources"))),
+            ]
+        ),
+        "",
+    ]
+    if family_rows:
+        lines.extend(
+            [
+                "### Strategy Families",
+                "",
+                *_markdown_table(
+                    ["Attack type", "Status", "Cells", "Missing", "Risk focus"],
+                    family_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Strategy Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Status", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
 
 
 def _compare_markdown(result: Mapping[str, Any]) -> List[str]:
@@ -6046,6 +6462,19 @@ def _float_or_none(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    parsed = _float_or_none(value)
+    if parsed is None:
+        return None
+    return int(parsed)
+
+
+def _bounded_ratio(numerator: Optional[int], denominator: int) -> Optional[float]:
+    if numerator is None or denominator <= 0:
+        return None
+    return round(max(0.0, min(1.0, float(numerator) / float(denominator))), 4)
 
 
 def _optimization_config(manifest: Mapping[str, Any]) -> Dict[str, Any]:

@@ -3787,6 +3787,16 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     assert metrics["adversarial_resilience"] == pytest.approx(1.0)
     assert metrics["red_team_campaign_coverage"] == pytest.approx(1.0)
     assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
+    strategy = result["redteam_strategy"]
+    assert strategy["strategy_cell_count"] == 4
+    assert strategy["coverage_cell_count"] == 4
+    assert strategy["executed_cell_count"] == 4
+    assert strategy["coverage_ratio"] == pytest.approx(1.0)
+    assert strategy["execution_ratio"] == pytest.approx(1.0)
+    assert {item["attack_type"] for item in strategy["strategy_families"]} == {
+        "prompt_injection",
+        "credential_exfiltration",
+    }
 
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     assert set(state) == {"adversarial", "red_team_campaign"}
@@ -4082,6 +4092,13 @@ def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path)
     assert metrics["adversarial_resilience"] == pytest.approx(1.0)
     assert metrics["red_team_campaign_coverage"] == pytest.approx(1.0)
     assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
+    strategy = result["redteam_strategy"]
+    assert strategy["strategy_cell_count"] == 25
+    assert strategy["coverage_cell_count"] == 25
+    assert strategy["executed_cell_count"] == 25
+    assert strategy["coverage_ratio"] == pytest.approx(1.0)
+    assert strategy["execution_ratio"] == pytest.approx(1.0)
+    assert {item["attack_type"] for item in strategy["strategy_families"]} == set(attacks)
 
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     assert len(state["adversarial"]["attack_pack"]["attacks"]) == 25
@@ -7002,6 +7019,8 @@ def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
     junit_path = tmp_path / "redteam-result.junit.xml"
     sarif_path = tmp_path / "redteam-result.sarif.json"
     markdown_path = tmp_path / "redteam-result.md"
+    report_path = tmp_path / "redteam-report.json"
+    report_markdown_path = tmp_path / "redteam-report.md"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     exit_code = main([
@@ -7028,6 +7047,20 @@ def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
         "credential_exfiltration",
     ]
     assert payload["redteam"]["error_finding_count"] == 0
+    strategy = payload["redteam_strategy"]
+    assert strategy["kind"] == "redteam_strategy_map"
+    assert strategy["taxonomy"] == "strategy_response_multiplex_campaign"
+    assert strategy["strategy_cell_count"] == 4
+    assert strategy["status"] == "needs_attention"
+    assert strategy["coverage_ratio"] == pytest.approx(0.0)
+    assert set(strategy["risk_focus"]) >= {
+        "instruction_integrity",
+        "secret_protection",
+    }
+    assert {
+        "rerun_redteam_campaign",
+        "optimize_redteam_strategy",
+    } <= {action["id"] for action in strategy["actions"]}
     assert payload["summary"]["metric_averages"]["adversarial_resilience"] == 1.0
     assert payload["summary"]["metric_averages"]["environment_injection_resistance"] == 1.0
     assert payload["summary"]["metric_averages"]["red_team_campaign_quality"] == 1.0
@@ -7035,7 +7068,31 @@ def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
     sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
     assert sarif["version"] == "2.1.0"
     assert all(result["level"] != "error" for result in sarif["runs"][0]["results"])
-    assert "agent-learning-redteam" in markdown_path.read_text(encoding="utf-8")
+    direct_markdown = markdown_path.read_text(encoding="utf-8")
+    assert "agent-learning-redteam" in direct_markdown
+    assert "## Red Team Strategy" in direct_markdown
+    assert "### Strategy Actions" in direct_markdown
+
+    report_exit_code = main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_markdown_path),
+    ])
+
+    assert report_exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "redteam_strategy" in report["summary"]["sections"]
+    report_strategy = report["report"]["redteam_strategy"]
+    assert report_strategy["strategy_cell_count"] == 4
+    assert {
+        "report_redteam_strategy",
+        "rerun_redteam_campaign",
+        "optimize_redteam_strategy",
+    } <= {action["id"] for action in report_strategy["actions"]}
+    assert "## Red Team Strategy" in report_markdown_path.read_text(encoding="utf-8")
 
 
 def test_agent_learn_optimize_runs_unified_command_and_writes_artifacts(

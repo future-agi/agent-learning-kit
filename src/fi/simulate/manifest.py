@@ -558,6 +558,13 @@ async def redteam_manifest(
             "redteam": redteam_summary,
             "duration_seconds": round(time.time() - started, 4),
         }
+        redteam_strategy = cli._redteam_strategy_card(
+            result,
+            source_path=manifest_path,
+            source_manifest_path=manifest_path,
+        )
+        if redteam_strategy is not None:
+            result["redteam_strategy"] = redteam_strategy
         return result
 
     report = await run_local_text_manifest(runtime_manifest, manifest_path)
@@ -574,6 +581,13 @@ async def redteam_manifest(
     )
     result["redteam"] = redteam_result
     result["summary"]["redteam"] = redteam_result
+    redteam_strategy = cli._redteam_strategy_card(
+        result,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if redteam_strategy is not None:
+        result["redteam_strategy"] = redteam_strategy
     return result
 
 
