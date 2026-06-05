@@ -44,6 +44,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _init(args[1:])
     if command in {"actions", "list-actions"}:
         return _actions(args[1:])
+    if command in {"action-run", "run-action"}:
+        return _action_run(args[1:])
     if command == "run":
         return _run(args[1:])
     if command == "eval":
@@ -278,6 +280,100 @@ def _actions(args: Sequence[str]) -> int:
         path.write_text(actions.render_markdown(payload), encoding="utf-8")
         written.append(str(path))
     payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _action_run(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn action-run",
+        description="Run one embedded CLI action from a saved artifact/report.",
+    )
+    parser.add_argument(
+        "artifact",
+        help="Path to an Agent Learning JSON/YAML artifact or report.",
+    )
+    parser.add_argument(
+        "--id",
+        dest="action_id",
+        required=True,
+        help="Action id to run.",
+    )
+    parser.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        help="Placeholder input as name=value; repeatable.",
+    )
+    parser.add_argument(
+        "--cwd",
+        default=None,
+        help="Working directory for relative action outputs.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve the action command without executing it.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help="Write JSON action-run result to this path.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown action-run result to this path.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the action-run artifact name.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON result when no output path is configured.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import actions
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn action-run", exc)
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    try:
+        artifact = actions.load_artifact_file(artifact_path)
+        payload = actions.run_action(
+            artifact,
+            str(parsed.action_id),
+            source_path=artifact_path,
+            inputs=_parse_key_value_items(parsed.input),
+            cwd=parsed.cwd,
+            dry_run=bool(parsed.dry_run),
+            name=parsed.name,
+        )
+    except Exception as exc:
+        print(f"agent-learn action-run: {exc}", file=sys.stderr)
+        return 1
+
+    written = _write_json_outputs(
+        payload,
+        _as_list(parsed.output),
+        base_dir=artifact_path.parent,
+    )
+    for value in _as_list(parsed.markdown):
+        path = _resolve_output_path(str(value), artifact_path.parent)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(actions.render_action_run_markdown(payload), encoding="utf-8")
+        written.append(str(path))
+    payload["outputs_written"].extend(path for path in written if path not in payload["outputs_written"])
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
@@ -2168,6 +2264,20 @@ def _as_list(value: Any) -> List[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _parse_key_value_items(values: Sequence[Any]) -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    for item in _as_list(values):
+        text = str(item)
+        if "=" not in text:
+            raise ValueError(f"expected name=value input, got {text!r}")
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"expected non-empty input name, got {text!r}")
+        parsed[key] = value
+    return parsed
 
 
 def _unique_strings(values: Sequence[Any]) -> List[str]:

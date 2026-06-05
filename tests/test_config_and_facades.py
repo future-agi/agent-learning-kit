@@ -5833,6 +5833,39 @@ def test_sdk_framework_certification_simulation_example_runs(
     action_markdown = actions_md_path.read_text(encoding="utf-8")
     assert "## Actions" in action_markdown
     assert "rerun_framework_certification" in action_markdown
+
+    action_run_dir = tmp_path / "sdk-framework-certification-action-run"
+    action_run_path = tmp_path / "sdk-framework-certification-action-run.json"
+    action_run_md_path = tmp_path / "sdk-framework-certification-action-run.md"
+    assert main([
+        "action-run",
+        str(output_path),
+        "--id",
+        "rerun_framework_certification",
+        "--cwd",
+        str(action_run_dir),
+        "--output",
+        str(action_run_path),
+        "--markdown",
+        str(action_run_md_path),
+    ]) == 0
+    action_run = json.loads(action_run_path.read_text(encoding="utf-8"))
+    assert action_run["kind"] == "agent-learning.action-run.v1"
+    assert action_run["status"] == "passed"
+    assert action_run["summary"]["command_exit_code"] == 0
+    assert action_run["summary"]["action_id"] == "rerun_framework_certification"
+    assert action_run["command_args"][:2] == ["agent-learn", "run"]
+    assert {
+        Path(item["path"]).name
+        for item in action_run["outputs"]
+        if item["exists"]
+    } >= {
+        "framework-certification-rerun.json",
+        "framework-certification-rerun.junit.xml",
+        "framework-certification-rerun.sarif.json",
+        "framework-certification-rerun.md",
+    }
+    assert "## Outputs" in action_run_md_path.read_text(encoding="utf-8")
     event_names = {event["name"] for event in report_case["events"]}
     assert {
         "framework_lifecycle_ready",

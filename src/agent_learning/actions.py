@@ -3,12 +3,14 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from ._schema import AGENT_LEARNING_CLI_SCHEMA_VERSION, normalize_public_payload
 
 AGENT_LEARNING_ACTIONS_KIND = "agent-learning.actions.v1"
+AGENT_LEARNING_ACTION_RUN_KIND = "agent-learning.action-run.v1"
 
 
 def load_artifact_file(path: str | Path) -> dict[str, Any]:
@@ -55,6 +57,70 @@ def get_action(
 ) -> Optional[dict[str, Any]]:
     actions = action_catalog(artifact, action_id=action_id)["actions"]
     return actions[0] if actions else None
+
+
+def run_action(
+    artifact: Mapping[str, Any],
+    action_id: str,
+    *,
+    source_path: str | Path = ".",
+    inputs: Optional[Mapping[str, Any]] = None,
+    cwd: str | Path | None = None,
+    dry_run: bool = False,
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    action = get_action(artifact, action_id)
+    if action is None:
+        raise ValueError(f"action not found: {action_id}")
+    command_args = _resolved_command_args(action, inputs or {})
+    if not command_args:
+        raise ValueError(f"action {action_id!r} does not include command_args")
+    command_name = command_args[0]
+    if command_name not in {"agent-learn", "agent-simulate"}:
+        raise ValueError(f"unsupported action command: {command_name}")
+    if len(command_args) < 2:
+        raise ValueError(f"action {action_id!r} is missing a subcommand")
+    subcommand = command_args[1]
+    if subcommand in {"action-run", "run-action"}:
+        raise ValueError("action-run cannot recursively execute action-run")
+
+    run_cwd = Path(cwd).expanduser().resolve() if cwd is not None else Path.cwd()
+    command_args = _absolutize_output_args(command_args, run_cwd)
+    output_records = _command_output_records(command_args, run_cwd)
+    exit_code = 0
+    if not dry_run:
+        exit_code = _dispatch_action_command(command_args, cwd=run_cwd)
+        output_records = _command_output_records(command_args, run_cwd)
+    status = "passed" if exit_code == 0 else "failed"
+    payload = {
+        "schema_version": AGENT_LEARNING_CLI_SCHEMA_VERSION,
+        "kind": AGENT_LEARNING_ACTION_RUN_KIND,
+        "name": str(name or f"{action_id}-action-run"),
+        "status": status,
+        "exit_code": exit_code,
+        "source_path": str(source_path),
+        "cwd": str(run_cwd),
+        "dry_run": bool(dry_run),
+        "action": action,
+        "command": " ".join(_shell_token(arg) for arg in command_args),
+        "command_args": command_args,
+        "outputs": output_records,
+        "outputs_written": [
+            str(item["path"])
+            for item in output_records
+            if item.get("exists") is True
+        ],
+        "summary": {
+            "action_id": str(action.get("id") or action_id),
+            "action_label": action.get("label"),
+            "source_card_path": action.get("source_card_path"),
+            "requires_input": bool(action.get("inputs")),
+            "command_exit_code": exit_code,
+            "output_count": len(output_records),
+            "outputs_written_count": sum(1 for item in output_records if item.get("exists") is True),
+        },
+    }
+    return payload
 
 
 def action_catalog(
@@ -169,6 +235,39 @@ def render_markdown(catalog: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_action_run_markdown(result: Mapping[str, Any]) -> str:
+    rows = [
+        "| Output | Exists |",
+        "| --- | --- |",
+    ]
+    for item in result.get("outputs") or []:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append(
+            "| "
+            + " | ".join(_md_cell(value) for value in [item.get("path"), item.get("exists")])
+            + " |"
+        )
+    if len(rows) == 2:
+        rows.append("| No declared outputs |  |")
+    summary = dict(result.get("summary") or {})
+    lines = [
+        f"# {_md_text(result.get('name') or 'action-run')}",
+        "",
+        f"- Source: `{_md_code(result.get('source_path') or '.')}`",
+        f"- Action: {_md_text(summary.get('action_id') or 'unknown')}",
+        f"- Status: {_md_text(result.get('status') or 'unknown')}",
+        f"- Exit code: {_md_text(result.get('exit_code'))}",
+        f"- Command: `{_md_code(result.get('command') or '')}`",
+        "",
+        "## Outputs",
+        "",
+        *rows,
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _walk_cli_actions(value: Any, path: str = "") -> Iterable[tuple[str, Mapping[str, Any]]]:
     if isinstance(value, Mapping):
         if value.get("kind") == "cli" and value.get("command_args") is not None:
@@ -191,6 +290,115 @@ def _source_card_path(action_path: str) -> str:
     if action_path.endswith(".actions"):
         return action_path[: -len(".actions")].removeprefix("report.")
     return action_path
+
+
+def _resolved_command_args(
+    action: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+) -> list[str]:
+    input_defaults = {
+        str(item.get("name")): item.get("default")
+        for item in action.get("inputs") or []
+        if isinstance(item, Mapping) and item.get("name") not in (None, "")
+    }
+    values = {**input_defaults, **{str(key): value for key, value in inputs.items()}}
+    resolved: list[str] = []
+    for raw_arg in action.get("command_args") or []:
+        arg = str(raw_arg)
+        for name, value in values.items():
+            arg = arg.replace("{{" + name + "}}", str(value))
+        if "{{" in arg or "}}" in arg:
+            raise ValueError(f"action {action.get('id')!r} requires input for {arg}")
+        resolved.append(arg)
+    return resolved
+
+
+def _dispatch_action_command(command_args: list[str], *, cwd: Path) -> int:
+    previous_cwd = Path.cwd()
+    cwd.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chdir(cwd)
+        if command_args[0] == "agent-learn":
+            cli = importlib.import_module("agent_learning.cli")
+        else:
+            cli = importlib.import_module("fi.simulate.cli")
+        return int(cli.main(command_args[1:]))
+    finally:
+        os.chdir(previous_cwd)
+
+
+def _command_output_records(command_args: list[str], cwd: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for flag, value in _command_output_values(command_args):
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            path = cwd / path
+        path = path.resolve()
+        records.append({"flag": flag, "path": str(path), "exists": path.exists()})
+    return records
+
+
+def _absolutize_output_args(command_args: list[str], cwd: Path) -> list[str]:
+    output_flags = {"-o", "--output", "--junit", "--sarif", "--markdown", "--md"}
+    resolved = list(command_args)
+    index = 0
+    while index < len(resolved):
+        arg = resolved[index]
+        if arg in output_flags and index + 1 < len(resolved):
+            resolved[index + 1] = str(_output_arg_path(resolved[index + 1], cwd))
+            index += 2
+            continue
+        replaced = False
+        for flag in output_flags:
+            prefix = flag + "="
+            if arg.startswith(prefix):
+                resolved[index] = prefix + str(_output_arg_path(arg[len(prefix):], cwd))
+                replaced = True
+                break
+        index += 1
+        if replaced:
+            continue
+    return resolved
+
+
+def _command_output_values(command_args: list[str]) -> list[tuple[str, str]]:
+    output_flags = {"-o", "--output", "--junit", "--sarif", "--markdown", "--md"}
+    values: list[tuple[str, str]] = []
+    index = 0
+    while index < len(command_args):
+        arg = command_args[index]
+        flag: Optional[str] = None
+        value: Optional[str] = None
+        if arg in output_flags and index + 1 < len(command_args):
+            flag = arg
+            value = command_args[index + 1]
+            index += 2
+        else:
+            for candidate in output_flags:
+                prefix = candidate + "="
+                if arg.startswith(prefix):
+                    flag = candidate
+                    value = arg[len(prefix):]
+                    break
+            index += 1
+        if flag is None or value in (None, ""):
+            continue
+        values.append((flag, str(value)))
+    return values
+
+
+def _output_arg_path(value: str, cwd: Path) -> Path:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (cwd / path).resolve()
+
+
+def _shell_token(value: Any) -> str:
+    text = str(value)
+    if all(char.isalnum() or char in "-_./:=@" for char in text):
+        return text
+    return "'" + text.replace("'", "'\"'\"'") + "'"
 
 
 def _load_json_or_yaml(path: Path) -> Any:
@@ -231,9 +439,12 @@ def _md_cell(value: Any) -> str:
 
 __all__ = [
     "AGENT_LEARNING_ACTIONS_KIND",
+    "AGENT_LEARNING_ACTION_RUN_KIND",
     "action_catalog",
     "extract_actions",
     "get_action",
     "load_artifact_file",
+    "render_action_run_markdown",
     "render_markdown",
+    "run_action",
 ]

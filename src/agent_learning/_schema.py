@@ -13,6 +13,7 @@ _PUBLIC_VALUE_REPLACEMENTS = {
     "agent-simulate.eval.v1": AGENT_LEARNING_EVAL_SCHEMA_VERSION,
     "agent-simulate.eval-optimization.v1": "agent-learning.eval-optimization.v1",
     "agent-simulate.actions.v1": "agent-learning.actions.v1",
+    "agent-simulate.action-run.v1": "agent-learning.action-run.v1",
     "agent-simulate.baseline.v1": "agent-learning.baseline.v1",
     "agent-simulate.compare.v1": "agent-learning.compare.v1",
     "agent-simulate.init.v1": "agent-learning.init.v1",

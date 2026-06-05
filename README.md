@@ -169,16 +169,21 @@ turn those embedded card actions into a standalone
 before extraction, de-dupes actions by id, marks actions that need placeholder
 inputs, and can be filtered with `--id`, giving promptfoo-style users a direct
 way to discover the next runnable command from any saved run/report/optimization
-artifact.
+artifact. `agent-learn action-run <artifact> --id <action_id>` and
+`agent_learning.actions.run_action()` execute one selected CLI action without
+shelling out, rewrite relative action output paths into the requested `--cwd`,
+and return an `agent-learning.action-run.v1` artifact that records the command,
+exit code, declared outputs, and generated files.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,
-`agent-learn optimize-suite`, `agent-learn suite`, and `agent-learn actions`
+`agent-learn optimize-suite`, `agent-learn suite`, `agent-learn actions`, and
+`agent-learn action-run`
 write Agent Learning Kit artifact kinds
 (`agent-learning.run.v1`, `agent-learning.eval.v1`,
 `agent-learning.redteam.v1`, `agent-learning.optimization.v1`,
 `agent-learning.eval-optimization.v1`, `agent-learning.suite.v1`, and
-`agent-learning.actions.v1`) plus
+`agent-learning.actions.v1` / `agent-learning.action-run.v1`) plus
 optional JUnit, SARIF, and Markdown outputs for CI.
 `agent-learn eval-cli ...` bridges the vendored ai-evaluation management CLI
 under the unified command for template listing, project scaffolding,
