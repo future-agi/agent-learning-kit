@@ -74,7 +74,16 @@ def strong_agent() -> dict[str, Any]:
                     {
                         "id": "cite_policy",
                         "name": "cite_sources",
-                        "arguments": {"doc_ids": ["doc_refund_2026"]},
+                        "arguments": {
+                            "doc_ids": ["doc_refund_2026"],
+                            "claim": (
+                                "The current refund policy allows approved "
+                                "refunds when framework trace, source "
+                                "grounding, memory provenance, and critic "
+                                "review are recorded."
+                            ),
+                            "freshness_checked": True,
+                        },
                     },
                     {
                         "id": "memory_lineage",
@@ -94,7 +103,9 @@ def strong_agent() -> dict[str, Any]:
                     "across world framework retrieval memory lineage multi agent "
                     "review evidence: optimized stack approves refund, records "
                     "trace, current policy grounding, provenance, critic-reviewed "
-                    "reconciliation."
+                    "reconciliation. The current refund policy allows approved "
+                    "refunds when framework trace, source grounding, memory "
+                    "provenance, and critic review are recorded."
                 ),
                 "tool_calls": [
                     {
@@ -243,12 +254,33 @@ def strong_stack() -> dict[str, Any]:
             ],
             "operations": [
                 {
+                    "id": "read_policy_memory",
+                    "operation": "read",
+                    "store": "episodic",
+                    "memory_id": "refund_decision",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                    "trace_id": "memory_trace_read",
+                    "attribution": {"source": "doc_refund_2026"},
+                },
+                {
                     "id": "write_policy_memory",
                     "operation": "write",
                     "store": "episodic",
                     "memory_id": "refund_decision",
                     "status": "allowed",
                     "policy_decision": "allowed",
+                    "trace_id": "memory_trace_write",
+                    "attribution": {"source": "doc_refund_2026"},
+                },
+                {
+                    "id": "recall_policy_memory",
+                    "operation": "recall",
+                    "store": "episodic",
+                    "memory_id": "refund_decision",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                    "trace_id": "memory_trace_recall",
                     "attribution": {"source": "doc_refund_2026"},
                 }
             ],
@@ -258,6 +290,48 @@ def strong_stack() -> dict[str, Any]:
                     "to": "refund_decision",
                     "type": "source_attribution",
                 }
+            ],
+            "policies": {
+                "retention": {"status": "enforced"},
+                "deletion": {"status": "enforced"},
+                "redaction": {"status": "enforced"},
+                "tenant_isolation": {"status": "enforced"},
+                "audit": {"status": "enforced"},
+            },
+            "poison_tests": [
+                {
+                    "id": "canary_poison",
+                    "status": "blocked",
+                    "canary": "FA_ORCHESTRATION_CANARY",
+                }
+            ],
+            "isolation_tests": [{"id": "tenant_a_boundary", "status": "passed"}],
+            "retention_tests": [{"id": "delete_after_retention", "status": "passed"}],
+            "observability": {
+                "traces": ["memory_trace_read", "memory_trace_write"],
+                "logs": ["orchestration-memory-audit.jsonl"],
+            },
+            "artifacts": [
+                {
+                    "id": "orchestration-memory-audit",
+                    "type": "json",
+                    "path": "artifacts/orchestration-memory-audit.json",
+                }
+            ],
+            "required_evidence": [
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
+                "retention_policy",
+                "deletion_policy",
+                "redaction",
+                "canary",
+            ],
+            "required_signals": [
+                "memory_lineage",
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
             ],
         },
         "multi_agent_room": {
@@ -335,8 +409,104 @@ def evaluation_config() -> dict[str, Any]:
             "terminal_status": "success",
             "expected_state": {"refund": {"status": "approved"}},
         },
+        "required_framework_trace": [
+            "framework_trace",
+            "langgraph",
+            "planner",
+            "tool",
+            "policy",
+            "framework_trace_status",
+        ],
+        "required_retrieval_memory_trace": [
+            "trace",
+            "query",
+            "document_read",
+            "attribution",
+            "retrieve_documents",
+            "cite_sources",
+        ],
+        "expected_retrieval_doc_ids": ["doc_refund_2026"],
+        "forbidden_retrieval_doc_ids": ["doc_refund_2025"],
+        "require_current_retrieval": True,
+        "require_source_grounding": True,
+        "source_grounding_min_overlap": 0.2,
+        "required_agent_memory_lineage": [
+            "agent_memory_lineage",
+            "source_attribution",
+            "tenant_isolation",
+            "audit",
+            "retention_policy",
+            "deletion_policy",
+            "redaction",
+            "canary",
+        ],
+        "agent_memory_lineage_quality": {
+            "min_store_count": 1,
+            "min_memory_count": 1,
+            "min_operation_count": 3,
+            "min_read_operations": 1,
+            "min_write_operations": 1,
+            "min_recall_operations": 1,
+            "min_observability_hooks": 1,
+            "min_artifact_count": 1,
+            "max_unattributed_memories": 0,
+            "max_open_poisoning": 0,
+            "max_isolation_violations": 0,
+            "max_retention_violations": 0,
+            "max_policy_violations": 0,
+            "require_target": True,
+            "require_stores": True,
+            "require_memory_records": True,
+            "require_operations": True,
+            "require_lineage": True,
+            "require_source_attribution": True,
+            "require_tenant_isolation": True,
+            "require_audit": True,
+            "require_retention_policy": True,
+            "require_deletion_policy": True,
+            "require_redaction": True,
+            "require_canaries": True,
+            "require_observability": True,
+            "require_artifacts": True,
+            "required_operation_types": ["read", "write", "recall"],
+            "required_policies": [
+                "retention",
+                "deletion",
+                "redaction",
+                "tenant_isolation",
+            ],
+        },
+        "required_multi_agent_trace": [
+            "trace",
+            "role",
+            "review_requested",
+            "reconciled",
+        ],
+        "required_multi_agent_roles": ["planner", "retriever", "critic"],
+        "expected_multi_agent_reviews": [
+            {
+                "reviewer": "critic",
+                "target_contains": "refund orchestration",
+                "criteria": ["policy", "memory", "world"],
+            }
+        ],
+        "expected_multi_agent_reconciliation": {
+            "summary_contains": "approved refund orchestration",
+            "accepted_source": "critic",
+            "conflicts_empty": True,
+        },
         "metric_weights": {
             "world_contract_quality": 8.0,
+            "world_contract_coverage": 3.0,
+            "framework_trace_coverage": 3.0,
+            "retrieval_context_quality": 4.0,
+            "retrieval_memory_attribution": 4.0,
+            "source_grounding": 3.0,
+            "agent_memory_lineage_coverage": 5.0,
+            "agent_memory_lineage_quality": 8.0,
+            "memory_integrity": 2.0,
+            "multi_agent_trace_coverage": 4.0,
+            "multi_agent_coordination_quality": 7.0,
             "tool_selection_accuracy": 4.0,
             "task_completion": 2.0,
             "goal_progress": 1.0,

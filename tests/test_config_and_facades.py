@@ -120,6 +120,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_multi_agent_coordination is not None
     assert optimize.build_orchestration_optimization_manifest is not None
     assert optimize.optimize_orchestration_stack is not None
+    assert simulate.build_orchestration_stack_run_manifest is not None
     assert optimize.build_realtime_optimization_manifest is not None
     assert optimize.optimize_realtime_stack is not None
     assert optimize.build_redteam_autogen_optimization_manifest is not None
@@ -950,7 +951,7 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
 
     assert output_path.exists()
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
-    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["optimization_score"] >= 0.98
     best_config = result["optimization"]["best_config"]
     assert [
         environment["type"]
@@ -974,11 +975,236 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
         "multi_agent_coordination_quality",
         "retrieval_context_quality",
         "agent_memory_lineage_coverage",
+        "agent_memory_lineage_quality",
+        "framework_trace_coverage",
+        "multi_agent_trace_coverage",
     ):
         assert best_history["metrics"][metric] == pytest.approx(1.0)
     state = best_history["report"]["results"][0]["metadata"]["environment_state"]
     assert state["world_contract"]["summary"]["terminal_status"] == "success"
     assert state["world_contract"]["state"]["refund"]["status"] == "approved"
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    lineage_summary = state["agent_memory_lineage"]["summary"]
+    assert lineage_summary["has_tenant_isolation"] is True
+    assert lineage_summary["has_retention_policy"] is True
+    assert lineage_summary["has_deletion_policy"] is True
+    assert lineage_summary["blocking_gap_count"] == 0
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+
+
+def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_ORCHESTRATION_SIMULATION_KEY",
+        "real-local-sdk-orchestration-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_orchestration_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert "optimization" not in manifest
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ORCHESTRATION_SIMULATION_KEY"
+    ]
+    assert manifest["agent"]["type"] == "scripted"
+    assert len(manifest["agent"]["responses"]) == 3
+    assert manifest["simulation"]["engine"] == "local_text"
+    assert manifest["simulation"]["min_turns"] == 3
+    assert manifest["simulation"]["max_turns"] == 3
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [environment["type"] for environment in manifest["simulation"]["environments"]] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    world = manifest["simulation"]["environments"][0]["data"]
+    assert world["transitions"][0]["id"] == "approve_refund"
+    framework = manifest["simulation"]["environments"][1]["data"]
+    assert framework["framework"] == "langgraph"
+    retrieval = manifest["simulation"]["environments"][2]["data"]
+    assert retrieval["documents"][0]["id"] == "doc_refund_2026"
+    lineage = manifest["simulation"]["environments"][3]["data"]
+    assert [operation["operation"] for operation in lineage["operations"]] == [
+        "read",
+        "write",
+        "recall",
+    ]
+    room = manifest["simulation"]["environments"][4]["data"]
+    assert set(room["participants"]) == {"planner", "retriever", "critic"}
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["world_contract_quality"]["terminal_status"] == "success"
+    assert eval_config["expected_retrieval_doc_ids"] == ["doc_refund_2026"]
+    assert eval_config["agent_memory_lineage_quality"]["required_operation_types"] == [
+        "read",
+        "write",
+        "recall",
+    ]
+    assert eval_config["required_multi_agent_roles"] == [
+        "planner",
+        "retriever",
+        "critic",
+    ]
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_orchestration_stack_run_manifest(
+        name="custom-orchestration-simulation",
+        agent=module._orchestration_optimization_example().strong_agent(),
+        stack={
+            "world": {
+                "name": "custom-world",
+                "initial_state": {"ticket": {"status": "open"}},
+                "transitions": [
+                    {
+                        "id": "close_ticket",
+                        "actor": "agent",
+                        "resource": "ticket",
+                        "action": "close",
+                        "effects": {"ticket.status": "closed"},
+                    }
+                ],
+            },
+            "framework": {
+                "framework": "custom_framework",
+                "spans": [{"id": "span", "signals": ["planner", "tool"]}],
+            },
+            "retrieval": {
+                "documents": [
+                    {
+                        "id": "doc_current",
+                        "content": "Current orchestration policy.",
+                        "current": True,
+                    }
+                ]
+            },
+            "lineage": {
+                "target": {"agent": "custom-agent"},
+                "stores": [{"id": "episodic"}],
+                "memories": [{"id": "m1", "source_ids": ["doc_current"]}],
+                "operations": [{"operation": "write", "status": "allowed"}],
+                "lineage": [
+                    {
+                        "from": "doc_current",
+                        "to": "m1",
+                        "type": "source_attribution",
+                    }
+                ],
+            },
+            "multi_agent": {
+                "participants": {"planner": {"name": "planner"}},
+            },
+        },
+        evaluation_config=module._orchestration_optimization_example().evaluation_config(),
+        min_turns=1,
+    )
+    assert [environment["type"] for environment in custom_manifest["simulation"]["environments"]] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+
+    output_path = tmp_path / "sdk-orchestration-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-orchestration-simulation"
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-orchestration-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "world_contract_quality",
+        "world_contract_coverage",
+        "framework_trace_coverage",
+        "retrieval_context_quality",
+        "retrieval_memory_attribution",
+        "agent_memory_lineage_coverage",
+        "agent_memory_lineage_quality",
+        "memory_integrity",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "tool_selection_accuracy",
+        "task_completion",
+        "goal_progress",
+        "trajectory_score",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["source_grounding"] >= 0.7
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent",
+    }
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+    assert state["world_contract"]["state"]["refund"]["status"] == "approved"
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+    assert state["framework_trace"]["adapter_conformance"]["score"] == pytest.approx(
+        1.0
+    )
+    assert state["retrieval_memory"]["queries"][0]["documents"] == [
+        "doc_refund_2026"
+    ]
+    assert state["retrieval_memory"]["citations"][0]["freshness_checked"] is True
+    lineage_summary = state["agent_memory_lineage"]["summary"]
+    for key in (
+        "has_source_attribution",
+        "has_tenant_isolation",
+        "has_retention_policy",
+        "has_deletion_policy",
+        "has_redaction",
+        "has_canaries",
+        "has_audit",
+        "has_observability",
+        "has_artifacts",
+    ):
+        assert lineage_summary[key] is True
+    assert lineage_summary["blocking_gap_count"] == 0
+    assert lineage_summary["policy_violation_count"] == 0
+    assert state["multi_agent"]["reviews"][0]["reviewer"] == "critic"
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "world_contract_ready",
+        "world_transition_applied",
+        "framework_trace_ready",
+        "planner.invoke",
+        "retrieval_memory_ready",
+        "agent_memory_lineage_ready",
+        "room_ready",
+        "query",
+        "document_read",
+        "attribution",
+        "agent_memory_lineage_status",
+        "retrieval_memory_status",
+        "review_requested",
+        "reconciled",
+    } <= event_names
+    assert len(report_case["events"]) >= 30
 
 
 def test_optimize_facade_builds_and_runs_multi_agent_coordination_manifest(

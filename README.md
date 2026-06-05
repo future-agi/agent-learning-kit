@@ -316,6 +316,11 @@ manifest = optimize.build_orchestration_optimization_manifest(
 result = optimize.optimize_manifest(manifest, manifest_path="examples/sdk.json")
 ```
 
+For direct, non-optimizer orchestration simulation,
+`simulate.build_orchestration_stack_run_manifest()` and
+`examples/sdk_orchestration_simulation.py` run a selected world/framework/
+retrieval/memory/multi-agent stack as a normal `agent-learning.run.v1` artifact.
+
 For retrieval and memory layers, pass candidates with `retrieval_memory` and
 `agent_memory_lineage` data. The SDK builds a runnable local manifest that
 searches current-document grounding, source attribution, memory writes, policy
@@ -362,6 +367,10 @@ AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_orchestration_optimization.py \
   artifacts/sdk-orchestration-optimization.json
+
+AGENT_LEARNING_SDK_ORCHESTRATION_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_orchestration_simulation.py \
+  artifacts/sdk-orchestration-simulation.json
 
 AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_optimization.py \
