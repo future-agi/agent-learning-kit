@@ -279,6 +279,9 @@ For raw task evidence that is not yet a full run artifact, use
 `evals.build_task_evidence_artifact()` or `evals.evaluate_task_evidence()`.
 The SDK normalizes messages, tool calls, metrics, environment state, artifacts,
 and events into the same agent-report shape used by `agent-learn eval-artifact`.
+The same path is available from the CLI and suite runner with
+`agent-learn eval-task`, so CI can score arbitrary task transcripts or tool
+run exports without writing Python glue.
 
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
@@ -308,6 +311,13 @@ AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_TASK_EVAL_KEY=... \
   PYTHONPATH=src python examples/sdk_task_evaluation.py \
   artifacts/sdk-task-evaluation.json
+
+PYTHONPATH=src agent-learn eval-task examples/task_evidence.json \
+  --config examples/task_evidence_eval_config.json \
+  --output artifacts/task-evidence-eval.json
+
+PYTHONPATH=src agent-learn suite examples/task_evidence_suite.json \
+  --output artifacts/task-evidence-suite.json
 
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \

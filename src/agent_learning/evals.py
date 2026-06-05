@@ -299,10 +299,12 @@ def build_task_evidence_artifact(
 
     raw_tool_calls = list(tool_calls or _as_list(source.get("tool_calls")) or _as_list(source.get("tools_called")))
     normalized_tool_calls = _normalize_task_tool_calls(raw_tool_calls)
+    source_messages = _as_list(source.get("messages"))
     messages_value = (
         [dict(item) for item in messages]
         if messages is not None
-        else _task_messages(
+        else [dict(item) for item in source_messages if isinstance(item, Mapping)]
+        or _task_messages(
             input_value=input_value,
             output_value=output_value,
             tool_calls=normalized_tool_calls,
@@ -438,6 +440,7 @@ def evaluate_artifact(
 ) -> dict[str, Any]:
     started = time.time()
     report, report_source = _artifact_report(artifact)
+    environment_state_keys = _report_environment_state_keys(report)
     evaluation = evaluate_agent_report(report, config=config, threshold=threshold)
     evaluation_payload = _plain(evaluation)
     cases = list(evaluation_payload.get("cases") or [])
@@ -462,6 +465,7 @@ def evaluate_artifact(
             "source_status": artifact.get("status"),
             "source_exit_code": artifact.get("exit_code"),
             "report_source": report_source,
+            "environment_state_keys": environment_state_keys,
             "metric_averages": dict(
                 _as_mapping(evaluation_payload.get("summary")).get("metric_averages")
                 or {}
@@ -497,6 +501,16 @@ def evaluate_artifact_file(
         name=name,
         source_path=artifact_path,
     )
+
+
+def _report_environment_state_keys(report: Mapping[str, Any]) -> list[str]:
+    keys: set[str] = set()
+    for result in _as_list(report.get("results")):
+        case = _as_mapping(result)
+        metadata = _as_mapping(case.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        keys.update(str(key) for key in environment_state if key not in (None, ""))
+    return sorted(keys)
 
 
 def load_eval_suite_file(path: str | Path) -> dict[str, Any]:

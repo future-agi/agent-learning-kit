@@ -23,6 +23,7 @@ _CHILD_COMMANDS = {
     "suite",
     "eval",
     "eval_artifact",
+    "eval_task",
     "redteam",
     "optimize",
     "optimize_eval",
@@ -617,6 +618,24 @@ def _execute_child_payload(
         )
         payload["kind"] = AGENT_LEARNING_ARTIFACT_EVAL_KIND
         return payload
+    if command == "eval_task":
+        from agent_learning import evals
+        from agent_learning.cli import AGENT_LEARNING_ARTIFACT_EVAL_KIND
+
+        config_path = _job_optional_path(
+            job,
+            base_dir=base_dir,
+            keys=("config", "eval_config", "agent_report_config"),
+        )
+        config = evals.load_artifact_file(config_path) if config_path else None
+        payload = evals.evaluate_task_evidence_file(
+            path,
+            config=config,
+            name=_job_name(job),
+            threshold=float(_job_threshold(job, suite_options) or 0.7),
+        )
+        payload["kind"] = AGENT_LEARNING_ARTIFACT_EVAL_KIND
+        return payload
     if command == "redteam":
         from agent_learning import redteam
 
@@ -993,6 +1012,7 @@ def _collect_summary_capabilities(summary: Mapping[str, Any], caps: dict[str, se
     _add_capabilities(caps, "frameworks", summary.get("observed_frameworks"))
     _add_capabilities(caps, "frameworks", summary.get("required_trace_frameworks"))
     _add_capabilities(caps, "frameworks", summary.get("frameworks"))
+    _add_capabilities(caps, "environment_state_keys", summary.get("environment_state_keys"))
     _add_capabilities(caps, "metrics", summary.get("observed_metrics"))
     _add_capabilities(caps, "metrics", summary.get("required_metrics"))
     _add_capabilities(caps, "metrics", summary.get("eval_metrics"))
@@ -1171,6 +1191,12 @@ def _normalize_command(value: Any) -> str:
         "eval_reports": "eval_artifact",
         "artifact_eval": "eval_artifact",
         "artifact_evaluation": "eval_artifact",
+        "evaltask": "eval_task",
+        "eval_tasks": "eval_task",
+        "eval_evidence": "eval_task",
+        "task_eval": "eval_task",
+        "task_evaluation": "eval_task",
+        "task_evidence_eval": "eval_task",
         "red_team": "redteam",
         "optimization": "optimize",
         "optimizeeval": "optimize_eval",

@@ -30,6 +30,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             None,
         ),
         (
+            "eval-task",
+            "task_evidence.json",
+            "agent-learning.artifact-evaluation.v1",
+            None,
+        ),
+        (
             "redteam",
             "redteam_manifest.json",
             "agent-learning.redteam.v1",
@@ -111,6 +117,8 @@ def test_shipped_examples_execute_through_unified_cli(
         args.append("--no-eval")
     if command == "eval-artifact":
         args.extend(["--config", str(EXAMPLES / "artifact_task_eval_config.json")])
+    if command == "eval-task":
+        args.extend(["--config", str(EXAMPLES / "task_evidence_eval_config.json")])
 
     exit_code = main(args)
 
@@ -146,6 +154,13 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["score"] >= 0.9
         assert payload["summary"]["metric_averages"]["task_completion"] >= 0.9
         assert payload["source"]["path"].endswith("refund_task_run.json")
+    if command == "eval-task":
+        assert payload["summary"]["report_source"] == "report"
+        assert payload["summary"]["source_kind"] == "agent-learning.task-evidence.v1"
+        assert payload["summary"]["score"] >= 0.9
+        assert payload["summary"]["metric_averages"]["task_completion"] >= 0.9
+        assert payload["summary"]["metric_averages"]["world_contract_quality"] >= 0.9
+        assert payload["source"]["path"].endswith("task_evidence.json")
     if command == "suite":
         assert payload["summary"]["job_count"] == 21
         assert payload["summary"]["passed_count"] == 21
@@ -314,6 +329,48 @@ def test_shipped_examples_execute_through_unified_cli(
         )
     if command in {"run", "eval", "redteam"}:
         assert payload["summary"]["case_count"] >= 1
+
+
+def test_task_evidence_suite_runs_eval_task_child(tmp_path):
+    output_path = tmp_path / "task-evidence-suite.json"
+    junit_path = tmp_path / "task-evidence-suite.junit.xml"
+    sarif_path = tmp_path / "task-evidence-suite.sarif.json"
+    markdown_path = tmp_path / "task-evidence-suite.md"
+
+    exit_code = main([
+        "suite",
+        str(EXAMPLES / "task_evidence_suite.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.suite.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["job_count"] == 1
+    assert payload["summary"]["passed_count"] == 1
+    assert payload["summary"]["capability_gate_passed"] is True
+    assert payload["summary"]["missing_required_capabilities"] == {}
+    assert payload["summary"]["commands"] == {"eval_task": 1}
+    child = payload["children"][0]
+    assert child["command"] == "eval_task"
+    assert child["kind"] == "agent-learning.artifact-evaluation.v1"
+    assert child["result"]["summary"]["source_kind"] == (
+        "agent-learning.task-evidence.v1"
+    )
+    assert child["result"]["summary"]["score"] >= 0.9
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    assert json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0]["results"] == []
+    assert "agent-learning-task-evidence-suite" in markdown_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_regression_artifact_suite_example_runs_artifact_lifecycle(tmp_path):
