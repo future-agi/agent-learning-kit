@@ -46,6 +46,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _actions(args[1:])
     if command in {"action-run", "run-action"}:
         return _action_run(args[1:])
+    if command in {"action-optimize", "optimize-actions", "actions-optimize"}:
+        return _action_optimize(args[1:])
     if command == "run":
         return _run(args[1:])
     if command == "eval":
@@ -374,6 +376,167 @@ def _action_run(args: Sequence[str]) -> int:
         path.write_text(actions.render_action_run_markdown(payload), encoding="utf-8")
         written.append(str(path))
     payload["outputs_written"].extend(path for path in written if path not in payload["outputs_written"])
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _action_optimize(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn action-optimize",
+        description=(
+            "Optimize which embedded artifact action to run next, then execute "
+            "the selected action through an Agent Learning suite."
+        ),
+    )
+    parser.add_argument(
+        "artifact",
+        help="Path to an Agent Learning JSON/YAML artifact or report.",
+    )
+    parser.add_argument(
+        "--id",
+        dest="action_ids",
+        action="append",
+        default=[],
+        help="Candidate action id to include; repeatable.",
+    )
+    parser.add_argument(
+        "--exclude-id",
+        dest="exclude_action_ids",
+        action="append",
+        default=[],
+        help="Action id to exclude; repeatable.",
+    )
+    parser.add_argument(
+        "--source-card",
+        action="append",
+        default=[],
+        help="Only include actions from this source card path; repeatable.",
+    )
+    parser.add_argument(
+        "--target-layer",
+        action="append",
+        default=[],
+        help="Only include actions matching this target layer; repeatable.",
+    )
+    parser.add_argument(
+        "--subcommand",
+        action="append",
+        default=[],
+        help="Only include actions whose CLI subcommand matches; repeatable.",
+    )
+    parser.add_argument(
+        "--required-env",
+        action="append",
+        default=[],
+        help="Required environment variable for the generated suite; repeatable.",
+    )
+    parser.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        help="Placeholder input as action_id.name=value; repeatable.",
+    )
+    parser.add_argument(
+        "--cwd-root",
+        default=None,
+        help="Root directory for candidate action working directories.",
+    )
+    parser.add_argument(
+        "--outputs-root",
+        default=None,
+        help="Root directory for candidate action-run child result files.",
+    )
+    parser.add_argument(
+        "--suite-output",
+        default=None,
+        help="Write the generated suite optimization manifest to this path.",
+    )
+    parser.add_argument(
+        "--include-synthesized-report-actions",
+        action="store_true",
+        help="Include synthesized report actions in addition to raw embedded actions.",
+    )
+    parser.add_argument(
+        "--include-requires-input",
+        action="store_true",
+        help="Allow actions with placeholders when matching inputs are provided.",
+    )
+    _add_suite_optimization_args(parser, include_suite_arg=False)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import actions, optimize, simulate, suite
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn action-optimize", exc)
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    try:
+        artifact = actions.load_artifact_file(artifact_path)
+        suite_manifest = optimize.build_artifact_action_optimization_manifest(
+            name=parsed.name or f"{artifact_path.stem}-action-optimization",
+            artifact_path=artifact_path,
+            artifact=artifact,
+            action_ids=_as_list(parsed.action_ids),
+            exclude_action_ids=_as_list(parsed.exclude_action_ids),
+            source_card_paths=_as_list(parsed.source_card),
+            target_layers=_as_list(parsed.target_layer),
+            command_subcommands=_as_list(parsed.subcommand),
+            required_env=_as_list(parsed.required_env),
+            action_inputs=_parse_action_inputs(parsed.input),
+            cwd_root=parsed.cwd_root,
+            outputs_root=parsed.outputs_root,
+            include_synthesized_report_actions=bool(
+                parsed.include_synthesized_report_actions
+            ),
+            include_requires_input=bool(parsed.include_requires_input),
+            threshold=float(parsed.threshold if parsed.threshold is not None else 1.0),
+        )
+        suite_path = (
+            Path(parsed.suite_output).expanduser().resolve()
+            if parsed.suite_output
+            else artifact_path.with_name(f"{artifact_path.stem}.action-optimization.json")
+        )
+        if parsed.suite_output:
+            suite.write_suite_file(suite_manifest, suite_path)
+        if parsed.dry_run:
+            payload = suite.optimize_suite(
+                suite_manifest,
+                suite_path=suite_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                max_candidates=parsed.max_candidates,
+                dry_run=True,
+            )
+        else:
+            payload = suite.optimize_suite(
+                suite_manifest,
+                suite_path=suite_path,
+                name=parsed.name,
+                threshold=parsed.threshold,
+                max_candidates=parsed.max_candidates,
+            )
+    except Exception as exc:
+        print(f"agent-learn action-optimize: {exc}", file=sys.stderr)
+        return 1
+
+    payload["kind"] = AGENT_LEARNING_SUITE_OPTIMIZATION_KIND
+    if parsed.suite_output:
+        payload.setdefault("outputs_written", []).append(str(suite_path))
+    written = _write_result_outputs(
+        payload,
+        suite_manifest,
+        parsed,
+        suite_path,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=simulate.render_markdown,
+    )
+    existing_outputs = list(payload.get("outputs_written") or [])
+    payload["outputs_written"] = [
+        *existing_outputs,
+        *[path for path in written if path not in existing_outputs],
+    ]
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
@@ -1239,8 +1402,13 @@ def _add_suite_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_suite_optimization_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("suite", help="Path to a JSON/YAML Agent Learning suite.")
+def _add_suite_optimization_args(
+    parser: argparse.ArgumentParser,
+    *,
+    include_suite_arg: bool = True,
+) -> None:
+    if include_suite_arg:
+        parser.add_argument("suite", help="Path to a JSON/YAML Agent Learning suite.")
     parser.add_argument(
         "-o",
         "--output",
@@ -2280,6 +2448,24 @@ def _parse_key_value_items(values: Sequence[Any]) -> Dict[str, str]:
     return parsed
 
 
+def _parse_action_inputs(values: Sequence[Any]) -> Dict[str, Dict[str, str]]:
+    parsed: Dict[str, Dict[str, str]] = {}
+    for item in _as_list(values):
+        text = str(item)
+        if "=" not in text:
+            raise ValueError(f"expected action_id.name=value input, got {text!r}")
+        key, value = text.split("=", 1)
+        if "." not in key:
+            raise ValueError(f"expected action_id.name=value input, got {text!r}")
+        action_id, input_name = key.split(".", 1)
+        action_id = action_id.strip()
+        input_name = input_name.strip()
+        if not action_id or not input_name:
+            raise ValueError(f"expected action_id.name=value input, got {text!r}")
+        parsed.setdefault(action_id, {})[input_name] = value
+    return parsed
+
+
 def _unique_strings(values: Sequence[Any]) -> List[str]:
     seen = set()
     unique: List[str] = []
@@ -2385,7 +2571,8 @@ def _help(error: Optional[str] = None) -> int:
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
             "compare, baseline, promote-to-regression, optimize-eval, "
-            "optimize-suite, suite, eval-cli, init"
+            "optimize-suite, suite, actions, action-run, action-optimize, "
+            "eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

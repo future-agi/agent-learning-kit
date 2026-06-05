@@ -100,6 +100,11 @@ agent-learn suite examples/multi_framework_simulation_suite.json \
   --output artifacts/multi-framework-suite.json
 agent-learn optimize-suite examples/suite_optimization.json \
   --output artifacts/suite-optimization.json
+agent-learn action-optimize artifacts/sdk-framework-certification-simulation.json \
+  --id report_framework_readiness \
+  --id rerun_framework_certification \
+  --source-card framework_readiness \
+  --output artifacts/artifact-action-optimization.json
 agent-learn run examples/framework_custom_manifest.json --no-eval \
   --output artifacts/framework-custom.json
 agent-learn optimize examples/custom_framework_optimization.json \
@@ -181,8 +186,11 @@ recommended next action, execute it, and keep the action-run result inside one
 `agent-learning.suite.v1` artifact.
 `optimize.build_artifact_action_optimization_manifest()` and
 `optimize.optimize_artifact_actions()` turn the same action catalog into an
-AgentOptimizer-backed suite search over `jobs.0`, so CLI or SDK users can let
-the optimizer choose between report, rerun, replay, repair, or follow-up
+AgentOptimizer-backed suite search over `jobs.0`. `agent-learn action-optimize
+<artifact>` exposes the same loop from the CLI with action id, source-card,
+target-layer, and subcommand filters, optional generated suite output, and
+normal JSON/JUnit/SARIF/Markdown result outputs. CLI or SDK users can let the
+optimizer choose between report, rerun, replay, repair, or follow-up
 optimization actions from a real artifact trajectory and still get child
 JSON/Markdown logs for the selected `action-run`. Suite optimization artifacts
 and reports also include an `artifact_action_plan` card with the selected
@@ -191,13 +199,14 @@ files, and the selection reason for Future AGI UI/API rendering.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,
-`agent-learn optimize-suite`, `agent-learn suite`, `agent-learn actions`, and
-`agent-learn action-run`
+`agent-learn optimize-suite`, `agent-learn suite`, `agent-learn actions`,
+`agent-learn action-run`, and `agent-learn action-optimize`
 write Agent Learning Kit artifact kinds
 (`agent-learning.run.v1`, `agent-learning.eval.v1`,
 `agent-learning.redteam.v1`, `agent-learning.optimization.v1`,
 `agent-learning.eval-optimization.v1`, `agent-learning.suite.v1`, and
-`agent-learning.actions.v1` / `agent-learning.action-run.v1`) plus
+`agent-learning.actions.v1` / `agent-learning.action-run.v1` /
+`agent-learning.suite-optimization.v1`) plus
 optional JUnit, SARIF, and Markdown outputs for CI.
 `agent-learn eval-cli ...` bridges the vendored ai-evaluation management CLI
 under the unified command for template listing, project scaffolding,
@@ -920,8 +929,8 @@ optimization artifacts rerun with `agent-learn optimize`, and both expose
 `examples/sdk_artifact_action_optimization.py` takes the next step: it creates a
 real certification artifact, extracts the readiness action cards, and runs an
 `agent-learning.suite.v1` optimization where each candidate is an `action-run`
-job. This gives promptfoo-style CLI workflows a deterministic way to optimize
-which saved-artifact action should run next.
+job. `agent-learn action-optimize` runs the same action search directly from a
+saved artifact for promptfoo-style CLI workflows.
 
 The `autonomous_redteam_task_world_optimization.json` example optimizes a
 local autonomous task/world red-team harness. It verifies structured artifacts,

@@ -6120,6 +6120,57 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert "## Artifact Action Plan" in action_opt_report_md_path.read_text(
         encoding="utf-8"
     )
+    action_cli_dir = tmp_path / "sdk-framework-certification-action-cli"
+    action_cli_output_path = tmp_path / (
+        "sdk-framework-certification-action-cli-result.json"
+    )
+    action_cli_markdown_path = tmp_path / (
+        "sdk-framework-certification-action-cli-result.md"
+    )
+    action_cli_suite_path = tmp_path / (
+        "sdk-framework-certification-action-cli-suite.json"
+    )
+    assert main([
+        "action-optimize",
+        str(output_path),
+        "--id",
+        "report_framework_readiness",
+        "--id",
+        "rerun_framework_certification",
+        "--source-card",
+        "framework_readiness",
+        "--subcommand",
+        "run",
+        "--cwd-root",
+        str(action_cli_dir / "runs"),
+        "--outputs-root",
+        str(action_cli_dir / "children"),
+        "--suite-output",
+        str(action_cli_suite_path),
+        "--output",
+        str(action_cli_output_path),
+        "--markdown",
+        str(action_cli_markdown_path),
+    ]) == 0
+    action_cli = json.loads(action_cli_output_path.read_text(encoding="utf-8"))
+    assert action_cli["kind"] == "agent-learning.suite-optimization.v1"
+    assert action_cli["status"] == "passed"
+    assert action_cli["artifact_action_plan"]["selected_action_id"] == (
+        "rerun_framework_certification"
+    )
+    action_cli_suite = json.loads(action_cli_suite_path.read_text(encoding="utf-8"))
+    assert action_cli_suite["metadata"]["scope_filters"]["source_card_paths"] == [
+        "framework_readiness"
+    ]
+    assert action_cli_suite["metadata"]["scope_filters"]["command_subcommands"] == [
+        "run"
+    ]
+    assert action_cli_suite["metadata"]["candidate_action_ids"] == [
+        "rerun_framework_certification",
+    ]
+    assert "## Artifact Action Plan" in action_cli_markdown_path.read_text(
+        encoding="utf-8"
+    )
     event_names = {event["name"] for event in report_case["events"]}
     assert {
         "framework_lifecycle_ready",

@@ -1208,6 +1208,10 @@ def build_artifact_action_optimization_manifest(
     artifact_path: str | Path,
     artifact: Optional[Mapping[str, Any]] = None,
     action_ids: Optional[Sequence[str]] = None,
+    exclude_action_ids: Sequence[str] = (),
+    source_card_paths: Sequence[str] = (),
+    target_layers: Sequence[str] = (),
+    command_subcommands: Sequence[str] = (),
     required_env: Sequence[str] = (),
     action_inputs: Optional[Mapping[str, Mapping[str, Any]]] = None,
     cwd_root: str | Path | None = None,
@@ -1260,6 +1264,10 @@ def build_artifact_action_optimization_manifest(
     ]
     requested = [str(item) for item in action_ids or [] if str(item)]
     requested_set = set(requested)
+    excluded_set = {str(item) for item in exclude_action_ids if str(item)}
+    source_card_set = {str(item) for item in source_card_paths if str(item)}
+    target_layer_set = {_scope_key(item) for item in target_layers if str(item)}
+    subcommand_set = {_scope_key(item) for item in command_subcommands if str(item)}
     inputs_by_action = {
         str(key): copy.deepcopy(dict(value))
         for key, value in dict(action_inputs or {}).items()
@@ -1280,6 +1288,13 @@ def build_artifact_action_optimization_manifest(
         if isinstance(action, Mapping)
         and action.get("id")
         and (not requested_set or str(action.get("id")) in requested_set)
+        and str(action.get("id")) not in excluded_set
+        and _artifact_action_matches_scope(
+            action,
+            source_card_paths=source_card_set,
+            target_layers=target_layer_set,
+            command_subcommands=subcommand_set,
+        )
         and _artifact_action_is_executable(
             action,
             inputs=inputs_by_action.get(str(action.get("id")), {}),
@@ -1314,6 +1329,15 @@ def build_artifact_action_optimization_manifest(
     source_name = catalog.get("summary", {}).get("source_name")
     search_space = {"jobs.0": copy.deepcopy(candidate_jobs)}
     suite_name = str(name)
+    scope_filters = _artifact_action_scope_filters(
+        action_ids=requested,
+        exclude_action_ids=excluded_set,
+        source_card_paths=source_card_set,
+        target_layers=target_layer_set,
+        command_subcommands=subcommand_set,
+        include_synthesized_report_actions=include_synthesized_report_actions,
+        include_requires_input=include_requires_input,
+    )
 
     return {
         "version": "agent-learning.suite.v1",
@@ -1336,6 +1360,7 @@ def build_artifact_action_optimization_manifest(
             "candidate_action_ids": [
                 str(action.get("id")) for action in action_candidates
             ],
+            "scope_filters": scope_filters,
             "research_sources": _unique_research_sources(
                 [
                     *_default_artifact_action_research_sources(),
@@ -1369,6 +1394,7 @@ def build_artifact_action_optimization_manifest(
                     "candidate_action_ids": [
                         str(action.get("id")) for action in action_candidates
                     ],
+                    "scope_filters": scope_filters,
                     **copy.deepcopy(dict(target_metadata or {})),
                 },
             },
@@ -12612,6 +12638,61 @@ def _artifact_action_is_executable(
     except ValueError:
         return False
     return True
+
+
+def _artifact_action_matches_scope(
+    action: Mapping[str, Any],
+    *,
+    source_card_paths: set[str],
+    target_layers: set[str],
+    command_subcommands: set[str],
+) -> bool:
+    if source_card_paths and str(action.get("source_card_path") or "") not in source_card_paths:
+        return False
+    if target_layers:
+        observed_layers = {_scope_key(item) for item in action.get("target_layers") or []}
+        observed_layers.update(
+            _scope_key(value)
+            for value in (
+                action.get("readiness_layer"),
+                action.get("strategy_layer"),
+                action.get("diagnosis_layer"),
+            )
+            if value
+        )
+        if not observed_layers.intersection(target_layers):
+            return False
+    if command_subcommands:
+        args = list(action.get("command_args") or [])
+        subcommand = _scope_key(args[1]) if len(args) > 1 else ""
+        if subcommand not in command_subcommands:
+            return False
+    return True
+
+
+def _artifact_action_scope_filters(
+    *,
+    action_ids: Sequence[str],
+    exclude_action_ids: set[str],
+    source_card_paths: set[str],
+    target_layers: set[str],
+    command_subcommands: set[str],
+    include_synthesized_report_actions: bool,
+    include_requires_input: bool,
+) -> dict[str, Any]:
+    return {
+        "action_ids": [str(item) for item in action_ids],
+        "exclude_action_ids": sorted(exclude_action_ids),
+        "source_card_paths": sorted(source_card_paths),
+        "target_layers": sorted(target_layers),
+        "command_subcommands": sorted(command_subcommands),
+        "include_synthesized_report_actions": bool(include_synthesized_report_actions),
+        "include_requires_input": bool(include_requires_input),
+    }
+
+
+def _scope_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _resolved_artifact_action_args(
