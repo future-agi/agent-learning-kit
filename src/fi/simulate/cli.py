@@ -38,6 +38,7 @@ from fi.simulate import (
     OptimizerPortfolioEnvironment,
     OptimizerTraceEnvironment,
     Persona,
+    PersistentStateRedTeamEnvironment,
     RedTeamCampaignEnvironment,
     RedTeamReadinessEnvironment,
     RetrievalMemoryEnvironment,
@@ -297,11 +298,15 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "optimizer_portfolio",
         "optimizer_society_trace",
         "optimizer_trace",
+        "persistent_state_attack",
+        "persistent_state_redteam",
         "red_team_campaign",
         "red_team_readiness",
         "redteam_campaign",
         "redteam_readiness",
         "retrieval_memory",
+        "stored_prompt_injection",
+        "memory_poisoning_lifecycle",
         "streaming_trace",
         "structured_artifact",
         "structured_artifacts",
@@ -725,6 +730,13 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(OptimizerPortfolioEnvironment(payload))
         elif env_type in {"optimizer_society_trace", "optimizer_trace"}:
             environments.append(OptimizerTraceEnvironment(payload))
+        elif env_type in {
+            "persistent_state_attack",
+            "persistent_state_redteam",
+            "stored_prompt_injection",
+            "memory_poisoning_lifecycle",
+        }:
+            environments.append(PersistentStateRedTeamEnvironment(payload))
         elif env_type == "agent_memory_lineage":
             environments.append(AgentMemoryLineageEnvironment(payload))
         elif env_type in {"tool_mock", "mock_tools"}:

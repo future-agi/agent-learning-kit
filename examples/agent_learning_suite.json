@@ -19,6 +19,7 @@
     "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY",
     "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY",
     "AGENT_LEARNING_SUITE_OPT_EXAMPLE_KEY"
   ],
   "required_capabilities": {
@@ -53,6 +54,7 @@
       "multi_agent_room",
       "multimodal_image",
       "optimizer_trace",
+      "persistent_state_attack",
       "red_team_campaign",
       "streaming_trace",
       "voice",
@@ -99,6 +101,8 @@
       "multi_agent_coordination_quality",
       "multimodal_faithfulness",
       "optimizer_trace_quality",
+      "persistent_state_attack_coverage",
+      "persistent_state_attack_quality",
       "red_team_campaign_quality",
       "voice_trace_coverage",
       "world_contract_quality"
@@ -162,6 +166,12 @@
       "command": "redteam",
       "path": "redteam_manifest.json",
       "name": "suite-agent-red-team"
+    },
+    {
+      "id": "persistent-state-redteam",
+      "command": "run",
+      "path": "persistent_state_redteam_manifest.json",
+      "name": "suite-persistent-state-redteam"
     },
     {
       "id": "eval-suite-optimizer",

@@ -121,6 +121,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
                 "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY",
                 "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY",
+                "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY",
                 "AGENT_LEARNING_SUITE_OPT_EXAMPLE_KEY",
             ],
         ),
@@ -215,8 +216,8 @@ def test_shipped_examples_execute_through_unified_cli(
         assert payload["summary"]["metric_averages"]["world_contract_quality"] >= 0.9
         assert payload["source"]["path"].endswith("task_evidence.json")
     if command == "suite":
-        assert payload["summary"]["job_count"] == 22
-        assert payload["summary"]["passed_count"] == 22
+        assert payload["summary"]["job_count"] == 23
+        assert payload["summary"]["passed_count"] == 23
         assert payload["summary"]["score"] == pytest.approx(1.0)
         assert payload["summary"]["capability_gate_passed"] is True
         assert payload["summary"]["missing_required_capabilities"] == {}
@@ -253,6 +254,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "multi_agent_room",
             "multimodal_image",
             "optimizer_trace",
+            "persistent_state_attack",
             "red_team_campaign",
             "streaming_trace",
             "voice",
@@ -299,6 +301,8 @@ def test_shipped_examples_execute_through_unified_cli(
             "multi_agent_coordination_quality",
             "multimodal_faithfulness",
             "optimizer_trace_quality",
+            "persistent_state_attack_coverage",
+            "persistent_state_attack_quality",
             "red_team_campaign_quality",
             "voice_trace_coverage",
             "world_contract_quality",
@@ -315,6 +319,7 @@ def test_shipped_examples_execute_through_unified_cli(
             "eval",
             "eval_artifact",
             "redteam",
+            "run",
             "optimize_eval",
             "optimize",
             "optimize",

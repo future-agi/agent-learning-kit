@@ -1702,6 +1702,7 @@ _KNOWN_ENVIRONMENT_TYPES = {
     "multi_agent_room",
     "observability_replay",
     "optimizer_trace",
+    "persistent_state_attack",
     "red_team_campaign",
     "red_team_readiness",
     "retrieval_memory",

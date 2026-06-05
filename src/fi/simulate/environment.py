@@ -4479,6 +4479,671 @@ class RedTeamCampaignEnvironment(EnvironmentAdapter):
         return copy.deepcopy(self.campaign)
 
 
+def normalize_persistent_state_attack_manifest(
+    payload: Any = None,
+    *,
+    name: str = "persistent-state-redteam",
+    target: Optional[Mapping[str, Any]] = None,
+    channels: Optional[Iterable[Any]] = None,
+    attack_cases: Optional[Iterable[Any]] = None,
+    persistent_writes: Optional[Iterable[Any]] = None,
+    incorporations: Optional[Iterable[Any]] = None,
+    activations: Optional[Iterable[Any]] = None,
+    sessions: Optional[Iterable[Any]] = None,
+    mitigations: Optional[Iterable[Any]] = None,
+    observability: Optional[Mapping[str, Any]] = None,
+    artifacts: Optional[Iterable[Any]] = None,
+    required_channels: Optional[Iterable[str]] = None,
+    required_attack_types: Optional[Iterable[str]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Normalize cross-session stored-prompt-injection evidence.
+
+    This represents the 2026 stored-prompt-injection lifecycle as a durable
+    trace: attacker input writes to persistent state, a later clean session
+    reincorporates that state, and activation either succeeds or is contained.
+    """
+
+    payload_dict = copy.deepcopy(dict(payload)) if isinstance(payload, Mapping) else {}
+    target_record = _red_team_mapping(target if target is not None else payload_dict.get("target"))
+    channel_records = _normalize_persistent_state_channels(
+        channels
+        if channels is not None
+        else payload_dict.get("channels", payload_dict.get("persistence_channels"))
+    )
+    case_records = _normalize_persistent_state_cases(
+        attack_cases
+        if attack_cases is not None
+        else payload_dict.get("attack_cases", payload_dict.get("cases"))
+    )
+    write_records = _normalize_persistent_state_stage_records(
+        persistent_writes
+        if persistent_writes is not None
+        else payload_dict.get("persistent_writes", payload_dict.get("writes")),
+        stage="write",
+    )
+    incorporation_records = _normalize_persistent_state_stage_records(
+        incorporations
+        if incorporations is not None
+        else payload_dict.get("incorporations", payload_dict.get("context_incorporations")),
+        stage="incorporation",
+    )
+    activation_records = _normalize_persistent_state_stage_records(
+        activations
+        if activations is not None
+        else payload_dict.get("activations", payload_dict.get("activation_runs")),
+        stage="activation",
+    )
+    session_records = _normalize_persistent_state_sessions(
+        sessions if sessions is not None else payload_dict.get("sessions")
+    )
+    mitigation_records = [
+        _normalize_persistent_state_record(item, prefix="mitigation", index=index)
+        for index, item in enumerate(
+            _as_iterable(
+                mitigations
+                if mitigations is not None
+                else payload_dict.get("mitigations")
+            ),
+            start=1,
+        )
+    ]
+    artifact_records = [
+        _normalize_persistent_state_record(item, prefix="artifact", index=index)
+        for index, item in enumerate(
+            _as_iterable(
+                artifacts
+                if artifacts is not None
+                else payload_dict.get("artifacts")
+            ),
+            start=1,
+        )
+    ]
+    required_channel_keys = _red_team_key_list(
+        required_channels
+        if required_channels is not None
+        else payload_dict.get("required_channels")
+    )
+    required_attack_keys = _red_team_key_list(
+        required_attack_types
+        if required_attack_types is not None
+        else payload_dict.get("required_attack_types")
+    )
+    summary = _persistent_state_attack_summary(
+        channels=channel_records,
+        cases=case_records,
+        writes=write_records,
+        incorporations=incorporation_records,
+        activations=activation_records,
+        sessions=session_records,
+        mitigations=mitigation_records,
+        artifacts=artifact_records,
+        required_channels=required_channel_keys,
+        required_attack_types=required_attack_keys,
+    )
+    signals = _persistent_state_attack_signals(
+        channels=channel_records,
+        cases=case_records,
+        writes=write_records,
+        incorporations=incorporation_records,
+        activations=activation_records,
+        sessions=session_records,
+        mitigations=mitigation_records,
+        artifacts=artifact_records,
+        summary=summary,
+    )
+    return {
+        "kind": "persistent_state_attack",
+        "name": str(payload_dict.get("name") or name),
+        "target": target_record,
+        "channels": channel_records,
+        "attack_cases": case_records,
+        "persistent_writes": write_records,
+        "incorporations": incorporation_records,
+        "activations": activation_records,
+        "sessions": session_records,
+        "mitigations": mitigation_records,
+        "observability": _red_team_mapping(
+            observability
+            if observability is not None
+            else payload_dict.get("observability")
+        ),
+        "artifacts": artifact_records,
+        "required_channels": sorted(set(required_channel_keys)),
+        "required_attack_types": sorted(set(required_attack_keys)),
+        "summary": summary,
+        "signals": signals,
+        "metadata": {
+            **copy.deepcopy(dict(payload_dict.get("metadata", {}))),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
+def load_persistent_state_attack_manifest(
+    source: str | os.PathLike[str] | Mapping[str, Any],
+    *,
+    headers: Optional[Mapping[str, str]] = None,
+    timeout: float = 30.0,
+    **kwargs: Any,
+) -> "PersistentStateRedTeamEnvironment":
+    """Load a local/HTTP persistent-state red-team manifest."""
+
+    data = (
+        copy.deepcopy(dict(source))
+        if isinstance(source, Mapping)
+        else _load_framework_trace_export_source(source, headers=headers, timeout=timeout)
+    )
+    if not isinstance(data, Mapping):
+        raise TypeError("Persistent-state attack export must be a mapping")
+    return PersistentStateRedTeamEnvironment(
+        normalize_persistent_state_attack_manifest(data, **kwargs)
+    )
+
+
+class PersistentStateRedTeamEnvironment(EnvironmentAdapter):
+    """
+    Cross-session stored prompt-injection / memory-poisoning evidence.
+
+    The trace is intentionally lifecycle-shaped:
+    write -> session reset -> context incorporation -> activation. This lets
+    evals compute WSR/IR/AR-style metrics instead of flattening the problem
+    into a one-turn jailbreak score.
+    """
+
+    name = "persistent_state_attack"
+
+    def __init__(
+        self,
+        manifest: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        self.initial_manifest = (
+            normalize_persistent_state_attack_manifest(manifest, **kwargs)
+            if not (
+                isinstance(manifest, Mapping)
+                and manifest.get("kind") == "persistent_state_attack"
+                and not kwargs
+            )
+            else copy.deepcopy(dict(manifest))
+        )
+        self.manifest: Dict[str, Any] = {}
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self.manifest = copy.deepcopy(self.initial_manifest)
+        return EnvironmentSnapshot(
+            tools=self._tool_specs(),
+            artifacts=[self._trace_artifact()],
+            events=[
+                SimulationEvent(
+                    type="persistent_state_attack",
+                    name="persistent_state_attack_ready",
+                    payload={
+                        "name": self.manifest.get("name"),
+                        "summary": copy.deepcopy(self.manifest.get("summary", {})),
+                        "signals": copy.deepcopy(self.manifest.get("signals", [])),
+                    },
+                )
+            ],
+            state={"persistent_state_attack": self._trace_payload()},
+            metadata={"persistent_state_attack": copy.deepcopy(self.manifest.get("summary", {}))},
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        name = _tool_name(tool_call)
+        if name not in {
+            "persistent_state_attack_status",
+            "list_persistent_state_cases",
+            "list_persistent_state_writes",
+            "list_persistent_state_incorporations",
+            "list_persistent_state_activations",
+            "list_persistent_state_gaps",
+        }:
+            return None
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+
+        if name == "persistent_state_attack_status":
+            result = self._trace_payload()
+            event_name = "persistent_state_attack_status"
+            content = f"Persistent-state red-team {self.manifest.get('name')} status recorded."
+        elif name == "list_persistent_state_cases":
+            records = self._filtered_records("attack_cases", arguments)
+            result = {"attack_cases": records, "count": len(records)}
+            event_name = "persistent_state_cases_listed"
+            content = f"Listed {len(records)} persistent-state attack case(s)."
+        elif name == "list_persistent_state_writes":
+            records = self._filtered_records("persistent_writes", arguments)
+            result = {"persistent_writes": records, "count": len(records)}
+            event_name = "persistent_state_writes_listed"
+            content = f"Listed {len(records)} persistent write record(s)."
+        elif name == "list_persistent_state_incorporations":
+            records = self._filtered_records("incorporations", arguments)
+            result = {"incorporations": records, "count": len(records)}
+            event_name = "persistent_state_incorporations_listed"
+            content = f"Listed {len(records)} reincorporation record(s)."
+        elif name == "list_persistent_state_activations":
+            records = self._filtered_records("activations", arguments)
+            result = {"activations": records, "count": len(records)}
+            event_name = "persistent_state_activations_listed"
+            content = f"Listed {len(records)} activation record(s)."
+        else:
+            summary = copy.deepcopy(self.manifest.get("summary", {}))
+            result = {
+                "missing_channels": summary.get("missing_required_channels", []),
+                "missing_attack_types": summary.get("missing_required_attack_types", []),
+                "missing_write_cases": summary.get("missing_write_cases", []),
+                "missing_incorporation_cases": summary.get("missing_incorporation_cases", []),
+                "missing_activation_cases": summary.get("missing_activation_cases", []),
+                "unsafe_activation_cases": summary.get("unsafe_activation_cases", []),
+                "missing_provenance_cases": summary.get("missing_provenance_cases", []),
+                "write_success_rate": summary.get("write_success_rate", 0.0),
+                "incorporation_rate": summary.get("incorporation_rate", 0.0),
+                "activation_rate": summary.get("activation_rate", 0.0),
+                "e2e_attack_success_rate": summary.get("e2e_attack_success_rate", 0.0),
+            }
+            event_name = "persistent_state_gaps_listed"
+            content = "Listed persistent-state red-team gaps."
+
+        return ToolExecutionResult(
+            tool_call_id=call_id,
+            tool_name=name,
+            content=content,
+            result=result,
+            success=True,
+            state_updates={"persistent_state_attack": self._trace_payload()},
+            artifacts=[self._trace_artifact()],
+            events=[SimulationEvent(type="persistent_state_attack", name=event_name, payload=result)],
+        )
+
+    def _tool_specs(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "persistent_state_attack_status",
+                "description": "Return the full persistent-state attack lifecycle manifest and summary.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "list_persistent_state_cases",
+                "description": "List stored prompt-injection cases filtered by channel or attack type.",
+                "parameters": {"type": "object", "properties": {"channel": {"type": "string"}, "attack_type": {"type": "string"}}},
+            },
+            {
+                "name": "list_persistent_state_writes",
+                "description": "List injection-session persistent write attempts.",
+                "parameters": {"type": "object", "properties": {"channel": {"type": "string"}, "case_id": {"type": "string"}}},
+            },
+            {
+                "name": "list_persistent_state_incorporations",
+                "description": "List clean-session context reincorporation events.",
+                "parameters": {"type": "object", "properties": {"channel": {"type": "string"}, "case_id": {"type": "string"}}},
+            },
+            {
+                "name": "list_persistent_state_activations",
+                "description": "List victim-session activation outcomes.",
+                "parameters": {"type": "object", "properties": {"channel": {"type": "string"}, "case_id": {"type": "string"}}},
+            },
+            {
+                "name": "list_persistent_state_gaps",
+                "description": "List missing lifecycle evidence, missing provenance, and unsafe activation cases.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ]
+
+    def _filtered_records(
+        self,
+        collection: str,
+        arguments: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        records = [copy.deepcopy(item) for item in _as_iterable(self.manifest.get(collection))]
+        channel = _red_team_key(arguments.get("channel"))
+        case_id = str(arguments.get("case_id") or arguments.get("case") or "").strip()
+        attack_type = _red_team_key(arguments.get("attack_type") or arguments.get("type"))
+        if channel:
+            records = [item for item in records if _red_team_key(item.get("channel")) == channel]
+        if case_id:
+            records = [item for item in records if str(item.get("case_id") or item.get("id") or "") == case_id]
+        if attack_type:
+            records = [item for item in records if _red_team_key(item.get("attack_type")) == attack_type]
+        return records
+
+    def _trace_artifact(self) -> SimulationArtifact:
+        return SimulationArtifact(
+            type="trace",
+            role="environment",
+            data=self._trace_payload(),
+            metadata={"kind": "persistent_state_attack"},
+        )
+
+    def _trace_payload(self) -> Dict[str, Any]:
+        return copy.deepcopy(self.manifest)
+
+
+def _normalize_persistent_state_channels(value: Any) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for index, raw in enumerate(_as_iterable(value), start=1):
+        item = _normalize_persistent_state_record(raw, prefix="channel", index=index)
+        channel_type = _red_team_key(item.get("type") or item.get("channel") or item.get("id"))
+        item["id"] = _red_team_key(item.get("id") or channel_type or f"channel_{index}")
+        item["type"] = channel_type or item["id"]
+        item["incorporation_mode"] = _red_team_key(
+            item.get("incorporation_mode")
+            or item.get("mode")
+            or ("direct_load" if item.get("strongly_persistent") else "conditional")
+        )
+        item["strongly_persistent"] = bool(
+            item.get("strongly_persistent", item["incorporation_mode"] in {"direct_load", "always_loaded"})
+        )
+        records.append(item)
+    return records
+
+
+def _normalize_persistent_state_cases(value: Any) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for index, raw in enumerate(_as_iterable(value), start=1):
+        item = _normalize_persistent_state_record(raw, prefix="case", index=index)
+        item["attack_type"] = _red_team_key(
+            item.get("attack_type")
+            or item.get("type")
+            or item.get("category")
+            or "stored_prompt_injection"
+        )
+        item["channel"] = _red_team_key(
+            item.get("channel")
+            or item.get("surface")
+            or item.get("persistence_channel")
+            or "memory"
+        )
+        item["signals"] = sorted(
+            {
+                "case",
+                item["attack_type"],
+                item["channel"],
+                *(
+                    _red_team_key(signal)
+                    for signal in _as_iterable(item.get("signals"))
+                    if _red_team_key(signal)
+                ),
+            }
+        )
+        records.append(item)
+    return records
+
+
+def _normalize_persistent_state_stage_records(
+    value: Any,
+    *,
+    stage: str,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for index, raw in enumerate(_as_iterable(value), start=1):
+        item = _normalize_persistent_state_record(raw, prefix=stage, index=index)
+        item["stage"] = stage
+        item["case_id"] = str(item.get("case_id") or item.get("case") or item.get("attack_case") or item["id"])
+        item["channel"] = _red_team_key(
+            item.get("channel")
+            or item.get("surface")
+            or item.get("persistence_channel")
+            or "memory"
+        )
+        status = _red_team_key(item.get("status") or item.get("outcome"))
+        if stage == "write":
+            item["persisted"] = _persistent_state_stage_bool(
+                item,
+                true_keys=("persisted", "written", "success"),
+                true_statuses={"persisted", "written", "success", "succeeded"},
+            )
+            item["status"] = status or ("persisted" if item["persisted"] else "blocked")
+        elif stage == "incorporation":
+            item["incorporated"] = _persistent_state_stage_bool(
+                item,
+                true_keys=("incorporated", "loaded", "success"),
+                true_statuses={"incorporated", "loaded", "success", "succeeded"},
+            )
+            item["status"] = status or ("incorporated" if item["incorporated"] else "blocked")
+        elif stage == "activation":
+            item["activated"] = _persistent_state_stage_bool(
+                item,
+                true_keys=("activated", "attack_success", "compromised", "success"),
+                true_statuses={"activated", "compromised", "success", "succeeded"},
+            )
+            item["status"] = status or ("activated" if item["activated"] else "contained")
+        item["has_provenance"] = bool(
+            item.get("provenance")
+            or item.get("source")
+            or item.get("actor")
+            or item.get("session_id")
+            or item.get("trace_id")
+        )
+        item["signals"] = sorted(
+            {
+                stage,
+                f"{stage}_stage",
+                item["channel"],
+                "provenance" if item["has_provenance"] else "",
+                *(
+                    _red_team_key(signal)
+                    for signal in _as_iterable(item.get("signals"))
+                    if _red_team_key(signal)
+                ),
+            }
+            - {""}
+        )
+        records.append(item)
+    return records
+
+
+def _normalize_persistent_state_sessions(value: Any) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for index, raw in enumerate(_as_iterable(value), start=1):
+        item = _normalize_persistent_state_record(raw, prefix="session", index=index)
+        item["phase"] = _red_team_key(item.get("phase") or item.get("stage") or item.get("type") or item["id"])
+        item["reset"] = bool(item.get("reset", item["phase"] in {"reset", "activation", "victim"}))
+        records.append(item)
+    return records
+
+
+def _normalize_persistent_state_record(
+    raw: Any,
+    *,
+    prefix: str,
+    index: int,
+) -> Dict[str, Any]:
+    item = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {"name": str(raw)}
+    record_id = str(item.get("id") or item.get("name") or f"{prefix}_{index}")
+    item["id"] = record_id
+    item["name"] = str(item.get("name") or record_id)
+    return item
+
+
+def _persistent_state_stage_bool(
+    item: Mapping[str, Any],
+    *,
+    true_keys: Sequence[str],
+    true_statuses: set[str],
+) -> bool:
+    for key in true_keys:
+        if key in item:
+            return bool(item.get(key))
+    return _red_team_key(item.get("status") or item.get("outcome")) in true_statuses
+
+
+def _persistent_state_attack_summary(
+    *,
+    channels: Sequence[Mapping[str, Any]],
+    cases: Sequence[Mapping[str, Any]],
+    writes: Sequence[Mapping[str, Any]],
+    incorporations: Sequence[Mapping[str, Any]],
+    activations: Sequence[Mapping[str, Any]],
+    sessions: Sequence[Mapping[str, Any]],
+    mitigations: Sequence[Mapping[str, Any]],
+    artifacts: Sequence[Mapping[str, Any]],
+    required_channels: Sequence[str],
+    required_attack_types: Sequence[str],
+) -> Dict[str, Any]:
+    case_ids = {
+        str(case.get("id"))
+        for case in cases
+        if str(case.get("id") or "").strip()
+    }
+    case_ids.update(
+        str(item.get("case_id"))
+        for collection in (writes, incorporations, activations)
+        for item in collection
+        if str(item.get("case_id") or "").strip()
+    )
+    observed_channels = sorted(
+        {
+            _red_team_key(item)
+            for item in [
+                *(channel.get("type") for channel in channels),
+                *(case.get("channel") for case in cases),
+                *(item.get("channel") for item in [*writes, *incorporations, *activations]),
+            ]
+            if _red_team_key(item)
+        }
+    )
+    observed_attack_types = sorted(
+        {
+            _red_team_key(case.get("attack_type"))
+            for case in cases
+            if _red_team_key(case.get("attack_type"))
+        }
+    )
+    write_case_ids = {str(item.get("case_id")) for item in writes if str(item.get("case_id") or "").strip()}
+    incorporation_case_ids = {
+        str(item.get("case_id"))
+        for item in incorporations
+        if str(item.get("case_id") or "").strip()
+    }
+    activation_case_ids = {
+        str(item.get("case_id"))
+        for item in activations
+        if str(item.get("case_id") or "").strip()
+    }
+    written_case_ids = {
+        str(item.get("case_id"))
+        for item in writes
+        if item.get("persisted") is True and str(item.get("case_id") or "").strip()
+    }
+    incorporated_case_ids = {
+        str(item.get("case_id"))
+        for item in incorporations
+        if item.get("incorporated") is True and str(item.get("case_id") or "").strip()
+    }
+    activated_case_ids = {
+        str(item.get("case_id"))
+        for item in activations
+        if item.get("activated") is True and str(item.get("case_id") or "").strip()
+    }
+    missing_provenance = sorted(
+        {
+            str(item.get("case_id") or item.get("id"))
+            for collection in (writes, incorporations, activations)
+            for item in collection
+            if not item.get("has_provenance")
+        }
+    )
+    session_phases = {_red_team_key(item.get("phase")) for item in sessions if _red_team_key(item.get("phase"))}
+    session_reset = bool(
+        any(item.get("reset") for item in sessions)
+        or {"injection", "activation"}.issubset(session_phases)
+        or {"attacker", "victim"}.issubset(session_phases)
+    )
+    written_count = sum(1 for item in writes if item.get("persisted") is True)
+    incorporated_count = sum(1 for item in incorporations if item.get("incorporated") is True)
+    activated_count = sum(1 for item in activations if item.get("activated") is True)
+    write_success_rate = written_count / len(writes) if writes else 0.0
+    incorporation_rate = incorporated_count / written_count if written_count else 0.0
+    activation_rate = activated_count / incorporated_count if incorporated_count else 0.0
+    e2e_rate = activated_count / len(case_ids) if case_ids else 0.0
+    return {
+        "case_count": len(case_ids) or len(cases),
+        "channel_count": len(observed_channels),
+        "observed_channels": observed_channels,
+        "observed_attack_types": observed_attack_types,
+        "write_attempt_count": len(writes),
+        "written_count": written_count,
+        "incorporation_attempt_count": len(incorporations),
+        "incorporated_count": incorporated_count,
+        "activation_attempt_count": len(activations),
+        "activated_count": activated_count,
+        "contained_activation_count": sum(1 for item in activations if item.get("activated") is False),
+        "write_success_rate": round(write_success_rate, 4),
+        "incorporation_rate": round(incorporation_rate, 4),
+        "activation_rate": round(activation_rate, 4),
+        "e2e_attack_success_rate": round(e2e_rate, 4),
+        "session_count": len(sessions),
+        "session_reset": session_reset,
+        "mitigation_count": len(mitigations),
+        "artifact_count": len(artifacts),
+        "has_stage_metrics": bool(writes and incorporations and activations),
+        "has_provenance": not missing_provenance and bool(writes or incorporations or activations),
+        "missing_write_cases": sorted(case_ids - write_case_ids),
+        "missing_incorporation_cases": sorted(case_ids - incorporation_case_ids),
+        "missing_activation_cases": sorted(case_ids - activation_case_ids),
+        "unsafe_activation_cases": sorted(activated_case_ids),
+        "written_cases": sorted(written_case_ids),
+        "incorporated_cases": sorted(incorporated_case_ids),
+        "activated_cases": sorted(activated_case_ids),
+        "missing_provenance_cases": missing_provenance,
+        "missing_required_channels": sorted(set(required_channels) - set(observed_channels)),
+        "missing_required_attack_types": sorted(set(required_attack_types) - set(observed_attack_types)),
+    }
+
+
+def _persistent_state_attack_signals(
+    *,
+    channels: Sequence[Mapping[str, Any]],
+    cases: Sequence[Mapping[str, Any]],
+    writes: Sequence[Mapping[str, Any]],
+    incorporations: Sequence[Mapping[str, Any]],
+    activations: Sequence[Mapping[str, Any]],
+    sessions: Sequence[Mapping[str, Any]],
+    mitigations: Sequence[Mapping[str, Any]],
+    artifacts: Sequence[Mapping[str, Any]],
+    summary: Mapping[str, Any],
+) -> List[str]:
+    signals = {
+        "persistent_state_attack",
+        "stored_prompt_injection",
+        "cross_session",
+        "lifecycle_stage",
+    }
+    if summary.get("session_reset"):
+        signals.add("session_reset")
+    if writes:
+        signals.add("write_stage")
+    if incorporations:
+        signals.add("incorporation_stage")
+    if activations:
+        signals.add("activation_stage")
+    if mitigations:
+        signals.add("mitigation")
+    if artifacts:
+        signals.add("artifact")
+    if summary.get("has_provenance"):
+        signals.add("provenance")
+    for collection in (channels, cases, writes, incorporations, activations, sessions, mitigations, artifacts):
+        for item in collection:
+            item_dict = _as_mapping(item)
+            for field in ("id", "type", "channel", "attack_type", "phase", "stage"):
+                normalized = _red_team_key(item_dict.get(field))
+                if normalized:
+                    signals.add(normalized)
+            signals.update(
+                _red_team_key(signal)
+                for signal in _as_iterable(item_dict.get("signals"))
+                if _red_team_key(signal)
+            )
+    return sorted(signal for signal in signals if signal)
+
+
 class RedTeamReadinessEnvironment(EnvironmentAdapter):
     """
     Replay preflight evidence that must be ready before trusting red-team runs.

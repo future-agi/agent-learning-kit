@@ -276,6 +276,7 @@ def test_facades_expose_unified_agent_learning_modules():
         "workspace_run_manifest",
         "optimizer_trace",
         "optimizer_backend_portfolio",
+        "persistent_state_attack",
         "red_team_campaign",
         "red_team_readiness",
         "framework_lifecycle",
@@ -3633,6 +3634,91 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     assert campaign_summary["artifact_count"] == 4
     assert campaign_summary["mitigation_count"] == 4
     assert campaign_summary["passed_run_count"] == 1
+
+
+def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_path):
+    from agent_learning import redteam, simulate
+
+    assert simulate.PersistentStateRedTeamEnvironment is not None
+    assert simulate.normalize_persistent_state_attack_manifest is not None
+    assert redteam.PersistentStateRedTeamEnvironment is (
+        simulate.PersistentStateRedTeamEnvironment
+    )
+    assert redteam.build_persistent_state_redteam_manifest is not None
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY",
+        "real-local-sdk-persistent-redteam-key",
+    )
+    example_path = (
+        PROJECT_ROOT / "examples" / "sdk_persistent_state_redteam_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_persistent_state_redteam_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.redteam.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY"
+    ]
+    env = manifest["simulation"]["environments"][0]
+    assert env["type"] == "persistent_state_attack"
+    assert env["data"]["required_channels"] == ["memory", "file"]
+    assert env["data"]["required_attack_types"] == [
+        "stored_prompt_injection",
+        "memory_poisoning",
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert {
+        "persistent_state_attack",
+        "stored_prompt_injection",
+        "cross_session",
+        "write_stage",
+        "incorporation_stage",
+        "activation_stage",
+        "provenance",
+    } <= set(config["required_persistent_state_attack"])
+    assert config["persistent_state_attack_quality"]["max_e2e_attack_success_rate"] == 0.0
+    assert config["persistent_state_attack_quality"]["require_session_reset"] is True
+
+    output_path = tmp_path / "sdk-persistent-state-redteam-run.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_score"] >= 0.99
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["persistent_state_attack_coverage"] == pytest.approx(1.0)
+    assert metrics["persistent_state_attack_quality"] == pytest.approx(1.0)
+
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"persistent_state_attack"}
+    summary = state["persistent_state_attack"]["summary"]
+    assert summary["case_count"] == 2
+    assert summary["write_attempt_count"] == 2
+    assert summary["incorporation_attempt_count"] == 2
+    assert summary["activation_attempt_count"] == 2
+    assert summary["written_count"] == 0
+    assert summary["incorporated_count"] == 0
+    assert summary["activated_count"] == 0
+    assert summary["write_success_rate"] == 0.0
+    assert summary["incorporation_rate"] == 0.0
+    assert summary["activation_rate"] == 0.0
+    assert summary["e2e_attack_success_rate"] == 0.0
+    assert summary["session_reset"] is True
+    assert summary["has_provenance"] is True
+    assert summary["missing_write_cases"] == []
+    assert summary["missing_incorporation_cases"] == []
+    assert summary["missing_activation_cases"] == []
 
 
 def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path):

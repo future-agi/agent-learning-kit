@@ -247,6 +247,7 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
         "domain_package",
         "world_attack_replay",
         "autonomy_loop",
+        "persistent_state_attack",
         "image",
         "vision",
         "framework_lifecycle",
