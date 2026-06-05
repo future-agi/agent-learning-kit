@@ -80,6 +80,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_eval_suite_file is not None
     assert optimize.build_agent_integration_optimization_manifest is not None
     assert optimize.optimize_agent_integration is not None
+    assert optimize.build_workspace_observability_optimization_manifest is not None
+    assert optimize.optimize_workspace_observability is not None
     assert optimize.build_artifact_optimization_suite is not None
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
@@ -1744,6 +1746,98 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
     assert summary["missing_required_channels"] == []
     assert summary["missing_required_trace_frameworks"] == []
     assert summary["providers_without_verified_credentials"] == []
+
+
+def test_sdk_workspace_observability_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY",
+        "real-local-sdk-workspace-observability-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_workspace_observability_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_workspace_observability_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "integration",
+        "environment",
+        "security",
+        "implementation",
+        "evaluator",
+    ]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    assert [env["type"] for env in candidates[0]] == [
+        "workspace_run_manifest",
+        "observability_replay",
+    ]
+    quality = manifest["evaluation"]["agent_report"]["config"][
+        "workspace_run_quality"
+    ]
+    assert quality["required_command_ids"] == [
+        "checkout",
+        "unit_tests",
+        "local_simulation",
+        "agent_report_eval",
+        "red_team_garak",
+        "red_team_pyrit",
+    ]
+
+    output_path = tmp_path / "sdk-workspace-observability-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.9
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    for metric in (
+        "workspace_run_coverage",
+        "workspace_run_quality",
+        "observability_replay_coverage",
+        "observability_replay_quality",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"workspace_run_manifest", "observability_replay_pack"}
+    workspace_summary = state["workspace_run_manifest"]["summary"]
+    assert workspace_summary["failed_command_count"] == 0
+    assert workspace_summary["open_red_team_finding_count"] == 0
+    assert workspace_summary["secret_leak_count"] == 0
+    assert workspace_summary["missing_required_evidence"] == []
+    replay_summary = state["observability_replay_pack"]["summary"]
+    assert replay_summary["case_count"] == 2
+    assert replay_summary["failed_case_count"] == 1
+    assert replay_summary["missing_trace_signals"] == []
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

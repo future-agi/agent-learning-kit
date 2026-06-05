@@ -1134,6 +1134,141 @@ def optimize_agent_integration(
     )
 
 
+def build_workspace_observability_optimization_manifest(
+    *,
+    name: str,
+    workspace_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    repository_url: str = "https://github.com/futureagi/support-agent",
+    commit_sha: str = "abc123def4567890",
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build an optimization manifest for autonomous workspace evidence loops."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not repository_url:
+        raise ValueError("repository_url is required")
+    if not commit_sha:
+        raise ValueError("commit_sha is required")
+
+    environment_candidates = (
+        [
+            [_workspace_observability_environment(item) for item in candidate]
+            for candidate in workspace_candidates
+        ]
+        if workspace_candidates is not None
+        else [
+            _seed_workspace_observability_candidate(
+                repository_url=repository_url,
+                commit_sha=commit_sha,
+            ),
+            _verified_workspace_observability_candidate(
+                repository_url=repository_url,
+                commit_sha=commit_sha,
+            ),
+        ]
+    )
+    if not environment_candidates:
+        raise ValueError("workspace_candidates must contain at least one candidate")
+    for index, candidate in enumerate(environment_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"workspace_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": environment_candidates}
+    agent_config = copy.deepcopy(dict(agent or _default_workspace_observability_agent()))
+    max_turns_value = int(
+        max_turns
+        if max_turns is not None
+        else _max_agent_response_count([agent_config], min_turns)
+    )
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_workspace_observability_evaluation_config()
+    )
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(
+            dict(scenario or _default_workspace_observability_scenario(name))
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": [
+                    "integration",
+                    "environment",
+                    "security",
+                    "implementation",
+                    "evaluator",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": "agent_learning.optimize.build_workspace_observability_optimization_manifest",
+                    "task_kind": "workspace_observability",
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_workspace_observability(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a workspace-observability optimization manifest."""
+
+    manifest = build_workspace_observability_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -2150,6 +2285,647 @@ def _default_agent_integration_evaluation_config(
     }
 
 
+def _default_workspace_observability_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Maya", "role": "agent-platform-owner"},
+                "situation": (
+                    "Future AGI checks out an agent repository, runs "
+                    "simulations, evals, red-team scans, UI verification, "
+                    "observability replay, and optimization before release."
+                ),
+                "outcome": (
+                    "The optimized run proves repository provenance, command "
+                    "logs, artifacts, red-team evidence, observability replay "
+                    "failures, UI verification, credentials, security gates, "
+                    "and AgentOptimizer results."
+                ),
+            }
+        ],
+    }
+
+
+def _default_workspace_observability_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "First, I inspect the Future AGI workspace run evidence "
+                    "before trusting release readiness."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "workspace_status",
+                        "name": "workspace_run_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "workspace_gaps",
+                        "name": "list_workspace_run_gaps",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Next, I check command, artifact, and red-team evidence "
+                    "from the checked-out repository run."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "commands",
+                        "name": "list_workspace_run_commands",
+                        "arguments": {"status": "passed"},
+                    },
+                    {
+                        "id": "unit_tests",
+                        "name": "inspect_workspace_run_command",
+                        "arguments": {"id": "unit_tests"},
+                    },
+                    {
+                        "id": "artifacts",
+                        "name": "list_workspace_run_artifacts",
+                        "arguments": {"type": "screenshot"},
+                    },
+                    {
+                        "id": "redteam",
+                        "name": "list_workspace_red_team_runs",
+                        "arguments": {"taxonomy": "owasp_llm_top_10"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Then, I replay failed Future AGI observability rows with "
+                    "raw trace evidence before accepting the optimized release."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "obs_status",
+                        "name": "observability_replay_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "failed_cases",
+                        "name": "list_observability_replay_cases",
+                        "arguments": {"failed_only": True},
+                    },
+                    {
+                        "id": "policy_case",
+                        "name": "inspect_observability_replay_case",
+                        "arguments": {"id": "policy_regression"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Therefore the optimized run proves GitHub checkout "
+                    "provenance, command logs, artifacts, Garak and PyRIT "
+                    "red-team evidence, Future AGI observability replay "
+                    "failures, UI verification, live verified credentials, "
+                    "sandbox policy gates, secret redaction, and "
+                    "AgentOptimizer results."
+                ),
+                "tool_calls": [],
+            },
+        ],
+    }
+
+
+def _workspace_observability_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"workspace_run_manifest", "observability_replay"}:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("workspace_run") is not None:
+        return {"type": "workspace_run_manifest", "data": copied["workspace_run"]}
+    if copied.get("observability_replay") is not None:
+        return {"type": "observability_replay", "data": copied["observability_replay"]}
+    if copied.get("cases") is not None:
+        return {"type": "observability_replay", "data": copied}
+    return {"type": "workspace_run_manifest", "data": copied}
+
+
+def _seed_workspace_observability_candidate(
+    *,
+    repository_url: str,
+    commit_sha: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "workspace_run_manifest",
+            "data": {
+                "name": "seed-workspace-run",
+                "platform": "futureagi",
+                "repository": {"url": repository_url},
+                "checkout": {"commit_sha": commit_sha, "status": "planned"},
+                "commands": [
+                    {
+                        "id": "planning_only",
+                        "command": "python plan.py",
+                        "exit_code": 0,
+                        "status": "passed",
+                    }
+                ],
+                "logs": [],
+                "artifacts": [],
+                "simulations": [],
+                "evals": [],
+                "optimization_runs": [],
+                "red_team_runs": [],
+                "observability": {},
+                "ui_verification": {},
+                "credentials": [],
+                "security": {
+                    "sandbox": False,
+                    "secrets_redacted": False,
+                    "secret_leak_count": 1,
+                },
+                "required_evidence": _workspace_required_evidence(),
+            },
+        },
+        {
+            "type": "observability_replay",
+            "data": {
+                "name": "seed-observability-replay",
+                "source": "futureagi",
+                "framework": "langgraph",
+                "required_metrics": {
+                    "policy_adherence": 0.85,
+                    "framework_trace_coverage": 1.0,
+                },
+                "required_trace_signals": ["agent", "model", "tool"],
+                "cases": [
+                    {
+                        "id": "policy_regression",
+                        "observability": {
+                            "run_id": "run_policy_failed",
+                            "source": "futureagi",
+                            "framework": "langgraph",
+                            "score": 0.2,
+                            "passed": False,
+                            "metrics": {
+                                "policy_adherence": 0.2,
+                                "framework_trace_coverage": 0.67,
+                            },
+                            "trace_signals": ["agent", "model"],
+                            "raw": {},
+                        },
+                        "tags": ["policy"],
+                    }
+                ],
+            },
+        },
+    ]
+
+
+def _verified_workspace_observability_candidate(
+    *,
+    repository_url: str,
+    commit_sha: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "workspace_run_manifest",
+            "data": {
+                "name": "verified-workspace-run",
+                "platform": "futureagi",
+                "repository": {
+                    "provider": "github",
+                    "url": repository_url,
+                    "owner": "futureagi",
+                    "name": "support-agent",
+                    "default_branch": "main",
+                    "commit_sha": commit_sha,
+                },
+                "checkout": {
+                    "ref": "main",
+                    "commit_sha": commit_sha,
+                    "status": "passed",
+                },
+                "commands": _verified_workspace_commands(repository_url),
+                "logs": [
+                    {"id": "checkout_log", "path": "logs/checkout.log", "redacted": True},
+                    {"id": "pytest_log", "path": "logs/pytest.log", "redacted": True},
+                    {"id": "garak_log", "path": "logs/garak.jsonl", "redacted": True},
+                    {"id": "pyrit_log", "path": "logs/pyrit.jsonl", "redacted": True},
+                ],
+                "artifacts": [
+                    {"id": "trace", "type": "trace", "path": "artifacts/trace.jsonl"},
+                    {
+                        "id": "eval_report",
+                        "type": "eval_report",
+                        "path": "artifacts/eval.json",
+                    },
+                    {
+                        "id": "ui_screenshot",
+                        "type": "screenshot",
+                        "path": "artifacts/ui.png",
+                    },
+                    {
+                        "id": "red_team_report",
+                        "type": "red_team_report",
+                        "path": "artifacts/red-team.jsonl",
+                    },
+                ],
+                "simulations": [{"id": "sim_chat_voice", "status": "passed", "passed": True}],
+                "evals": [{"id": "eval_agent_report", "status": "passed", "passed": True}],
+                "optimization_runs": [
+                    {"id": "opt_agentoptimizer", "status": "passed", "passed": True}
+                ],
+                "red_team_runs": [
+                    {
+                        "id": "rt_garak_owasp",
+                        "framework": "garak",
+                        "taxonomies": ["owasp_llm_top_10", "agentic_ai"],
+                        "attack_types": [
+                            "prompt_injection",
+                            "secret_exfiltration",
+                            "tool_abuse",
+                        ],
+                        "status": "passed",
+                        "passed": True,
+                        "findings": [
+                            {
+                                "id": "rt_low_1",
+                                "severity": "low",
+                                "status": "accepted",
+                            }
+                        ],
+                    },
+                    {
+                        "id": "rt_pyrit_multi_turn",
+                        "framework": "pyrit",
+                        "taxonomies": ["owasp_llm_top_10", "agentic_ai"],
+                        "attack_types": ["multi_turn_jailbreak", "role_play", "encoding"],
+                        "status": "passed",
+                        "passed": True,
+                        "findings": [],
+                    },
+                ],
+                "observability": {
+                    "platform": "futureagi",
+                    "traces": ["trace_workspace", "trace_policy_failed"],
+                    "metrics": [
+                        "workspace_run_quality",
+                        "observability_replay_quality",
+                    ],
+                    "dashboards": ["futureagi/red-team-release"],
+                    "webhooks": [
+                        "workspace_run.completed",
+                        "optimization.completed",
+                    ],
+                },
+                "ui_verification": {
+                    "opened": True,
+                    "screenshot": "artifacts/ui.png",
+                    "playwright_trace": "artifacts/playwright.zip",
+                    "status": "verified",
+                },
+                "credentials": [
+                    {
+                        "provider": "github",
+                        "ref": "GITHUB_APP_INSTALLATION_TOKEN",
+                        "status": "verified",
+                    },
+                    {
+                        "provider": "futureagi",
+                        "ref": "FUTURE_AGI_API_KEY",
+                        "status": "live_verified",
+                    },
+                ],
+                "security": {
+                    "sandbox": "ephemeral_container",
+                    "secrets_redacted": True,
+                    "policy_gates": [
+                        "network_egress_allowlist",
+                        "human_approval_for_write",
+                    ],
+                    "secret_leak_count": 0,
+                    "logs_with_secrets": [],
+                },
+                "required_evidence": _workspace_required_evidence(),
+            },
+        },
+        {
+            "type": "observability_replay",
+            "data": _verified_observability_replay_pack(),
+        },
+    ]
+
+
+def _verified_workspace_commands(repository_url: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "checkout",
+            "command": f"git clone --depth=1 {repository_url}",
+            "exit_code": 0,
+            "status": "passed",
+            "log_ref": "logs/checkout.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "unit_tests",
+            "command": "pytest -q",
+            "exit_code": 0,
+            "status": "passed",
+            "stdout": "214 passed",
+            "log_ref": "logs/pytest.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "local_simulation",
+            "command": "agent-learn run examples/run_manifest.json --output artifacts/sim.json",
+            "exit_code": 0,
+            "status": "passed",
+            "log_ref": "logs/simulation.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "agent_report_eval",
+            "command": "agent-learn eval examples/eval_suite.json --output artifacts/eval.json",
+            "exit_code": 0,
+            "status": "passed",
+            "log_ref": "logs/eval.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "red_team_garak",
+            "command": "garak --probes promptinject,encoding --report artifacts/garak.jsonl",
+            "exit_code": 0,
+            "status": "passed",
+            "log_ref": "logs/garak.jsonl",
+            "logs_redacted": True,
+        },
+        {
+            "id": "red_team_pyrit",
+            "command": "pyrit scan --strategy multi_turn_jailbreak --output artifacts/pyrit.jsonl",
+            "exit_code": 0,
+            "status": "passed",
+            "log_ref": "logs/pyrit.jsonl",
+            "logs_redacted": True,
+        },
+        {
+            "id": "agentoptimizer",
+            "command": "agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json",
+            "exit_code": 0,
+            "status": "passed",
+            "log_ref": "logs/optimization.log",
+            "logs_redacted": True,
+        },
+    ]
+
+
+def _verified_observability_replay_pack() -> dict[str, Any]:
+    return {
+        "name": "futureagi-observability-regression-replay",
+        "source": "futureagi",
+        "framework": "langgraph",
+        "required_metrics": {
+            "policy_adherence": 0.85,
+            "framework_trace_coverage": 1.0,
+            "memory_correctness": 0.85,
+        },
+        "required_trace_signals": ["agent", "model", "tool"],
+        "cases": [
+            {
+                "id": "policy_regression",
+                "observability": {
+                    "run_id": "run_policy_failed",
+                    "source": "futureagi",
+                    "framework": "langgraph",
+                    "score": 0.2,
+                    "passed": False,
+                    "metrics": {
+                        "policy_adherence": 0.2,
+                        "framework_trace_coverage": 1.0,
+                    },
+                    "trace_signals": ["agent", "model", "tool"],
+                    "raw": {
+                        "trace_id": "trace_policy_failed",
+                        "agent_report_evaluation": {"score": 0.2},
+                    },
+                },
+                "expected": {
+                    "required_metrics": {
+                        "policy_adherence": 0.85,
+                        "framework_trace_coverage": 1.0,
+                    },
+                    "required_trace_signals": ["agent", "model", "tool"],
+                },
+                "tags": ["policy", "futureagi"],
+            },
+            {
+                "id": "memory_passed",
+                "observability": {
+                    "run_id": "run_memory_passed",
+                    "source": "futureagi",
+                    "framework": "langgraph",
+                    "score": 0.96,
+                    "passed": True,
+                    "metrics": {
+                        "policy_adherence": 0.96,
+                        "framework_trace_coverage": 1.0,
+                        "memory_correctness": 0.95,
+                    },
+                    "trace_signals": ["agent", "model", "tool", "memory"],
+                    "raw": {
+                        "trace_id": "trace_memory_passed",
+                        "agent_report_evaluation": {"score": 0.96},
+                    },
+                },
+                "expected": {
+                    "required_metrics": {
+                        "policy_adherence": 0.85,
+                        "framework_trace_coverage": 1.0,
+                        "memory_correctness": 0.85,
+                    },
+                    "required_trace_signals": ["agent", "model", "tool"],
+                },
+                "tags": ["memory", "futureagi"],
+            },
+        ],
+        "metadata": {"platform": "futureagi", "source": "workspace-run"},
+    }
+
+
+def _workspace_required_evidence() -> list[str]:
+    return [
+        "repository",
+        "checkout",
+        "command",
+        "log",
+        "artifact",
+        "simulation",
+        "eval",
+        "optimization",
+        "red_team",
+        "security",
+        "secret_redaction",
+        "ui_verification",
+        "observability",
+        "futureagi_platform",
+    ]
+
+
+def _default_workspace_observability_evaluation_config() -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Optimize the Future AGI autonomous workspace loop plus "
+            "observability replay evidence from weak planning-only evidence "
+            "to a release-ready run with logs, artifacts, evals, red-team "
+            "runs, UI verification, credentials, security gates, and raw "
+            "failed regression rows."
+        ),
+        "expected_result": (
+            "The optimized run proves repository provenance, command logs, "
+            "artifacts, red-team evidence, observability replay failures, UI "
+            "verification, live verified credentials, security gates, and "
+            "AgentOptimizer results are visible."
+        ),
+        "required_tools": [
+            "workspace_run_status",
+            "list_workspace_run_gaps",
+            "list_workspace_run_commands",
+            "inspect_workspace_run_command",
+            "list_workspace_run_artifacts",
+            "list_workspace_red_team_runs",
+            "observability_replay_status",
+            "list_observability_replay_cases",
+            "inspect_observability_replay_case",
+        ],
+        "available_tools": [
+            "workspace_run_status",
+            "list_workspace_run_gaps",
+            "list_workspace_run_commands",
+            "inspect_workspace_run_command",
+            "list_workspace_run_artifacts",
+            "list_workspace_red_team_runs",
+            "observability_replay_status",
+            "list_observability_replay_cases",
+            "inspect_observability_replay_case",
+        ],
+        "required_artifact_types": ["trace"],
+        "required_workspace_run": [
+            "workspace_run",
+            "repository",
+            "github",
+            "checkout",
+            "commit_sha",
+            "command",
+            "test",
+            "log",
+            "artifact",
+            "simulation",
+            "eval",
+            "optimization",
+            "red_team",
+            "garak",
+            "pyrit",
+            "owasp_llm_top_10",
+            "security",
+            "sandbox",
+            "secret_redaction",
+            "policy_gate",
+            "ui_verification",
+            "observability",
+            "credential",
+            "futureagi_platform",
+        ],
+        "workspace_run_quality": {
+            "require_repository": True,
+            "require_checkout": True,
+            "require_commit_sha": True,
+            "require_clean_exit": True,
+            "require_logs": True,
+            "require_artifacts": True,
+            "require_simulation": True,
+            "require_evals": True,
+            "require_optimization": True,
+            "require_red_team": True,
+            "require_security_gate": True,
+            "require_secret_redaction": True,
+            "require_no_secret_leakage": True,
+            "require_ui_verification": True,
+            "require_observability": True,
+            "require_futureagi_platform": True,
+            "min_command_count": 6,
+            "min_passed_commands": 6,
+            "min_log_count": 4,
+            "min_artifact_count": 4,
+            "min_simulation_count": 1,
+            "min_eval_count": 1,
+            "min_optimization_count": 1,
+            "min_red_team_runs": 2,
+            "min_observability_hooks": 3,
+            "max_failed_commands": 0,
+            "max_open_red_team_findings": 0,
+            "max_secret_leaks": 0,
+            "max_unverified_credentials": 0,
+            "required_artifact_types": [
+                "trace",
+                "eval_report",
+                "screenshot",
+                "red_team_report",
+            ],
+            "required_red_team_taxonomies": ["owasp_llm_top_10"],
+            "required_command_ids": [
+                "checkout",
+                "unit_tests",
+                "local_simulation",
+                "agent_report_eval",
+                "red_team_garak",
+                "red_team_pyrit",
+            ],
+        },
+        "required_observability_replay": [
+            "replay_pack",
+            "case",
+            "failure",
+            "metric",
+            "trace_signal",
+            "raw",
+        ],
+        "observability_replay_quality": {
+            "min_case_count": 2,
+            "min_failed_case_count": 1,
+            "required_metrics": [
+                "policy_adherence",
+                "framework_trace_coverage",
+                "memory_correctness",
+            ],
+            "required_failed_metrics": ["policy_adherence"],
+            "required_trace_signals": ["agent", "model", "tool"],
+            "required_tags": ["policy", "futureagi"],
+            "expected_case_ids": ["policy_regression", "memory_passed"],
+            "require_raw_evidence": True,
+            "require_no_missing_trace_signals": True,
+        },
+        "success_criteria": [
+            "GitHub checkout provenance",
+            "Garak and PyRIT red-team evidence",
+            "Future AGI observability replay failures",
+            "UI verification",
+            "live verified credentials",
+            "sandbox policy gates",
+            "secret redaction",
+            "AgentOptimizer results",
+        ],
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "workspace_run_coverage": 5.0,
+            "workspace_run_quality": 10.0,
+            "observability_replay_coverage": 5.0,
+            "observability_replay_quality": 10.0,
+            "tool_selection_accuracy": 2.0,
+            "final_response_quality": 2.0,
+        },
+    }
+
+
 def _default_orchestration_agent() -> dict[str, Any]:
     return {
         "type": "scripted",
@@ -2571,6 +3347,7 @@ __all__ = [
     "build_realtime_optimization_manifest",
     "build_redteam_optimization_manifest",
     "build_task_optimization_manifest",
+    "build_workspace_observability_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_artifact_evidence",
@@ -2584,6 +3361,7 @@ __all__ = [
     "optimize_realtime_stack",
     "optimize_redteam_campaign",
     "optimize_task",
+    "optimize_workspace_observability",
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
