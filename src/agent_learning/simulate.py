@@ -269,6 +269,91 @@ def supported_manifest_environment_types() -> list[str]:
     return _manifest().supported_manifest_environment_types()
 
 
+def build_task_run_manifest(
+    *,
+    name: str,
+    agent: Mapping[str, Any],
+    task_description: Optional[str] = None,
+    expected_result: Optional[str] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    environments: Sequence[Mapping[str, Any]] = (),
+    required_env: Sequence[str] = (),
+    available_tools: Sequence[str] = (),
+    required_tools: Sequence[str] = (),
+    success_criteria: Sequence[str] = (),
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.7,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: int = 1,
+    auto_execute_tools: bool = True,
+    modality: Optional[str] = None,
+    persona: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable simulation manifest for any task/world agent.
+
+    This is the SDK counterpart to hand-writing ``agent-learning.run.v1`` JSON:
+    callers provide an existing manifest agent spec (scripted, callable,
+    framework, or any future adapter), optional environments, and optional
+    agent-report evaluation settings. Runtime semantics stay in simulate-sdk.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not agent:
+        raise ValueError("agent is required")
+    if scenario is None and not task_description:
+        raise ValueError("task_description is required when scenario is not provided")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    simulation: dict[str, Any] = {
+        "engine": str(simulation_engine),
+        "max_turns": int(max_turns),
+        "min_turns": int(min_turns),
+        "auto_execute_tools": bool(auto_execute_tools),
+        "environments": [copy.deepcopy(dict(item)) for item in environments],
+    }
+    if modality:
+        simulation["modality"] = str(modality)
+
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(scenario)
+            if scenario is not None
+            else _default_task_scenario(
+                str(name),
+                task_description=str(task_description),
+                expected_result=expected_result,
+                persona=persona,
+            )
+        ),
+        "agent": copy.deepcopy(dict(agent)),
+        "simulation": simulation,
+        "evaluation": _task_run_evaluation(
+            task_description=task_description,
+            expected_result=expected_result,
+            available_tools=available_tools,
+            required_tools=required_tools,
+            success_criteria=success_criteria,
+            evaluation_config=evaluation_config,
+            threshold=threshold,
+        ),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_task_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -421,6 +506,63 @@ def build_multi_framework_suite_manifest(
         "metadata": {
             "source": "agent_learning.simulate.build_multi_framework_suite_manifest",
             **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
+def _default_task_scenario(
+    name: str,
+    *,
+    task_description: str,
+    expected_result: Optional[Any],
+    persona: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": copy.deepcopy(
+                    dict(persona or {"name": "Task Owner", "role": "task-owner"})
+                ),
+                "situation": str(task_description),
+                "outcome": (
+                    str(expected_result)
+                    if expected_result is not None
+                    else "The task completes successfully."
+                ),
+            }
+        ],
+    }
+
+
+def _task_run_evaluation(
+    *,
+    task_description: Optional[str],
+    expected_result: Optional[Any],
+    available_tools: Sequence[str],
+    required_tools: Sequence[str],
+    success_criteria: Sequence[str],
+    evaluation_config: Optional[Mapping[str, Any]],
+    threshold: float,
+) -> dict[str, Any]:
+    config = copy.deepcopy(dict(evaluation_config or {}))
+    if task_description is not None:
+        config.setdefault("task_description", str(task_description))
+    if expected_result is not None:
+        config.setdefault("expected_result", str(expected_result))
+    if available_tools:
+        config.setdefault("available_tools", _unique_strings(available_tools))
+    if required_tools:
+        config.setdefault("required_tools", _unique_strings(required_tools))
+    if success_criteria:
+        config.setdefault("success_criteria", _unique_strings(success_criteria))
+    if not config:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "agent_report": {
+            "threshold": float(threshold),
+            "config": config,
         },
     }
 
@@ -824,9 +966,14 @@ def __dir__() -> list[str]:
 
 __all__ = [
     *_SIMULATE_EXPORTS,
+    "AGENT_LEARNING_RUN_KIND",
+    "AGENT_LEARNING_SUITE_KIND",
     "apply_manifest_env",
+    "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",
+    "build_multi_framework_suite_manifest",
+    "build_task_run_manifest",
     "compare_result_files",
     "compare_results",
     "create_baseline",

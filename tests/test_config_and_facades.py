@@ -52,6 +52,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
     assert set(fi_code_security.__all__) <= set(redteam.__all__)
     assert simulate.run_eval_suite_file is not None
+    assert simulate.build_task_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.write_manifest_file is not None
@@ -1079,6 +1080,44 @@ def test_sdk_task_evaluation_example_runs(monkeypatch, tmp_path):
     assert metrics["tool_selection_accuracy"] == pytest.approx(1.0)
     assert metrics["world_contract_quality"] == pytest.approx(1.0)
     assert metrics["memory_integrity"] == pytest.approx(1.0)
+
+
+def test_sdk_task_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TASK_SIMULATION_KEY",
+        "real-local-sdk-task-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_task_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_task_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["agent"]["type"] == "scripted"
+    assert manifest["simulation"]["environments"][0]["type"] == "world_contract"
+    assert manifest["evaluation"]["agent_report"]["config"]["required_tools"] == [
+        "apply_world_transition"
+    ]
+
+    output_path = tmp_path / "sdk-task-simulation-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_score"] >= 0.85
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["task_completion"] >= 0.9
+    assert metrics["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert metrics["world_contract_quality"] == pytest.approx(1.0)
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["world_contract"]["state"]["refund"]["status"] == "approved"
 
 
 def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):

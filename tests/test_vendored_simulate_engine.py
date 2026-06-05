@@ -386,6 +386,133 @@ def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(
     ] == ["approve_refund", "framework_status"]
 
 
+def test_task_run_manifest_builder_runs_world_task_with_eval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required_env = "AGENT_LEARNING_KIT_TASK_RUN_TEST_KEY"
+    transition = {
+        "id": "approve_refund",
+        "actor": "agent",
+        "resource": "refund",
+        "action": "approve_refund",
+        "required": True,
+        "preconditions": {"refund.status": "pending"},
+        "effects": {"refund.status": "approved"},
+        "postconditions": {"refund.status": "approved"},
+        "signals": ["refund_resolution"],
+    }
+    manifest = simulate.build_task_run_manifest(
+        name="sdk-task-run-builder",
+        required_env=[required_env],
+        task_description=(
+            "Approve the refund by applying the world transition and produce "
+            "a complete final state."
+        ),
+        expected_result=(
+            "The refund world transition is applied and the final state is "
+            "approved and complete."
+        ),
+        agent={
+            "type": "scripted",
+            "responses": [
+                {
+                    "content": (
+                        "First, because I approve the refund by applying the "
+                        "refund world transition, I produce a complete final "
+                        "state; the transition is applied, approved, and complete."
+                    ),
+                    "tool_calls": [
+                        {
+                            "id": "approve_refund",
+                            "name": "apply_world_transition",
+                            "arguments": {"id": "approve_refund"},
+                        }
+                    ],
+                },
+                {
+                    "content": (
+                        "Next, since I approve the refund by applying the "
+                        "refund world transition, I produce a complete final "
+                        "state; the transition is applied, approved, and complete."
+                    ),
+                },
+                {
+                    "content": (
+                        "Finally, therefore I approve the refund by applying "
+                        "the refund world transition and produce a complete "
+                        "final state; the transition is applied and approved."
+                    ),
+                },
+            ],
+        },
+        environments=[
+            {
+                "type": "world_contract",
+                "data": {
+                    "name": "sdk-task-run-refund-world",
+                    "actors": ["agent", "customer"],
+                    "resources": ["refund"],
+                    "initial_state": {"refund": {"status": "pending"}},
+                    "transitions": [transition],
+                    "success_conditions": [
+                        {
+                            "id": "refund_approved",
+                            "must": {"refund.status": "approved"},
+                        }
+                    ],
+                },
+            }
+        ],
+        required_tools=["apply_world_transition"],
+        available_tools=["apply_world_transition", "world_contract_status"],
+        success_criteria=[
+            "refund world transition is applied",
+            "final state is approved and complete",
+        ],
+        evaluation_config={
+            "required_world_contract": [
+                "world_contract",
+                "transition",
+                "success_condition",
+                "refund",
+            ],
+            "world_contract_quality": {
+                "required_transitions": ["approve_refund"],
+                "min_completed_transitions": 1,
+                "require_all_required_transitions": True,
+                "required_success_conditions": ["refund_approved"],
+                "terminal_status": "success",
+                "expected_state": {"refund": {"status": "approved"}},
+            },
+        },
+        threshold=0.85,
+        min_turns=3,
+        max_turns=3,
+    )
+
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [required_env]
+    assert manifest["evaluation"]["enabled"] is True
+    assert manifest["evaluation"]["agent_report"]["config"]["required_tools"] == [
+        "apply_world_transition"
+    ]
+    assert manifest["simulation"]["environments"][0]["type"] == "world_contract"
+
+    manifest_path = simulate.write_manifest_file(manifest, tmp_path / "task-run.json")
+    monkeypatch.setenv(required_env, "real-local-task-run-key")
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_score"] == 1.0
+    assert result["summary"]["metric_averages"]["task_completion"] == 1.0
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == 1.0
+    assert result["summary"]["metric_averages"]["world_contract_quality"] == 1.0
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["world_contract"]["state"]["refund"]["status"] == "approved"
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+
+
 def test_public_manifest_command_detection_prioritizes_optimization() -> None:
     assert simulate.detect_manifest_command(
         {

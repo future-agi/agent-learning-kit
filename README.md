@@ -198,6 +198,30 @@ manifest = simulate.build_framework_run_manifest(
 simulate.write_manifest_file(manifest, "manifests/langgraph.json")
 ```
 
+For arbitrary task/world simulation, build a normal run manifest from an agent
+spec, task description, environment bundle, and optional agent-report eval
+config:
+
+```python
+import asyncio
+
+from agent_learning import simulate
+
+manifest = simulate.build_task_run_manifest(
+    name="refund-world-smoke",
+    agent=scripted_or_framework_agent,
+    task_description="Approve the refund by applying the world transition.",
+    expected_result="The refund final state is approved.",
+    environments=[refund_world_contract],
+    required_tools=["apply_world_transition"],
+    available_tools=["apply_world_transition", "world_contract_status"],
+    required_env=["AGENT_LEARNING_API_KEY"],
+)
+result = asyncio.run(
+    simulate.run_manifest(manifest, manifest_path="manifests/refund.json")
+)
+```
+
 For batches, `simulate.build_multi_framework_suite_manifest()` composes those
 generated run manifests into an `agent-learning.suite.v1` capability-gated
 suite.
@@ -311,6 +335,10 @@ AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_TASK_EVAL_KEY=... \
   PYTHONPATH=src python examples/sdk_task_evaluation.py \
   artifacts/sdk-task-evaluation.json
+
+AGENT_LEARNING_SDK_TASK_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_task_simulation.py \
+  artifacts/sdk-task-simulation.json
 
 PYTHONPATH=src agent-learn eval-task examples/task_evidence.json \
   --config examples/task_evidence_eval_config.json \
