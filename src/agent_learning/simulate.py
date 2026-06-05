@@ -876,6 +876,84 @@ def build_autonomous_redteam_task_world_run_manifest(
     return manifest
 
 
+def build_multimodal_image_run_manifest(
+    *,
+    name: str,
+    images: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct multimodal image-grounding simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_multimodal_image_optimization_manifest(
+            name=name,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    environments = (
+        [_multimodal_image_environment(item) for item in images]
+        if images is not None
+        else copy.deepcopy(default_environments)
+    )
+    if not environments:
+        raise ValueError("images must contain at least one environment")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_multimodal_image_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -1718,6 +1796,23 @@ def _autonomous_redteam_task_world_environment(
     return {"type": "structured_artifact", "data": copied}
 
 
+def _multimodal_image_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    image_types = {"image", "images", "vision", "multimodal_image"}
+    if copied.get("type") in image_types:
+        if copied.get("data") is not None:
+            return copied
+        environment_type = copied.pop("type")
+        return {"type": environment_type, "data": copied}
+    if copied.get("multimodal_image") is not None:
+        return {"type": "multimodal_image", "data": copied["multimodal_image"]}
+    if copied.get("image") is not None:
+        return {"type": "image", "data": copied["image"]}
+    if copied.get("images") is not None or copied.get("state") is not None:
+        return {"type": "multimodal_image", "data": copied}
+    return {"type": "image", "data": copied}
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -1783,6 +1878,7 @@ __all__ = [
     "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",
+    "build_multimodal_image_run_manifest",
     "build_multi_framework_suite_manifest",
     "build_realtime_run_manifest",
     "build_task_run_manifest",

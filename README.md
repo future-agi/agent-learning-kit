@@ -469,6 +469,10 @@ AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multimodal_image_optimization.py \
   artifacts/sdk-multimodal-image-optimization.json
 
+AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_multimodal_image_simulation.py \
+  artifacts/sdk-multimodal-image-simulation.json
+
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
   artifacts/sdk-multi-framework-simulation.json
@@ -685,3 +689,8 @@ The same harness is available from Python through
 `optimize.build_multimodal_image_optimization_manifest()` and
 `examples/sdk_multimodal_image_optimization.py`, which search weak versus
 hardened image evidence as one `simulation.environments` bundle.
+For direct, non-optimizer simulation,
+`simulate.build_multimodal_image_run_manifest()` and
+`examples/sdk_multimodal_image_simulation.py` run the hardened receipt image,
+OCR/layout, artifact-grounding, artifact-semantics, and multimodal trajectory
+evidence as a normal `agent-learning.run.v1` artifact.

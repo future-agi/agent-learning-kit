@@ -106,6 +106,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_multi_agent_framework_handoff is not None
     assert optimize.build_multimodal_image_optimization_manifest is not None
     assert optimize.optimize_multimodal_image is not None
+    assert simulate.build_multimodal_image_run_manifest is not None
     assert optimize.build_optimizer_governance_optimization_manifest is not None
     assert optimize.optimize_optimizer_governance is not None
     assert optimize.build_task_optimization_manifest is not None
@@ -3504,6 +3505,147 @@ def test_sdk_multimodal_image_optimization_example_runs(
             "vision_harness": "receipt_grounding",
         }
     }
+
+
+def test_sdk_multimodal_image_simulation_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_SIMULATION_KEY",
+        "real-local-sdk-multimodal-image-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_multimodal_image_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multimodal_image_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTIMODAL_IMAGE_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["min_turns"] == 3
+    assert manifest["simulation"]["max_turns"] == 3
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "multimodal_image"
+    ]
+    receipt = manifest["simulation"]["environments"][0]["data"]["images"][
+        "receipt_image"
+    ]
+    assert receipt["data"]["layout"] == {
+        "merchant": "Contoso",
+        "total": "$42.00",
+        "status": "paid",
+    }
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == ["list_images", "inspect_image"]
+    assert config["artifact_grounding_checks"][0]["artifact_id"] == (
+        "receipt_image"
+    )
+    assert config["trajectory_templates"][0]["multimodal"]["claims"][0][
+        "support_terms"
+    ] == ["Contoso", "$42.00", "paid"]
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_multimodal_image_run_manifest(
+        name="custom-multimodal-image-simulation",
+        images=[
+            {
+                "type": "multimodal_image",
+                "images": {
+                    "receipt": {
+                        "uri": "data:image/png;base64,iVBORw0KGgo=",
+                        "labels": ["receipt", "paid"],
+                    }
+                },
+                "state": {"vision_harness": "custom"},
+            },
+            {
+                "image": {
+                    "images": {
+                        "thumbnail": {
+                            "uri": "data:image/png;base64,iVBORw0KGgo=",
+                        }
+                    }
+                },
+            },
+        ],
+        min_turns=1,
+    )
+    custom_environments = custom_manifest["simulation"]["environments"]
+    assert custom_environments == [
+        {
+            "type": "multimodal_image",
+            "data": {
+                "images": {
+                    "receipt": {
+                        "uri": "data:image/png;base64,iVBORw0KGgo=",
+                        "labels": ["receipt", "paid"],
+                    }
+                },
+                "state": {"vision_harness": "custom"},
+            },
+        },
+        {
+            "type": "image",
+            "data": {
+                "images": {
+                    "thumbnail": {
+                        "uri": "data:image/png;base64,iVBORw0KGgo=",
+                    }
+                }
+            },
+        },
+    ]
+
+    output_path = tmp_path / "sdk-multimodal-image-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-multimodal-image-simulation"
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-multimodal-image-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    for metric in (
+        "artifact_coverage",
+        "artifact_grounding_quality",
+        "artifact_semantics_quality",
+        "agent_goal_accuracy",
+        "multimodal_faithfulness",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    assert report_case["metadata"]["environment_state"] == {
+        "images": {
+            "ids": ["receipt_image"],
+            "last_inspected": "receipt_image",
+            "vision_harness": "receipt_grounding",
+        }
+    }
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "image_fixtures_ready",
+        "list_images",
+        "inspect_image",
+        "inspect_image_state_update",
+    } <= event_names
 
 
 def test_sdk_workspace_observability_optimization_example_runs(
