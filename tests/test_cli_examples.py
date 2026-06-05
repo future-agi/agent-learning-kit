@@ -43,6 +43,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
         ),
         (
+            "redteam",
+            "long_horizon_redteam_manifest.json",
+            "agent-learning.redteam.v1",
+            "AGENT_LEARNING_LONG_HORIZON_REDTEAM_KEY",
+        ),
+        (
             "optimize",
             "optimization_manifest.json",
             "agent-learning.optimization.v1",

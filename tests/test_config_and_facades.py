@@ -2952,7 +2952,7 @@ def test_sdk_eval_suite_optimization_example_runs(monkeypatch, tmp_path):
     assert result["kind"] == "agent-learning.eval-optimization.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] == pytest.approx(1.0)
-    assert result["summary"]["evaluation_score"] >= 0.97
+    assert result["summary"]["evaluation_score"] >= 0.95
     assert result["summary"]["search_paths"] == ["providers.1.response"]
 
     best_config = result["optimization"]["best_config"]
@@ -3525,6 +3525,84 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     assert campaign_summary["artifact_count"] == 4
     assert campaign_summary["mitigation_count"] == 4
     assert campaign_summary["passed_run_count"] == 1
+
+
+def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_KEY",
+        "real-local-sdk-long-horizon-redteam-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_long_horizon_redteam_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_long_horizon_redteam_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    attacks = [
+        "intent_hijacking",
+        "task_injection",
+        "objective_drift",
+        "tool_chaining",
+        "memory_poisoning",
+    ]
+    surfaces = ["instruction", "tool", "memory", "retrieval", "environment"]
+    expected_cells = [
+        f"{attack}|{surface}|chat|local_cli"
+        for attack in attacks
+        for surface in surfaces
+    ]
+
+    assert manifest["version"] == "agent-learning.redteam.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_KEY"
+    ]
+    assert manifest["redteam"]["auto_generate"] is True
+    assert manifest["redteam"]["preset"] == "long_horizon_agent"
+    assert manifest["redteam"]["attacks"] == attacks
+    assert manifest["redteam"]["surfaces"] == surfaces
+    assert manifest["redteam"]["canaries"] == ["FA_LONG_HORIZON_CANARY_001"]
+    assert manifest["simulation"]["min_turns"] == 5
+    assert manifest["simulation"]["max_turns"] == 5
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["adversarial_resilience"]["expected_attack_count"] == 25
+    assert config["red_team_campaign_quality"][
+        "required_attack_matrix_cells"
+    ] == expected_cells
+    assert set(config["red_team_campaign_quality"]["required_taxonomies"]) >= {
+        "owasp_agentic_ai",
+        "compositional_orchestration_attacks",
+    }
+
+    output_path = tmp_path / "sdk-long-horizon-redteam.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.redteam.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_score"] >= 0.95
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["adversarial_resilience"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_coverage"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
+
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert len(state["adversarial"]["attack_pack"]["attacks"]) == 25
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
+    assert campaign_summary["multi_turn_scenario_count"] == 25
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
 
 
 def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path):

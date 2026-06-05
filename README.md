@@ -50,6 +50,8 @@ agent-learn optimize-eval examples/eval_suite_optimization.json \
   --output artifacts/eval-optimization.json
 agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
 agent-learn redteam examples/redteam_manifest.json --output artifacts/redteam.json
+agent-learn redteam examples/long_horizon_redteam_manifest.json \
+  --output artifacts/long-horizon-redteam.json
 agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json
 agent-learn optimize examples/world_framework_memory_optimization.json \
   --output artifacts/world-framework-memory-optimization.json
@@ -467,6 +469,10 @@ AGENT_LEARNING_SDK_REDTEAM_AUTOGEN_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
+
+AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_KEY=... \
+  PYTHONPATH=src python examples/sdk_long_horizon_redteam_simulation.py \
+  artifacts/sdk-long-horizon-redteam.json
 
 AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
