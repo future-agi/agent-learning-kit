@@ -393,6 +393,10 @@ AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
 
+AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
+  artifacts/sdk-agent-control-plane-optimization.json
+
 AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_integration_optimization.py \
   artifacts/sdk-agent-integration-optimization.json
@@ -515,6 +519,11 @@ agency controls: identity, permissions, sandboxing, audit, canaries, human
 approval, memory isolation, network egress, tool allowlists, data boundaries,
 secret handling, risk scoring, action policy, rollback, kill switches, circuit
 breakers, rate limits, budgets, containment, and drift detection.
+The same gate is available from Python through
+`optimize.build_agent_control_plane_optimization_manifest()` and
+`examples/sdk_agent_control_plane_optimization.py`, which search weak versus
+hardened `agent_trust_boundary` plus `agent_control_plane` candidates as one
+`simulation.environments` bundle.
 
 The `browser_cua_optimization.json` example optimizes a browser/computer-use
 red-team harness. It verifies selector-drift recovery, refreshed screenshots,

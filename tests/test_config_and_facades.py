@@ -78,6 +78,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.DualJudge is fi_code_security.DualJudge
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
+    assert optimize.build_agent_control_plane_optimization_manifest is not None
+    assert optimize.optimize_agent_control_plane is not None
     assert optimize.build_agent_integration_optimization_manifest is not None
     assert optimize.optimize_agent_integration is not None
     assert optimize.build_workspace_observability_optimization_manifest is not None
@@ -1639,6 +1641,90 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     assert campaign_summary["artifact_count"] == 4
     assert campaign_summary["mitigation_count"] == 4
     assert campaign_summary["passed_run_count"] == 1
+
+
+def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY",
+        "real-local-sdk-agent-control-plane-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_agent_control_plane_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_agent_control_plane_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "security",
+        "policy",
+        "autonomy",
+        "evaluator",
+    ]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    assert [env["type"] for env in candidates[1]] == [
+        "agent_trust_boundary",
+        "agent_control_plane",
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert len(config["agent_trust_boundary_quality"]["required_controls"]) == 11
+    assert len(config["agent_control_plane_quality"]["required_controls"]) == 11
+
+    output_path = tmp_path / "sdk-agent-control-plane-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    for metric in (
+        "agent_trust_boundary_coverage",
+        "agent_trust_boundary_quality",
+        "agent_control_plane_coverage",
+        "agent_control_plane_quality",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"agent_trust_boundary_model", "agent_control_plane"}
+    trust_summary = state["agent_trust_boundary_model"]["summary"]
+    assert trust_summary["control_count"] == 11
+    assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+    assert trust_summary["high_risk_unmitigated_count"] == 0
+    assert trust_summary["gaps"] == []
+    assert trust_summary["has_secret_handling"] is True
+    control_summary = state["agent_control_plane"]["summary"]
+    assert control_summary["control_count"] == 11
+    assert control_summary["required_control_rate"] == pytest.approx(1.0)
+    assert control_summary["exceeded_budget_count"] == 0
+    assert control_summary["high_risk_uncontained_count"] == 0
+    assert control_summary["gaps"] == []
+    assert control_summary["has_kill_switch"] is True
+    assert control_summary["has_drift_detection"] is True
 
 
 def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
