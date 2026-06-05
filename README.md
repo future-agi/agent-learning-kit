@@ -374,6 +374,10 @@ AGENT_LEARNING_SDK_EVAL_SUITE_KEY=... \
   PYTHONPATH=src python examples/sdk_eval_suite.py \
   artifacts/sdk-eval-suite.json
 
+AGENT_LEARNING_SDK_EVAL_SUITE_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_eval_suite_optimization.py \
+  artifacts/sdk-eval-suite-optimization.json
+
 PYTHONPATH=src agent-learn eval-task examples/task_evidence.json \
   --config examples/task_evidence_eval_config.json \
   --output artifacts/task-evidence-eval.json
@@ -462,6 +466,10 @@ the same promptfoo-style eval-suite path from Python; the
 `sdk_eval_suite.py` cookbook writes an eval manifest plus a one-job
 `agent-learning.suite.v1` wrapper so SDK-built evals can run through both
 `agent-learn eval` and `agent-learn suite`.
+`optimize.build_eval_suite_optimization_manifest()` and
+`examples/sdk_eval_suite_optimization.py` add the matching SDK optimization
+path: keep promptfoo-style tests fixed and search provider response candidates
+through `optimize.optimize_eval_suite_response()`.
 For direct agent-report metrics over an existing artifact, `agent-learn
 eval-artifact` consumes the same saved artifact plus
 `artifact_task_eval_config.json` and emits JSON, JUnit, SARIF, and Markdown

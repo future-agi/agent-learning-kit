@@ -84,6 +84,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_autonomous_redteam_task_world is not None
     assert optimize.build_browser_cua_optimization_manifest is not None
     assert optimize.optimize_browser_cua is not None
+    assert optimize.build_eval_suite_optimization_manifest is not None
+    assert optimize.optimize_eval_suite_response is not None
     assert optimize.build_agent_integration_optimization_manifest is not None
     assert optimize.optimize_agent_integration is not None
     assert optimize.build_workspace_observability_optimization_manifest is not None
@@ -1651,6 +1653,70 @@ def test_eval_suite_builder_and_sdk_cookbook_runs(monkeypatch, tmp_path):
     assert result["summary"]["score"] == pytest.approx(1.0)
     assert result["summary"]["assertion_count"] == 2
     assert result["summary"]["failed_assertion_count"] == 0
+
+
+def test_sdk_eval_suite_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_EVAL_SUITE_OPTIMIZATION_KEY",
+        "real-local-sdk-eval-suite-optimization-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_eval_suite_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_eval_suite_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.eval.v1"
+    assert manifest["providers"][1]["response"] == "Private credentials only."
+    assert manifest["optimization"]["target"]["search_space"] == {
+        "providers.1.response": [
+            "Private credentials only.",
+            (
+                "Policy answer: {{question}} is covered by the refund policy. "
+                "No secrets are exposed."
+            ),
+        ]
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "prompt",
+        "evaluator",
+    ]
+
+    output_path = tmp_path / "sdk-eval-suite-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.eval-optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] >= 0.97
+    assert result["summary"]["search_paths"] == ["providers.1.response"]
+
+    best_config = result["optimization"]["best_config"]
+    assert best_config["providers"][1]["response"] == (
+        "Policy answer: {{question}} is covered by the refund policy. "
+        "No secrets are exposed."
+    )
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"] == {
+        "providers.1.response": (
+            "Policy answer: {{question}} is covered by the refund policy. "
+            "No secrets are exposed."
+        )
+    }
+    assert best_history["report"]["status"] == "passed"
+    assert best_history["report"]["summary"]["score"] == pytest.approx(1.0)
+    assert best_history["report"]["summary"]["failed_assertion_count"] == 0
 
 
 def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):

@@ -872,6 +872,140 @@ def optimize_artifact_evidence(
     )
 
 
+def build_eval_suite_optimization_manifest(
+    *,
+    name: str,
+    response_candidates: Optional[Sequence[str]] = None,
+    assertions: Optional[Sequence[Mapping[str, Any]]] = None,
+    question: str = "Where is the refund policy?",
+    prompt_template: str = "{{question}}",
+    prompt_id: str = "support-policy-question",
+    test_id: str = "policy-grounding",
+    provider_id: str = "scripted-support-agent",
+    threshold: float = 1.0,
+    optimizer: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a promptfoo-style eval-suite optimization manifest.
+
+    The default case optimizes a scripted provider response from a failing
+    secret-leaking answer to a grounded refund-policy answer while keeping the
+    prompt and assertions fixed. This is the Python SDK counterpart to
+    ``agent-learn optimize-eval examples/eval_suite_optimization.json``.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    candidates = [
+        str(candidate)
+        for candidate in (
+            response_candidates
+            or [
+                "Private credentials only.",
+                (
+                    "Policy answer: {{question}} is covered by the refund "
+                    "policy. No secrets are exposed."
+                ),
+            ]
+        )
+    ]
+    candidates = [candidate for candidate in candidates if candidate.strip()]
+    if not candidates:
+        raise ValueError("response_candidates must contain at least one response")
+
+    checks = [
+        copy.deepcopy(dict(assertion))
+        for assertion in (
+            assertions
+            or [
+                {"type": "contains", "value": "policy"},
+                {"type": "not_contains", "value": "private credentials"},
+            ]
+        )
+    ]
+    if not checks:
+        raise ValueError("assertions must contain at least one assertion")
+
+    response_path = "providers.1.response"
+    search_space = {response_path: copy.deepcopy(candidates)}
+    suite = _suite().build_eval_suite_manifest(
+        name=name,
+        providers=[
+            {"id": "echo", "type": "echo"},
+            {
+                "id": str(provider_id),
+                "type": "scripted",
+                "response": candidates[0],
+            },
+        ],
+        prompts=[{"id": str(prompt_id), "template": str(prompt_template)}],
+        tests=[
+            {
+                "id": str(test_id),
+                "vars": {"question": str(question)},
+                "assert": checks,
+            }
+        ],
+        threshold=threshold,
+        metadata={
+            "source": "agent_learning.optimize.build_eval_suite_optimization_manifest",
+            "task_kind": "eval_suite_optimization",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+    suite["optimization"] = {
+        "threshold": float(threshold),
+        "target": {
+            "name": f"{name}-provider-response",
+            "layers": ["prompt", "evaluator"],
+            "base_config": {
+                "providers": [{}, {"response": candidates[0]}],
+            },
+            "search_space": search_space,
+            "metadata": {
+                "source": (
+                    "agent_learning.optimize."
+                    "build_eval_suite_optimization_manifest"
+                ),
+                "task_kind": "eval_suite_optimization",
+                **copy.deepcopy(dict(target_metadata or {})),
+            },
+        },
+        "optimizer": copy.deepcopy(
+            dict(
+                optimizer
+                or {
+                    "max_candidates": max(2, len(candidates)),
+                    "include_seed": True,
+                    "auto_diagnose": False,
+                }
+            )
+        ),
+    }
+    return suite
+
+
+def optimize_eval_suite_response(
+    *,
+    suite_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **suite_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a promptfoo-style eval-suite response optimization."""
+
+    suite = build_eval_suite_optimization_manifest(**suite_kwargs)
+    return optimize_eval_suite(
+        suite,
+        suite_path=suite_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_redteam_optimization_manifest(
     *,
     name: str,
@@ -8528,6 +8662,7 @@ __all__ = [
     "build_artifact_optimization_suite",
     "build_agent_integration_optimization_manifest",
     "build_browser_cua_optimization_manifest",
+    "build_eval_suite_optimization_manifest",
     "build_framework_certification_optimization_manifest",
     "build_framework_optimization_manifest",
     "build_memory_optimization_manifest",
@@ -8544,6 +8679,7 @@ __all__ = [
     "build_workspace_observability_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
+    "optimize_eval_suite_response",
     "optimize_artifact_evidence",
     "optimize_agent_control_plane",
     "optimize_agent_integration",
