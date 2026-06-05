@@ -12,6 +12,7 @@ _SUBMODULES = {
     "redteam",
     "simulate",
     "suite",
+    "trinity",
 }
 
 
@@ -38,4 +39,5 @@ __all__ = [
     "redteam",
     "simulate",
     "suite",
+    "trinity",
 ]

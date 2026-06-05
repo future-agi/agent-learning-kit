@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ._schema import normalize_public_payload
-from .config import current_config
 
 
 AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
@@ -2494,66 +2493,9 @@ def _run_async(awaitable: Any) -> Any:
 
 
 def _doctor() -> int:
-    modules = {
-        "simulate": "agent_learning.simulate",
-        "evaluation": "agent_learning.evals",
-        "redteam": "agent_learning.redteam",
-        "optimize": "agent_learning.optimize",
-        "suite": "agent_learning.suite",
-        "engine.simulate": "fi.simulate",
-        "engine.evals": "fi.evals",
-        "engine.opt": "fi.opt",
-    }
-    payload = {
-        "config": {
-            "api_key_configured": bool(current_config().api_key),
-            "api_url": current_config().api_url,
-            "project_id_configured": bool(current_config().project_id),
-            "workspace_id_configured": bool(current_config().workspace_id),
-        },
-        "consolidation": {
-            "public_package": "agent-learning-kit",
-            "public_import": "agent_learning",
-            "public_cli": "agent-learn",
-            "new_development_home": True,
-            "shared_key_env": "AGENT_LEARNING_API_KEY",
-            "shared_secret_env": "AGENT_LEARNING_SECRET_KEY",
-            "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
-            "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
-            "unified_python_modules": [
-                "agent_learning.simulate",
-                "agent_learning.evals",
-                "agent_learning.redteam",
-                "agent_learning.optimize",
-                "agent_learning.suite",
-            ],
-            "vendored_engine_modules": [
-                "fi.simulate",
-                "fi.evals",
-                "fi.opt",
-            ],
-            "legacy_python_distributions": [
-                "agent-simulate",
-                "ai-evaluation",
-                "agent-opt",
-            ],
-        },
-        "modules": {},
-    }
-    for name, module_name in modules.items():
-        try:
-            importlib.import_module(module_name)
-        except Exception as exc:
-            payload["modules"][name] = {
-                "available": False,
-                "module": module_name,
-                "error": str(exc),
-            }
-        else:
-            payload["modules"][name] = {
-                "available": True,
-                "module": module_name,
-            }
+    from agent_learning import trinity
+
+    payload = trinity.trinity_status()
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 

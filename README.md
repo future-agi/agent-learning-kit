@@ -37,11 +37,22 @@ for the boundary between this package and the backing engine repos.
 Run `agent-learn doctor` to verify the active consolidation boundary: the
 public package/CLI, shared `AGENT_LEARNING_API_KEY` /
 `AGENT_LEARNING_SECRET_KEY` config, unified
-`agent_learning.{simulate,evals,redteam,optimize,suite}` APIs, vendored
+`agent_learning.{simulate,evals,redteam,optimize,suite,trinity}` APIs, vendored
 `fi.{simulate,evals,opt}` engines, and legacy Python distributions that should
 not be project dependencies. For one-key local usage,
 `configure(api_key=...)` mirrors the key into legacy `FI_API_KEY` and
 `FI_SECRET_KEY` engine paths.
+
+Python code can verify the same boundary without shelling out:
+
+```python
+from agent_learning import trinity
+
+status = trinity.assert_trinity_ready()
+assert status["modules"]["simulate"]["available"]
+assert status["modules"]["evaluation"]["available"]
+assert status["modules"]["optimize"]["available"]
+```
 
 CLI entrypoint:
 

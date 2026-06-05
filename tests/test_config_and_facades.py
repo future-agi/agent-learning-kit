@@ -69,7 +69,7 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 def test_facades_expose_unified_agent_learning_modules():
     import agent_learning
-    from agent_learning import actions, evals, optimize, redteam, simulate, suite
+    from agent_learning import actions, evals, optimize, redteam, simulate, suite, trinity
 
     fi_simulate = importlib.import_module("fi.simulate")
     fi_engines = importlib.import_module("fi.simulate.simulation.engines")
@@ -77,9 +77,15 @@ def test_facades_expose_unified_agent_learning_modules():
     fi_scanners = importlib.import_module("fi.evals.guardrails.scanners")
     fi_code_security = importlib.import_module("fi.evals.metrics.code_security")
 
-    assert {"actions", "evals", "optimize", "redteam", "simulate", "suite"} <= set(
-        agent_learning.__all__
-    )
+    assert {
+        "actions",
+        "evals",
+        "optimize",
+        "redteam",
+        "simulate",
+        "suite",
+        "trinity",
+    } <= set(agent_learning.__all__)
     assert {name for name in dir(agent_learning) if name in agent_learning.__all__} >= {
         "actions",
         "evals",
@@ -87,6 +93,7 @@ def test_facades_expose_unified_agent_learning_modules():
         "redteam",
         "simulate",
         "suite",
+        "trinity",
     }
     assert actions.extract_actions({"report": {}}) == []
 
@@ -95,6 +102,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
     assert set(fi_code_security.__all__) <= set(redteam.__all__)
     assert simulate.run_eval_suite_file is not None
+    assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
     assert simulate.build_task_run_manifest is not None
@@ -7837,6 +7845,8 @@ def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp
 
 
 def test_agent_learn_doctor_reports_module_availability(capsys):
+    from agent_learning import trinity
+
     exit_code = main(["doctor"])
 
     captured = capsys.readouterr()
@@ -7869,6 +7879,11 @@ def test_agent_learn_doctor_reports_module_availability(capsys):
             "agent-opt",
         ],
     }
+    assert payload == trinity.trinity_status()
+    ready = trinity.assert_trinity_ready()
+    assert ready["modules"]["simulate"]["available"] is True
+    assert ready["modules"]["evaluation"]["available"] is True
+    assert ready["modules"]["optimize"]["available"] is True
     assert payload["modules"]["simulate"]["available"] is True
     assert payload["modules"]["evaluation"]["available"] is True
     assert payload["modules"]["optimize"]["available"] is True
