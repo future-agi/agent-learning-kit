@@ -515,6 +515,118 @@ def build_browser_cua_run_manifest(
     return manifest
 
 
+def build_agent_integration_run_manifest(
+    *,
+    name: str,
+    integration: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    providers: Sequence[str] = (
+        "livekit",
+        "vapi",
+        "retell",
+        "bland",
+        "elevenlabs",
+        "deepgram",
+        "agora",
+        "pipecat",
+        "twilio",
+    ),
+    channels: Sequence[str] = (
+        "chat",
+        "voice",
+        "webrtc",
+        "phone",
+        "sip",
+        "websocket",
+        "media_stream",
+    ),
+    trace_frameworks: Sequence[str] = (
+        "langchain",
+        "langgraph",
+        "openai_agents",
+        "autogen",
+        "crewai",
+        "llamaindex",
+        "pydantic_ai",
+        "pipecat",
+        "livekit",
+    ),
+    provider_channels: Optional[Mapping[str, Sequence[str]]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct provider/framework integration simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_agent_integration_optimization_manifest(
+            name=name,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            providers=providers,
+            channels=channels,
+            trace_frameworks=trace_frameworks,
+            provider_channels=provider_channels,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    environments = (
+        [_agent_integration_environment(integration)]
+        if integration is not None
+        else copy.deepcopy(default_environments)
+    )
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_agent_integration_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -1290,6 +1402,16 @@ def _browser_cua_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     return {"type": "browser", "data": copied}
 
 
+def _agent_integration_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") == "agent_integration":
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("agent_integration") is not None:
+        return {"type": "agent_integration", "data": copied["agent_integration"]}
+    return {"type": "agent_integration", "data": copied}
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -1347,6 +1469,7 @@ __all__ = [
     "AGENT_LEARNING_RUN_KIND",
     "AGENT_LEARNING_SUITE_KIND",
     "apply_manifest_env",
+    "build_agent_integration_run_manifest",
     "build_eval_suite_manifest",
     "build_browser_cua_run_manifest",
     "build_framework_run_manifest",

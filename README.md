@@ -433,6 +433,10 @@ AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_integration_optimization.py \
   artifacts/sdk-agent-integration-optimization.json
 
+AGENT_LEARNING_SDK_AGENT_INTEGRATION_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_agent_integration_simulation.py \
+  artifacts/sdk-agent-integration-simulation.json
+
 AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_observability_optimization.py \
   artifacts/sdk-workspace-observability-optimization.json
@@ -548,6 +552,12 @@ The same workflow is available from Python through
 `optimize.build_agent_integration_optimization_manifest()` and
 `examples/sdk_agent_integration_optimization.py`, which generate the provider
 matrix and search it as one `agent_integration` environment candidate.
+For direct, non-optimizer simulation,
+`simulate.build_agent_integration_run_manifest()` and
+`examples/sdk_agent_integration_simulation.py` run the verified provider matrix
+as a normal `agent-learning.run.v1` artifact across LiveKit, Vapi, Retell,
+Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported
+framework traces.
 
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,

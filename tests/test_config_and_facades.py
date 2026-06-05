@@ -60,6 +60,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_realtime_run_manifest is not None
     assert simulate.build_browser_cua_run_manifest is not None
     assert simulate.write_manifest_file is not None
+    assert simulate.build_agent_integration_run_manifest is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
     assert redteam.build_redteam_manifest is not None
@@ -2750,6 +2751,126 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
     assert summary["missing_required_channels"] == []
     assert summary["missing_required_trace_frameworks"] == []
     assert summary["providers_without_verified_credentials"] == []
+
+
+def test_sdk_agent_integration_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_AGENT_INTEGRATION_SIMULATION_KEY",
+        "real-local-sdk-agent-integration-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_agent_integration_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_agent_integration_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AGENT_INTEGRATION_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["min_turns"] == 4
+    assert manifest["simulation"]["max_turns"] == 4
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "agent_integration"
+    ]
+    integration_data = manifest["simulation"]["environments"][0]["data"]
+    assert {provider["provider"] for provider in integration_data["providers"]} >= {
+        "agora",
+        "bland",
+        "deepgram",
+        "elevenlabs",
+        "livekit",
+        "pipecat",
+        "retell",
+        "twilio",
+        "vapi",
+    }
+    assert set(integration_data["required_trace_frameworks"]) >= {
+        "autogen",
+        "crewai",
+        "langchain",
+        "langgraph",
+        "livekit",
+        "llamaindex",
+        "openai_agents",
+        "pipecat",
+        "pydantic_ai",
+    }
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert "agent_integration_quality" in config
+    assert config["agent_integration_quality"]["required_provider_channels"][
+        "vapi"
+    ] == ["chat", "voice", "webrtc", "phone", "sip", "websocket"]
+
+    output_path = tmp_path / "sdk-agent-integration-simulation-result.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    written_result = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-agent-integration-simulation"
+    assert written_result["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-agent-integration-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "agent_integration_coverage",
+        "agent_integration_quality",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"agent_integration_manifest"}
+    summary = state["agent_integration_manifest"]["summary"]
+    assert set(summary["observed_providers"]) >= {
+        "agora",
+        "bland",
+        "deepgram",
+        "elevenlabs",
+        "livekit",
+        "pipecat",
+        "retell",
+        "twilio",
+        "vapi",
+    }
+    assert set(summary["trace_frameworks"]) >= {
+        "autogen",
+        "crewai",
+        "langchain",
+        "langgraph",
+        "livekit",
+        "llamaindex",
+        "openai_agents",
+        "pipecat",
+        "pydantic_ai",
+    }
+    assert summary["verified_provider_count"] == 16
+    assert summary["failed_session_count"] == 0
+    assert summary["missing_required_providers"] == []
+    assert summary["missing_required_channels"] == []
+    assert summary["missing_required_trace_frameworks"] == []
+    assert summary["providers_without_verified_credentials"] == []
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "agent_integration_manifest_ready",
+        "agent_integration_status",
+        "agent_integration_providers_listed",
+        "agent_integration_provider_inspected",
+        "agent_integration_sessions_listed",
+        "agent_integration_gaps_listed",
+    } <= event_names
 
 
 def test_sdk_framework_certification_optimization_example_runs(
