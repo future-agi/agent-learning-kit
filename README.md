@@ -129,6 +129,10 @@ self-contained trinity workspace with local run, promptfoo-style eval,
 structured artifact eval, direct artifact-report eval, red-team, eval-suite
 optimization, task/world optimization, a saved task artifact fixture, and
 `manifests/suite.json` as the single CI entrypoint.
+`suite.build_optimization_lifecycle_plan()` and
+`suite.run_optimization_lifecycle_file()` expose the same lifecycle from the
+SDK; `examples/sdk_optimization_lifecycle.py` writes the task/world optimize
+manifest, runs the lifecycle, and verifies promotion plus replay artifacts.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

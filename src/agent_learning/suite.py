@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import os
+import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,9 @@ from ._schema import AGENT_LEARNING_CLI_SCHEMA_VERSION, public_payload
 
 AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
 AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
+AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND = (
+    "agent-learning.optimization-lifecycle.v1"
+)
 
 _CHILD_COMMANDS = {
     "baseline",
@@ -383,6 +387,293 @@ def build_regression_artifact_suite_manifest(
             **copy.deepcopy(dict(metadata or {})),
         },
     )
+
+
+def build_optimization_lifecycle_plan(
+    *,
+    optimize_manifest_path: str | Path,
+    workspace_dir: str | Path | None = None,
+    name: str = "optimization-lifecycle",
+    required_env: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Build an executable optimize -> promote -> replay lifecycle plan."""
+
+    paths = _optimization_lifecycle_paths(
+        optimize_manifest_path=optimize_manifest_path,
+        workspace_dir=workspace_dir,
+    )
+    required_env_args = _required_env_cli_args(required_env)
+    steps = [
+        _lifecycle_step(
+            "dry_run_optimization",
+            "Dry Run Optimization",
+            ["agent-learn", "optimize", paths["optimize_manifest"], "--dry-run"],
+        ),
+        _lifecycle_step(
+            "optimize",
+            "Run Optimization",
+            [
+                "agent-learn",
+                "optimize",
+                paths["optimize_manifest"],
+                "--output",
+                paths["optimization"],
+                "--junit",
+                paths["optimization_junit"],
+                "--sarif",
+                paths["optimization_sarif"],
+                "--markdown",
+                paths["optimization_markdown"],
+            ],
+            outputs={
+                "json": paths["optimization"],
+                "junit": paths["optimization_junit"],
+                "sarif": paths["optimization_sarif"],
+                "markdown": paths["optimization_markdown"],
+            },
+        ),
+        _lifecycle_step(
+            "report_optimization",
+            "Report Optimization",
+            [
+                "agent-learn",
+                "report",
+                paths["optimization"],
+                "--output",
+                paths["optimization_report"],
+                "--markdown",
+                paths["optimization_report_markdown"],
+            ],
+            outputs={
+                "json": paths["optimization_report"],
+                "markdown": paths["optimization_report_markdown"],
+            },
+        ),
+        _lifecycle_step(
+            "promote_to_regression",
+            "Promote To Regression",
+            [
+                "agent-learn",
+                "promote-to-regression",
+                paths["optimization"],
+                "--output",
+                paths["promotion"],
+                "--manifest",
+                paths["regression_manifest"],
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+                *required_env_args,
+            ],
+            outputs={
+                "json": paths["promotion"],
+                "manifest": paths["regression_manifest"],
+            },
+        ),
+        _lifecycle_step(
+            "report_promotion",
+            "Report Promotion",
+            [
+                "agent-learn",
+                "report",
+                paths["promotion"],
+                "--output",
+                paths["promotion_report"],
+                "--markdown",
+                paths["promotion_report_markdown"],
+            ],
+            outputs={
+                "json": paths["promotion_report"],
+                "markdown": paths["promotion_report_markdown"],
+            },
+        ),
+        _lifecycle_step(
+            "replay_regression",
+            "Replay Regression",
+            [
+                "agent-learn",
+                "replay",
+                paths["regression_manifest"],
+                "--output",
+                paths["replay"],
+                "--junit",
+                paths["replay_junit"],
+                "--sarif",
+                paths["replay_sarif"],
+                "--markdown",
+                paths["replay_markdown"],
+            ],
+            outputs={
+                "json": paths["replay"],
+                "junit": paths["replay_junit"],
+                "sarif": paths["replay_sarif"],
+                "markdown": paths["replay_markdown"],
+            },
+        ),
+        _lifecycle_step(
+            "report_replay",
+            "Report Replay",
+            [
+                "agent-learn",
+                "report",
+                paths["replay"],
+                "--output",
+                paths["replay_report"],
+                "--markdown",
+                paths["replay_report_markdown"],
+            ],
+            outputs={
+                "json": paths["replay_report"],
+                "markdown": paths["replay_report_markdown"],
+            },
+        ),
+    ]
+    return {
+        "kind": AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "artifacts": {key: str(value) for key, value in paths.items()},
+        "steps": steps,
+        "metadata": {
+            "source": "agent_learning.suite.build_optimization_lifecycle_plan",
+            "research_synthesis": (
+                "Deterministic optimization transactions: diagnose/search, "
+                "export, promote, replay, and expose action cards over one "
+                "shared evidence trail."
+            ),
+        },
+    }
+
+
+def run_optimization_lifecycle_file(
+    optimize_manifest_path: str | Path,
+    *,
+    workspace_dir: str | Path | None = None,
+    name: str = "optimization-lifecycle",
+    required_env: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Run optimize, report, promote, replay, and report replay via SDK."""
+
+    from agent_learning import optimize, simulate
+
+    plan = build_optimization_lifecycle_plan(
+        optimize_manifest_path=optimize_manifest_path,
+        workspace_dir=workspace_dir,
+        name=name,
+        required_env=required_env,
+    )
+    paths = {key: Path(value) for key, value in plan["artifacts"].items()}
+    outputs_written: list[str] = []
+
+    optimization = optimize.optimize_manifest_file(paths["optimize_manifest"])
+    outputs_written.extend(
+        _write_lifecycle_result_bundle(
+            optimization,
+            json_path=paths["optimization"],
+            junit_path=paths["optimization_junit"],
+            sarif_path=paths["optimization_sarif"],
+            markdown_path=paths["optimization_markdown"],
+            source_path=paths["optimize_manifest"],
+        )
+    )
+
+    optimization_report = simulate.render_report(
+        optimization,
+        source_path=paths["optimization"],
+    )
+    outputs_written.extend(
+        _write_lifecycle_report_bundle(
+            optimization_report,
+            json_path=paths["optimization_report"],
+            markdown_path=paths["optimization_report_markdown"],
+            source_path=paths["optimization"],
+        )
+    )
+
+    promotion = simulate.promote_to_regression(
+        optimization,
+        source_path=paths["optimization"],
+        min_level="note",
+        max_findings=1,
+        required_env=required_env,
+    )
+    outputs_written.append(_write_json(paths["promotion"], promotion))
+    manifest = promotion.get("manifest")
+    if isinstance(manifest, Mapping):
+        outputs_written.append(_write_json(paths["regression_manifest"], manifest))
+
+    promotion_report = simulate.render_report(
+        promotion,
+        source_path=paths["promotion"],
+    )
+    outputs_written.extend(
+        _write_lifecycle_report_bundle(
+            promotion_report,
+            json_path=paths["promotion_report"],
+            markdown_path=paths["promotion_report_markdown"],
+            source_path=paths["promotion"],
+        )
+    )
+
+    replay = simulate.replay_manifests([paths["regression_manifest"]])
+    outputs_written.extend(
+        _write_lifecycle_result_bundle(
+            replay,
+            json_path=paths["replay"],
+            junit_path=paths["replay_junit"],
+            sarif_path=paths["replay_sarif"],
+            markdown_path=paths["replay_markdown"],
+            source_path=paths["regression_manifest"],
+        )
+    )
+
+    replay_report = simulate.render_report(replay, source_path=paths["replay"])
+    outputs_written.extend(
+        _write_lifecycle_report_bundle(
+            replay_report,
+            json_path=paths["replay_report"],
+            markdown_path=paths["replay_report_markdown"],
+            source_path=paths["replay"],
+        )
+    )
+
+    passed = all(
+        payload.get("status") == "passed"
+        for payload in (optimization, promotion, replay)
+    )
+    return {
+        "kind": AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND,
+        "name": str(name),
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": dict(optimization.get("summary") or {}).get(
+                "optimization_score"
+            ),
+            "promotion_kind": dict(promotion.get("summary") or {}).get(
+                "promotion_kind"
+            ),
+            "promoted_manifest_count": dict(promotion.get("summary") or {}).get(
+                "promoted_manifest_count"
+            ),
+            "replay_pass_rate": dict(replay.get("summary") or {}).get(
+                "replay_pass_rate"
+            ),
+            "step_count": len(plan["steps"]),
+            "outputs_written_count": len(outputs_written),
+        },
+        "plan": plan,
+        "artifacts": {
+            "optimization": optimization,
+            "optimization_report": optimization_report,
+            "promotion": promotion,
+            "promotion_report": promotion_report,
+            "replay": replay,
+            "replay_report": replay_report,
+        },
+        "outputs_written": outputs_written,
+    }
 
 
 def write_suite_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
@@ -1522,6 +1813,122 @@ def _unique_strings(values: Sequence[Any]) -> list[str]:
     return result
 
 
+def _optimization_lifecycle_paths(
+    *,
+    optimize_manifest_path: str | Path,
+    workspace_dir: str | Path | None,
+) -> dict[str, Path]:
+    manifest_path = Path(optimize_manifest_path).expanduser().resolve()
+    if workspace_dir is None:
+        workspace = (
+            manifest_path.parent.parent
+            if manifest_path.parent.name == "manifests"
+            else manifest_path.parent
+        )
+    else:
+        workspace = Path(workspace_dir).expanduser().resolve()
+    artifacts = workspace / "artifacts"
+    regressions = workspace / "regressions"
+    return {
+        "optimize_manifest": manifest_path,
+        "optimization": artifacts / "optimization.json",
+        "optimization_junit": artifacts / "optimization.junit.xml",
+        "optimization_sarif": artifacts / "optimization.sarif.json",
+        "optimization_markdown": artifacts / "optimization.md",
+        "optimization_report": artifacts / "optimization-report.json",
+        "optimization_report_markdown": artifacts / "optimization-report.md",
+        "promotion": artifacts / "promotion.json",
+        "promotion_report": artifacts / "promotion-report.json",
+        "promotion_report_markdown": artifacts / "promotion-report.md",
+        "regression_manifest": regressions / "optimized-regression.json",
+        "replay": artifacts / "replay.json",
+        "replay_junit": artifacts / "replay.junit.xml",
+        "replay_sarif": artifacts / "replay.sarif.json",
+        "replay_markdown": artifacts / "replay.md",
+        "replay_report": artifacts / "replay-report.json",
+        "replay_report_markdown": artifacts / "replay-report.md",
+    }
+
+
+def _required_env_cli_args(required_env: Sequence[str]) -> list[str]:
+    args: list[str] = []
+    for key in _unique_strings(required_env):
+        args.extend(["--required-env", key])
+    return args
+
+
+def _lifecycle_step(
+    step_id: str,
+    label: str,
+    command_args: Sequence[Any],
+    *,
+    outputs: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    step = {
+        "id": step_id,
+        "label": label,
+        "kind": "cli",
+        "command": " ".join(shlex.quote(str(arg)) for arg in command_args),
+        "command_args": [str(arg) for arg in command_args],
+    }
+    if outputs:
+        step["outputs"] = {key: str(value) for key, value in outputs.items()}
+    return step
+
+
+def _write_lifecycle_result_bundle(
+    result: Mapping[str, Any],
+    *,
+    json_path: Path,
+    junit_path: Path,
+    sarif_path: Path,
+    markdown_path: Path,
+    source_path: Path,
+) -> list[str]:
+    from agent_learning import simulate
+
+    return [
+        _write_json(json_path, result),
+        _write_text(junit_path, simulate.render_junit(result)),
+        _write_text(sarif_path, simulate.render_sarif(result, manifest_path=source_path)),
+        _write_text(
+            markdown_path,
+            simulate.render_markdown(result, source_path=source_path),
+        ),
+    ]
+
+
+def _write_lifecycle_report_bundle(
+    report: Mapping[str, Any],
+    *,
+    json_path: Path,
+    markdown_path: Path,
+    source_path: Path,
+) -> list[str]:
+    from agent_learning import simulate
+
+    return [
+        _write_json(json_path, report),
+        _write_text(
+            markdown_path,
+            simulate.render_markdown(report, source_path=source_path),
+        ),
+    ]
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> str:
+    return _write_text(
+        path,
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+    )
+
+
+def _write_text(path: Path, value: str) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+    return str(path)
+
+
 def _job_name(job: Mapping[str, Any]) -> Optional[str]:
     value = job.get("name")
     if value in (None, ""):
@@ -1721,11 +2128,13 @@ def _md_cell(value: Any) -> str:
 
 
 __all__ = [
+    "AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND",
     "AGENT_LEARNING_SUITE_KIND",
     "AGENT_LEARNING_SUITE_OPTIMIZATION_KIND",
     "SuiteError",
     "SuiteOptimizationOptions",
     "SuiteRunOptions",
+    "build_optimization_lifecycle_plan",
     "build_regression_artifact_suite_manifest",
     "build_suite_manifest",
     "build_trinity_suite_manifest",
@@ -1738,6 +2147,7 @@ __all__ = [
     "render_markdown",
     "render_sarif",
     "required_suite_env",
+    "run_optimization_lifecycle_file",
     "run_suite",
     "run_suite_file",
     "validate_suite_env",

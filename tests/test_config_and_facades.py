@@ -200,9 +200,14 @@ def test_facades_expose_unified_agent_learning_modules():
     assert suite.run_suite_file is not None
     assert suite.optimize_suite_file is not None
     assert suite.build_suite_manifest is not None
+    assert suite.build_optimization_lifecycle_plan is not None
     assert suite.build_regression_artifact_suite_manifest is not None
     assert suite.build_trinity_suite_manifest is not None
+    assert suite.run_optimization_lifecycle_file is not None
     assert suite.write_suite_file is not None
+    assert suite.AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND == (
+        "agent-learning.optimization-lifecycle.v1"
+    )
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
     assert simulate.AdversarialEnvironmentPack is not None
     assert simulate.AutonomyLoopEnvironment is not None
@@ -1088,6 +1093,103 @@ def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+
+
+def test_sdk_optimization_lifecycle_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_OPTIMIZATION_LIFECYCLE_KEY",
+        "real-local-sdk-optimization-lifecycle-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_optimization_lifecycle.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_optimization_lifecycle",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    workspace = tmp_path / "sdk-lifecycle-plan"
+    manifest_path = module.write_workspace(workspace)
+    plan = module.build_plan(workspace)
+    assert manifest_path.exists()
+    assert plan["kind"] == "agent-learning.optimization-lifecycle.v1"
+    assert [step["id"] for step in plan["steps"]] == [
+        "dry_run_optimization",
+        "optimize",
+        "report_optimization",
+        "promote_to_regression",
+        "report_promotion",
+        "replay_regression",
+        "report_replay",
+    ]
+    assert plan["steps"][3]["command_args"][-2:] == [
+        "--required-env",
+        "AGENT_LEARNING_SDK_OPTIMIZATION_LIFECYCLE_KEY",
+    ]
+
+    output_path = tmp_path / "sdk-optimization-lifecycle-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert result["kind"] == "agent-learning.optimization-lifecycle.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["promotion_kind"] == "optimized_manifest"
+    assert result["summary"]["promoted_manifest_count"] == 1
+    assert result["summary"]["replay_pass_rate"] == pytest.approx(1.0)
+    assert result["summary"]["step_count"] == 7
+    assert result["summary"]["outputs_written_count"] == 16
+
+    lifecycle_workspace = (
+        output_path.parent / "sdk-optimization-lifecycle-workspace"
+    )
+    promoted_manifest = json.loads(
+        (
+            lifecycle_workspace
+            / "regressions"
+            / "optimized-regression.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert promoted_manifest["version"] == "agent-learning.run.v1"
+    assert promoted_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_OPTIMIZATION_LIFECYCLE_KEY"
+    ]
+    assert {
+        environment["type"]
+        for environment in promoted_manifest["simulation"]["environments"]
+    } >= {"world_contract", "optimizer_trace"}
+
+    promotion_actions = {
+        action["id"]
+        for action in result["artifacts"]["promotion_report"]["report"][
+            "optimizer_replay"
+        ]["actions"]
+    }
+    assert {
+        "recreate_promotion",
+        "replay_promoted_manifest",
+        "export_promoted_manifest",
+    } <= promotion_actions
+    replay_card = result["artifacts"]["replay_report"]["report"]["replay"]
+    assert replay_card["replay_pass_rate"] == pytest.approx(1.0)
+    assert {action["id"] for action in replay_card["actions"]} == {
+        "rerun_replay",
+        "report_artifact",
+    }
+    assert "failures=\"0\"" in (
+        lifecycle_workspace / "artifacts" / "replay.junit.xml"
+    ).read_text(encoding="utf-8")
+    assert not [
+        item
+        for item in json.loads(
+            (lifecycle_workspace / "artifacts" / "replay.sarif.json").read_text(
+                encoding="utf-8"
+            )
+        )["runs"][0]["results"]
+        if item.get("level") == "error"
+    ]
 
 
 def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
