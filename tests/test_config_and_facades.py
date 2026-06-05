@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import configure, current_config, get_api_key
+from agent_learning import actions, configure, current_config, get_api_key
 from agent_learning._facade import optional_module
 from agent_learning.cli import main
 
@@ -1397,6 +1397,81 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
         if action["id"] == "export_selected_orchestration_manifest"
     )["artifact_ref"] == (
         "report.orchestration_strategy.artifacts.selected_orchestration_manifest"
+    )
+    action_catalog = actions.action_catalog(result, source_path=output_path)
+    export_action = next(
+        action
+        for action in action_catalog["actions"]
+        if action["id"] == "export_selected_orchestration_manifest"
+    )
+    assert export_action["kind"] == "download"
+    assert export_action["artifact_ref"] == (
+        "report.orchestration_strategy.artifacts.selected_orchestration_manifest"
+    )
+    export_path = tmp_path / "selected-orchestration-manifest.json"
+    export_run = actions.run_action(
+        result,
+        "export_selected_orchestration_manifest",
+        source_path=output_path,
+        cwd=tmp_path,
+        artifact_output_path=export_path,
+    )
+    assert export_run["kind"] == "agent-learning.action-run.v1"
+    assert export_run["status"] == "passed"
+    assert export_run["summary"]["action_kind"] == "download"
+    assert export_run["artifact_ref"] == (
+        "report.orchestration_strategy.artifacts.selected_orchestration_manifest"
+    )
+    assert export_path.exists()
+    exported_manifest = json.loads(export_path.read_text(encoding="utf-8"))
+    assert exported_manifest["agent"] == best_config["agent"]
+
+    action_cwd = tmp_path / "orchestration-actions"
+    export_action_run_path = tmp_path / "export-action-run.json"
+    export_action_exit_code = main([
+        "action-run",
+        str(output_path),
+        "--id",
+        "export_selected_orchestration_manifest",
+        "--cwd",
+        str(action_cwd),
+        "--output",
+        str(export_action_run_path),
+    ])
+    assert export_action_exit_code == 0
+    default_export_path = action_cwd / "artifacts" / (
+        "selected-orchestration-manifest.json"
+    )
+    assert default_export_path.exists()
+    export_action_payload = json.loads(
+        export_action_run_path.read_text(encoding="utf-8")
+    )
+    assert export_action_payload["summary"]["action_kind"] == "download"
+    assert export_action_payload["outputs"][0]["artifact_ref"] == (
+        "report.orchestration_strategy.artifacts.selected_orchestration_manifest"
+    )
+
+    replay_action_run_path = tmp_path / "replay-action-run.json"
+    replay_action_exit_code = main([
+        "action-run",
+        str(output_path),
+        "--id",
+        "replay_selected_orchestration_manifest",
+        "--cwd",
+        str(action_cwd),
+        "--output",
+        str(replay_action_run_path),
+    ])
+    assert replay_action_exit_code == 0
+    replay_action_payload = json.loads(
+        replay_action_run_path.read_text(encoding="utf-8")
+    )
+    assert replay_action_payload["status"] == "passed"
+    assert replay_action_payload["summary"]["action_kind"] == "cli"
+    assert any(
+        output["path"].endswith("selected-orchestration-replay.json")
+        and output["exists"] is True
+        for output in replay_action_payload["outputs"]
     )
     report_exit_code = main([
         "report",

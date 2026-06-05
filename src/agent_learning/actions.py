@@ -13,6 +13,7 @@ from ._schema import AGENT_LEARNING_CLI_SCHEMA_VERSION, normalize_public_payload
 
 AGENT_LEARNING_ACTIONS_KIND = "agent-learning.actions.v1"
 AGENT_LEARNING_ACTION_RUN_KIND = "agent-learning.action-run.v1"
+_MISSING = object()
 
 
 def load_artifact_file(path: str | Path) -> dict[str, Any]:
@@ -28,14 +29,14 @@ def extract_actions(
     *,
     action_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """Return embedded CLI actions from an Agent Learning artifact/report."""
+    """Return embedded executable actions from an Agent Learning artifact/report."""
 
     normalized = normalize_public_payload(artifact)
     if not isinstance(normalized, Mapping):
         return []
     actions: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for path, action in _walk_cli_actions(normalized):
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for path, action in _walk_actions(normalized):
         if action_id is not None and str(action.get("id") or "") != action_id:
             continue
         record = copy.deepcopy(dict(action))
@@ -43,7 +44,9 @@ def extract_actions(
         record["source_card_path"] = _source_card_path(path)
         key = (
             str(record.get("id") or ""),
+            str(record.get("kind") or ""),
             str(record.get("command") or ""),
+            str(record.get("artifact_ref") or ""),
             str(record.get("path") or ""),
         )
         if key in seen:
@@ -76,10 +79,27 @@ def run_action(
     cwd: str | Path | None = None,
     dry_run: bool = False,
     name: Optional[str] = None,
+    artifact_output_path: str | Path | None = None,
 ) -> dict[str, Any]:
     action = get_action(artifact, action_id, source_path=source_path)
     if action is None:
         raise ValueError(f"action not found: {action_id}")
+    action_kind = str(action.get("kind") or "cli")
+    if action_kind == "download":
+        return _run_download_action(
+            artifact,
+            action_id,
+            action,
+            source_path=source_path,
+            inputs=inputs or {},
+            cwd=cwd,
+            dry_run=dry_run,
+            name=name,
+            artifact_output_path=artifact_output_path,
+        )
+    if action_kind != "cli":
+        raise ValueError(f"unsupported action kind: {action_kind}")
+
     command_args = _resolved_command_args(action, inputs or {})
     if not command_args:
         raise ValueError(f"action {action_id!r} does not include command_args")
@@ -139,6 +159,7 @@ def run_action(
         "summary": {
             "action_id": str(action.get("id") or action_id),
             "action_label": action.get("label"),
+            "action_kind": action_kind,
             "source_card_path": action.get("source_card_path"),
             "requires_input": bool(action.get("inputs")),
             "command_exit_code": exit_code,
@@ -147,6 +168,87 @@ def run_action(
             "output_count": output_count,
             "outputs_written_count": outputs_written_count,
             "output_completion_rate": output_completion_rate,
+        },
+    }
+    return payload
+
+
+def _run_download_action(
+    artifact: Mapping[str, Any],
+    action_id: str,
+    action: Mapping[str, Any],
+    *,
+    source_path: str | Path,
+    inputs: Mapping[str, Any],
+    cwd: str | Path | None,
+    dry_run: bool,
+    name: Optional[str],
+    artifact_output_path: str | Path | None,
+) -> dict[str, Any]:
+    artifact_ref = str(action.get("artifact_ref") or "")
+    if not artifact_ref:
+        raise ValueError(f"download action {action_id!r} is missing artifact_ref")
+
+    value = _resolve_artifact_ref(artifact, artifact_ref)
+    if value is _MISSING:
+        raise ValueError(
+            f"download action {action_id!r} artifact_ref not found: {artifact_ref}"
+        )
+
+    run_cwd = Path(cwd).expanduser().resolve() if cwd is not None else Path.cwd()
+    output_path = _download_output_path(
+        action,
+        inputs,
+        run_cwd,
+        artifact_output_path=artifact_output_path,
+    )
+    output_record = {
+        "flag": "--artifact-output",
+        "path": str(output_path),
+        "exists": output_path.exists(),
+        "artifact_ref": artifact_ref,
+    }
+    if not dry_run:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            _download_payload_text(value, output_path),
+            encoding="utf-8",
+        )
+        output_record["exists"] = output_path.exists()
+
+    outputs_written = [str(output_path)] if output_record["exists"] else []
+    output_count = 1
+    outputs_written_count = len(outputs_written)
+    payload = {
+        "schema_version": AGENT_LEARNING_CLI_SCHEMA_VERSION,
+        "kind": AGENT_LEARNING_ACTION_RUN_KIND,
+        "name": str(name or f"{action_id}-action-run"),
+        "status": "passed",
+        "exit_code": 0,
+        "source_path": str(source_path),
+        "cwd": str(run_cwd),
+        "dry_run": bool(dry_run),
+        "action": action,
+        "command": f"download {artifact_ref} -> {output_path}",
+        "command_args": [],
+        "artifact_ref": artifact_ref,
+        "artifact_output_path": str(output_path),
+        "logs": {"stdout": "", "stderr": "", "stdout_bytes": 0, "stderr_bytes": 0},
+        "outputs": [output_record],
+        "outputs_written": outputs_written,
+        "summary": {
+            "action_id": str(action.get("id") or action_id),
+            "action_label": action.get("label"),
+            "action_kind": "download",
+            "source_card_path": action.get("source_card_path"),
+            "requires_input": bool(action.get("inputs")),
+            "command_exit_code": 0,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "output_count": output_count,
+            "outputs_written_count": outputs_written_count,
+            "output_completion_rate": round(outputs_written_count / output_count, 4),
+            "artifact_ref": artifact_ref,
         },
     }
     return payload
@@ -242,7 +344,7 @@ def render_markdown(catalog: Mapping[str, Any]) -> str:
                     or action.get("diagnosis_status")
                     or action.get("status"),
                     _join_values(action.get("target_layers")),
-                    action.get("command"),
+                    action.get("command") or action.get("artifact_ref"),
                 ]
             )
             + " |"
@@ -286,6 +388,7 @@ def render_action_run_markdown(result: Mapping[str, Any]) -> str:
         "",
         f"- Source: `{_md_code(result.get('source_path') or '.')}`",
         f"- Action: {_md_text(summary.get('action_id') or 'unknown')}",
+        f"- Action kind: {_md_text(summary.get('action_kind') or 'cli')}",
         f"- Status: {_md_text(result.get('status') or 'unknown')}",
         f"- Exit code: {_md_text(result.get('exit_code'))}",
         f"- Command: `{_md_code(result.get('command') or '')}`",
@@ -309,18 +412,24 @@ def render_action_run_markdown(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _walk_cli_actions(value: Any, path: str = "") -> Iterable[tuple[str, Mapping[str, Any]]]:
+def _walk_actions(value: Any, path: str = "") -> Iterable[tuple[str, Mapping[str, Any]]]:
     if isinstance(value, Mapping):
-        if value.get("kind") == "cli" and value.get("command_args") is not None:
+        if (
+            value.get("kind") == "cli"
+            and value.get("command_args") is not None
+        ) or (
+            value.get("kind") == "download"
+            and value.get("artifact_ref") is not None
+        ):
             yield path, value
             return
         for key, item in value.items():
             item_path = f"{path}.{key}" if path else str(key)
-            yield from _walk_cli_actions(item, item_path)
+            yield from _walk_actions(item, item_path)
     elif isinstance(value, list):
         for index, item in enumerate(value):
             item_path = f"{path}.{index}" if path else str(index)
-            yield from _walk_cli_actions(item, item_path)
+            yield from _walk_actions(item, item_path)
 
 
 def _source_card_path(action_path: str) -> str:
@@ -445,6 +554,78 @@ def _output_arg_path(value: str, cwd: Path) -> Path:
     if path.is_absolute():
         return path.resolve()
     return (cwd / path).resolve()
+
+
+def _resolve_artifact_ref(artifact: Mapping[str, Any], artifact_ref: str) -> Any:
+    normalized = normalize_public_payload(artifact)
+    if not isinstance(normalized, Mapping):
+        return _MISSING
+    candidates = [artifact_ref]
+    if artifact_ref.startswith("report."):
+        candidates.append(artifact_ref.removeprefix("report."))
+    for candidate in candidates:
+        value = _resolve_path(normalized, candidate.split("."))
+        if value is not _MISSING:
+            return value
+    return _MISSING
+
+
+def _resolve_path(value: Any, path: list[str]) -> Any:
+    current = value
+    for part in path:
+        if isinstance(current, Mapping):
+            if part not in current:
+                return _MISSING
+            current = current[part]
+            continue
+        if isinstance(current, list):
+            try:
+                index = int(part)
+            except ValueError:
+                return _MISSING
+            if index < 0 or index >= len(current):
+                return _MISSING
+            current = current[index]
+            continue
+        return _MISSING
+    return current
+
+
+def _download_output_path(
+    action: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    cwd: Path,
+    *,
+    artifact_output_path: str | Path | None,
+) -> Path:
+    raw_value = artifact_output_path
+    if raw_value in (None, ""):
+        for name in ("artifact_output", "artifact_output_path", "output_path"):
+            if inputs.get(name) not in (None, ""):
+                raw_value = inputs[name]
+                break
+    if raw_value in (None, ""):
+        raw_value = action.get("default_filename")
+    if raw_value in (None, ""):
+        raw_value = f"{_slug(action.get('id') or 'artifact')}.json"
+
+    path = Path(str(raw_value)).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (cwd / path).resolve()
+
+
+def _download_payload_text(value: Any, output_path: Path) -> str:
+    if isinstance(value, str) and output_path.suffix.lower() not in {".json", ".jsonl"}:
+        return value if value.endswith("\n") else value + "\n"
+    return json.dumps(value, indent=2, sort_keys=True, default=str) + "\n"
+
+
+def _slug(value: Any, default: str = "artifact") -> str:
+    text = str(value or default).strip().lower()
+    chars = [char if char.isalnum() else "-" for char in text]
+    slug = "-".join(part for part in "".join(chars).split("-") if part)
+    return slug or default
 
 
 def _shell_token(value: Any) -> str:

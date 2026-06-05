@@ -215,7 +215,7 @@ def _init(args: Sequence[str]) -> int:
 def _actions(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn actions",
-        description="List executable CLI actions embedded in a saved artifact/report.",
+        description="List executable actions embedded in a saved artifact/report.",
     )
     parser.add_argument(
         "artifact",
@@ -299,7 +299,7 @@ def _actions(args: Sequence[str]) -> int:
 def _action_run(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn action-run",
-        description="Run one embedded CLI action from a saved artifact/report.",
+        description="Run one embedded CLI/download action from a saved artifact/report.",
     )
     parser.add_argument(
         "artifact",
@@ -326,6 +326,11 @@ def _action_run(args: Sequence[str]) -> int:
         "--dry-run",
         action="store_true",
         help="Resolve the action command without executing it.",
+    )
+    parser.add_argument(
+        "--artifact-output",
+        default=None,
+        help="Write a download/export action artifact to this path.",
     )
     parser.add_argument(
         "-o",
@@ -381,6 +386,7 @@ def _action_run(args: Sequence[str]) -> int:
             cwd=parsed.cwd,
             dry_run=bool(parsed.dry_run),
             name=parsed.name,
+            artifact_output_path=parsed.artifact_output,
         )
     except Exception as exc:
         print(f"agent-learn action-run: {exc}", file=sys.stderr)

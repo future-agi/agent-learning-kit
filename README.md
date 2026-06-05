@@ -205,13 +205,16 @@ turn those embedded card actions into a standalone
 `agent-learning.actions.v1` catalog. The catalog prefers raw embedded actions,
 adds synthesized report actions as fallbacks, de-dupes actions by id, marks
 actions that need placeholder inputs, and can be filtered with `--id`, giving
-promptfoo-style users a direct way to discover the next runnable command from
-any saved run/report/optimization artifact. `agent-learn action-run <artifact>
---id <action_id>` and
+promptfoo-style users a direct way to discover the next runnable command or
+artifact export from any saved run/report/optimization artifact. `agent-learn
+action-run <artifact> --id <action_id>` and
 `agent_learning.actions.run_action()` execute one selected CLI action without
-shelling out, rewrite relative action output paths into the requested `--cwd`,
-and return an `agent-learning.action-run.v1` artifact that records the command,
-exit code, captured stdout/stderr logs, declared outputs, and generated files.
+shelling out or materialize one selected `kind: download` export action with
+`--artifact-output`. Relative command outputs and default download paths are
+resolved inside the requested `--cwd`, and the returned
+`agent-learning.action-run.v1` artifact records the action kind, command or
+artifact ref, exit code, captured stdout/stderr logs, declared outputs, and
+generated files.
 `actions` and `action-run` both write JSON/JUnit/SARIF/Markdown outputs for CI.
 Suites can include the same loop with `{"command": "action-run", "path":
 "...artifact.json", "action_id": "..."}` jobs, so CI can run a saved artifact,

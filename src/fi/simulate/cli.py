@@ -4920,9 +4920,25 @@ def _orchestration_rollout_plan(
     selected = _orchestration_selected_history(history, best_candidate_id)
     selected_candidate_id = _string_or_none(selected.get("candidate_id"))
     best_config = optimization.get("best_config")
-    selected_manifest = (
-        copy.deepcopy(dict(best_config)) if isinstance(best_config, Mapping) else None
-    )
+    source_manifest = optimization.get("source_manifest")
+    selected_manifest = None
+    if isinstance(best_config, Mapping):
+        if isinstance(source_manifest, Mapping):
+            selected_manifest = _deep_merge(
+                copy.deepcopy(dict(source_manifest)),
+                copy.deepcopy(dict(best_config)),
+            )
+            selected_manifest["version"] = _promoted_regression_manifest_version(
+                result,
+                source_manifest,
+            )
+            if source_manifest_path is not None:
+                _absolutize_manifest_sources(
+                    selected_manifest,
+                    source_manifest_path.expanduser().resolve().parent,
+                )
+        else:
+            selected_manifest = copy.deepcopy(dict(best_config))
     selected_environment_types = _orchestration_selected_environment_types(
         selected_manifest,
     )
@@ -5204,7 +5220,7 @@ def _orchestration_rollout_actions(
                 "report.orchestration_strategy.artifacts."
                 "selected_orchestration_manifest"
             ),
-            "default_filename": "selected-orchestration-manifest.json",
+            "default_filename": "artifacts/selected-orchestration-manifest.json",
             "strategy_status": status,
             "target_layers": default_layers,
         },
