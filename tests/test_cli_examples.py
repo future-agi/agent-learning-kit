@@ -921,6 +921,8 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     output_path = tmp_path / "custom-framework-optimization.json"
     promotion_path = tmp_path / "custom-framework-optimization-promotion.json"
     manifest_path = tmp_path / "custom-framework-optimization-regression.json"
+    report_path = tmp_path / "custom-framework-optimization-report.json"
+    report_markdown_path = tmp_path / "custom-framework-optimization-report.md"
     replay_path = tmp_path / "custom-framework-optimization-replay.json"
     junit_path = tmp_path / "custom-framework-optimization.junit.xml"
     sarif_path = tmp_path / "custom-framework-optimization.sarif.json"
@@ -1040,6 +1042,28 @@ def test_custom_framework_optimization_example_runs_adapter_search(
         "optimized_manifest"
     )
 
+    exit_code = main([
+        "report",
+        str(promotion_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_markdown_path),
+    ])
+    assert exit_code == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "passed"
+    assert "optimization_replay" in report["summary"]["sections"]
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "## Optimization Replay" in report_markdown
+    assert "Promotion kind" in report_markdown
+    assert "optimized_manifest" in report_markdown
+    assert "### Promoted Manifest" in report_markdown
+    assert "agent.method" in report_markdown
+    assert "execute_task" in report_markdown
+    assert "optimizer_trace" in report_markdown
+
     monkeypatch.setenv(
         "AGENT_LEARNING_CUSTOM_FRAMEWORK_REGRESSION_KEY",
         "real-local-custom-framework-regression-key",
@@ -1077,9 +1101,10 @@ def test_custom_framework_optimization_example_runs_adapter_search(
         for result in replay_sarif["runs"][0]["results"]
         if result.get("level") == "error"
     ]
-    assert "custom-framework-optimization-regression" in replay_markdown_path.read_text(
-        encoding="utf-8"
-    )
+    replay_markdown = replay_markdown_path.read_text(encoding="utf-8")
+    assert "custom-framework-optimization-regression" in replay_markdown
+    assert "### Replay Metrics" in replay_markdown
+    assert "framework_runtime_contract" in replay_markdown
 
 
 def test_social_memory_framework_optimization_example_synthesizes_patches(

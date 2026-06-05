@@ -616,6 +616,18 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
         "optimizer_trace"
     )
 
+    report = simulate.render_report(
+        promotion,
+        source_path=PROJECT_ROOT / "examples" / "sdk-framework-optimization-promotion.json",
+    )
+    assert report["status"] == "passed"
+    assert "optimization_replay" in report["summary"]["sections"]
+    markdown = report["report"]["markdown"]
+    assert "## Optimization Replay" in markdown
+    assert "optimized_manifest" in markdown
+    assert "agent.method" in markdown
+    assert "execute_task" in markdown
+
 
 def test_sdk_social_memory_framework_optimization_example_runs(
     monkeypatch,

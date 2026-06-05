@@ -2347,6 +2347,8 @@ def _markdown_sections(result: Mapping[str, Any]) -> List[str]:
         sections.append("compare")
     if result.get("optimization") is not None:
         sections.append("optimization")
+    if _has_optimization_replay_card(result):
+        sections.append("optimization_replay")
     if result.get("baseline") is not None:
         sections.append("baseline")
     if _result_metric_averages(result) or dict(result.get("compare") or {}).get("metrics"):
@@ -2390,6 +2392,8 @@ def _result_markdown(
         lines.extend(_compare_markdown(result))
     if "optimization" in sections:
         lines.extend(_optimization_markdown(result))
+    if "optimization_replay" in sections:
+        lines.extend(_optimization_replay_markdown(result))
     if "baseline" in sections:
         lines.extend(_baseline_markdown(result))
     if "metrics" in sections:
@@ -2413,12 +2417,33 @@ def _replay_markdown(result: Mapping[str, Any]) -> List[str]:
         ]
         for item in manifests
     ]
-    return [
+    lines = [
         "## Replay",
         "",
         *_markdown_table(["Command", "Status", "Score", "Exit", "Findings", "Manifest"], rows),
         "",
     ]
+    metric_rows = _replay_metric_rows(manifests)
+    if metric_rows:
+        lines.extend(
+            [
+                "### Replay Metrics",
+                "",
+                *_markdown_table(["Manifest", "Metric", "Score"], metric_rows),
+                "",
+            ]
+        )
+    return lines
+
+
+def _replay_metric_rows(manifests: Sequence[Mapping[str, Any]]) -> List[List[Any]]:
+    rows: List[List[Any]] = []
+    for item in manifests:
+        name = Path(str(item.get("path") or "")).name or item.get("name")
+        metrics = dict(dict(item.get("summary") or {}).get("metric_averages") or {})
+        for metric_name in sorted(metrics):
+            rows.append([name, metric_name, metrics[metric_name]])
+    return rows
 
 
 def _redteam_markdown(result: Mapping[str, Any]) -> List[str]:
@@ -2489,6 +2514,213 @@ def _optimization_markdown(result: Mapping[str, Any]) -> List[str]:
         *_key_value_table(rows),
         "",
     ]
+
+
+def _has_optimization_replay_card(result: Mapping[str, Any]) -> bool:
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping) and (
+        isinstance(optimization.get("source_manifest"), Mapping)
+        or optimization.get("source_manifest_path")
+        or optimization.get("best_config")
+    ):
+        return True
+    summary = result.get("summary")
+    manifest = result.get("manifest")
+    if isinstance(summary, Mapping) and summary.get("promotion_kind"):
+        return True
+    if isinstance(manifest, Mapping):
+        metadata = manifest.get("metadata")
+        if isinstance(metadata, Mapping) and isinstance(metadata.get("regression"), Mapping):
+            return True
+    return False
+
+
+def _optimization_replay_markdown(result: Mapping[str, Any]) -> List[str]:
+    summary = dict(result.get("summary") or {})
+    optimization = result.get("optimization")
+    manifest = result.get("manifest")
+    if isinstance(optimization, Mapping):
+        return _optimization_result_replay_markdown(summary, optimization)
+    if isinstance(manifest, Mapping):
+        return _promotion_result_replay_markdown(summary, manifest)
+    return []
+
+
+def _optimization_result_replay_markdown(
+    summary: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> List[str]:
+    best_config = optimization.get("best_config")
+    history = [dict(item) for item in _coerce_list(optimization.get("history")) if isinstance(item, Mapping)]
+    trace = optimization.get("optimizer_trace")
+    rows = [
+        ("Replay artifact", "optimization_result"),
+        ("Source manifest", optimization.get("source_manifest_path")),
+        ("Best candidate", optimization.get("best_candidate_id", summary.get("best_candidate_id"))),
+        ("Final score", optimization.get("final_score", summary.get("optimization_score"))),
+        ("Threshold", summary.get("threshold")),
+        ("Search paths", _join_values(summary.get("search_paths"))),
+        ("Winning patch paths", _join_values(_patch_leaf_paths(best_config))),
+        ("History count", len(history)),
+        ("Optimizer trace", isinstance(trace, Mapping)),
+    ]
+    lines = [
+        "## Optimization Replay",
+        "",
+        *_key_value_table(rows),
+        "",
+    ]
+    patch_rows = _flatten_leaf_rows(best_config)[:20]
+    if patch_rows:
+        lines.extend(
+            [
+                "### Winning Patch",
+                "",
+                *_markdown_table(["Path", "Value"], patch_rows),
+                "",
+            ]
+        )
+    history_rows = _optimization_history_rows(history)
+    if history_rows:
+        lines.extend(
+            [
+                "### Candidate History",
+                "",
+                *_markdown_table(
+                    ["Candidate", "Score", "Patch paths", "Role", "Round"],
+                    history_rows,
+                ),
+                "",
+            ]
+        )
+    trace_rows = _optimizer_trace_rows(trace)
+    if trace_rows:
+        lines.extend(
+            [
+                "### Optimizer Trace",
+                "",
+                *_key_value_table(trace_rows),
+                "",
+            ]
+        )
+    return lines
+
+
+def _promotion_result_replay_markdown(
+    summary: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> List[str]:
+    metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), Mapping) else {}
+    regression = metadata.get("regression") if isinstance(metadata, Mapping) and isinstance(metadata.get("regression"), Mapping) else {}
+    rows = [
+        ("Replay artifact", "promotion_manifest"),
+        ("Promotion kind", summary.get("promotion_kind", regression.get("promotion_kind"))),
+        ("Source name", summary.get("source_name", regression.get("source_name"))),
+        ("Source path", summary.get("source_path", regression.get("promoted_from"))),
+        ("Source status", summary.get("source_status", regression.get("source_status"))),
+        ("Best candidate", summary.get("best_candidate_id", regression.get("best_candidate_id"))),
+        ("Search paths", _join_values(summary.get("search_paths", regression.get("search_paths")))),
+        ("History count", summary.get("history_count", regression.get("history_count"))),
+        ("Promoted manifests", summary.get("promoted_manifest_count")),
+        ("Required env", _join_values(manifest.get("required_env"))),
+        ("Environment types", _join_values(_redteam_environment_types(manifest))),
+        ("Optimizer trace", summary.get("has_optimizer_trace", regression.get("has_optimizer_trace"))),
+    ]
+    lines = [
+        "## Optimization Replay",
+        "",
+        *_key_value_table(rows),
+        "",
+    ]
+    manifest_rows = _promoted_manifest_rows(manifest)
+    if manifest_rows:
+        lines.extend(
+            [
+                "### Promoted Manifest",
+                "",
+                *_markdown_table(["Path", "Value"], manifest_rows),
+                "",
+            ]
+        )
+    return lines
+
+
+def _optimization_history_rows(history: Sequence[Mapping[str, Any]]) -> List[List[Any]]:
+    sorted_history = sorted(
+        history,
+        key=lambda item: float(item.get("score") or 0.0),
+        reverse=True,
+    )
+    return [
+        [
+            item.get("candidate_id"),
+            item.get("score"),
+            _join_values(_patch_leaf_paths(item.get("patch") or item.get("candidate_patch"))),
+            item.get("proposal_role"),
+            item.get("proposal_round"),
+        ]
+        for item in sorted_history[:10]
+    ]
+
+
+def _optimizer_trace_rows(trace: Any) -> List[tuple[str, Any]]:
+    if not isinstance(trace, Mapping):
+        return []
+    summary = trace.get("summary") if isinstance(trace.get("summary"), Mapping) else {}
+    return [
+        ("Trace kind", trace.get("kind")),
+        ("Trace roles", _join_values(summary.get("roles") or trace.get("roles"))),
+        ("Proposal count", summary.get("proposal_count") or _count_trace_items(trace, "proposals")),
+        ("Candidate count", summary.get("candidate_count") or _count_trace_items(trace, "candidates")),
+        ("Final score", summary.get("final_score") or trace.get("final_score")),
+        ("Passed", summary.get("passed") if "passed" in summary else trace.get("passed")),
+    ]
+
+
+def _count_trace_items(trace: Mapping[str, Any], key: str) -> Optional[int]:
+    value = trace.get(key)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return len(value)
+    return None
+
+
+def _promoted_manifest_rows(manifest: Mapping[str, Any]) -> List[List[Any]]:
+    candidate = {
+        "name": manifest.get("name"),
+        "agent.type": dict(manifest.get("agent") or {}).get("type")
+        if isinstance(manifest.get("agent"), Mapping)
+        else None,
+        "agent.framework": dict(manifest.get("agent") or {}).get("framework")
+        if isinstance(manifest.get("agent"), Mapping)
+        else None,
+        "agent.method": dict(manifest.get("agent") or {}).get("method")
+        if isinstance(manifest.get("agent"), Mapping)
+        else None,
+        "agent.input_mode": dict(manifest.get("agent") or {}).get("input_mode")
+        if isinstance(manifest.get("agent"), Mapping)
+        else None,
+        "agent.target": dict(manifest.get("agent") or {}).get("target")
+        if isinstance(manifest.get("agent"), Mapping)
+        else None,
+        "simulation.environments": _join_values(_redteam_environment_types(manifest)),
+    }
+    return [[key, value] for key, value in candidate.items() if value not in (None, "", [], {})]
+
+
+def _flatten_leaf_rows(value: Any, prefix: str = "") -> List[List[Any]]:
+    if isinstance(value, Mapping):
+        rows: List[List[Any]] = []
+        for key in sorted(value):
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            rows.extend(_flatten_leaf_rows(value[key], child_prefix))
+        return rows
+    if isinstance(value, list):
+        rows = []
+        for index, item in enumerate(value):
+            child_prefix = f"{prefix}.{index}" if prefix else str(index)
+            rows.extend(_flatten_leaf_rows(item, child_prefix))
+        return rows
+    return [[prefix, value]] if prefix else []
 
 
 def _baseline_markdown(result: Mapping[str, Any]) -> List[str]:
