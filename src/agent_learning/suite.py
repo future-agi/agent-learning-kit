@@ -21,6 +21,7 @@ AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND = (
 )
 
 _CHILD_COMMANDS = {
+    "action_run",
     "baseline",
     "compare",
     "promote_to_regression",
@@ -1119,6 +1120,19 @@ def _execute_child_payload(
         )
         payload["kind"] = AGENT_LEARNING_SUITE_KIND
         return payload
+    if command == "action_run":
+        from agent_learning import actions
+
+        artifact = actions.load_artifact_file(path)
+        return actions.run_action(
+            artifact,
+            _job_action_id(job),
+            source_path=path,
+            inputs=_job_action_inputs(job),
+            cwd=_job_action_cwd(job, base_dir=base_dir),
+            dry_run=_job_dry_run(job, suite_options),
+            name=_job_name(job),
+        )
     if command == "eval":
         from agent_learning import evals
         from agent_learning.cli import AGENT_LEARNING_EVAL_KIND
@@ -1318,6 +1332,17 @@ def _write_child_outputs(
 def _child_renderers(command: str) -> tuple[Any, Any, Any]:
     if command == "suite":
         return render_junit, render_sarif, render_markdown
+    if command == "action_run":
+        from agent_learning import actions, simulate
+
+        def render_action_run_markdown(
+            payload: Mapping[str, Any],
+            *,
+            source_path: Path,
+        ) -> str:
+            return actions.render_action_run_markdown(payload)
+
+        return simulate.render_junit, simulate.render_sarif, render_action_run_markdown
     if command == "redteam":
         from agent_learning import redteam
 
@@ -1717,6 +1742,48 @@ def _job_optional_path(
     return None
 
 
+def _job_action_id(job: Mapping[str, Any]) -> str:
+    raw = (
+        job.get("action_id")
+        or job.get("action-id")
+        or job.get("action")
+        or job.get("actionId")
+    )
+    if raw in (None, ""):
+        raise SuiteError(f"suite action-run job {job.get('id') or ''} requires action_id")
+    return str(raw)
+
+
+def _job_action_inputs(job: Mapping[str, Any]) -> dict[str, Any]:
+    raw = job.get("inputs") or job.get("action_inputs") or job.get("action-inputs")
+    if raw in (None, ""):
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    parsed: dict[str, Any] = {}
+    for value in _as_list(raw):
+        text = str(value)
+        if "=" not in text:
+            raise SuiteError(f"suite action-run input must be name=value: {text!r}")
+        key, item = text.split("=", 1)
+        if not key.strip():
+            raise SuiteError(f"suite action-run input has empty name: {text!r}")
+        parsed[key.strip()] = item
+    return parsed
+
+
+def _job_action_cwd(job: Mapping[str, Any], *, base_dir: Path) -> Path:
+    raw = (
+        job.get("cwd")
+        or job.get("working_dir")
+        or job.get("working-dir")
+        or job.get("workdir")
+    )
+    if raw in (None, ""):
+        return base_dir
+    return _resolve_path(str(raw), base_dir)
+
+
 def _job_output_paths(job: Mapping[str, Any], base_dir: Path) -> dict[str, list[Path]]:
     outputs: dict[str, list[Path]] = {
         "json": [],
@@ -1763,6 +1830,10 @@ def _normalize_command(value: Any) -> str:
         "evaltask": "eval_task",
         "eval_tasks": "eval_task",
         "eval_evidence": "eval_task",
+        "action": "action_run",
+        "actions": "action_run",
+        "actionrun": "action_run",
+        "run_action": "action_run",
         "task_eval": "eval_task",
         "task_evaluation": "eval_task",
         "task_evidence_eval": "eval_task",

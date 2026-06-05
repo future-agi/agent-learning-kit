@@ -173,7 +173,11 @@ artifact. `agent-learn action-run <artifact> --id <action_id>` and
 `agent_learning.actions.run_action()` execute one selected CLI action without
 shelling out, rewrite relative action output paths into the requested `--cwd`,
 and return an `agent-learning.action-run.v1` artifact that records the command,
-exit code, declared outputs, and generated files.
+exit code, declared outputs, and generated files. Suites can include the same
+loop with `{"command": "action-run", "path": "...artifact.json",
+"action_id": "..."}` jobs, so CI can run a saved artifact, inspect the
+recommended next action, execute it, and keep the action-run result inside one
+`agent-learning.suite.v1` artifact.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

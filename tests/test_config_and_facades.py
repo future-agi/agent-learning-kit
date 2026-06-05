@@ -5866,6 +5866,70 @@ def test_sdk_framework_certification_simulation_example_runs(
         "framework-certification-rerun.md",
     }
     assert "## Outputs" in action_run_md_path.read_text(encoding="utf-8")
+
+    suite_action_run_dir = tmp_path / "sdk-framework-certification-suite-action-run"
+    suite_child_output_path = tmp_path / "sdk-framework-certification-suite-child.json"
+    suite_child_markdown_path = tmp_path / "sdk-framework-certification-suite-child.md"
+    suite_path = tmp_path / "sdk-framework-certification-action-suite.json"
+    suite_output_path = tmp_path / "sdk-framework-certification-action-suite-result.json"
+    suite_markdown_path = tmp_path / "sdk-framework-certification-action-suite-result.md"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-learning.suite.v1",
+                "name": "sdk-framework-certification-action-suite",
+                "required_env": [
+                    "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY"
+                ],
+                "jobs": [
+                    {
+                        "id": "framework-readiness-rerun",
+                        "command": "action-run",
+                        "path": str(output_path),
+                        "action_id": "rerun_framework_certification",
+                        "cwd": str(suite_action_run_dir),
+                        "output": str(suite_child_output_path),
+                        "outputs": {"markdown": str(suite_child_markdown_path)},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main([
+        "suite",
+        str(suite_path),
+        "--output",
+        str(suite_output_path),
+        "--markdown",
+        str(suite_markdown_path),
+    ]) == 0
+    suite_payload = json.loads(suite_output_path.read_text(encoding="utf-8"))
+    assert suite_payload["kind"] == "agent-learning.suite.v1"
+    assert suite_payload["status"] == "passed"
+    assert suite_payload["summary"]["commands"] == {"action_run": 1}
+    suite_child = suite_payload["children"][0]
+    assert suite_child["command"] == "action_run"
+    assert suite_child["kind"] == "agent-learning.action-run.v1"
+    assert suite_child["result"]["summary"]["action_id"] == (
+        "rerun_framework_certification"
+    )
+    assert suite_child["result"]["summary"]["command_exit_code"] == 0
+    assert {
+        Path(item["path"]).name
+        for item in suite_child["result"]["outputs"]
+        if item["exists"]
+    } >= {
+        "framework-certification-rerun.json",
+        "framework-certification-rerun.junit.xml",
+        "framework-certification-rerun.sarif.json",
+        "framework-certification-rerun.md",
+    }
+    assert suite_child_output_path.exists()
+    assert "## Outputs" in suite_child_markdown_path.read_text(encoding="utf-8")
+    assert "sdk-framework-certification-action-suite" in suite_markdown_path.read_text(
+        encoding="utf-8"
+    )
     event_names = {event["name"] for event in report_case["events"]}
     assert {
         "framework_lifecycle_ready",
