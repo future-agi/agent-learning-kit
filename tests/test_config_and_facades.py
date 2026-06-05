@@ -69,7 +69,7 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 def test_facades_expose_unified_agent_learning_modules():
     import agent_learning
-    from agent_learning import evals, optimize, redteam, simulate, suite
+    from agent_learning import actions, evals, optimize, redteam, simulate, suite
 
     fi_simulate = importlib.import_module("fi.simulate")
     fi_engines = importlib.import_module("fi.simulate.simulation.engines")
@@ -77,16 +77,18 @@ def test_facades_expose_unified_agent_learning_modules():
     fi_scanners = importlib.import_module("fi.evals.guardrails.scanners")
     fi_code_security = importlib.import_module("fi.evals.metrics.code_security")
 
-    assert {"evals", "optimize", "redteam", "simulate", "suite"} <= set(
+    assert {"actions", "evals", "optimize", "redteam", "simulate", "suite"} <= set(
         agent_learning.__all__
     )
     assert {name for name in dir(agent_learning) if name in agent_learning.__all__} >= {
+        "actions",
         "evals",
         "optimize",
         "redteam",
         "simulate",
         "suite",
     }
+    assert actions.extract_actions({"report": {}}) == []
 
     assert set(fi_simulate.__all__) <= set(simulate.__all__)
     assert set(fi_guardrails.__all__) <= set(redteam.__all__)
@@ -5792,6 +5794,45 @@ def test_sdk_framework_certification_simulation_example_runs(
     report_markdown = report_md_path.read_text(encoding="utf-8")
     assert "## Framework Readiness" in report_markdown
     assert "### Framework Actions" in report_markdown
+
+    from agent_learning import actions
+
+    catalog = actions.action_catalog(saved, source_path=output_path)
+    assert catalog["kind"] == "agent-learning.actions.v1"
+    assert catalog["summary"]["action_count"] >= 3
+    assert {
+        "report_framework_readiness",
+        "rerun_framework_certification",
+        "optimize_framework_readiness",
+    } <= set(catalog["summary"]["action_ids"])
+    assert len({
+        (action["id"], tuple(action["command_args"]))
+        for action in catalog["actions"]
+    }) == len(catalog["actions"])
+    rerun_action = actions.get_action(saved, "rerun_framework_certification")
+    assert rerun_action is not None
+    assert rerun_action["source_card_path"] == "framework_readiness"
+    assert rerun_action["command_args"][:2] == ["agent-learn", "run"]
+
+    actions_path = tmp_path / "sdk-framework-certification-actions.json"
+    actions_md_path = tmp_path / "sdk-framework-certification-actions.md"
+    assert main([
+        "actions",
+        str(output_path),
+        "--id",
+        "rerun_framework_certification",
+        "--output",
+        str(actions_path),
+        "--markdown",
+        str(actions_md_path),
+    ]) == 0
+    action_payload = json.loads(actions_path.read_text(encoding="utf-8"))
+    assert action_payload["kind"] == "agent-learning.actions.v1"
+    assert action_payload["summary"]["action_count"] == 1
+    assert action_payload["actions"][0]["id"] == "rerun_framework_certification"
+    action_markdown = actions_md_path.read_text(encoding="utf-8")
+    assert "## Actions" in action_markdown
+    assert "rerun_framework_certification" in action_markdown
     event_names = {event["name"] for event in report_case["events"]}
     assert {
         "framework_lifecycle_ready",

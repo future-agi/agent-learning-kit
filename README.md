@@ -163,14 +163,22 @@ evidence into readiness layers, names weak framework metrics, and emits
 `report_framework_readiness`, `rerun_framework_certification` or
 `rerun_framework_optimization`, and `optimize_framework_readiness` commands for
 CLI, SDK, CI, and Future AGI UI surfaces.
+`agent-learn actions <artifact>` and `agent_learning.actions.action_catalog()`
+turn those embedded card actions into a standalone
+`agent-learning.actions.v1` catalog. The catalog synthesizes the report view
+before extraction, de-dupes actions by id, marks actions that need placeholder
+inputs, and can be filtered with `--id`, giving promptfoo-style users a direct
+way to discover the next runnable command from any saved run/report/optimization
+artifact.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,
-`agent-learn optimize-suite`, and `agent-learn suite`
+`agent-learn optimize-suite`, `agent-learn suite`, and `agent-learn actions`
 write Agent Learning Kit artifact kinds
 (`agent-learning.run.v1`, `agent-learning.eval.v1`,
-`agent-learning.redteam.v1`, `agent-learning.optimization.v1`, and
-`agent-learning.eval-optimization.v1`, plus `agent-learning.suite.v1`) plus
+`agent-learning.redteam.v1`, `agent-learning.optimization.v1`,
+`agent-learning.eval-optimization.v1`, `agent-learning.suite.v1`, and
+`agent-learning.actions.v1`) plus
 optional JUnit, SARIF, and Markdown outputs for CI.
 `agent-learn eval-cli ...` bridges the vendored ai-evaluation management CLI
 under the unified command for template listing, project scaffolding,

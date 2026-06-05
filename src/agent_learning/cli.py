@@ -42,6 +42,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _doctor()
     if command == "init":
         return _init(args[1:])
+    if command in {"actions", "list-actions"}:
+        return _actions(args[1:])
     if command == "run":
         return _run(args[1:])
     if command == "eval":
@@ -202,6 +204,81 @@ def _init(args: Sequence[str]) -> int:
         base_dir=target_dir,
     )
     if not payload["outputs_written"] and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _actions(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn actions",
+        description="List executable CLI actions embedded in a saved artifact/report.",
+    )
+    parser.add_argument(
+        "artifact",
+        help="Path to an Agent Learning JSON/YAML artifact or report.",
+    )
+    parser.add_argument(
+        "--id",
+        dest="action_id",
+        default=None,
+        help="Only include the action with this id.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help="Write JSON action catalog to this path.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown action catalog to this path.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the action catalog artifact name.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON catalog when no output path is configured.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import actions
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn actions", exc)
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    try:
+        artifact = actions.load_artifact_file(artifact_path)
+        payload = actions.action_catalog(
+            artifact,
+            source_path=artifact_path,
+            action_id=parsed.action_id,
+            name=parsed.name,
+        )
+    except Exception as exc:
+        print(f"agent-learn actions: {exc}", file=sys.stderr)
+        return 1
+
+    written = _write_json_outputs(
+        payload,
+        _as_list(parsed.output),
+        base_dir=artifact_path.parent,
+    )
+    for value in _as_list(parsed.markdown):
+        path = _resolve_output_path(str(value), artifact_path.parent)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(actions.render_markdown(payload), encoding="utf-8")
+        written.append(str(path))
+    payload["outputs_written"] = written
+    if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
 

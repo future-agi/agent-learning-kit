@@ -6,6 +6,7 @@ from typing import Any
 from .config import AgentLearningConfig, configure, current_config, get_api_key
 
 _SUBMODULES = {
+    "actions",
     "evals",
     "optimize",
     "redteam",
@@ -28,6 +29,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "AgentLearningConfig",
+    "actions",
     "configure",
     "current_config",
     "evals",
