@@ -165,11 +165,12 @@ evidence into readiness layers, names weak framework metrics, and emits
 CLI, SDK, CI, and Future AGI UI surfaces.
 `agent-learn actions <artifact>` and `agent_learning.actions.action_catalog()`
 turn those embedded card actions into a standalone
-`agent-learning.actions.v1` catalog. The catalog synthesizes the report view
-before extraction, de-dupes actions by id, marks actions that need placeholder
-inputs, and can be filtered with `--id`, giving promptfoo-style users a direct
-way to discover the next runnable command from any saved run/report/optimization
-artifact. `agent-learn action-run <artifact> --id <action_id>` and
+`agent-learning.actions.v1` catalog. The catalog prefers raw embedded actions,
+adds synthesized report actions as fallbacks, de-dupes actions by id, marks
+actions that need placeholder inputs, and can be filtered with `--id`, giving
+promptfoo-style users a direct way to discover the next runnable command from
+any saved run/report/optimization artifact. `agent-learn action-run <artifact>
+--id <action_id>` and
 `agent_learning.actions.run_action()` execute one selected CLI action without
 shelling out, rewrite relative action output paths into the requested `--cwd`,
 and return an `agent-learning.action-run.v1` artifact that records the command,
@@ -178,6 +179,12 @@ loop with `{"command": "action-run", "path": "...artifact.json",
 "action_id": "..."}` jobs, so CI can run a saved artifact, inspect the
 recommended next action, execute it, and keep the action-run result inside one
 `agent-learning.suite.v1` artifact.
+`optimize.build_artifact_action_optimization_manifest()` and
+`optimize.optimize_artifact_actions()` turn the same action catalog into an
+AgentOptimizer-backed suite search over `jobs.0`, so CLI or SDK users can let
+the optimizer choose between report, rerun, replay, repair, or follow-up
+optimization actions from a real artifact trajectory and still get child
+JSON/Markdown logs for the selected `action-run`.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,
@@ -601,6 +608,10 @@ AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_simulation.py \
   artifacts/sdk-framework-certification-simulation.json
 
+AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \
+  artifacts/sdk-artifact-action-optimization.json
+
 AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_social_memory_framework_optimization.py \
   artifacts/sdk-social-memory-framework-optimization.json
@@ -903,6 +914,11 @@ lifecycle, capability, probe, and portability evidence as a normal
 `framework_readiness` report card; run artifacts rerun with `agent-learn run`,
 optimization artifacts rerun with `agent-learn optimize`, and both expose
 `optimize_framework_readiness` for the next certification/search pass.
+`examples/sdk_artifact_action_optimization.py` takes the next step: it creates a
+real certification artifact, extracts the readiness action cards, and runs an
+`agent-learning.suite.v1` optimization where each candidate is an `action-run`
+job. This gives promptfoo-style CLI workflows a deterministic way to optimize
+which saved-artifact action should run next.
 
 The `autonomous_redteam_task_world_optimization.json` example optimizes a
 local autonomous task/world red-team harness. It verifies structured artifacts,

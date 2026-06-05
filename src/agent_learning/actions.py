@@ -133,7 +133,7 @@ def action_catalog(
     artifacts = [artifact]
     synthesized = _synthesized_report_artifact(artifact, source_path=source_path)
     if synthesized is not None:
-        artifacts.insert(0, synthesized)
+        artifacts.append(synthesized)
     actions: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in artifacts:

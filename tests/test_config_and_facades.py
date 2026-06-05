@@ -144,6 +144,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
+    assert optimize.build_artifact_action_optimization_manifest is not None
+    assert optimize.optimize_artifact_actions is not None
     assert optimize.build_artifact_optimization_suite is not None
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
@@ -3215,6 +3217,65 @@ def test_sdk_suite_optimization_example_runs(monkeypatch, tmp_path):
     )
 
 
+def test_sdk_artifact_action_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY",
+        "real-local-sdk-artifact-action-optimization-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_artifact_action_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_artifact_action_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_source_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY"
+    ]
+
+    output_path = tmp_path / "sdk-artifact-action-optimization-result.json"
+    result = module.run(output_path)
+
+    suite_manifest_path = output_path.with_suffix("") / (
+        "artifact-action-optimization-suite.json"
+    )
+    suite_manifest = json.loads(suite_manifest_path.read_text(encoding="utf-8"))
+    assert suite_manifest["version"] == "agent-learning.suite.v1"
+    assert suite_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY"
+    ]
+    assert [
+        job["action_id"]
+        for job in suite_manifest["optimization"]["target"]["search_space"]["jobs.0"]
+    ] == [
+        "report_framework_readiness",
+        "rerun_framework_certification",
+    ]
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.suite-optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["child_command_count"] == {"action_run": 1}
+    best_job = result["optimization"]["best_config"]["jobs"][0]
+    assert best_job["command"] == "action-run"
+    assert best_job["action_id"] in {
+        "report_framework_readiness",
+        "rerun_framework_certification",
+    }
+    assert result["optimization"]["suite_optimization"]["source"] == (
+        "agent_learning_suite"
+    )
+
+
 def test_eval_suite_builder_and_sdk_cookbook_runs(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_EVAL_SUITE_KEY",
@@ -5795,7 +5856,7 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert "## Framework Readiness" in report_markdown
     assert "### Framework Actions" in report_markdown
 
-    from agent_learning import actions
+    from agent_learning import actions, optimize
 
     catalog = actions.action_catalog(saved, source_path=output_path)
     assert catalog["kind"] == "agent-learning.actions.v1"
@@ -5929,6 +5990,80 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert "## Outputs" in suite_child_markdown_path.read_text(encoding="utf-8")
     assert "sdk-framework-certification-action-suite" in suite_markdown_path.read_text(
         encoding="utf-8"
+    )
+
+    action_opt_dir = tmp_path / "sdk-framework-certification-action-optimization"
+    action_opt_manifest = optimize.build_artifact_action_optimization_manifest(
+        name="sdk-framework-certification-action-optimization",
+        artifact_path=output_path,
+        action_ids=[
+            "report_framework_readiness",
+            "rerun_framework_certification",
+        ],
+        required_env=[
+            "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY"
+        ],
+        cwd_root=action_opt_dir / "runs",
+        outputs_root=action_opt_dir / "children",
+    )
+    action_jobs = action_opt_manifest["optimization"]["target"]["search_space"][
+        "jobs.0"
+    ]
+    assert [job["action_id"] for job in action_jobs] == [
+        "report_framework_readiness",
+        "rerun_framework_certification",
+    ]
+    assert action_opt_manifest["required_capabilities"] == {
+        "commands": ["action_run"],
+        "result_kinds": ["agent-learning.action-run.v1"],
+    }
+    assert action_opt_manifest["metadata"]["research_sources"]
+    action_opt_manifest_path = tmp_path / (
+        "sdk-framework-certification-action-optimization-suite.json"
+    )
+    action_opt_output_path = tmp_path / (
+        "sdk-framework-certification-action-optimization-result.json"
+    )
+    action_opt_markdown_path = tmp_path / (
+        "sdk-framework-certification-action-optimization-result.md"
+    )
+    action_opt_manifest_path.write_text(
+        json.dumps(action_opt_manifest),
+        encoding="utf-8",
+    )
+    assert main([
+        "optimize-suite",
+        str(action_opt_manifest_path),
+        "--output",
+        str(action_opt_output_path),
+        "--markdown",
+        str(action_opt_markdown_path),
+    ]) == 0
+    action_opt = json.loads(action_opt_output_path.read_text(encoding="utf-8"))
+    assert action_opt["kind"] == "agent-learning.suite-optimization.v1"
+    assert action_opt["status"] == "passed"
+    assert action_opt["summary"]["job_count"] == 1
+    assert action_opt["summary"]["child_command_count"] == {"action_run": 1}
+    assert "jobs.0" in action_opt["summary"]["search_paths"]
+    best_action_job = action_opt["optimization"]["best_config"]["jobs"][0]
+    assert best_action_job["command"] == "action-run"
+    assert best_action_job["action_id"] in {
+        "report_framework_readiness",
+        "rerun_framework_certification",
+    }
+    assert action_opt["optimization"]["suite_optimization"]["source"] == (
+        "agent_learning_suite"
+    )
+    assert any(
+        (action_opt_dir / "children" / action_id / "action-run.json").exists()
+        for action_id in [
+            "report-framework-readiness",
+            "rerun-framework-certification",
+        ]
+    )
+    assert (
+        "sdk-framework-certification-action-optimization"
+        in action_opt_markdown_path.read_text(encoding="utf-8")
     )
     event_names = {event["name"] for event in report_case["events"]}
     assert {

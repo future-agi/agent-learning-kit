@@ -1202,6 +1202,203 @@ def optimize_artifact_evidence(
     )
 
 
+def build_artifact_action_optimization_manifest(
+    *,
+    name: str,
+    artifact_path: str | Path,
+    artifact: Optional[Mapping[str, Any]] = None,
+    action_ids: Optional[Sequence[str]] = None,
+    required_env: Sequence[str] = (),
+    action_inputs: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    cwd_root: str | Path | None = None,
+    outputs_root: str | Path | None = None,
+    include_synthesized_report_actions: bool = False,
+    include_requires_input: bool = False,
+    threshold: float = 1.0,
+    optimizer: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a suite optimization manifest over embedded artifact actions.
+
+    Saved artifacts already carry deterministic report/rerun/optimization action
+    cards. This helper turns those cards into ``action-run`` suite-job
+    candidates so AgentOptimizer can search over the *next action* to take from
+    a real trajectory, instead of forcing users to manually pick one. By
+    default it uses raw embedded actions, so action sources remain tied to real
+    artifact/manifest paths rather than synthesized report placeholders.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    artifact_path_value = str(artifact_path)
+    from agent_learning import actions as action_api
+
+    source_artifact = (
+        copy.deepcopy(dict(artifact))
+        if artifact is not None
+        else action_api.load_artifact_file(artifact_path)
+    )
+    catalog = action_api.action_catalog(
+        source_artifact,
+        source_path=artifact_path_value,
+        name=f"{name}-actions",
+    )
+    raw_actions = (
+        catalog.get("actions") or []
+        if include_synthesized_report_actions
+        else action_api.extract_actions(source_artifact)
+    )
+    catalog_actions = [
+        {
+            **copy.deepcopy(dict(action)),
+            "requires_input": bool(action.get("inputs")),
+        }
+        for action in raw_actions
+        if isinstance(action, Mapping)
+    ]
+    requested = [str(item) for item in action_ids or [] if str(item)]
+    requested_set = set(requested)
+    inputs_by_action = {
+        str(key): copy.deepcopy(dict(value))
+        for key, value in dict(action_inputs or {}).items()
+        if isinstance(value, Mapping)
+    }
+    available = {
+        str(action.get("id")): copy.deepcopy(dict(action))
+        for action in catalog_actions
+        if isinstance(action, Mapping) and action.get("id")
+    }
+    missing = sorted(requested_set - set(available))
+    if missing:
+        raise ValueError(f"action_id(s) not found in artifact: {', '.join(missing)}")
+
+    action_candidates = [
+        action
+        for action in catalog_actions
+        if isinstance(action, Mapping)
+        and action.get("id")
+        and (not requested_set or str(action.get("id")) in requested_set)
+        and _artifact_action_is_executable(
+            action,
+            inputs=inputs_by_action.get(str(action.get("id")), {}),
+            include_requires_input=include_requires_input,
+        )
+    ]
+    if requested:
+        order = {action_id: index for index, action_id in enumerate(requested)}
+        action_candidates.sort(key=lambda action: order[str(action.get("id"))])
+    if not action_candidates:
+        raise ValueError("artifact does not contain any runnable action candidates")
+
+    safe_name = _safe_slug(name)
+    run_root = str(cwd_root) if cwd_root is not None else f"{safe_name}-action-runs"
+    output_root = (
+        str(outputs_root)
+        if outputs_root is not None
+        else f"{safe_name}-action-run-results"
+    )
+    candidate_jobs = [
+        _artifact_action_candidate_job(
+            name=name,
+            artifact_path=artifact_path_value,
+            action=action,
+            inputs=inputs_by_action.get(str(action.get("id")), {}),
+            cwd_root=run_root,
+            outputs_root=output_root,
+        )
+        for action in action_candidates
+    ]
+    source_kind = catalog.get("summary", {}).get("source_kind")
+    source_name = catalog.get("summary", {}).get("source_name")
+    search_space = {"jobs.0": copy.deepcopy(candidate_jobs)}
+    suite_name = str(name)
+
+    return {
+        "version": "agent-learning.suite.v1",
+        "name": suite_name,
+        "required_env": [str(key) for key in required_env],
+        "jobs": [copy.deepcopy(candidate_jobs[0])],
+        "required_capabilities": {
+            "commands": ["action_run"],
+            "result_kinds": ["agent-learning.action-run.v1"],
+        },
+        "metadata": {
+            "source": (
+                "agent_learning.optimize."
+                "build_artifact_action_optimization_manifest"
+            ),
+            "task_kind": "artifact_action_optimization",
+            "artifact_path": artifact_path_value,
+            "source_kind": source_kind,
+            "source_name": source_name,
+            "candidate_action_ids": [
+                str(action.get("id")) for action in action_candidates
+            ],
+            "research_sources": _unique_research_sources(
+                [
+                    *_default_artifact_action_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Treat artifact action cards as trajectory-level operations: "
+                "the optimizer searches report, rerun, replay, and repair "
+                "actions as first-class candidates, executes the selected "
+                "action in an auditable suite job, and preserves generated "
+                "logs for Future AGI UI/CI handoff."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": suite_name,
+                "layers": ["harness", "action", "evaluator"],
+                "base_config": {"jobs": [copy.deepcopy(candidate_jobs[0])]},
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_artifact_action_optimization_manifest"
+                    ),
+                    "task_kind": "artifact_action_optimization",
+                    "artifact_path": artifact_path_value,
+                    "source_kind": source_kind,
+                    "candidate_action_ids": [
+                        str(action.get("id")) for action in action_candidates
+                    ],
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_artifact_action_optimizer(candidate_jobs))
+            ),
+        },
+    }
+
+
+def optimize_artifact_actions(
+    *,
+    suite_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute an artifact action-plan optimization manifest."""
+
+    manifest = build_artifact_action_optimization_manifest(**manifest_kwargs)
+    return optimize_suite(
+        manifest,
+        suite_path=suite_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_eval_suite_optimization_manifest(
     *,
     name: str,
@@ -12362,6 +12559,141 @@ def _default_artifact_optimizer(
     }
 
 
+def _artifact_action_candidate_job(
+    *,
+    name: str,
+    artifact_path: str,
+    action: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    cwd_root: str,
+    outputs_root: str,
+) -> dict[str, Any]:
+    action_id = str(action.get("id") or "")
+    safe_action = _safe_slug(action_id)
+    job: dict[str, Any] = {
+        "id": f"artifact-action-{safe_action}",
+        "command": "action-run",
+        "path": artifact_path,
+        "action_id": action_id,
+        "name": f"{name}-{safe_action}",
+        "cwd": _join_path_text(cwd_root, safe_action),
+        "output": _join_path_text(outputs_root, safe_action, "action-run.json"),
+        "outputs": {
+            "markdown": _join_path_text(outputs_root, safe_action, "action-run.md")
+        },
+    }
+    if inputs:
+        job["inputs"] = copy.deepcopy(dict(inputs))
+    return job
+
+
+def _artifact_action_is_executable(
+    action: Mapping[str, Any],
+    *,
+    inputs: Mapping[str, Any],
+    include_requires_input: bool,
+) -> bool:
+    command_args = action.get("command_args")
+    if not isinstance(command_args, Sequence) or isinstance(command_args, (str, bytes)):
+        return False
+    if len(command_args) < 2:
+        return False
+    command_name = str(command_args[0])
+    if command_name not in {"agent-learn", "agent-simulate"}:
+        return False
+    subcommand = str(command_args[1]).strip().lower().replace("_", "-")
+    if subcommand in {"action-run", "run-action"}:
+        return False
+    if bool(action.get("requires_input") or action.get("inputs")):
+        if not include_requires_input and not inputs:
+            return False
+    try:
+        _resolved_artifact_action_args(action, inputs)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolved_artifact_action_args(
+    action: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+) -> list[str]:
+    defaults = {
+        str(item.get("name")): item.get("default")
+        for item in action.get("inputs") or []
+        if isinstance(item, Mapping)
+        and item.get("name") not in (None, "")
+        and item.get("default") is not None
+    }
+    values = {**defaults, **{str(key): value for key, value in inputs.items()}}
+    resolved: list[str] = []
+    for raw_arg in action.get("command_args") or []:
+        arg = str(raw_arg)
+        for key, value in values.items():
+            arg = arg.replace("{{" + key + "}}", str(value))
+        if "{{" in arg or "}}" in arg:
+            raise ValueError(f"action {action.get('id')!r} has unresolved input")
+        resolved.append(arg)
+    return resolved
+
+
+def _default_artifact_action_optimizer(
+    candidate_jobs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "algorithm": "agent",
+        "max_candidates": max(2, len(candidate_jobs) + 1),
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+
+
+def _default_artifact_action_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "tmap_trajectory_aware_red_teaming",
+            "title": (
+                "T-MAP: Red-Teaming LLM Agents with Trajectory-aware "
+                "Evolutionary Search"
+            ),
+            "source": "arxiv:2603.22341",
+            "url": "https://arxiv.org/abs/2603.22341",
+            "year": 2026,
+        },
+        {
+            "id": "general_purpose_automated_red_teaming",
+            "title": "Training a General Purpose Automated Red Teaming Model",
+            "source": "arxiv:2604.23067",
+            "url": "https://arxiv.org/abs/2604.23067",
+            "year": 2026,
+        },
+        {
+            "id": "unified_prompt_optimization_clinical_qa",
+            "title": (
+                "Neural at ArchEHR-QA 2026: One Method Fits All: Unified "
+                "Prompt Optimization for Clinical QA over EHRs"
+            ),
+            "source": "arxiv:2605.10877",
+            "url": "https://arxiv.org/abs/2605.10877",
+            "year": 2026,
+        },
+    ]
+
+
+def _safe_slug(value: str) -> str:
+    slug = "".join(
+        char.lower() if char.isalnum() else "-"
+        for char in str(value).strip()
+    ).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug or "item"
+
+
+def _join_path_text(*parts: str) -> str:
+    return str(Path(str(parts[0])).joinpath(*(str(part) for part in parts[1:])))
+
+
 def _search_space_cardinality(search_space: Mapping[str, Sequence[Any]]) -> int:
     size = 1
     for choices in search_space.values():
@@ -12516,6 +12848,7 @@ __all__ = [
     "diagnose_text",
     "build_agent_control_plane_optimization_manifest",
     "build_autonomous_redteam_task_world_optimization_manifest",
+    "build_artifact_action_optimization_manifest",
     "build_artifact_optimization_suite",
     "build_agent_integration_optimization_manifest",
     "build_browser_cua_optimization_manifest",
@@ -12545,6 +12878,7 @@ __all__ = [
     "optimize_eval_suite_response",
     "optimize_agent_learning_suite",
     "optimize_agent_learning_suite_file",
+    "optimize_artifact_actions",
     "optimize_artifact_evidence",
     "optimize_agent_control_plane",
     "optimize_agent_integration",
