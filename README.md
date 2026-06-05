@@ -119,12 +119,16 @@ agent-learn doctor
 
 `agent-learn init` scaffolds runnable Agent Learning projects. The optimize
 preset generates a local task/world optimization manifest that patches both an
-agent action and a world-contract transition, then can be run with
-`agent-learn optimize`. The all preset generates a self-contained trinity
-workspace with local run, promptfoo-style eval, structured artifact eval,
-direct artifact-report eval, red-team, eval-suite optimization, task/world
-optimization, a saved task artifact fixture, and `manifests/suite.json` as the
-single CI entrypoint.
+agent action and a world-contract transition, then emits the full CLI lifecycle:
+dry-run, optimize, report, promote-to-regression, promotion report, replay, and
+replay report with JSON, JUnit, SARIF, and Markdown artifacts. The promoted
+manifest is written under `regressions/` with the public
+`agent-learning.run.v1` schema so it can be replayed by CLI users, SDK tests,
+CI, and Future AGI UI cards from the same evidence. The all preset generates a
+self-contained trinity workspace with local run, promptfoo-style eval,
+structured artifact eval, direct artifact-report eval, red-team, eval-suite
+optimization, task/world optimization, a saved task artifact fixture, and
+`manifests/suite.json` as the single CI entrypoint.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

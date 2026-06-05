@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import shlex
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from ._schema import normalize_public_payload
 from .config import current_config
 
 
@@ -86,7 +88,10 @@ def _simulate(args: Sequence[str]) -> int:
         cli = importlib.import_module("fi.simulate.cli")
     except Exception as exc:
         return _vendored_import_failed("agent-learn simulate", exc)
-    return int(cli.main(list(args)))
+    exit_code = int(cli.main(list(args)))
+    if exit_code == 0:
+        _normalize_agent_learning_simulate_side_effects(args)
+    return exit_code
 
 
 def _init(args: Sequence[str]) -> int:
@@ -161,7 +166,11 @@ def _init(args: Sequence[str]) -> int:
             name=str(parsed.name),
             required_env=required_env,
         )
-        _rewrite_init_readme_for_agent_learning(target_dir)
+        _rewrite_init_readme_for_agent_learning(
+            target_dir,
+            str(parsed.preset),
+            required_env,
+        )
     except Exception as exc:
         print(f"agent-learn init: {exc}", file=sys.stderr)
         return 1
@@ -178,7 +187,11 @@ def _init(args: Sequence[str]) -> int:
         for command in payload.get("init", {}).get("next_commands", [])
     ]
     next_commands = (
-        _agent_learning_init_next_commands(target_dir, str(parsed.preset))
+        _agent_learning_init_next_commands(
+            target_dir,
+            str(parsed.preset),
+            required_env,
+        )
         or next_commands
     )
     payload.setdefault("init", {})["next_commands"] = next_commands
@@ -1608,7 +1621,11 @@ def _agent_learning_suite_manifest(
     }
 
 
-def _agent_learning_init_next_commands(target_dir: Path, preset: str) -> List[str]:
+def _agent_learning_init_next_commands(
+    target_dir: Path,
+    preset: str,
+    required_env: Sequence[str] = (),
+) -> List[str]:
     preset = str(preset or "").lower().replace("_", "-")
     if preset == "all":
         suite_path = target_dir / "manifests" / "suite.json"
@@ -1624,8 +1641,82 @@ def _agent_learning_init_next_commands(target_dir: Path, preset: str) -> List[st
             )
         ]
     if preset == "optimize":
+        paths = _agent_learning_init_lifecycle_paths(target_dir)
+        required_env_args = _agent_learning_required_env_args(required_env)
         return [
-            f"agent-learn optimize {target_dir / 'manifests' / 'optimize.json'} --dry-run"
+            _agent_learning_shell_command(
+                "agent-learn",
+                "optimize",
+                paths["optimize_manifest"],
+                "--dry-run",
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "optimize",
+                paths["optimize_manifest"],
+                "--output",
+                paths["optimization"],
+                "--junit",
+                paths["optimization_junit"],
+                "--sarif",
+                paths["optimization_sarif"],
+                "--markdown",
+                paths["optimization_markdown"],
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "report",
+                paths["optimization"],
+                "--output",
+                paths["optimization_report"],
+                "--markdown",
+                paths["optimization_report_markdown"],
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "promote-to-regression",
+                paths["optimization"],
+                "--output",
+                paths["promotion"],
+                "--manifest",
+                paths["regression_manifest"],
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+                *required_env_args,
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "report",
+                paths["promotion"],
+                "--output",
+                paths["promotion_report"],
+                "--markdown",
+                paths["promotion_report_markdown"],
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "replay",
+                paths["regression_manifest"],
+                "--output",
+                paths["replay"],
+                "--junit",
+                paths["replay_junit"],
+                "--sarif",
+                paths["replay_sarif"],
+                "--markdown",
+                paths["replay_markdown"],
+            ),
+            _agent_learning_shell_command(
+                "agent-learn",
+                "report",
+                paths["replay"],
+                "--output",
+                paths["replay_report"],
+                "--markdown",
+                paths["replay_report_markdown"],
+            ),
         ]
     return []
 
@@ -1802,13 +1893,144 @@ def _slug(value: str, *, default: str) -> str:
     return slug or default
 
 
-def _rewrite_init_readme_for_agent_learning(target_dir: Path) -> None:
+def _agent_learning_init_lifecycle_paths(target_dir: Path) -> Dict[str, Path]:
+    artifacts = target_dir / "artifacts"
+    return {
+        "optimize_manifest": target_dir / "manifests" / "optimize.json",
+        "optimization": artifacts / "optimization.json",
+        "optimization_junit": artifacts / "optimization.junit.xml",
+        "optimization_sarif": artifacts / "optimization.sarif.json",
+        "optimization_markdown": artifacts / "optimization.md",
+        "optimization_report": artifacts / "optimization-report.json",
+        "optimization_report_markdown": artifacts / "optimization-report.md",
+        "promotion": artifacts / "promotion.json",
+        "promotion_report": artifacts / "promotion-report.json",
+        "promotion_report_markdown": artifacts / "promotion-report.md",
+        "regression_manifest": target_dir / "regressions" / "optimized-regression.json",
+        "replay": artifacts / "replay.json",
+        "replay_junit": artifacts / "replay.junit.xml",
+        "replay_sarif": artifacts / "replay.sarif.json",
+        "replay_markdown": artifacts / "replay.md",
+        "replay_report": artifacts / "replay-report.json",
+        "replay_report_markdown": artifacts / "replay-report.md",
+    }
+
+
+def _agent_learning_required_env_args(required_env: Sequence[str]) -> List[str]:
+    args: List[str] = []
+    for key in _unique_strings(required_env):
+        args.extend(["--required-env", key])
+    return args
+
+
+def _agent_learning_shell_command(*parts: Any) -> str:
+    return " ".join(shlex.quote(str(part)) for part in parts)
+
+
+def _normalize_agent_learning_simulate_side_effects(args: Sequence[str]) -> None:
+    arguments = [str(arg) for arg in args]
+    if not arguments:
+        return
+    command = arguments[0]
+    base_dir = _agent_learning_simulate_output_base_dir(arguments)
+    for raw_path in _agent_learning_option_values(arguments, "--output", "-o"):
+        _normalize_agent_learning_json_file(
+            _agent_learning_resolve_side_effect_path(raw_path, base_dir),
+        )
+    if command == "promote-to-regression":
+        for raw_path in _agent_learning_option_values(arguments, "--manifest"):
+            _normalize_agent_learning_json_file(
+                _agent_learning_resolve_side_effect_path(raw_path, base_dir),
+                forced_version=AGENT_LEARNING_RUN_KIND,
+            )
+
+
+def _agent_learning_simulate_output_base_dir(args: Sequence[str]) -> Path:
+    command = args[0] if args else ""
+    if command == "replay":
+        return Path.cwd()
+    if len(args) > 1:
+        return Path(args[1]).expanduser().resolve().parent
+    return Path.cwd()
+
+
+def _agent_learning_option_values(args: Sequence[str], *names: str) -> List[str]:
+    values: List[str] = []
+    index = 0
+    names_set = set(names)
+    while index < len(args):
+        item = args[index]
+        if item in names_set and index + 1 < len(args):
+            values.append(args[index + 1])
+            index += 2
+            continue
+        for name in names:
+            prefix = f"{name}="
+            if item.startswith(prefix):
+                values.append(item[len(prefix):])
+                break
+        index += 1
+    return values
+
+
+def _agent_learning_resolve_side_effect_path(raw_path: str, base_dir: Path) -> Path:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def _normalize_agent_learning_json_file(
+    path: Path,
+    *,
+    forced_version: Optional[str] = None,
+) -> None:
+    if not path.exists() or path.suffix.lower() in {".xml", ".md", ".markdown"}:
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    normalized = normalize_public_payload(payload)
+    if forced_version and isinstance(normalized, dict):
+        normalized["version"] = forced_version
+    if not isinstance(normalized, (dict, list)):
+        return
+    path.write_text(
+        json.dumps(normalized, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _rewrite_init_readme_for_agent_learning(
+    target_dir: Path,
+    preset: str,
+    required_env: Sequence[str],
+) -> None:
     readme = target_dir / "README.md"
     if not readme.exists():
         return
     content = readme.read_text(encoding="utf-8")
     content = content.replace("Generated by `agent-simulate init`.", "Generated by `agent-learn init`.")
     content = content.replace("`agent-simulate ", "`agent-learn ")
+    commands = _agent_learning_init_next_commands(target_dir, preset, required_env)
+    if commands:
+        section_title = (
+            "Optimization Lifecycle"
+            if str(preset or "").lower().replace("_", "-") == "optimize"
+            else "Agent Learning Entrypoint"
+        )
+        command_lines = "\n".join(f"- `{command}`" for command in commands)
+        content = (
+            content.rstrip()
+            + "\n\n"
+            + f"## {section_title}\n\n"
+            + command_lines
+            + "\n\n"
+            + "The lifecycle produces JSON, JUnit, SARIF, Markdown, promotion, "
+            + "and replay artifacts so CLI users, SDK tests, CI, and Future AGI "
+            + "UI cards can inspect the same evidence.\n"
+        )
     readme.write_text(content, encoding="utf-8")
 
 
@@ -1869,6 +2091,18 @@ def _as_list(value: Any) -> List[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _unique_strings(values: Sequence[Any]) -> List[str]:
+    seen = set()
+    unique: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def _resolve_output_path(value: str, base_dir: Path) -> Path:

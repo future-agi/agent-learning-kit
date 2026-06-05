@@ -4014,7 +4014,7 @@ def _persistent_state_optimization_regression_manifest(
     best_profile = _persistent_state_best_profile(environments)
     outcome = _persistent_state_regression_outcome()
     return {
-        "version": CLI_SCHEMA_VERSION,
+        "version": _promoted_regression_manifest_version(source),
         "name": manifest_name,
         "required_env": _unique_strings(required_env),
         "scenario": {
@@ -4555,7 +4555,10 @@ def _optimized_manifest_regression_manifest(
     manifest = copy.deepcopy(dict(source_manifest))
     manifest.pop("optimization", None)
     manifest = _deep_merge(manifest, copy.deepcopy(dict(best_config)))
-    manifest["version"] = CLI_SCHEMA_VERSION
+    manifest["version"] = _promoted_regression_manifest_version(
+        source,
+        source_manifest,
+    )
     manifest["name"] = manifest_name
     if required_env:
         manifest["required_env"] = _unique_strings(required_env)
@@ -4582,6 +4585,28 @@ def _optimized_manifest_regression_manifest(
         optimization=optimization,
     )
     return manifest
+
+
+def _promoted_regression_manifest_version(
+    source: Mapping[str, Any],
+    source_manifest: Optional[Mapping[str, Any]] = None,
+) -> str:
+    public_signals = [
+        source.get("kind"),
+        source.get("schema_version"),
+        source.get("version"),
+    ]
+    if isinstance(source_manifest, Mapping):
+        public_signals.extend(
+            [
+                source_manifest.get("kind"),
+                source_manifest.get("schema_version"),
+                source_manifest.get("version"),
+            ]
+        )
+    if any(str(value).startswith("agent-learning.") for value in public_signals):
+        return "agent-learning.run.v1"
+    return CLI_SCHEMA_VERSION
 
 
 def _annotate_optimized_manifest_regression(
@@ -4948,7 +4973,7 @@ def _regression_manifest(
     providers = _unique_strings(_coerce_list(source_redteam.get("providers"))) or ["local_cli"]
     frameworks = _unique_strings(_coerce_list(source_redteam.get("frameworks"))) or ["agent_simulate"]
     return {
-        "version": CLI_SCHEMA_VERSION,
+        "version": _promoted_regression_manifest_version(source),
         "name": manifest_name,
         "required_env": _unique_strings(required_env),
         "redteam": {
