@@ -873,6 +873,13 @@ def optimize_suite(
         payload["optimization"]["suite_optimization"] = artifact
     payload["summary"]["job_count"] = len(_suite_jobs(prepared))
     payload["summary"]["child_command_count"] = _suite_job_command_counts(prepared)
+    action_plan = _artifact_action_plan_card(payload)
+    if action_plan is not None:
+        payload["artifact_action_plan"] = action_plan
+        payload["optimization"]["artifact_action_plan"] = copy.deepcopy(action_plan)
+        payload["summary"]["artifact_action_best_action_id"] = action_plan.get(
+            "selected_action_id"
+        )
     return public_payload(payload, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
 
@@ -1434,6 +1441,151 @@ def _suite_job_command_counts(suite: Mapping[str, Any]) -> dict[str, int]:
         command = str(job.get("command") or "unknown")
         counts[command] = counts.get(command, 0) + 1
     return counts
+
+
+def _artifact_action_plan_card(result: Mapping[str, Any]) -> dict[str, Any] | None:
+    optimization = _as_mapping(result.get("optimization"))
+    history = [
+        _as_mapping(item)
+        for item in _as_list(optimization.get("history"))
+        if _as_mapping(item)
+    ]
+    candidate_records = [
+        record
+        for item in history
+        for record in _artifact_action_candidate_records(item)
+    ]
+    if not candidate_records:
+        return None
+    selected_action_id = _artifact_action_selected_id(optimization, candidate_records)
+    for record in candidate_records:
+        record["selected"] = bool(record.get("action_id") == selected_action_id)
+    selected = next(
+        (
+            record
+            for record in candidate_records
+            if record.get("action_id") == selected_action_id
+        ),
+        max(candidate_records, key=lambda record: float(record.get("score") or 0.0)),
+    )
+    return {
+        "kind": "artifact_action_plan",
+        "status": "selected" if selected_action_id else "observed",
+        "source": "agent_learning_suite_optimization",
+        "selected_action_id": selected.get("action_id"),
+        "selected_candidate_id": selected.get("candidate_id"),
+        "selected_score": selected.get("score"),
+        "selection_reason": _artifact_action_selection_reason(selected),
+        "candidate_count": len(candidate_records),
+        "candidate_score_lineage": candidate_records,
+        "search_paths": _as_string_list(result.get("summary", {}).get("search_paths")),
+        "source_manifest_path": optimization.get("source_manifest_path"),
+    }
+
+
+def _artifact_action_candidate_records(
+    history_item: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    report = _as_mapping(history_item.get("report"))
+    records: list[dict[str, Any]] = []
+    for child in _as_list(report.get("children") or report.get("jobs")):
+        child_item = _as_mapping(child)
+        if str(child_item.get("command") or "").replace("-", "_") != "action_run":
+            continue
+        action_result = _as_mapping(child_item.get("result"))
+        action_summary = _as_mapping(action_result.get("summary"))
+        action_id = str(
+            action_summary.get("action_id")
+            or _artifact_action_id_from_patch(history_item)
+            or child_item.get("id")
+            or ""
+        )
+        output_count = int(action_summary.get("output_count") or 0)
+        outputs_written_count = int(action_summary.get("outputs_written_count") or 0)
+        completion = _artifact_action_completion_rate(
+            action_summary,
+            output_count=output_count,
+            outputs_written_count=outputs_written_count,
+        )
+        evidence_depth = round(min(outputs_written_count / 4.0, 1.0), 4)
+        records.append(
+            {
+                "candidate_id": history_item.get("candidate_id"),
+                "action_id": action_id,
+                "action_label": action_summary.get("action_label"),
+                "source_card_path": action_summary.get("source_card_path"),
+                "score": history_item.get("score"),
+                "action_score": round((0.8 * completion) + (0.2 * evidence_depth), 4),
+                "status": action_result.get("status") or child_item.get("status"),
+                "exit_code": action_result.get("exit_code", child_item.get("exit_code")),
+                "output_count": output_count,
+                "outputs_written_count": outputs_written_count,
+                "output_completion_rate": completion,
+                "evidence_depth": evidence_depth,
+                "outputs_written": list(action_result.get("outputs_written") or []),
+                "outputs": [
+                    {
+                        "flag": _as_mapping(output).get("flag"),
+                        "path": _as_mapping(output).get("path"),
+                        "exists": _as_mapping(output).get("exists"),
+                    }
+                    for output in _as_list(action_result.get("outputs"))
+                    if _as_mapping(output)
+                ],
+                "command_args": list(action_result.get("command_args") or []),
+                "patch": copy.deepcopy(dict(history_item.get("patch") or {})),
+            }
+        )
+    return records
+
+
+def _artifact_action_completion_rate(
+    summary: Mapping[str, Any],
+    *,
+    output_count: int,
+    outputs_written_count: int,
+) -> float:
+    if summary.get("output_completion_rate") is not None:
+        return round(float(summary.get("output_completion_rate") or 0.0), 4)
+    if output_count:
+        return round(outputs_written_count / output_count, 4)
+    return 1.0
+
+
+def _artifact_action_selected_id(
+    optimization: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+) -> str | None:
+    best_config = _as_mapping(optimization.get("best_config"))
+    for job in _as_list(best_config.get("jobs")):
+        action_id = _as_mapping(job).get("action_id")
+        if action_id:
+            return str(action_id)
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda record: float(record.get("score") or 0.0))
+    return str(best.get("action_id")) if best.get("action_id") else None
+
+
+def _artifact_action_id_from_patch(history_item: Mapping[str, Any]) -> str | None:
+    patch = _as_mapping(history_item.get("patch") or history_item.get("candidate_patch"))
+    job = _as_mapping(patch.get("jobs.0"))
+    action_id = job.get("action_id")
+    return str(action_id) if action_id else None
+
+
+def _artifact_action_selection_reason(selected: Mapping[str, Any]) -> str:
+    action_id = selected.get("action_id") or "selected action"
+    status = selected.get("status") or "unknown"
+    output_count = selected.get("output_count")
+    outputs_written = selected.get("outputs_written_count")
+    completion = selected.get("output_completion_rate")
+    score = selected.get("score")
+    return (
+        f"Selected {action_id} because it finished with status {status}, "
+        f"score {score}, output completion {completion}, and "
+        f"{outputs_written}/{output_count} declared outputs written."
+    )
 
 
 def _suite_capability_summary(children: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

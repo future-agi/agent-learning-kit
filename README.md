@@ -184,7 +184,10 @@ recommended next action, execute it, and keep the action-run result inside one
 AgentOptimizer-backed suite search over `jobs.0`, so CLI or SDK users can let
 the optimizer choose between report, rerun, replay, repair, or follow-up
 optimization actions from a real artifact trajectory and still get child
-JSON/Markdown logs for the selected `action-run`.
+JSON/Markdown logs for the selected `action-run`. Suite optimization artifacts
+and reports also include an `artifact_action_plan` card with the selected
+action, candidate score lineage, output completion, evidence depth, generated
+files, and the selection reason for Future AGI UI/API rendering.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

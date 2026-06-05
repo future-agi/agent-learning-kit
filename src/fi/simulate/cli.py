@@ -2314,6 +2314,9 @@ def _report_result(
     optimizer_replay = _optimizer_replay_card(source, source_path=source_path)
     if optimizer_replay is not None:
         report_payload["optimizer_replay"] = optimizer_replay
+    artifact_action_plan = _artifact_action_plan_card(source)
+    if artifact_action_plan is not None:
+        report_payload["artifact_action_plan"] = artifact_action_plan
     replay_card = _replay_report_card(source, source_path=source_path)
     if replay_card is not None:
         report_payload["replay"] = replay_card
@@ -3311,6 +3314,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("optimization")
     if _has_optimization_replay_card(result):
         sections.append("optimization_replay")
+    if _has_artifact_action_plan_card(result):
+        sections.append("artifact_action_plan")
     if _has_harness_diagnosis_card(result, source_path=source_path):
         sections.append("harness_diagnosis")
     if result.get("baseline") is not None:
@@ -3364,6 +3369,8 @@ def _result_markdown(
         lines.extend(_optimization_markdown(result))
     if "optimization_replay" in sections:
         lines.extend(_optimization_replay_markdown(result))
+    if "artifact_action_plan" in sections:
+        lines.extend(_artifact_action_plan_markdown(result))
     if "harness_diagnosis" in sections:
         lines.extend(_harness_diagnosis_markdown(result, source_path=source_path))
     if "baseline" in sections:
@@ -5342,6 +5349,87 @@ def _has_optimization_replay_card(result: Mapping[str, Any]) -> bool:
         if isinstance(metadata, Mapping) and isinstance(metadata.get("regression"), Mapping):
             return True
     return False
+
+
+def _artifact_action_plan_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    existing = result.get("artifact_action_plan")
+    if isinstance(existing, Mapping):
+        return copy.deepcopy(dict(existing))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping) and isinstance(
+        optimization.get("artifact_action_plan"),
+        Mapping,
+    ):
+        return copy.deepcopy(dict(optimization["artifact_action_plan"]))
+    report = result.get("report")
+    if isinstance(report, Mapping) and isinstance(
+        report.get("artifact_action_plan"),
+        Mapping,
+    ):
+        return copy.deepcopy(dict(report["artifact_action_plan"]))
+    return None
+
+
+def _has_artifact_action_plan_card(result: Mapping[str, Any]) -> bool:
+    return _artifact_action_plan_card(result) is not None
+
+
+def _artifact_action_plan_markdown(result: Mapping[str, Any]) -> List[str]:
+    card = _artifact_action_plan_card(result)
+    if not isinstance(card, Mapping):
+        return []
+    rows = [
+        ("Selected action", card.get("selected_action_id")),
+        ("Selected candidate", card.get("selected_candidate_id")),
+        ("Selected score", card.get("selected_score")),
+        ("Candidate count", card.get("candidate_count")),
+        ("Reason", card.get("selection_reason")),
+    ]
+    lines = [
+        "## Artifact Action Plan",
+        "",
+        *_key_value_table(rows),
+        "",
+    ]
+    candidate_rows = []
+    for item in _coerce_list(card.get("candidate_score_lineage")):
+        record = dict(item) if isinstance(item, Mapping) else {}
+        if not record:
+            continue
+        candidate_rows.append(
+            [
+                record.get("action_id"),
+                record.get("selected"),
+                record.get("score"),
+                record.get("action_score"),
+                record.get("status"),
+                record.get("output_completion_rate"),
+                record.get("outputs_written_count"),
+                record.get("output_count"),
+            ]
+        )
+    if candidate_rows:
+        lines.extend(
+            [
+                "### Action Candidates",
+                "",
+                *_markdown_table(
+                    [
+                        "Action",
+                        "Selected",
+                        "Score",
+                        "Action score",
+                        "Status",
+                        "Completion",
+                        "Written",
+                        "Declared",
+                    ],
+                    candidate_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
 
 
 def _has_harness_diagnosis_card(

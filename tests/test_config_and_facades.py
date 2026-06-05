@@ -3268,6 +3268,25 @@ def test_sdk_artifact_action_optimization_example_runs(monkeypatch, tmp_path):
     best_job = result["optimization"]["best_config"]["jobs"][0]
     assert best_job["command"] == "action-run"
     assert best_job["action_id"] == "rerun_framework_certification"
+    action_plan = result["artifact_action_plan"]
+    assert action_plan["kind"] == "artifact_action_plan"
+    assert action_plan["selected_action_id"] == "rerun_framework_certification"
+    assert action_plan["selected_score"] == pytest.approx(1.0)
+    assert action_plan["candidate_count"] == 2
+    assert [
+        item["action_id"]
+        for item in action_plan["candidate_score_lineage"]
+    ] == [
+        "report_framework_readiness",
+        "rerun_framework_certification",
+    ]
+    selected_lineage = next(
+        item
+        for item in action_plan["candidate_score_lineage"]
+        if item["selected"]
+    )
+    assert selected_lineage["outputs_written_count"] == 4
+    assert selected_lineage["output_completion_rate"] == pytest.approx(1.0)
     assert result["optimization"]["suite_optimization"]["source"] == (
         "agent_learning_suite"
     )
@@ -6049,6 +6068,21 @@ def test_sdk_framework_certification_simulation_example_runs(
     best_action_job = action_opt["optimization"]["best_config"]["jobs"][0]
     assert best_action_job["command"] == "action-run"
     assert best_action_job["action_id"] == "rerun_framework_certification"
+    action_plan = action_opt["artifact_action_plan"]
+    assert action_plan["selected_action_id"] == "rerun_framework_certification"
+    assert action_plan["candidate_count"] == 2
+    assert "4/4 declared outputs written" in action_plan["selection_reason"]
+    assert action_plan["candidate_score_lineage"][0]["action_id"] == (
+        "report_framework_readiness"
+    )
+    assert action_plan["candidate_score_lineage"][0]["outputs_written_count"] == 2
+    assert action_plan["candidate_score_lineage"][1]["action_id"] == (
+        "rerun_framework_certification"
+    )
+    assert action_plan["candidate_score_lineage"][1]["outputs_written_count"] == 4
+    assert action_opt["optimization"]["artifact_action_plan"]["selected_action_id"] == (
+        "rerun_framework_certification"
+    )
     assert action_opt["optimization"]["suite_optimization"]["source"] == (
         "agent_learning_suite"
     )
@@ -6062,6 +6096,29 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert (
         "sdk-framework-certification-action-optimization"
         in action_opt_markdown_path.read_text(encoding="utf-8")
+    )
+    action_opt_report_path = tmp_path / (
+        "sdk-framework-certification-action-optimization-report.json"
+    )
+    action_opt_report_md_path = tmp_path / (
+        "sdk-framework-certification-action-optimization-report.md"
+    )
+    assert main([
+        "report",
+        str(action_opt_output_path),
+        "--output",
+        str(action_opt_report_path),
+        "--markdown",
+        str(action_opt_report_md_path),
+    ]) == 0
+    action_opt_report = json.loads(action_opt_report_path.read_text(encoding="utf-8"))
+    assert "artifact_action_plan" in action_opt_report["summary"]["sections"]
+    report_action_plan = action_opt_report["report"]["artifact_action_plan"]
+    assert report_action_plan["selected_action_id"] == (
+        "rerun_framework_certification"
+    )
+    assert "## Artifact Action Plan" in action_opt_report_md_path.read_text(
+        encoding="utf-8"
     )
     event_names = {event["name"] for event in report_case["events"]}
     assert {
