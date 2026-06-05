@@ -39,6 +39,7 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 
 def test_facades_expose_unified_agent_learning_modules():
+    import agent_learning
     from agent_learning import evals, optimize, redteam, simulate, suite
 
     fi_simulate = importlib.import_module("fi.simulate")
@@ -47,6 +48,16 @@ def test_facades_expose_unified_agent_learning_modules():
     fi_scanners = importlib.import_module("fi.evals.guardrails.scanners")
     fi_code_security = importlib.import_module("fi.evals.metrics.code_security")
 
+    assert {"evals", "optimize", "redteam", "simulate", "suite"} <= set(
+        agent_learning.__all__
+    )
+    assert {name for name in dir(agent_learning) if name in agent_learning.__all__} >= {
+        "evals",
+        "optimize",
+        "redteam",
+        "simulate",
+        "suite",
+    }
     assert set(fi_simulate.__all__) <= set(simulate.__all__)
     assert set(fi_guardrails.__all__) <= set(redteam.__all__)
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
