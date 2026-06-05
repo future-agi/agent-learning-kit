@@ -186,6 +186,7 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_evals = _assert_vendored_module("fi.evals")
     fi_autoeval = _assert_vendored_module("fi.evals.autoeval")
     fi_local_evals = _assert_vendored_module("fi.evals.local")
+    fi_metrics = _assert_vendored_module("fi.evals.metrics")
     fi_opt = _assert_vendored_module("fi.opt")
     fi_optimizers = _assert_vendored_module("fi.opt.optimizers")
     fi_opt_base = _assert_vendored_module("fi.opt.base")
@@ -193,6 +194,7 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_opt_generators = _assert_vendored_module("fi.opt.generators")
     fi_opt_simulate = _assert_vendored_module("fi.opt.integrations.simulate")
     fi_agent_metrics = _assert_vendored_module("fi.evals.metrics.agents")
+    fi_hallucination = _assert_vendored_module("fi.evals.metrics.hallucination")
 
     assert set(fi_evals.__all__) <= set(agent_evals.__all__)
     for name in (
@@ -238,6 +240,47 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "LocalLLMFactory",
     ):
         assert getattr(agent_evals, name) is getattr(fi_local_evals, name)
+    for name in (
+        "BLEUScore",
+        "ROUGEScore",
+        "LevenshteinSimilarity",
+        "Regex",
+        "Contains",
+        "ContainsAny",
+        "LengthBetween",
+        "JsonSchema",
+        "ContainsJson",
+        "CustomLLMJudge",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_metrics, name)
+    for name in (
+        "AgentTrajectoryInput",
+        "AgentStep",
+        "ToolCall",
+        "TaskDefinition",
+        "StepEfficiency",
+        "TrajectoryScore",
+        "GoalProgress",
+        "ActionSafety",
+        "ReasoningQuality",
+        "normalize_agent_report",
+        "replay_domain_package_registry",
+        "select_domain_package_registry_replay_pack",
+        "validate_domain_package_registry",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_agent_metrics, name)
+    for name in (
+        "HallucinationDetector",
+        "HallucinationScore",
+        "check_entailment",
+        "check_contradiction",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_hallucination, name)
+    contains = agent_evals.Contains({"keyword": "approved"})
+    contains_result = contains.evaluate(
+        [{"response": "refund approved after policy check"}]
+    )
+    assert contains_result.eval_results[0].output == pytest.approx(1.0)
     assert set(fi_opt.__all__) <= set(agent_optimize.__all__)
     assert set(fi_optimizers.__all__) <= set(agent_optimize.__all__)
     for name in (

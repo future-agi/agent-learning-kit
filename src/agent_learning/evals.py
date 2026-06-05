@@ -170,10 +170,84 @@ _LOCAL_EVAL_EXPORT_NAMES = (
     "LocalLLMFactory",
 )
 
+_METRIC_EXPORT_NAMES = (
+    "AggregatedMetric",
+    "BLEUScore",
+    "ROUGEScore",
+    "LevenshteinSimilarity",
+    "EmbeddingSimilarity",
+    "NumericSimilarity",
+    "SemanticListContains",
+    "RecallScore",
+    "Regex",
+    "Contains",
+    "ContainsAny",
+    "ContainsAll",
+    "ContainsNone",
+    "Equals",
+    "StartsWith",
+    "EndsWith",
+    "LengthLessThan",
+    "LengthGreaterThan",
+    "LengthBetween",
+    "ContainsEmail",
+    "ContainsLink",
+    "JsonSchema",
+    "ContainsJson",
+    "CustomLLMJudge",
+)
+
+_AGENT_METRIC_EXPORT_NAMES = (
+    "AgentTrajectoryInput",
+    "AgentStep",
+    "ToolCall",
+    "TaskDefinition",
+    "TrajectoryAnalysis",
+    "StepEfficiency",
+    "ToolSelectionAccuracy",
+    "TrajectoryScore",
+    "GoalProgress",
+    "ActionSafety",
+    "ReasoningQuality",
+    "analyze_domain_package_registry_coverage",
+    "diff_domain_package_registries",
+    "generate_domain_package_registry_fixtures",
+    "generate_domain_package_registry_mutation_pack",
+    "normalize_agent_report",
+    "replay_domain_package_registry",
+    "select_domain_package_registry_replay_pack",
+    "validate_domain_package_registry",
+)
+
+_HALLUCINATION_EXPORT_NAMES = (
+    "HallucinationInput",
+    "ClaimExtractionInput",
+    "FactualConsistencyInput",
+    "Claim",
+    "NLIResult",
+    "HallucinationResult",
+    "Faithfulness",
+    "ClaimSupport",
+    "FactualConsistency",
+    "ContradictionDetection",
+    "HallucinationScore",
+    "NLILabel",
+    "check_entailment",
+    "check_contradiction",
+    "HallucinationSentinel",
+    "HallucinationDetector",
+)
+
 _EVAL_EXPORTS = {name: "fi.evals" for name in _FI_EVAL_EXPORT_NAMES}
 _EVAL_EXPORTS.update({name: "fi.evals.autoeval" for name in _AUTOEVAL_EXPORT_NAMES})
 _EVAL_EXPORTS.update({name: "fi.evals.local" for name in _LOCAL_EVAL_EXPORT_NAMES})
 _EVAL_EXPORTS["AgentReportEvaluator"] = "fi.evals.metrics.agents"
+for _name in _METRIC_EXPORT_NAMES:
+    _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics")
+for _name in _AGENT_METRIC_EXPORT_NAMES:
+    _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics.agents")
+for _name in _HALLUCINATION_EXPORT_NAMES:
+    _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics.hallucination")
 
 
 def _evals() -> Any:
