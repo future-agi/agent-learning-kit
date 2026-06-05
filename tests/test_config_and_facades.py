@@ -61,6 +61,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_browser_cua_run_manifest is not None
     assert simulate.write_manifest_file is not None
     assert simulate.build_agent_integration_run_manifest is not None
+    assert simulate.build_workspace_observability_run_manifest is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
     assert redteam.build_redteam_manifest is not None
@@ -3287,6 +3288,108 @@ def test_sdk_workspace_observability_optimization_example_runs(
     assert replay_summary["case_count"] == 2
     assert replay_summary["failed_case_count"] == 1
     assert replay_summary["missing_trace_signals"] == []
+
+
+def test_sdk_workspace_observability_simulation_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_SIMULATION_KEY",
+        "real-local-sdk-workspace-observability-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_workspace_observability_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_workspace_observability_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["min_turns"] == 4
+    assert manifest["simulation"]["max_turns"] == 4
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "workspace_run_manifest",
+        "observability_replay",
+    ]
+    workspace_data = manifest["simulation"]["environments"][0]["data"]
+    assert workspace_data["repository"]["provider"] == "github"
+    assert workspace_data["checkout"]["commit_sha"] == "abc123def4567890"
+    assert workspace_data["security"]["secrets_redacted"] is True
+    replay_data = manifest["simulation"]["environments"][1]["data"]
+    assert replay_data["source"] == "futureagi"
+    assert len(replay_data["cases"]) == 2
+    quality = manifest["evaluation"]["agent_report"]["config"][
+        "workspace_run_quality"
+    ]
+    assert quality["required_command_ids"] == [
+        "checkout",
+        "unit_tests",
+        "local_simulation",
+        "agent_report_eval",
+        "red_team_garak",
+        "red_team_pyrit",
+    ]
+
+    output_path = tmp_path / "sdk-workspace-observability-simulation-result.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    written_result = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-workspace-observability-simulation"
+    assert written_result["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-workspace-observability-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "workspace_run_coverage",
+        "workspace_run_quality",
+        "observability_replay_coverage",
+        "observability_replay_quality",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"workspace_run_manifest", "observability_replay_pack"}
+    workspace_summary = state["workspace_run_manifest"]["summary"]
+    assert workspace_summary["failed_command_count"] == 0
+    assert workspace_summary["open_red_team_finding_count"] == 0
+    assert workspace_summary["secret_leak_count"] == 0
+    assert workspace_summary["missing_required_evidence"] == []
+    assert workspace_summary["ui_verification_count"] == 1
+    replay_summary = state["observability_replay_pack"]["summary"]
+    assert replay_summary["case_count"] == 2
+    assert replay_summary["failed_case_count"] == 1
+    assert replay_summary["missing_trace_signals"] == []
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "workspace_run_manifest_ready",
+        "workspace_run_status",
+        "workspace_run_commands_listed",
+        "workspace_run_command_inspected",
+        "workspace_run_artifacts_listed",
+        "workspace_red_team_runs_listed",
+        "observability_replay_status",
+        "observability_replay_cases_listed",
+        "observability_replay_case_inspected",
+    } <= event_names
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

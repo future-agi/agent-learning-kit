@@ -627,6 +627,92 @@ def build_agent_integration_run_manifest(
     return manifest
 
 
+def build_workspace_observability_run_manifest(
+    *,
+    name: str,
+    workspace: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    repository_url: str = "https://github.com/futureagi/support-agent",
+    commit_sha: str = "abc123def4567890",
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct Future AGI workspace/observability simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not repository_url:
+        raise ValueError("repository_url is required")
+    if not commit_sha:
+        raise ValueError("commit_sha is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_workspace_observability_optimization_manifest(
+            name=name,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            repository_url=repository_url,
+            commit_sha=commit_sha,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    environments = (
+        [_workspace_observability_environment(item) for item in workspace]
+        if workspace is not None
+        else copy.deepcopy(default_environments)
+    )
+    if not environments:
+        raise ValueError("workspace must contain at least one environment")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_workspace_observability_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -1412,6 +1498,20 @@ def _agent_integration_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     return {"type": "agent_integration", "data": copied}
 
 
+def _workspace_observability_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"workspace_run_manifest", "observability_replay"}:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("workspace_run") is not None:
+        return {"type": "workspace_run_manifest", "data": copied["workspace_run"]}
+    if copied.get("observability_replay") is not None:
+        return {"type": "observability_replay", "data": copied["observability_replay"]}
+    if copied.get("cases") is not None:
+        return {"type": "observability_replay", "data": copied}
+    return {"type": "workspace_run_manifest", "data": copied}
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -1478,6 +1578,7 @@ __all__ = [
     "build_multi_framework_suite_manifest",
     "build_realtime_run_manifest",
     "build_task_run_manifest",
+    "build_workspace_observability_run_manifest",
     "compare_result_files",
     "compare_results",
     "create_baseline",

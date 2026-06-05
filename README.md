@@ -441,6 +441,10 @@ AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_observability_optimization.py \
   artifacts/sdk-workspace-observability-optimization.json
 
+AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_workspace_observability_simulation.py \
+  artifacts/sdk-workspace-observability-simulation.json
+
 AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_optimization.py \
   artifacts/sdk-framework-certification-optimization.json
@@ -541,6 +545,11 @@ The same evidence loop is available from Python through
 `examples/sdk_workspace_observability_optimization.py`, which generate the
 workspace-run plus observability-replay candidates and search them as one
 `simulation.environments` bundle.
+For direct, non-optimizer simulation,
+`simulate.build_workspace_observability_run_manifest()` and
+`examples/sdk_workspace_observability_simulation.py` run the verified Future AGI
+workspace and observability replay evidence as a normal `agent-learning.run.v1`
+artifact.
 
 The `agent_integration_optimization.json` example optimizes provider and
 framework integration coverage for the Future AGI UI/observability/evals layer.
