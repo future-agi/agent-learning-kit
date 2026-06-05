@@ -465,6 +465,108 @@ def test_agent_learn_init_optimize_scaffold_uses_unified_cli(
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
 
 
+def test_agent_learn_init_all_scaffold_runs_trinity_suite(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_LEARNING_INIT_ALL_KEY", "real-local-init-all-key")
+    project_dir = tmp_path / "agent-learning-all-project"
+    init_output = tmp_path / "init-all.json"
+    suite_output = project_dir / "artifacts" / "suite.json"
+    suite_junit = project_dir / "artifacts" / "suite.junit.xml"
+    suite_sarif = project_dir / "artifacts" / "suite.sarif.json"
+    suite_markdown = project_dir / "artifacts" / "suite.md"
+
+    exit_code = main([
+        "init",
+        str(project_dir),
+        "--preset",
+        "all",
+        "--name",
+        "refund-agent",
+        "--required-env",
+        "AGENT_LEARNING_INIT_ALL_KEY",
+        "--force",
+        "--output",
+        str(init_output),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(init_output.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.init.v1"
+    assert payload["summary"]["files_written_count"] == 12
+    assert payload["init"]["next_commands"] == [
+        (
+            f"agent-learn suite {project_dir / 'manifests' / 'suite.json'} "
+            f"--output {project_dir / 'artifacts' / 'suite.json'} "
+            f"--junit {project_dir / 'artifacts' / 'suite.junit.xml'} "
+            f"--sarif {project_dir / 'artifacts' / 'suite.sarif.json'} "
+            f"--markdown {project_dir / 'artifacts' / 'suite.md'}"
+        )
+    ]
+    assert {
+        "run.json",
+        "redteam.json",
+        "optimize.json",
+        "eval.json",
+        "artifact_task_eval_suite.json",
+        "artifact_task_eval_config.json",
+        "eval_suite_optimization.json",
+        "suite.json",
+    } <= {
+        path.name
+        for path in (project_dir / "manifests").iterdir()
+    }
+    artifact_suite = json.loads(
+        (project_dir / "manifests" / "artifact_task_eval_suite.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert {item["type"] for item in artifact_suite["tests"][0]["assert"]} == {
+        "json_path_equals",
+        "json_path_gte",
+    }
+
+    exit_code = main([
+        "suite",
+        str(project_dir / "manifests" / "suite.json"),
+        "--output",
+        str(suite_output),
+        "--junit",
+        str(suite_junit),
+        "--sarif",
+        str(suite_sarif),
+        "--markdown",
+        str(suite_markdown),
+    ])
+
+    assert exit_code == 0
+    suite = json.loads(suite_output.read_text(encoding="utf-8"))
+    assert suite["kind"] == "agent-learning.suite.v1"
+    assert suite["status"] == "passed"
+    assert suite["summary"]["score"] == pytest.approx(1.0)
+    assert suite["summary"]["job_count"] == 7
+    assert suite["summary"]["passed_count"] == 7
+    assert suite["summary"]["failed_count"] == 0
+    assert suite["summary"]["capability_gate_passed"] is True
+    assert {
+        child["kind"]
+        for child in suite["children"]
+    } == {
+        "agent-learning.run.v1",
+        "agent-learning.eval.v1",
+        "agent-learning.artifact-evaluation.v1",
+        "agent-learning.redteam.v1",
+        "agent-learning.eval-optimization.v1",
+        "agent-learning.optimization.v1",
+    }
+    assert 'failures="0"' in suite_junit.read_text(encoding="utf-8")
+    assert json.loads(suite_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
+    assert "refund-agent-trinity-suite" in suite_markdown.read_text(
+        encoding="utf-8",
+    )
+
+
 def test_world_framework_memory_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,
