@@ -79,6 +79,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_REPORT_REPAIR_OPT_EXAMPLE_KEY",
         ),
         (
+            "optimize",
+            "framework_import_repair_optimization.json",
+            "agent-learning.optimization.v1",
+            "AGENT_LEARNING_FRAMEWORK_IMPORT_REPAIR_OPT_EXAMPLE_KEY",
+        ),
+        (
             "optimize-eval",
             "eval_suite_optimization.json",
             "agent-learning.eval-optimization.v1",
@@ -1792,6 +1798,88 @@ def test_report_repair_optimization_example_scores_simulation_evidence(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "report-repair-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_framework_import_repair_optimization_example_scores_import_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_FRAMEWORK_IMPORT_REPAIR_OPT_EXAMPLE_KEY",
+        "real-local-framework-import-repair-opt-key",
+    )
+
+    output_path = tmp_path / "framework-import-repair-optimization.json"
+    junit_path = tmp_path / "framework-import-repair-optimization.junit.xml"
+    sarif_path = tmp_path / "framework-import-repair-optimization.sarif.json"
+    markdown_path = tmp_path / "framework-import-repair-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "framework_import_repair_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert payload["summary"]["evaluation_passed"] is True
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    metrics = best_history["metrics"]
+    for metric in (
+        "tool_selection_accuracy",
+        "framework_import_coverage",
+        "framework_import_quality",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"framework_import_manifest"}
+    summary = state["framework_import_manifest"]["summary"]
+    assert summary["source_count"] == 24
+    assert summary["passed_source_count"] == 24
+    assert summary["failed_source_count"] == 0
+    assert summary["missing_required_frameworks"] == []
+    assert summary["missing_required_export_types"] == []
+    assert summary["missing_required_signals"] == []
+    assert summary["observed_frameworks"] == [
+        "langchain",
+        "langgraph",
+        "livekit",
+        "pipecat",
+    ]
+    assert summary["observed_export_types"] == [
+        "capability_matrix",
+        "event_stream",
+        "lifecycle",
+        "portability_matrix",
+        "probe_suite",
+        "trace_export",
+    ]
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "framework-import-repair-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 

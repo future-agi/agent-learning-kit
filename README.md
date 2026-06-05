@@ -81,6 +81,8 @@ agent-learn optimize examples/browser_cua_optimization.json \
   --output artifacts/browser-cua-optimization.json
 agent-learn optimize examples/framework_certification_optimization.json \
   --output artifacts/framework-certification-optimization.json
+agent-learn optimize examples/framework_import_repair_optimization.json \
+  --output artifacts/framework-import-repair-optimization.json
 agent-learn optimize examples/autonomous_redteam_task_world_optimization.json \
   --output artifacts/autonomous-redteam-task-world-optimization.json
 agent-learn optimize examples/multimodal_image_optimization.json \
@@ -673,6 +675,19 @@ our own optimizer-native simulation evidence scorer. The same repair search is
 available from Python through
 `optimize.build_report_repair_optimization_manifest()` and
 `examples/sdk_report_repair_optimization.py`.
+
+The `framework_import_repair_optimization.json` example optimizes BYO
+framework/provider import readiness before Future AGI exposes the agent through
+UI observability, evals, simulation, red-team, and optimization workflows. It
+scores normalized import evidence directly, then selects the candidate whose
+target, adapter, source coverage, trace/event/lifecycle/capability/probe/
+portability exports, observability hooks, artifacts, and failed-source gaps all
+close. The design builds on 2026 harness optimization, runtime-semantics,
+trace-provenance, and causal-repair research, then adds our own deterministic
+framework import readiness contract. The same repair search is available from
+Python through
+`optimize.build_framework_import_repair_optimization_manifest()` and
+`examples/sdk_framework_import_repair_optimization.py`.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It

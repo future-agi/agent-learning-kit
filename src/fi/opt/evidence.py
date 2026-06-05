@@ -10,6 +10,7 @@ from .targets import AgentCandidate, CandidateEvaluation
 DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "tool_coverage": 1.0,
     "framework_trace": 2.0,
+    "framework_import": 2.0,
     "runtime_semantics": 1.0,
     "world_contract": 3.0,
     "world_orchestration_replay": 3.0,
@@ -28,8 +29,9 @@ def score_simulation_evidence(
 
     The scorer intentionally stays deterministic. It consumes the environment
     evidence emitted by simulate engines (``metadata.environment_state``) and
-    turns framework trace, runtime semantic, memory-lineage, orchestration, tool,
-    and world-contract evidence into a single optimizer-grade score.
+    turns framework trace, framework-import readiness, runtime semantic,
+    memory-lineage, orchestration, tool, and world-contract evidence into a
+    single optimizer-grade score.
     """
 
     cfg = copy.deepcopy(dict(config or {}))
@@ -70,6 +72,15 @@ def score_simulation_evidence(
         )
         if runtime_component is not None:
             components.append(runtime_component)
+
+    if _should_score("framework_import", layers, env_states, cfg):
+        components.append(
+            _score_framework_import_manifest(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
 
     if _should_score("world", layers, env_states, cfg):
         components.append(
@@ -138,6 +149,7 @@ def score_simulation_evidence(
                     "CausalFlow 2026: failed traces should produce minimal, validated repairs.",
                     "AgentTrace/provenance 2026: process evidence beats final-answer-only scoring.",
                     "Runtime-persistence 2026: framework runtime semantics are part of trace validity.",
+                    "VeRO 2026: harness optimization needs versioned rewards and structured observations.",
                 ],
             }
         },
@@ -302,6 +314,85 @@ def _score_runtime_semantics(
             "candidate_method": method,
             "expected_input_mode": contract.get("input_mode"),
             "candidate_input_mode": input_mode,
+        },
+    }
+
+
+def _score_framework_import_manifest(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "framework_import_manifest")
+    if not payload:
+        return _missing_component(
+            "framework_import",
+            "No framework_import_manifest environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("framework_import_quality"),
+        manifest_config.get("framework_import_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    signals = {_norm(item) for item in _as_list(payload.get("signals")) if _norm(item)}
+    observed = _framework_import_observed(summary, signals)
+
+    required_import = {
+        _norm(item)
+        for item in _configured_list("required_framework_import", cfg, manifest_config)
+        if _norm(item)
+    }
+    coverage_matched = sorted(required_import & observed)
+    coverage_missing = sorted(required_import - observed)
+    coverage_score = (
+        len(coverage_matched) / len(required_import)
+        if required_import
+        else (1.0 if observed else 0.0)
+    )
+
+    checks: list[dict[str, Any]] = []
+    _append_framework_import_count_checks(checks, summary, quality)
+    _append_framework_import_boolean_checks(checks, summary, quality)
+    _append_framework_import_required_checks(
+        checks,
+        summary,
+        quality=quality,
+        payload=payload,
+    )
+    quality_score = (
+        sum(1 for check in checks if check["match"]) / len(checks)
+        if checks
+        else 1.0
+    )
+
+    blocking_gaps = {
+        "missing_required_sources": _as_list(summary.get("missing_required_sources")),
+        "missing_required_frameworks": _as_list(summary.get("missing_required_frameworks")),
+        "missing_required_export_types": _as_list(summary.get("missing_required_export_types")),
+        "missing_required_signals": _as_list(summary.get("missing_required_signals")),
+        "failed_sources": _as_list(summary.get("failed_sources")),
+    }
+    gap_count = sum(len(values) for values in blocking_gaps.values()) + len(
+        coverage_missing
+    )
+    gap_score = 1.0 if gap_count == 0 else 0.0
+    score = round(0.35 * coverage_score + 0.45 * quality_score + 0.20 * gap_score, 4)
+    return {
+        "name": "framework_import",
+        "score": score,
+        "reason": (
+            "framework import evidence is portable and gap-free"
+            if score >= 0.99
+            else "framework import evidence incomplete"
+        ),
+        "details": {
+            "matched_required": coverage_matched,
+            "missing_required": coverage_missing,
+            "checks": checks,
+            "blocking_gaps": blocking_gaps,
+            "summary": copy.deepcopy(summary),
         },
     }
 
@@ -555,15 +646,31 @@ def _should_score(
         return _norm(layer) in explicit
     aliases = {
         "framework": {"framework", "runtime", "integration"},
+        "framework_import": {
+            "framework_import",
+            "import",
+            "import_manifest",
+            "byo_framework",
+            "byo_framework_import",
+        },
         "world": {"world", "environment"},
         "orchestration": {"orchestration", "multi_agent"},
         "memory": {"memory", "retrieval"},
     }
+    scoring_layers = {_norm(item) for item in _as_list(cfg.get("layers"))}
+    if scoring_layers:
+        return bool(scoring_layers & aliases.get(layer, {layer}))
     if layers & aliases.get(layer, {layer}):
         return True
     keys = _environment_keys(env_states)
     if layer == "framework":
         return "framework_trace" in keys
+    if layer == "framework_import":
+        return (
+            "framework_import_manifest" in keys
+            or bool(cfg.get("framework_import_quality"))
+            or bool(cfg.get("required_framework_import"))
+        )
     if layer == "world":
         return "world_contract" in keys
     if layer == "orchestration":
@@ -571,6 +678,167 @@ def _should_score(
     if layer == "memory":
         return "agent_memory_lineage" in keys
     return False
+
+
+def _framework_import_observed(
+    summary: Mapping[str, Any],
+    signals: set[str],
+) -> set[str]:
+    observed = set(signals)
+    for key in (
+        "observed_frameworks",
+        "observed_export_types",
+        "observed_signals",
+        "source_keys",
+    ):
+        observed.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+    for boolean_key, signal in (
+        ("source_count", "source"),
+        ("passed_source_count", "passed_source"),
+        ("has_target", "target"),
+        ("has_adapter", "adapter"),
+        ("has_trace_export", "trace_export"),
+        ("has_event_stream", "event_stream"),
+        ("has_lifecycle", "lifecycle"),
+        ("has_capability_matrix", "capability_matrix"),
+        ("has_probe_suite", "probe_suite"),
+        ("has_portability_matrix", "portability_matrix"),
+        ("has_observability", "observability"),
+        ("has_artifacts", "artifact"),
+    ):
+        if summary.get(boolean_key):
+            observed.add(signal)
+    if summary:
+        observed.add("framework_import")
+        observed.add("framework_import_manifest")
+    return {item for item in observed if item}
+
+
+def _append_framework_import_count_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for requirement, observed_key in (
+        ("min_source_count", "source_count"),
+        ("min_passed_sources", "passed_source_count"),
+        ("min_artifact_count", "artifact_count"),
+        ("min_observability_hooks", "observability_hook_count"),
+    ):
+        minimum = _int_or_none(quality.get(requirement))
+        if minimum is None:
+            continue
+        actual = int(summary.get(observed_key, 0) or 0)
+        checks.append(
+            {
+                "check": requirement,
+                "expected": minimum,
+                "actual": actual,
+                "match": actual >= minimum,
+            }
+        )
+    maximum = _int_or_none(quality.get("max_failed_sources"))
+    if maximum is not None:
+        actual = int(summary.get("failed_source_count", 0) or 0)
+        checks.append(
+            {
+                "check": "max_failed_sources",
+                "expected": maximum,
+                "actual": actual,
+                "match": actual <= maximum,
+            }
+        )
+
+
+def _append_framework_import_boolean_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for requirement, summary_key in (
+        ("require_target", "has_target"),
+        ("require_adapter", "has_adapter"),
+        ("require_trace_export", "has_trace_export"),
+        ("require_event_stream", "has_event_stream"),
+        ("require_lifecycle", "has_lifecycle"),
+        ("require_capability_matrix", "has_capability_matrix"),
+        ("require_probe_suite", "has_probe_suite"),
+        ("require_portability_matrix", "has_portability_matrix"),
+        ("require_observability", "has_observability"),
+        ("require_artifacts", "has_artifacts"),
+    ):
+        if requirement not in quality:
+            continue
+        expected = bool(quality.get(requirement))
+        actual = bool(summary.get(summary_key))
+        checks.append(
+            {
+                "check": requirement,
+                "expected": expected,
+                "actual": actual,
+                "match": actual is expected,
+            }
+        )
+
+
+def _append_framework_import_required_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    *,
+    quality: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    requirement_specs = (
+        (
+            "required_sources",
+            "sources",
+            "source_keys",
+            "required_source",
+        ),
+        (
+            "required_frameworks",
+            "frameworks",
+            "observed_frameworks",
+            "required_framework",
+        ),
+        (
+            "required_export_types",
+            "export_types",
+            "observed_export_types",
+            "required_export_type",
+        ),
+        (
+            "required_signals",
+            "signals",
+            "observed_signals",
+            "required_signal",
+        ),
+    )
+    for primary, alias, observed_key, check_name in requirement_specs:
+        required = {
+            _norm(item)
+            for item in (
+                _as_list(quality.get(primary) or quality.get(alias))
+                or _as_list(payload.get(primary))
+            )
+            if _norm(item)
+        }
+        if not required:
+            continue
+        observed = {
+            _norm(item)
+            for item in _as_list(summary.get(observed_key))
+            if _norm(item)
+        }
+        for item in sorted(required):
+            checks.append(
+                {
+                    "check": check_name,
+                    "expected": item,
+                    "actual": sorted(observed),
+                    "match": item in observed,
+                }
+            )
 
 
 def _environment_states(report: Any) -> list[Mapping[str, Any]]:
@@ -822,6 +1090,15 @@ def _float_mapping(value: Any) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _get(value: Any, key: str, default: Any = None) -> Any:

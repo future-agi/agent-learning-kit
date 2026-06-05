@@ -151,6 +151,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.score_simulation_evidence is not None
     assert optimize.build_report_repair_optimization_manifest is not None
     assert optimize.optimize_report_repair is not None
+    assert optimize.build_framework_import_repair_optimization_manifest is not None
+    assert optimize.optimize_framework_import_repair is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
     assert optimize.optimize_social_memory_framework is not None
     assert simulate.build_social_memory_framework_run_manifest is not None
@@ -4101,6 +4103,121 @@ def test_sdk_report_repair_optimization_example_runs(monkeypatch, tmp_path):
         "world_contract": 1.0,
         "world_orchestration_replay": 1.0,
         "agent_memory_lineage": 1.0,
+    }
+
+
+def test_sdk_framework_import_repair_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_IMPORT_REPAIR_EXAMPLE_KEY",
+        "real-local-sdk-framework-import-repair-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_framework_import_repair_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_import_repair_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_IMPORT_REPAIR_EXAMPLE_KEY"
+    ]
+    assert manifest["optimization"]["scoring"]["method"] == "simulation_evidence"
+    assert manifest["optimization"]["scoring"]["layers"] == ["framework_import"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    metadata = manifest["optimization"]["target"]["metadata"]
+    assert metadata["task_kind"] == "framework_import_repair"
+    assert metadata["frameworks"] == [
+        "langgraph",
+        "langchain",
+        "livekit",
+        "pipecat",
+    ]
+    assert {item["year"] for item in metadata["research_sources"]} == {2026}
+    assert {
+        item["url"]
+        for item in metadata["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2602.22480",
+        "https://arxiv.org/abs/2603.01209",
+        "https://arxiv.org/abs/2606.04990",
+    }
+
+    output_path = tmp_path / "sdk-framework-import-repair-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_passed"] is True
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    metrics = best_history["metrics"]
+    assert metrics["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert metrics["framework_import_coverage"] == pytest.approx(1.0)
+    assert metrics["framework_import_quality"] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"framework_import_manifest"}
+    summary = state["framework_import_manifest"]["summary"]
+    assert summary["source_count"] == 24
+    assert summary["passed_source_count"] == 24
+    assert summary["failed_source_count"] == 0
+    assert summary["observed_frameworks"] == [
+        "langchain",
+        "langgraph",
+        "livekit",
+        "pipecat",
+    ]
+    assert summary["observed_export_types"] == [
+        "capability_matrix",
+        "event_stream",
+        "lifecycle",
+        "portability_matrix",
+        "probe_suite",
+        "trace_export",
+    ]
+    assert summary["has_adapter"] is True
+    assert summary["has_target"] is True
+    assert summary["has_observability"] is True
+    assert summary["has_artifacts"] is True
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "framework_import": 1.0,
     }
 
 

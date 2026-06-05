@@ -548,6 +548,162 @@ def optimize_report_repair(
     )
 
 
+def build_framework_import_repair_optimization_manifest(
+    *,
+    name: str = "framework-import-repair-optimization",
+    frameworks: Sequence[str] = ("langgraph", "langchain", "livekit", "pipecat"),
+    export_types: Sequence[str] = (
+        "trace_export",
+        "event_stream",
+        "lifecycle",
+        "capability_matrix",
+        "probe_suite",
+        "portability_matrix",
+    ),
+    import_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a BYO-framework import/readiness repair optimization manifest.
+
+    The search unit is the whole framework-import evidence bundle: target,
+    adapter, trace/event/lifecycle/capability/probe/portability exports,
+    observability hooks, artifacts, and gap reports. This is for users who
+    bring their own framework/provider agents and need the SDK to prove the
+    imported evidence is good enough for Future AGI observability, evals,
+    red-team, simulation, and optimization workflows.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    framework_list = [str(item) for item in frameworks if str(item)]
+    export_type_list = [str(item) for item in export_types if str(item)]
+    if not framework_list:
+        raise ValueError("frameworks must contain at least one framework")
+    if not export_type_list:
+        raise ValueError("export_types must contain at least one export type")
+
+    env_candidates = (
+        [
+            [_framework_import_repair_environment(item) for item in candidate]
+            for candidate in import_candidates
+        ]
+        if import_candidates is not None
+        else _default_framework_import_repair_environment_candidates(
+            frameworks=framework_list,
+            export_types=export_type_list,
+        )
+    )
+    if not env_candidates:
+        raise ValueError("import_candidates must contain at least one candidate")
+    for index, candidate in enumerate(env_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"import_candidates[{index}] must not be empty")
+
+    eval_config = copy.deepcopy(
+        dict(
+            evaluation_config
+            or _default_framework_import_repair_evaluation_config(
+                frameworks=framework_list,
+                export_types=export_type_list,
+            )
+        )
+    )
+    agent_config = copy.deepcopy(
+        dict(agent or _default_framework_import_repair_agent())
+    )
+    search_space = {"simulation.environments": env_candidates}
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=[agent_config],
+        environment_candidates=env_candidates,
+        evaluation_config=eval_config,
+        required_env=required_env,
+        base_agent=agent_config,
+        optimizer=copy.deepcopy(
+            dict(optimizer or _default_task_optimizer(search_space))
+        ),
+        threshold=threshold,
+        layers=("framework", "integration", "evaluator"),
+        min_turns=3,
+        max_turns=3,
+        scenario=copy.deepcopy(
+            dict(scenario or _default_framework_import_repair_scenario(name))
+        ),
+        search_space={},
+        target_metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_framework_import_repair_optimization_manifest"
+            ),
+            "cookbook": "framework-import-repair-optimization",
+            "task_kind": "framework_import_repair",
+            "frameworks": framework_list,
+            "export_types": export_type_list,
+            "research_sources": _unique_research_sources(
+                [
+                    *_default_framework_import_repair_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Framework import readiness is scored as a deterministic "
+                "evidence contract: source coverage, export coverage, runtime "
+                "lifecycle/probe/portability evidence, observability hooks, "
+                "artifacts, and zero failed imports must all close before the "
+                "UI/control-plane layer treats a BYO agent as optimizable."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["target"]["search_space"] = copy.deepcopy(search_space)
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["framework_import"],
+        "required_tools": eval_config.get("required_tools", []),
+        "required_framework_import": eval_config.get(
+            "required_framework_import",
+            [],
+        ),
+        "framework_import_quality": eval_config.get(
+            "framework_import_quality",
+            {},
+        ),
+        "weights": {
+            "framework_import": 5.0,
+            "tool_coverage": 1.0,
+        },
+    }
+    return manifest
+
+
+def optimize_framework_import_repair(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute BYO-framework import/readiness repair optimization."""
+
+    manifest = build_framework_import_repair_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_orchestration_optimization_manifest(
     *,
     name: str,
@@ -6756,6 +6912,430 @@ def _default_report_repair_research_sources() -> list[dict[str, Any]]:
     ]
 
 
+def _framework_import_repair_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"framework_import", "framework_import_manifest"}:
+        copied["type"] = "framework_import"
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("framework_import_manifest") is not None:
+        return {"type": "framework_import", "data": copied["framework_import_manifest"]}
+    if copied.get("sources") is not None or copied.get("required_frameworks") is not None:
+        return {"type": "framework_import", "data": copied}
+    return {"type": "framework_import", "data": copied}
+
+
+def _default_framework_import_repair_environment_candidates(
+    *,
+    frameworks: Sequence[str],
+    export_types: Sequence[str],
+) -> list[list[dict[str, Any]]]:
+    return [
+        [
+            _framework_import_repair_manifest(
+                "weak",
+                frameworks=frameworks,
+                export_types=export_types,
+            )
+        ],
+        [
+            _framework_import_repair_manifest(
+                "partial",
+                frameworks=frameworks,
+                export_types=export_types,
+            )
+        ],
+        [
+            _framework_import_repair_manifest(
+                "verified",
+                frameworks=frameworks,
+                export_types=export_types,
+            )
+        ],
+    ]
+
+
+def _framework_import_repair_manifest(
+    level: str,
+    *,
+    frameworks: Sequence[str],
+    export_types: Sequence[str],
+) -> dict[str, Any]:
+    framework_list = [str(item) for item in frameworks]
+    export_type_list = [str(item) for item in export_types]
+    required_signals = _default_framework_import_required_signals()
+    if level == "weak":
+        active_frameworks = framework_list[:1]
+        active_export_types = export_type_list[:1]
+        sources = [
+            _framework_import_repair_source(
+                framework=active_frameworks[0],
+                export_type=active_export_types[0],
+                level=level,
+            )
+        ]
+        if len(framework_list) > 1:
+            sources.append(
+                _framework_import_repair_source(
+                    framework=framework_list[1],
+                    export_type=active_export_types[0],
+                    level=level,
+                    status="failed",
+                )
+            )
+        target: dict[str, Any] = {}
+        adapter: dict[str, Any] = {}
+        observability: dict[str, Any] = {}
+        artifacts: list[dict[str, Any]] = []
+    elif level == "partial":
+        active_frameworks = framework_list[: max(1, min(2, len(framework_list)))]
+        active_export_types = export_type_list[: max(1, min(3, len(export_type_list)))]
+        sources = [
+            _framework_import_repair_source(
+                framework=framework,
+                export_type=export_type,
+                level=level,
+            )
+            for framework in active_frameworks
+            for export_type in active_export_types
+        ]
+        sources.append(
+            _framework_import_repair_source(
+                framework=framework_list[-1],
+                export_type=export_type_list[-1],
+                level=level,
+                status="failed",
+            )
+        )
+        target = {
+            "name": "partial-byo-agent",
+            "provider": "futureagi",
+            "repository": "github.com/customer/agent",
+        }
+        adapter = {
+            "name": "partial-import-adapter",
+            "version": "2026-06",
+            "runtime": active_frameworks[0],
+        }
+        observability = {"traces": ["otel-preview"]}
+        artifacts = [
+            {
+                "id": "partial-trace-artifact",
+                "type": "trace_export",
+                "path": "artifacts/partial-trace.json",
+                "signals": ["trace_export", "artifact"],
+            }
+        ]
+    else:
+        sources = [
+            _framework_import_repair_source(
+                framework=framework,
+                export_type=export_type,
+                level=level,
+            )
+            for framework in framework_list
+            for export_type in export_type_list
+        ]
+        target = {
+            "name": "verified-byo-agent",
+            "provider": "futureagi",
+            "repository": "github.com/customer/agent",
+            "commit": "verified-2026-06-framework-import",
+            "modalities": ["chat", "voice", "webrtc", "sip"],
+        }
+        adapter = {
+            "name": "futureagi-framework-import-adapter",
+            "version": "2026-06",
+            "runtime": "multi_framework",
+            "supports": [
+                "trace_export",
+                "event_stream",
+                "lifecycle",
+                "capability_matrix",
+                "probe_suite",
+                "portability_matrix",
+            ],
+        }
+        observability = {
+            "traces": ["otel", "futureagi"],
+            "logs": ["tool_calls", "state_transitions"],
+            "metrics": ["coverage", "latency", "failures"],
+            "dashboards": ["futureagi-import-readiness"],
+            "events": ["simulation", "eval", "optimization"],
+        }
+        artifacts = [
+            {
+                "id": f"verified-{export_type}-artifact",
+                "type": export_type,
+                "path": f"artifacts/verified-{export_type}.json",
+                "signals": [export_type, "artifact", "observability"],
+            }
+            for export_type in export_type_list
+        ]
+    return {
+        "type": "framework_import",
+        "data": {
+            "name": f"{level}-framework-import-readiness",
+            "framework": framework_list[0],
+            "target": target,
+            "adapter": adapter,
+            "sources": sources,
+            "observability": observability,
+            "artifacts": artifacts,
+            "required_frameworks": framework_list,
+            "required_export_types": export_type_list,
+            "required_signals": required_signals,
+            "metadata": {
+                "candidate": level,
+                "cookbook": "framework-import-repair",
+                "research_synthesis": (
+                    "Import readiness must prove portable execution evidence, "
+                    "not just adapter configuration."
+                ),
+            },
+        },
+    }
+
+
+def _framework_import_repair_source(
+    *,
+    framework: str,
+    export_type: str,
+    level: str,
+    status: str = "passed",
+) -> dict[str, Any]:
+    source_id = f"{framework}_{export_type}_{level}"
+    signals = {
+        framework,
+        export_type,
+        "framework_import",
+        "source",
+        "observability" if level == "verified" else "",
+    }
+    if export_type == "trace_export":
+        signals.update({"span", "trace_export"})
+    elif export_type == "event_stream":
+        signals.update({"event_stream", "stream"})
+    elif export_type == "lifecycle":
+        signals.update({"lifecycle", "startup", "shutdown"})
+    elif export_type == "capability_matrix":
+        signals.update({"capability_matrix", "tools", "memory"})
+    elif export_type == "probe_suite":
+        signals.update({"probe_suite", "smoke_probe"})
+    elif export_type == "portability_matrix":
+        signals.update({"portability_matrix", "migration"})
+    source: dict[str, Any] = {
+        "id": source_id,
+        "name": source_id,
+        "framework": framework,
+        "export_type": export_type,
+        "status": status,
+        "record_count": 8 if status == "passed" else 1,
+        "signals": sorted(item for item in signals if item),
+        "description": (
+            f"{framework} {export_type} import evidence for {level} candidate"
+        ),
+    }
+    if status != "passed":
+        source["error"] = "source failed during import replay"
+    return source
+
+
+def _default_framework_import_required_signals() -> list[str]:
+    return [
+        "framework_import",
+        "target",
+        "adapter",
+        "trace_export",
+        "event_stream",
+        "lifecycle",
+        "capability_matrix",
+        "probe_suite",
+        "portability_matrix",
+        "observability",
+        "artifact",
+    ]
+
+
+def _default_framework_import_repair_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "framework-import-repair-agent",
+        "method": "run",
+        "input_mode": "text",
+        "responses": [
+            {
+                "content": (
+                    "I will first inspect the normalized BYO framework import "
+                    "manifest before accepting it into Future AGI workflows."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "framework_import_status",
+                        "name": "framework_import_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_exports",
+                        "name": "list_framework_import_exports",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Next I will verify passed source coverage across frameworks "
+                    "and export types."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "framework_import_sources",
+                        "name": "list_framework_import_sources",
+                        "arguments": {"status": "passed"},
+                    }
+                ],
+            },
+            {
+                "content": (
+                    "Finally I will check gaps and failed sources before the "
+                    "agent is exposed to observability, evals, red-team, and optimization."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "framework_import_gaps",
+                        "name": "list_framework_import_gaps",
+                        "arguments": {},
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _default_framework_import_repair_evaluation_config(
+    *,
+    frameworks: Sequence[str],
+    export_types: Sequence[str],
+) -> dict[str, Any]:
+    framework_list = [str(item) for item in frameworks]
+    export_type_list = [str(item) for item in export_types]
+    required_tools = [
+        "framework_import_status",
+        "list_framework_import_exports",
+        "list_framework_import_sources",
+        "list_framework_import_gaps",
+    ]
+    required_framework_import = [
+        "framework_import",
+        "framework_import_manifest",
+        "target",
+        "adapter",
+        "source",
+        "passed_source",
+        "artifact",
+        "observability",
+        *framework_list,
+        *export_type_list,
+    ]
+    return {
+        "task_description": (
+            "Repair a BYO framework/provider import bundle until Future AGI can "
+            "treat it as portable evidence for observability, evals, simulation, "
+            "red-team, and optimization."
+        ),
+        "expected_result": (
+            "The optimized import has target, adapter, source, export, lifecycle, "
+            "probe, portability, observability, artifact, and no-failed-source evidence."
+        ),
+        "success_criteria": [
+            "all required frameworks are imported",
+            "all required export types are imported",
+            "target and adapter records are present",
+            "observability hooks and artifacts exist",
+            "failed source count is zero",
+        ],
+        "required_tools": required_tools,
+        "available_tools": required_tools,
+        "required_artifact_types": ["trace"],
+        "required_framework_import": required_framework_import,
+        "framework_import_quality": {
+            "required_frameworks": framework_list,
+            "required_export_types": export_type_list,
+            "required_signals": _default_framework_import_required_signals(),
+            "min_source_count": len(framework_list) * len(export_type_list),
+            "min_passed_sources": len(framework_list) * len(export_type_list),
+            "min_artifact_count": len(export_type_list),
+            "min_observability_hooks": 3,
+            "max_failed_sources": 0,
+            "require_target": True,
+            "require_adapter": True,
+            "require_trace_export": True,
+            "require_event_stream": True,
+            "require_lifecycle": True,
+            "require_capability_matrix": True,
+            "require_probe_suite": True,
+            "require_portability_matrix": True,
+            "require_observability": True,
+            "require_artifacts": True,
+        },
+        "metric_weights": {
+            "framework_import_coverage": 5.0,
+            "framework_import_quality": 8.0,
+            "tool_selection_accuracy": 2.0,
+            "task_completion": 1.0,
+        },
+    }
+
+
+def _default_framework_import_repair_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Asha", "role": "agent-platform-owner"},
+                "situation": (
+                    "Asha is importing a customer-owned multi-framework agent "
+                    "into Future AGI and needs to prove the evidence contract "
+                    "before enabling UI observability, evals, red-team, and optimization."
+                ),
+                "outcome": (
+                    "The optimized import bundle proves portable framework "
+                    "evidence with clean gaps and failed-source checks."
+                ),
+            }
+        ],
+    }
+
+
+def _default_framework_import_repair_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "VeRO: A Harness for Agents to Optimize Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.22480",
+            "used_for": "versioned candidate rewards and observation-driven harness search",
+        },
+        {
+            "title": "Agents Learn Their Runtime: Interpreter Persistence as Training-Time Semantics",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "runtime/interface semantics as import-readiness constraints",
+        },
+        {
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": "portable process evidence across tools, memory, environment, and recovery",
+        },
+        {
+            "title": "CausalFlow: Causal Attribution and Counterfactual Repair for LLM Agent Failures",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.25338",
+            "used_for": "failed import evidence to minimal validated repair candidates",
+        },
+    ]
+
+
 def _default_task_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -11438,6 +12018,7 @@ __all__ = [
     "build_browser_cua_optimization_manifest",
     "build_eval_suite_optimization_manifest",
     "build_framework_certification_optimization_manifest",
+    "build_framework_import_repair_optimization_manifest",
     "build_framework_optimization_manifest",
     "build_long_horizon_redteam_optimization_manifest",
     "build_memory_optimization_manifest",
@@ -11466,6 +12047,7 @@ __all__ = [
     "optimize_autonomous_redteam_task_world",
     "optimize_browser_cua",
     "optimize_framework_certification",
+    "optimize_framework_import_repair",
     "optimize_long_horizon_redteam",
     "optimize_framework_adapter",
     "optimize_manifest",
