@@ -452,6 +452,10 @@ AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_TRINITY_SUITE_KEY=... \
   PYTHONPATH=src python examples/sdk_trinity_suite.py \
   artifacts/sdk-trinity-suite.json
+
+AGENT_LEARNING_SDK_REGRESSION_ARTIFACT_SUITE_KEY=... \
+  PYTHONPATH=src python examples/sdk_regression_artifact_suite.py \
+  artifacts/sdk-regression-artifact-suite.json
 ```
 
 The `artifact_task_eval_suite.json` example evaluates a saved
@@ -480,6 +484,10 @@ teams usually script around promptfoo-style CI: create a compact baseline,
 compare current vs baseline, render a report, promote a red-team finding into a
 runnable regression manifest, and replay that manifest, all as first-class
 `agent-learn suite` jobs with a capability gate.
+`suite.build_regression_artifact_suite_manifest()` and
+`examples/sdk_regression_artifact_suite.py` expose the same lifecycle from the
+SDK; the cookbook writes local baseline/current/finding/replay artifacts, runs
+the generated suite, and verifies promotion plus replay evidence.
 
 The `voice_streaming_realtime_manifest.json` example makes `voice` and
 `streaming_trace` first-class manifest environments. It replays voice timing,

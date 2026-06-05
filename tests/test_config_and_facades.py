@@ -129,6 +129,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.write_task_evidence_file is not None
     assert suite.run_suite_file is not None
     assert suite.build_suite_manifest is not None
+    assert suite.build_regression_artifact_suite_manifest is not None
     assert suite.build_trinity_suite_manifest is not None
     assert suite.write_suite_file is not None
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
@@ -1612,6 +1613,69 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         if child["id"] == "agent-optimizer"
     )
     assert optimizer_child["summary"]["optimization_score"] >= 0.84
+
+
+def test_sdk_regression_artifact_suite_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REGRESSION_ARTIFACT_SUITE_KEY",
+        "real-local-sdk-regression-artifact-suite-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_regression_artifact_suite.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_regression_artifact_suite",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest("workspace")
+    assert manifest["version"] == "agent-learning.suite.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REGRESSION_ARTIFACT_SUITE_KEY"
+    ]
+    assert [
+        job["command"]
+        for job in manifest["jobs"]
+    ] == [
+        "baseline",
+        "compare",
+        "report",
+        "promote_to_regression",
+        "replay",
+    ]
+    assert manifest["required_capabilities"]["metrics"] == [
+        "compare_score_delta",
+        "replay_pass_rate",
+    ]
+
+    output_path = tmp_path / "sdk-regression-artifact-suite-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.suite.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["score"] == pytest.approx(1.0)
+    assert result["summary"]["passed_count"] == 5
+    assert result["summary"]["capability_gate_passed"] is True
+    assert result["summary"]["missing_required_capabilities"] == {}
+    assert [child["command"] for child in result["children"]] == [
+        "baseline",
+        "compare",
+        "report",
+        "promote_to_regression",
+        "replay",
+    ]
+    assert result["children"][1]["result"]["summary"]["comparison_passed"] is True
+    promotion = result["children"][3]["result"]
+    assert promotion["summary"]["promoted_finding_count"] == 1
+    promoted_envs = promotion["manifest"]["simulation"]["environments"]
+    assert promoted_envs[0]["type"] == "adversarial_attack_pack"
+    assert promoted_envs[0]["data"]["attacks"]
+    assert result["children"][4]["result"]["summary"]["replay_pass_rate"] == 1.0
 
 
 def test_eval_suite_builder_and_sdk_cookbook_runs(monkeypatch, tmp_path):

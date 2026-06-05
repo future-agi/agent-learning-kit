@@ -258,6 +258,106 @@ def build_trinity_suite_manifest(
     )
 
 
+def build_regression_artifact_suite_manifest(
+    *,
+    name: str,
+    baseline_path: str | Path,
+    current_path: str | Path,
+    finding_path: str | Path,
+    replay_manifest_paths: Sequence[str | Path],
+    required_env: Sequence[str] = (),
+    min_score_delta: float = 0.0,
+    max_new_findings: int = 0,
+    max_new_error_findings: int = 0,
+    min_level: str = "warning",
+    max_findings: int = 1,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build the artifact-regression lifecycle suite from SDK paths.
+
+    This composes the lifecycle users usually script around CI artifacts:
+    create a compact baseline, compare current vs baseline, render a report,
+    promote a red-team finding into a regression manifest, and replay one or
+    more regression manifests.
+    """
+
+    replay_paths = [_suite_path_text(path) for path in replay_manifest_paths]
+    if not replay_paths:
+        raise ValueError("replay_manifest_paths must contain at least one manifest")
+
+    suite_name = str(name)
+    jobs = [
+        {
+            "id": "baseline-current-run",
+            "command": "baseline",
+            "path": _suite_path_text(current_path),
+            "name": f"{suite_name}-baseline",
+        },
+        {
+            "id": "compare-baseline-to-current",
+            "command": "compare",
+            "path": _suite_path_text(current_path),
+            "baseline": _suite_path_text(baseline_path),
+            "current": _suite_path_text(current_path),
+            "name": f"{suite_name}-compare",
+            "min_score_delta": float(min_score_delta),
+            "max_new_findings": int(max_new_findings),
+            "max_new_error_findings": int(max_new_error_findings),
+        },
+        {
+            "id": "report-current-run",
+            "command": "report",
+            "path": _suite_path_text(current_path),
+            "name": f"{suite_name}-report",
+        },
+        {
+            "id": "promote-redteam-finding",
+            "command": "promote_to_regression",
+            "path": _suite_path_text(finding_path),
+            "name": f"{suite_name}-promoted-regression",
+            "min_level": str(min_level),
+            "max_findings": int(max_findings),
+        },
+        {
+            "id": "replay-regression-manifest",
+            "command": "replay",
+            "path": replay_paths[0],
+            "manifests": replay_paths,
+            "name": f"{suite_name}-replay",
+        },
+    ]
+    return build_suite_manifest(
+        name=suite_name,
+        required_env=required_env,
+        jobs=jobs,
+        required_capabilities={
+            "commands": [
+                "baseline",
+                "compare",
+                "report",
+                "promote_to_regression",
+                "replay",
+            ],
+            "result_kinds": [
+                "agent_simulate.baseline.v1",
+                "agent_simulate.compare.v1",
+                "agent_simulate.report.v1",
+                "agent_simulate.regression_promotion.v1",
+                "agent_simulate.replay.v1",
+            ],
+            "metrics": [
+                "compare_score_delta",
+                "replay_pass_rate",
+            ],
+        },
+        metadata={
+            "source": "agent_learning.suite.build_regression_artifact_suite_manifest",
+            "task_kind": "regression_artifact_lifecycle",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+
 def write_suite_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
     """Write a suite manifest as formatted JSON and return the resolved path."""
 
@@ -1417,6 +1517,7 @@ __all__ = [
     "AGENT_LEARNING_SUITE_KIND",
     "SuiteError",
     "SuiteRunOptions",
+    "build_regression_artifact_suite_manifest",
     "build_suite_manifest",
     "build_trinity_suite_manifest",
     "load_suite",
