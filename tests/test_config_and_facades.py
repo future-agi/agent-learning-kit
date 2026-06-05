@@ -58,6 +58,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.write_manifest_file is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
+    assert redteam.build_redteam_manifest is not None
+    assert redteam.build_redteam_run_manifest is redteam.build_redteam_manifest
     assert redteam.RedTeamCampaignEnvironment is fi_simulate.RedTeamCampaignEnvironment
     assert redteam.RedTeamReadinessEnvironment is (
         fi_simulate.RedTeamReadinessEnvironment
@@ -1522,6 +1524,72 @@ def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_history["metrics"]["red_team_campaign_quality"] == pytest.approx(1.0)
     assert best_history["metrics"]["adversarial_resilience"] >= 0.9
+
+
+def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_RUN_KEY",
+        "real-local-sdk-redteam-run-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_redteam_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.redteam.v1"
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_REDTEAM_RUN_KEY"]
+    assert manifest["redteam"]["auto_generate"] is True
+    assert manifest["redteam"]["attacks"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert manifest["redteam"]["surfaces"] == ["tool", "memory"]
+    assert manifest["redteam"]["canaries"] == ["FA_SDK_REDTEAM_CANARY_001"]
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "red_team_campaign_quality"
+    ]["required_attack_matrix_cells"] == [
+        "prompt_injection|tool|chat|local_cli",
+        "prompt_injection|memory|chat|local_cli",
+        "credential_exfiltration|tool|chat|local_cli",
+        "credential_exfiltration|memory|chat|local_cli",
+    ]
+
+    output_path = tmp_path / "sdk-redteam-run.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.redteam.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_score"] >= 0.97
+    assert result["summary"]["redteam"]["auto_generate"] is True
+    assert result["summary"]["redteam"]["environment_types"] == [
+        "adversarial_attack_pack",
+        "red_team_campaign",
+    ]
+    assert result["summary"]["redteam"]["finding_count"] == 0
+    assert result["summary"]["redteam"]["warning_finding_count"] == 0
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["adversarial_resilience"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_coverage"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
+
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"adversarial", "red_team_campaign"}
+    assert len(state["adversarial"]["attack_pack"]["attacks"]) == 4
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["coverage_cell_count"] == 4
+    assert campaign_summary["executed_cell_count"] == 4
+    assert campaign_summary["artifact_count"] == 4
+    assert campaign_summary["mitigation_count"] == 4
+    assert campaign_summary["passed_run_count"] == 1
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

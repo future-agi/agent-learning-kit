@@ -130,6 +130,10 @@ without importing legacy `fi.evals.*` paths.
 execution, adversarial/campaign/readiness environments, local guardrail scanner
 pipelines, Protect/guardrail config types, code-security metrics, CWE detector
 helpers, and agent trajectory safety metrics.
+`agent_learning.redteam.build_redteam_manifest()` builds direct SDK red-team
+run manifests with `redteam.auto_generate: true`, so Python callers can create
+the same attack-pack and campaign evidence as `agent-learn redteam` without
+hand-writing JSON.
 
 The `world_framework_memory_optimization.json` example optimizes a
 LangGraph-style world orchestration across framework trace, retrieval, memory
@@ -380,6 +384,10 @@ AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_optimization.py \
   artifacts/sdk-redteam-optimization.json
+
+AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_simulation.py \
+  artifacts/sdk-redteam-run.json
 
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
