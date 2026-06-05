@@ -84,6 +84,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_memory_layer is not None
     assert optimize.build_multi_agent_optimization_manifest is not None
     assert optimize.optimize_multi_agent_coordination is not None
+    assert optimize.build_orchestration_optimization_manifest is not None
+    assert optimize.optimize_orchestration_stack is not None
     assert optimize.build_realtime_optimization_manifest is not None
     assert optimize.optimize_realtime_stack is not None
     assert optimize.build_redteam_optimization_manifest is not None
@@ -619,6 +621,75 @@ def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+
+
+def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY",
+        "real-local-sdk-orchestration-example-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_orchestration_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "orchestration",
+        "framework",
+        "world",
+        "memory",
+        "multi_agent",
+        "tools",
+        "evaluator",
+    ]
+
+    output_path = tmp_path / "sdk-orchestration-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    best_config = result["optimization"]["best_config"]
+    assert [
+        environment["type"]
+        for environment in best_config["simulation"]["environments"]
+    ] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"agent", "simulation.environments"}
+    for metric in (
+        "task_completion",
+        "tool_selection_accuracy",
+        "world_contract_quality",
+        "multi_agent_coordination_quality",
+        "retrieval_context_quality",
+        "agent_memory_lineage_coverage",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+    assert state["world_contract"]["state"]["refund"]["status"] == "approved"
 
 
 def test_optimize_facade_builds_and_runs_multi_agent_coordination_manifest(

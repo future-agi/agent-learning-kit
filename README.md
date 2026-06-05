@@ -285,6 +285,24 @@ result = optimize.optimize_task(
 )
 ```
 
+For full orchestration-stack optimization, pass coherent stack candidates with
+world, framework, retrieval, memory-lineage, and multi-agent room evidence. The
+SDK searches each stack as one `simulation.environments` bundle so evidence
+from different candidates cannot be mixed accidentally:
+
+```python
+from agent_learning import optimize
+
+manifest = optimize.build_orchestration_optimization_manifest(
+    name="refund-orchestration-optimization",
+    agent_candidates=[weak_agent, strong_agent],
+    stack_candidates=[weak_stack, strong_stack],
+    evaluation_config=agent_report_config,
+    required_env=["AGENT_LEARNING_API_KEY"],
+)
+result = optimize.optimize_manifest(manifest, manifest_path="examples/sdk.json")
+```
+
 For retrieval and memory layers, pass candidates with `retrieval_memory` and
 `agent_memory_lineage` data. The SDK builds a runnable local manifest that
 searches current-document grounding, source attribution, memory writes, policy
@@ -323,6 +341,10 @@ Runnable SDK cookbook:
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_orchestration_optimization.py \
+  artifacts/sdk-orchestration-optimization.json
 
 AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_optimization.py \

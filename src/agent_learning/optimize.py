@@ -335,6 +335,105 @@ def optimize_task(
     )
 
 
+def build_orchestration_optimization_manifest(
+    *,
+    name: str,
+    stack_candidates: Sequence[Mapping[str, Any]],
+    evaluation_config: Mapping[str, Any],
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    search_space: Optional[Mapping[str, Sequence[Any]]] = None,
+    target_base_config: Optional[Mapping[str, Any]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    layers: Sequence[str] = (
+        "orchestration",
+        "framework",
+        "world",
+        "memory",
+        "multi_agent",
+        "tools",
+        "evaluator",
+    ),
+) -> dict[str, Any]:
+    """Build a runnable optimization manifest for a full orchestration stack.
+
+    A stack candidate is a coherent environment bundle. It can provide an
+    explicit ``environments`` list, or shorthand blocks such as
+    ``world_orchestration_replay``, ``world_contract``, ``framework_trace``,
+    ``retrieval_memory``, ``agent_memory_lineage``, and ``multi_agent_room``.
+    The optimizer searches those bundles as one unit so world, framework,
+    memory, and collaboration evidence cannot drift apart across candidates.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not stack_candidates:
+        raise ValueError("stack_candidates must contain at least one candidate")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+
+    environment_candidates = [
+        _orchestration_environment_bundle(candidate)
+        for candidate in stack_candidates
+    ]
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else [_default_orchestration_agent()]
+    )
+    inferred_turns = _max_agent_response_count(agents, min_turns)
+
+    return build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agents,
+        evaluation_config=evaluation_config,
+        scenario=scenario or _default_orchestration_scenario(name),
+        environment_candidates=environment_candidates,
+        required_env=required_env,
+        optimizer=optimizer,
+        threshold=threshold,
+        layers=layers,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns if max_turns is not None else inferred_turns,
+        auto_execute_tools=auto_execute_tools,
+        search_space=search_space,
+        target_base_config=target_base_config,
+        target_metadata={
+            "source": "agent_learning.optimize.build_orchestration_optimization_manifest",
+            "task_kind": "orchestration_stack",
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+
+
+def optimize_orchestration_stack(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute an orchestration-stack optimization manifest."""
+
+    manifest = build_orchestration_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_multi_agent_optimization_manifest(
     *,
     name: str,
@@ -1108,6 +1207,105 @@ def _typed_memory_environment(environment_type: str, data: Any) -> dict[str, Any
     return {"type": environment_type, "data": copy.deepcopy(dict(data))}
 
 
+_ORCHESTRATION_ENVIRONMENT_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("world_orchestration_replay", "world_replay", "world_orchestration"),
+        "world_orchestration_replay",
+    ),
+    (("world_contract", "world"), "world_contract"),
+    (("orchestration_trace", "orchestration"), "orchestration_trace"),
+    (("framework_trace", "framework"), "framework_trace"),
+    (("retrieval_memory", "retrieval"), "retrieval_memory"),
+    (
+        ("agent_memory_lineage", "memory_lineage", "lineage"),
+        "agent_memory_lineage",
+    ),
+    (("multi_agent_room", "room", "multi_agent"), "multi_agent_room"),
+    (("structured_artifact", "artifact"), "structured_artifact"),
+    (("domain_package", "domain"), "domain_package"),
+    (("adversarial_attack_pack", "attack_pack", "attacks"), "adversarial_attack_pack"),
+    (("red_team_campaign", "redteam_campaign"), "red_team_campaign"),
+    (("red_team_readiness", "redteam_readiness"), "red_team_readiness"),
+    (("voice", "voice_trace"), "voice"),
+    (("streaming_trace", "streaming"), "streaming_trace"),
+    (("workspace_run_manifest", "workspace_run"), "workspace_run_manifest"),
+)
+
+
+def _orchestration_environment_bundle(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
+    candidate_dict = copy.deepcopy(dict(candidate))
+    explicit_environments = candidate_dict.pop("environments", None)
+    if explicit_environments is not None:
+        bundle = _environment_list(explicit_environments)
+        if not bundle:
+            raise ValueError("orchestration candidate environments must not be empty")
+        return bundle
+
+    for annotation_key in ("id", "name", "description", "metadata"):
+        candidate_dict.pop(annotation_key, None)
+
+    bundle: list[dict[str, Any]] = []
+    for aliases, environment_type in _ORCHESTRATION_ENVIRONMENT_ALIASES:
+        data = _pop_first(candidate_dict, aliases)
+        if data is not None:
+            bundle.append(_typed_orchestration_environment(environment_type, data))
+
+    if candidate_dict:
+        allowed = sorted(
+            {
+                "environments",
+                "id",
+                "name",
+                "description",
+                "metadata",
+                *[
+                    alias
+                    for aliases, _environment_type in _ORCHESTRATION_ENVIRONMENT_ALIASES
+                    for alias in aliases
+                ],
+            }
+        )
+        raise ValueError(
+            "orchestration candidate has unsupported key(s): "
+            f"{', '.join(sorted(candidate_dict))}; expected one of {', '.join(allowed)}"
+        )
+    if not bundle:
+        raise ValueError("orchestration candidate must define at least one environment")
+    return bundle
+
+
+def _environment_list(environments: Any) -> list[dict[str, Any]]:
+    if isinstance(environments, Mapping):
+        environments = [environments]
+    if isinstance(environments, (str, bytes)) or environments is None:
+        raise ValueError("environments must be a mapping or sequence of mappings")
+    bundle: list[dict[str, Any]] = []
+    for index, raw in enumerate(environments, start=1):
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"environment {index} must be a mapping")
+        item = copy.deepcopy(dict(raw))
+        if not item.get("type"):
+            raise ValueError(f"environment {index} requires type")
+        bundle.append(item)
+    return bundle
+
+
+def _typed_orchestration_environment(environment_type: str, data: Any) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        raise ValueError(f"{environment_type} candidate data must be a mapping")
+    item = copy.deepcopy(dict(data))
+    if item.get("type") and "data" in item:
+        return item
+    return {"type": environment_type, "data": item}
+
+
+def _pop_first(source: dict[str, Any], keys: Sequence[str]) -> Any:
+    for key in keys:
+        if key in source:
+            return source.pop(key)
+    return None
+
+
 def _artifact_field_candidate(
     fields: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1230,6 +1428,125 @@ def _default_multi_agent_scenario(name: str) -> dict[str, Any]:
                 "situation": "Optimize handoff, review, and reconciliation through Agent Learning Kit.",
                 "outcome": "The optimized multi-agent trace satisfies the configured coordination gates.",
             }
+        ],
+    }
+
+
+def _default_orchestration_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "SDK user", "role": "orchestration-owner"},
+                "situation": (
+                    "Optimize a full agent orchestration stack across world, "
+                    "framework, memory, collaboration, and evaluator evidence."
+                ),
+                "outcome": (
+                    "The optimized orchestration stack satisfies the configured "
+                    "task and environment gates."
+                ),
+            }
+        ],
+    }
+
+
+def _default_orchestration_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": "Inspecting world orchestration and applying the required transition.",
+                "tool_calls": [
+                    {
+                        "id": "world_status",
+                        "name": "world_orchestration_replay_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "approve_refund",
+                        "name": "apply_world_transition",
+                        "arguments": {"id": "approve_refund"},
+                    },
+                ],
+            },
+            {
+                "content": "Inspecting framework and retrieval evidence for the orchestration.",
+                "tool_calls": [
+                    {
+                        "id": "framework_status",
+                        "name": "framework_trace_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "retrieve_policy",
+                        "name": "retrieve_documents",
+                        "arguments": {"query": "current refund policy"},
+                    },
+                    {
+                        "id": "read_policy",
+                        "name": "read_document",
+                        "arguments": {"id": "doc_refund_2026"},
+                    },
+                    {
+                        "id": "cite_policy",
+                        "name": "cite_sources",
+                        "arguments": {
+                            "doc_ids": ["doc_refund_2026"],
+                            "claim": "Refund approval is grounded in current policy.",
+                            "freshness_checked": True,
+                        },
+                    },
+                ],
+            },
+            {
+                "content": "Inspecting memory lineage and multi-agent review evidence.",
+                "tool_calls": [
+                    {
+                        "id": "memory_lineage",
+                        "name": "agent_memory_lineage_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "retrieval_memory",
+                        "name": "retrieval_memory_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "room_status",
+                        "name": "room_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "critic_review",
+                        "name": "request_review",
+                        "arguments": {
+                            "reviewer": "critic",
+                            "target": "world orchestration refund decision",
+                            "criteria": ["policy", "memory", "world"],
+                        },
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "The orchestration stack proves the world transition, "
+                    "framework trace, policy grounding, memory provenance, "
+                    "and critic-reviewed decision."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "reconcile",
+                        "name": "reconcile",
+                        "arguments": {
+                            "summary": "approved refund orchestration accepted",
+                            "accepted_source": "critic",
+                            "conflicts": [],
+                            "participants": ["planner", "retriever", "critic"],
+                        },
+                    }
+                ],
+            },
         ],
     }
 
@@ -1550,6 +1867,7 @@ __all__ = [
     "build_framework_optimization_manifest",
     "build_memory_optimization_manifest",
     "build_multi_agent_optimization_manifest",
+    "build_orchestration_optimization_manifest",
     "build_realtime_optimization_manifest",
     "build_redteam_optimization_manifest",
     "build_task_optimization_manifest",
@@ -1561,6 +1879,7 @@ __all__ = [
     "optimize_manifest_file",
     "optimize_memory_layer",
     "optimize_multi_agent_coordination",
+    "optimize_orchestration_stack",
     "optimize_realtime_stack",
     "optimize_redteam_campaign",
     "optimize_task",
