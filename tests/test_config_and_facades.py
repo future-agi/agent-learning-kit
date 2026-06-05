@@ -111,6 +111,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_multimodal_image_run_manifest is not None
     assert optimize.build_optimizer_governance_optimization_manifest is not None
     assert optimize.optimize_optimizer_governance is not None
+    assert simulate.build_optimizer_governance_run_manifest is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -2012,6 +2013,138 @@ def test_sdk_optimizer_governance_optimization_example_runs(
         assert trace_summary[flag] is True
     assert trace_summary["governance_check_count"] == 6
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
+
+
+def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_SIMULATION_KEY",
+        "real-local-sdk-optimizer-governance-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_optimizer_governance_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_optimizer_governance_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert "optimization" not in manifest
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_SIMULATION_KEY"
+    ]
+    assert manifest["agent"]["type"] == "scripted"
+    assert len(manifest["agent"]["responses"]) == 4
+    assert manifest["simulation"]["engine"] == "local_text"
+    assert manifest["simulation"]["min_turns"] == 4
+    assert manifest["simulation"]["max_turns"] == 4
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [environment["type"] for environment in manifest["simulation"]["environments"]] == [
+        "optimizer_trace"
+    ]
+    trace = manifest["simulation"]["environments"][0]["data"]
+    assert trace["optimizer"] == "SocietyAgentOptimizer"
+    assert trace["best_candidate_id"] == "c_steward"
+    assert len(trace["roles"]) == 5
+    assert len(trace["proposals"]) == 5
+    assert len(trace["rounds"]) == 3
+    assert len(trace["diagnostics"]) == 2
+    assert {check["name"] for check in trace["governance"]["checks"]} == {
+        "role_diversity",
+        "mediator_review",
+        "contract_gate",
+        "rollback_check",
+        "search_locality",
+        "dependency_audit",
+    }
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["required_tools"] == [
+        "optimizer_trace_status",
+        "list_optimizer_proposals",
+        "inspect_optimizer_role",
+        "inspect_optimizer_candidate",
+        "inspect_optimizer_governance",
+    ]
+    assert eval_config["optimizer_trace_quality"]["required_best_role"] == (
+        "dharma_steward"
+    )
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_optimizer_governance_run_manifest(
+        name="custom-optimizer-governance-simulation",
+        optimizer_trace=trace,
+        min_turns=1,
+    )
+    assert custom_manifest["version"] == "agent-learning.run.v1"
+    assert "optimization" not in custom_manifest
+    assert custom_manifest["simulation"]["environments"][0]["data"] == trace
+
+    output_path = tmp_path / "sdk-optimizer-governance-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-optimizer-governance-simulation"
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-optimizer-governance-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] == pytest.approx(0.9875)
+    for metric in (
+        "optimizer_trace_coverage",
+        "optimizer_trace_quality",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"optimizer_society_trace"}
+    trace_state = state["optimizer_society_trace"]
+    assert trace_state["optimizer"] == "SocietyAgentOptimizer"
+    assert trace_state["summary"]["role_count"] == 5
+    assert trace_state["summary"]["proposal_count"] == 5
+    assert trace_state["summary"]["round_count"] == 3
+    assert trace_state["summary"]["diagnostic_count"] == 2
+    assert trace_state["summary"]["role_credit_count"] == 5
+    assert trace_state["summary"]["duplicate_candidate_count"] == 0
+    assert trace_state["summary"]["best_candidate_id"] == "c_steward"
+    assert trace_state["summary"]["final_score"] == pytest.approx(0.99)
+    for flag in (
+        "has_role_graph",
+        "has_critique",
+        "has_synthesis",
+        "has_steward",
+        "has_governance",
+        "has_role_diversity",
+        "has_mediator",
+        "has_contract_gate",
+        "has_rollback",
+        "has_locality",
+        "has_dependency_audit",
+    ):
+        assert trace_state["summary"][flag] is True
+    assert trace_state["summary"]["governance_check_count"] == 6
+    assert trace_state["summary"]["governance_pass_rate"] == pytest.approx(1.0)
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "optimizer_trace_ready",
+        "optimizer_trace_status",
+        "optimizer_proposals_listed",
+        "optimizer_role_inspected",
+        "optimizer_candidate_inspected",
+        "optimizer_governance_inspected",
+    } <= event_names
 
 
 def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):

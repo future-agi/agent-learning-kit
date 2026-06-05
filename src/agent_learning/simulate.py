@@ -1442,6 +1442,95 @@ def build_multi_agent_framework_handoff_run_manifest(
     return manifest
 
 
+def build_optimizer_governance_run_manifest(
+    *,
+    name: str,
+    optimizer_trace: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct optimizer-governance simulation manifest.
+
+    This is the run counterpart to the optimizer-governance cookbook: it
+    executes a selected optimizer society trace as normal simulation evidence,
+    so optimization runs can be audited without launching another optimizer
+    loop.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    governance_candidates = (
+        [[copy.deepcopy(dict(optimizer_trace))]]
+        if optimizer_trace is not None
+        else None
+    )
+    optimization_manifest = (
+        _agent_optimize.build_optimizer_governance_optimization_manifest(
+            name=name,
+            governance_candidates=governance_candidates,
+            evaluation_config=copy.deepcopy(dict(evaluation_config))
+            if evaluation_config is not None
+            else None,
+            agent=copy.deepcopy(dict(agent)) if agent is not None else None,
+            scenario=scenario,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    selected_environments = copy.deepcopy(
+        list(
+            search_space.get("simulation.environments")
+            or [optimization_manifest["simulation"]["environments"]]
+        )[-1]
+    )
+    if not selected_environments:
+        raise ValueError("optimizer_trace must contain at least one environment")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": selected_environments,
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_optimizer_governance_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -2462,6 +2551,7 @@ __all__ = [
     "build_multi_agent_coordination_run_manifest",
     "build_multi_agent_framework_handoff_run_manifest",
     "build_multi_framework_suite_manifest",
+    "build_optimizer_governance_run_manifest",
     "build_orchestration_stack_run_manifest",
     "build_realtime_run_manifest",
     "build_social_memory_framework_run_manifest",

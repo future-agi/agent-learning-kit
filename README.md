@@ -435,6 +435,10 @@ AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_optimizer_governance_optimization.py \
   artifacts/sdk-optimizer-governance-optimization.json
 
+AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_optimizer_governance_simulation.py \
+  artifacts/sdk-optimizer-governance-simulation.json
+
 AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_realtime_voice_optimization.py \
   artifacts/sdk-realtime-voice-optimization.json
@@ -659,6 +663,11 @@ The governed society-trace harness is available from Python through
 `examples/sdk_optimizer_governance_optimization.py`, which search weak versus
 governed optimizer traces and verify role diversity, diagnostics, search-path
 locality, rollback lineage, and governance pass rate.
+`simulate.build_optimizer_governance_run_manifest()` and
+`examples/sdk_optimizer_governance_simulation.py` run the selected governed
+optimizer trace as a normal `agent-learning.run.v1` artifact, so optimizer
+decisions can be audited through simulation evidence without starting another
+optimizer loop.
 They can also select the social-memory optimizer with
 `optimization.optimizer.algorithm: "social_memory"`, then tune `max_rounds`,
 `beam_width`, `max_proposals_per_round`, `target_score`, `include_seed`, and
