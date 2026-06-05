@@ -144,6 +144,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_long_horizon_redteam is not None
     assert optimize.build_redteam_optimization_manifest is not None
     assert optimize.optimize_redteam_campaign is not None
+    assert optimize.build_redteam_society_optimization_manifest is not None
+    assert optimize.optimize_redteam_society is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
     assert optimize.optimize_social_memory_framework is not None
     assert simulate.build_social_memory_framework_run_manifest is not None
@@ -3716,6 +3718,121 @@ def test_sdk_long_horizon_redteam_optimization_example_runs(monkeypatch, tmp_pat
     assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
 
     state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+
+
+def test_sdk_redteam_society_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_SOCIETY_EXAMPLE_KEY",
+        "real-local-sdk-redteam-society-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_redteam_society_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_society_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    roles = {
+        "red_team_lead",
+        "orchestrator_leak_tester",
+        "tool_chain_attacker",
+        "memory_privacy_guard",
+        "vidura",
+        "dharma_steward",
+    }
+
+    assert manifest["version"] == "agent-learning.optimization.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_SOCIETY_EXAMPLE_KEY"
+    ]
+    assert manifest["redteam"]["profile"] == "redteam_society_attack_system"
+    assert manifest["redteam"]["attack_system"]["strategy"] == (
+        "multi_agent_redteam_society"
+    )
+    assert set(manifest["redteam"]["signals"]) >= {
+        "multi_agent_council",
+        "orchestrator_leak",
+        "consensus_review",
+        "causal_attribution",
+    }
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    final_room = candidates[-1][0]["data"]
+    assert set(final_room["participants"]) == roles
+    assert final_room["allow_unknown_roles"] is False
+    assert len(final_room["expected_handoffs"]) == 3
+    assert final_room["expected_reconciliation"]["accepted_source"] == (
+        "dharma_steward"
+    )
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["adversarial_resilience"]["expected_attack_count"] == 25
+    assert set(config["required_multi_agent_roles"]) == roles
+    assert config["expected_multi_agent_reconciliation"]["accepted_source"] == (
+        "dharma_steward"
+    )
+
+    output_path = tmp_path / "sdk-redteam-society-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.96
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in result["summary"]["search_paths"]
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    best_room = result["optimization"]["best_config"]["simulation"][
+        "environments"
+    ][0]["data"]
+    assert set(best_room["participants"]) == roles
+    assert best_room["allow_unknown_roles"] is False
+    assert best_room["expected_reconciliation"]["accepted_source"] == (
+        "dharma_steward"
+    )
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"adversarial", "multi_agent", "red_team_campaign"}
+    multi_agent = state["multi_agent"]
+    assert set(multi_agent["participants"]) == roles
+    assert len(multi_agent["handoffs"]) == 3
+    assert len(multi_agent["reviews"]) == 1
+    assert len(multi_agent["reconciliations"]) == 1
+    assert all(check["match"] for check in multi_agent["coordination_checks"])
     campaign_summary = state["red_team_campaign"]["summary"]
     assert campaign_summary["attack_count"] == 25
     assert campaign_summary["coverage_cell_count"] == 25

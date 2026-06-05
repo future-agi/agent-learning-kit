@@ -63,6 +63,8 @@ agent-learn optimize examples/redteam_autogen_optimization.json \
   --output artifacts/redteam-autogen-optimization.json
 agent-learn optimize examples/long_horizon_redteam_optimization.json \
   --output artifacts/long-horizon-redteam-optimization.json
+agent-learn optimize examples/redteam_society_optimization.json \
+  --output artifacts/redteam-society-optimization.json
 agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability-optimization.json
 agent-learn optimize examples/agent_integration_optimization.json \
@@ -480,6 +482,10 @@ AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_long_horizon_redteam_optimization.py \
   artifacts/sdk-long-horizon-redteam-optimization.json
 
+AGENT_LEARNING_SDK_REDTEAM_SOCIETY_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_society_optimization.py \
+  artifacts/sdk-redteam-society-optimization.json
+
 AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
   artifacts/sdk-agent-control-plane-optimization.json
@@ -631,6 +637,15 @@ memory poisoning over instruction, tool, memory, retrieval, and environment
 surfaces. The same attack-system search is available from Python through
 `optimize.build_long_horizon_redteam_optimization_manifest()` and
 `examples/sdk_long_horizon_redteam_optimization.py`.
+
+The `redteam_society_optimization.json` example adds a multi-agent red-team
+council around the long-horizon attack system. It searches weak, partial, and
+verified `multi_agent_room` candidates until the selected council has
+orchestrator-leak, tool-chain, memory-privacy, critic, and steward roles with
+explicit handoff contracts, review, reconciliation, and full 25-cell red-team
+campaign evidence. The same society search is available from Python through
+`optimize.build_redteam_society_optimization_manifest()` and
+`examples/sdk_redteam_society_optimization.py`.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It

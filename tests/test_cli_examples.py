@@ -61,6 +61,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_LONG_HORIZON_REDTEAM_OPT_EXAMPLE_KEY",
         ),
         (
+            "optimize",
+            "redteam_society_optimization.json",
+            "agent-learning.optimization.v1",
+            "AGENT_LEARNING_REDTEAM_SOCIETY_OPT_EXAMPLE_KEY",
+        ),
+        (
             "optimize-eval",
             "eval_suite_optimization.json",
             "agent-learning.eval-optimization.v1",
@@ -1480,6 +1486,100 @@ def test_long_horizon_redteam_optimization_example_selects_attack_system(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "long-horizon-redteam-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_redteam_society_optimization_example_selects_council(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_REDTEAM_SOCIETY_OPT_EXAMPLE_KEY",
+        "real-local-redteam-society-opt-key",
+    )
+
+    output_path = tmp_path / "redteam-society-optimization.json"
+    junit_path = tmp_path / "redteam-society-optimization.junit.xml"
+    sarif_path = tmp_path / "redteam-society-optimization.sarif.json"
+    markdown_path = tmp_path / "redteam-society-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "redteam_society_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    roles = {
+        "red_team_lead",
+        "orchestrator_leak_tester",
+        "tool_chain_attacker",
+        "memory_privacy_guard",
+        "vidura",
+        "dharma_steward",
+    }
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.96
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    best_room = payload["optimization"]["best_config"]["simulation"][
+        "environments"
+    ][0]["data"]
+    assert set(best_room["participants"]) == roles
+    assert best_room["allow_unknown_roles"] is False
+    assert len(best_room["expected_handoffs"]) == 3
+    assert best_room["expected_reconciliation"]["accepted_source"] == (
+        "dharma_steward"
+    )
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"adversarial", "multi_agent", "red_team_campaign"}
+    multi_agent = state["multi_agent"]
+    assert set(multi_agent["participants"]) == roles
+    assert len(multi_agent["handoffs"]) == 3
+    assert len(multi_agent["reviews"]) == 1
+    assert len(multi_agent["reconciliations"]) == 1
+    assert all(check["match"] for check in multi_agent["coordination_checks"])
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "redteam-society-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 
