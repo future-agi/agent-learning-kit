@@ -98,6 +98,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_workspace_observability is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
+    assert simulate.build_framework_certification_run_manifest is not None
     assert optimize.build_artifact_optimization_suite is not None
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
@@ -3119,6 +3120,172 @@ def test_sdk_framework_certification_optimization_example_runs(
     portability = state["framework_portability_matrix"]["summary"]
     assert portability["mapped_count"] == 10
     assert portability["missing_count"] == 0
+
+
+def test_sdk_framework_certification_simulation_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY",
+        "real-local-sdk-framework-certification-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_framework_certification_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_certification_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY"
+    ]
+    assert manifest["simulation"]["min_turns"] == 4
+    assert manifest["simulation"]["max_turns"] == 4
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["framework_lifecycle_quality"]["required_stages"] == [
+        "initialize",
+        "tool_registration",
+        "start_session",
+        "invoke",
+        "stream",
+        "checkpoint",
+        "retry",
+        "cancel",
+        "resume",
+        "shutdown",
+    ]
+    assert len(config["framework_probe_quality"]["required_operations"]) == 12
+    assert len(config["framework_portability_quality"]["required_mappings"]) == 10
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_framework_certification_run_manifest(
+        name="custom-framework-certification-simulation",
+        framework="custom_graph",
+        target_framework="custom_runner",
+        certification=[
+            {
+                "type": "framework_lifecycle",
+                "framework": "custom_graph",
+                "phases": [{"stage": "initialize"}],
+            },
+            {
+                "capabilities": [
+                    {"name": "tool_calling", "status": "supported"}
+                ],
+            },
+            {"probes": [{"id": "invoke", "status": "passed"}]},
+            {"mappings": [{"id": "invoke", "status": "mapped"}]},
+        ],
+        min_turns=1,
+    )
+    custom_environments = custom_manifest["simulation"]["environments"]
+    assert custom_environments == [
+        {
+            "type": "framework_lifecycle",
+            "data": {
+                "framework": "custom_graph",
+                "phases": [{"stage": "initialize"}],
+            },
+        },
+        {
+            "type": "framework_capability",
+            "data": {
+                "capabilities": [
+                    {"name": "tool_calling", "status": "supported"}
+                ],
+            },
+        },
+        {
+            "type": "framework_probe",
+            "data": {"probes": [{"id": "invoke", "status": "passed"}]},
+        },
+        {
+            "type": "framework_portability",
+            "data": {"mappings": [{"id": "invoke", "status": "mapped"}]},
+        },
+    ]
+
+    output_path = tmp_path / "sdk-framework-certification-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-framework-certification-simulation"
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-framework-certification-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "framework_lifecycle_coverage",
+        "framework_lifecycle_quality",
+        "framework_capability_coverage",
+        "framework_capability_quality",
+        "framework_probe_coverage",
+        "framework_probe_quality",
+        "framework_portability_coverage",
+        "framework_portability_quality",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {
+        "framework_lifecycle_trace",
+        "framework_capability_matrix",
+        "framework_probe_suite",
+        "framework_portability_matrix",
+    }
+    lifecycle = state["framework_lifecycle_trace"]["summary"]
+    assert lifecycle["phase_count"] == 10
+    assert lifecycle["recovered_error_count"] == 1
+    assert lifecycle["terminal_status"] == "completed"
+    capability = state["framework_capability_matrix"]["summary"]
+    assert capability["supported_count"] == 9
+    assert capability["missing_count"] == 0
+    assert capability["has_exports"] is True
+    probe = state["framework_probe_suite"]["summary"]
+    assert probe["passed_count"] == 12
+    assert probe["failed_count"] == 0
+    assert probe["required_pass_rate"] == pytest.approx(1.0)
+    portability = state["framework_portability_matrix"]["summary"]
+    assert portability["mapped_count"] == 10
+    assert portability["missing_count"] == 0
+    assert portability["required_mapping_rate"] == pytest.approx(1.0)
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "framework_lifecycle_ready",
+        "framework_lifecycle_status",
+        "framework_capability_ready",
+        "framework_capability_status",
+        "framework_probe_suite_ready",
+        "framework_probe_status",
+        "framework_portability_matrix_ready",
+        "framework_portability_status",
+        "framework_probe_failures_listed",
+        "framework_portability_gaps_listed",
+    } <= event_names
 
 
 def test_sdk_autonomous_redteam_task_world_optimization_example_runs(

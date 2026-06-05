@@ -453,6 +453,10 @@ AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_optimization.py \
   artifacts/sdk-framework-certification-optimization.json
 
+AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_framework_certification_simulation.py \
+  artifacts/sdk-framework-certification-simulation.json
+
 AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_social_memory_framework_optimization.py \
   artifacts/sdk-social-memory-framework-optimization.json
@@ -664,6 +668,11 @@ The same harness is available from Python through
 `examples/sdk_framework_certification_optimization.py`, which search weak
 versus certified lifecycle, capability, probe, and portability candidates as
 one `simulation.environments` bundle.
+For direct, non-optimizer simulation,
+`simulate.build_framework_certification_run_manifest()` and
+`examples/sdk_framework_certification_simulation.py` run the certified
+lifecycle, capability, probe, and portability evidence as a normal
+`agent-learning.run.v1` artifact.
 
 The `autonomous_redteam_task_world_optimization.json` example optimizes a
 local autonomous task/world red-team harness. It verifies structured artifacts,
