@@ -1639,7 +1639,7 @@ def build_redteam_optimization_manifest(
 
     This is the SDK path for the promptfoo-style red-team use case: optimize the
     attack/surface matrix while the simulator auto-generates the adversarial
-    attack pack and campaign evidence that ai-evaluation scores.
+    attack pack and campaign evidence that Agent Learning evals score.
     """
 
     if not name:
@@ -1859,7 +1859,7 @@ def build_persistent_state_redteam_optimization_manifest(
     The search space is a set of coherent lifecycle defense candidates. Each
     candidate changes the simulated write policy, context rehydration behavior,
     activation guard, provenance, and mitigations together, then the optimizer
-    selects the candidate with the best ai-evaluation lifecycle metrics.
+    selects the candidate with the best Agent Learning lifecycle metrics.
     """
 
     if not name:

@@ -195,7 +195,7 @@ def optimize_eval_suite_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Load and optimize a promptfoo-style eval suite with agent-opt."""
+    """Load and optimize a promptfoo-style eval suite with Agent Learning."""
 
     suite_path = Path(path).expanduser().resolve()
     suite = load_eval_suite_file(suite_path)
@@ -270,7 +270,9 @@ def optimize_eval_suite(
     try:
         from fi.opt import problem_from_eval_suite
     except Exception as exc:  # pragma: no cover - optional dependency clarity
-        raise ManifestError("agent-opt is required for eval-suite optimization.") from exc
+        raise ManifestError(
+            "Agent Learning Kit optimizer engine is required for eval-suite optimization."
+        ) from exc
 
     problem = problem_from_eval_suite(
         prepared,
@@ -309,7 +311,7 @@ def run_eval_suite(
     opts = options or EvalSuiteOptions()
     base_dir = Path(suite_path).expanduser().resolve().parent
     prepared = _prepare_eval_suite(dict(suite), base_dir=base_dir)
-    name = str(opts.name or prepared.get("name") or "agent-simulate-eval")
+    name = str(opts.name or prepared.get("name") or "agent-learning-eval")
     threshold = float(opts.threshold if opts.threshold is not None else prepared.get("threshold", 1.0))
     if opts.dry_run:
         return _suite_result(

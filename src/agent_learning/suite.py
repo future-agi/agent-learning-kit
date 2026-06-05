@@ -869,7 +869,9 @@ def optimize_suite(
     try:
         from fi.opt import problem_from_agent_learning_suite
     except Exception as exc:  # pragma: no cover - optional dependency clarity
-        raise SuiteError("agent-opt is required for suite optimization.") from exc
+        raise SuiteError(
+            "Agent Learning Kit optimizer engine is required for suite optimization."
+        ) from exc
 
     problem = problem_from_agent_learning_suite(
         prepared,

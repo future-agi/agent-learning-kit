@@ -350,7 +350,8 @@ def build_task_run_manifest(
     This is the SDK counterpart to hand-writing ``agent-learning.run.v1`` JSON:
     callers provide an existing manifest agent spec (scripted, callable,
     framework, or any future adapter), optional environments, and optional
-    agent-report evaluation settings. Runtime semantics stay in simulate-sdk.
+    agent-report evaluation settings. Runtime semantics live in the vendored
+    Agent Learning simulation engine inside this package.
     """
 
     if not name:

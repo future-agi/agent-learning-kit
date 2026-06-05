@@ -257,8 +257,9 @@ def build_redteam_manifest(
     """Build a runnable red-team manifest from SDK data.
 
     The generated manifest uses the same ``redteam.auto_generate`` path as the
-    CLI. At runtime simulate-sdk materializes adversarial attack-pack and
-    campaign environments, then ai-evaluation scores the resulting report.
+    CLI. At runtime the Agent Learning simulation engine materializes
+    adversarial attack-pack and campaign environments, then Agent Learning evals
+    score the resulting report.
     """
 
     if not name:

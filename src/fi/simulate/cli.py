@@ -369,10 +369,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else:
                 result = optimize_manifest_command(args)
         except ManifestError as exc:
-            print(f"agent-simulate: {exc}", file=sys.stderr)
+            print(f"agent-learn simulate: {exc}", file=sys.stderr)
             return 2
         except Exception as exc:
-            print(f"agent-simulate: {args.command} failed: {exc}", file=sys.stderr)
+            print(f"agent-learn simulate: {args.command} failed: {exc}", file=sys.stderr)
             return 3
         if not result.get("outputs_written") and not getattr(args, "quiet", False):
             if args.command == "report":
@@ -426,7 +426,7 @@ def init_scaffold_command(args: argparse.Namespace) -> Dict[str, Any]:
         force=bool(getattr(args, "force", False)),
         duration_seconds=round(time.time() - started, 4),
     )
-    return _write_outputs(result, {}, args, target_dir / "agent-simulate-init.json")
+    return _write_outputs(result, {}, args, target_dir / "agent-learning-init.json")
 
 
 def compare_results_command(args: argparse.Namespace) -> Dict[str, Any]:
@@ -1424,7 +1424,7 @@ def _prepare_redteam_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     env_types = _redteam_environment_types(manifest)
     if not REDTEAM_ENV_TYPES.intersection(env_types):
         raise ManifestError(
-            "`agent-simulate redteam` requires at least one adversarial_attack_pack, "
+            "`agent-learn redteam` requires at least one adversarial_attack_pack, "
             "red_team_campaign, or red_team_readiness environment; set "
             "`redteam.auto_generate: true` to materialize a local attack matrix"
         )
@@ -6471,7 +6471,7 @@ def _init_scaffold_result(
     allowed = {"ci", "run", "redteam", "optimize", "all"}
     if preset not in allowed:
         raise ManifestError(f"--preset must be one of: {', '.join(sorted(allowed))}")
-    name = _slug(name, default="agent-simulate")
+    name = _slug(name, default="agent-learning")
     required_env = _unique_strings(required_env)
     files = _init_scaffold_files(target_dir=target_dir, preset=preset, name=name, required_env=required_env)
     existing = [str(path) for path in files if path.exists() and not force]
@@ -6484,8 +6484,8 @@ def _init_scaffold_result(
         path.write_text(content, encoding="utf-8")
         written.append(str(path))
     return {
-        "schema_version": CLI_SCHEMA_VERSION,
-        "kind": "agent-simulate.init.v1",
+        "schema_version": "agent-learning.cli.v1",
+        "kind": "agent-learning.init.v1",
         "name": f"{name}-init",
         "status": "passed",
         "exit_code": 0,
@@ -6531,13 +6531,13 @@ def _init_scaffold_files(
 def _init_next_commands(target_dir: Path, preset: str) -> List[str]:
     commands = []
     if preset in {"ci", "all"}:
-        commands.append(f"agent-simulate replay {target_dir / 'manifests'} --output {target_dir / 'artifacts' / 'replay.json'}")
+        commands.append(f"agent-learn replay {target_dir / 'manifests'} --output {target_dir / 'artifacts' / 'replay.json'}")
     if preset == "run":
-        commands.append(f"agent-simulate run {target_dir / 'manifests' / 'run.json'} --output {target_dir / 'artifacts' / 'run.json'}")
+        commands.append(f"agent-learn run {target_dir / 'manifests' / 'run.json'} --output {target_dir / 'artifacts' / 'run.json'}")
     if preset == "redteam":
-        commands.append(f"agent-simulate redteam {target_dir / 'manifests' / 'redteam.json'} --output {target_dir / 'artifacts' / 'redteam.json'}")
+        commands.append(f"agent-learn redteam {target_dir / 'manifests' / 'redteam.json'} --output {target_dir / 'artifacts' / 'redteam.json'}")
     if preset == "optimize":
-        commands.append(f"agent-simulate optimize {target_dir / 'manifests' / 'optimize.json'} --dry-run")
+        commands.append(f"agent-learn optimize {target_dir / 'manifests' / 'optimize.json'} --dry-run")
     return commands
 
 
@@ -6684,8 +6684,8 @@ def _init_redteam_campaign(name: str, attack_id: str) -> Dict[str, Any]:
         ],
         "runs": [
             {
-                "id": "agent-simulate-local",
-                "framework": "agent_simulate",
+                "id": "agent-learning-local",
+                "framework": "agent_learning",
                 "status": "passed",
                 "taxonomies": ["owasp_llm_top_10", "owasp_agentic_ai"],
                 "attack_types": ["prompt_injection"],
@@ -6722,7 +6722,7 @@ def _init_optimize_manifest(name: str, required_env: Sequence[str]) -> Dict[str,
                     ],
                     "evaluation.agent_report.threshold": [0.7, 0.75],
                 },
-                "metadata": {"source": "agent-simulate init"},
+                "metadata": {"source": "agent-learn init"},
             },
             "optimizer": {
                 "max_candidates": 4,
@@ -6736,11 +6736,11 @@ def _init_optimize_manifest(name: str, required_env: Sequence[str]) -> Dict[str,
 def _init_readme(name: str, preset: str) -> str:
     return (
         f"# {name} Agent Simulation Suite\n\n"
-        "Generated by `agent-simulate init`.\n\n"
+        "Generated by `agent-learn init`.\n\n"
         "## Commands\n\n"
-        "- `agent-simulate replay manifests --output artifacts/replay.json --junit artifacts/replay.junit.xml --sarif artifacts/replay.sarif.json --markdown artifacts/replay.md`\n"
-        "- `agent-simulate promote-to-regression artifacts/redteam-result.json --manifest regressions/promoted-regression.json`\n"
-        "- `agent-simulate report artifacts/replay.json --markdown artifacts/replay.md`\n\n"
+        "- `agent-learn replay manifests --output artifacts/replay.json --junit artifacts/replay.junit.xml --sarif artifacts/replay.sarif.json --markdown artifacts/replay.md`\n"
+        "- `agent-learn promote-to-regression artifacts/redteam-result.json --manifest regressions/promoted-regression.json`\n"
+        "- `agent-learn report artifacts/replay.json --markdown artifacts/replay.md`\n\n"
         f"Preset: `{preset}`.\n"
     )
 
@@ -8652,9 +8652,11 @@ def _build_optimizer_inputs(optimization: Mapping[str, Any]) -> tuple[Any, Dict[
     try:
         from fi.opt import OptimizationTarget
     except Exception as exc:  # pragma: no cover - optional dependency clarity
-        raise ManifestError("agent-opt is required for `agent-simulate optimize`.") from exc
+        raise ManifestError(
+            "Agent Learning Kit optimizer engine is required for `agent-learn optimize`."
+        ) from exc
     target = OptimizationTarget(
-        name=str(target_config.get("name") or "agent-simulate-cli-optimization"),
+        name=str(target_config.get("name") or "agent-learning-cli-optimization"),
         layers=list(target_config.get("layers") or ["harness", "evaluator"]),
         base_config=copy.deepcopy(dict(target_config.get("base_config") or {})),
         search_space=copy.deepcopy(dict(target_config.get("search_space") or {})),
@@ -8715,7 +8717,7 @@ def _optimization_result(
     search_paths = _optimization_search_paths(optimization_result, history)
     metric_averages = _optimization_metric_averages(history)
     manifest_optimization = _manifest_optimization_artifact(
-        name=str(manifest.get("name") or "agent-simulate-cli-optimization"),
+        name=str(manifest.get("name") or "agent-learning-cli-optimization"),
         final_score=final_score,
         threshold=threshold,
         passed=passed,
@@ -8726,7 +8728,7 @@ def _optimization_result(
         metric_averages=metric_averages,
     )
     optimizer_trace = _optimizer_trace_artifact(
-        name=str(manifest.get("name") or "agent-simulate-cli-optimization"),
+        name=str(manifest.get("name") or "agent-learning-cli-optimization"),
         optimization_result=optimization_result,
         final_score=final_score,
         passed=passed,
@@ -8750,7 +8752,7 @@ def _optimization_result(
     overall_passed = passed and evaluation_passed
     return {
         "schema_version": CLI_SCHEMA_VERSION,
-        "name": str(manifest.get("name") or "agent-simulate-cli-optimization"),
+        "name": str(manifest.get("name") or "agent-learning-cli-optimization"),
         "status": "passed" if overall_passed else "failed",
         "exit_code": 0 if overall_passed else 1,
         "summary": {
@@ -9028,7 +9030,7 @@ def _optimizer_trace_artifact(
         best_candidate_id=best_candidate_id,
         final_score=final_score,
         metadata={
-            "source": "agent-simulate optimize",
+            "source": "agent-learn optimize",
             "history_count": len(history),
             "optimizer_metadata": result_metadata,
         },
@@ -9095,7 +9097,7 @@ def _optimization_trace_diagnostics(optimization_result: Any) -> List[Dict[str, 
         {
             "component": "manifest",
             "failure_mode": "optimization_search",
-            "evidence": "agent-simulate optimize evaluated manifest candidates.",
+            "evidence": "agent-learn optimize evaluated manifest candidates.",
         }
     ]
 
@@ -9476,7 +9478,7 @@ def _sarif_json(result: Mapping[str, Any], manifest_path: Path) -> str:
             {
                 "tool": {
                     "driver": {
-                        "name": "agent-simulate redteam",
+                        "name": "agent-learn redteam",
                         "informationUri": "https://futureagi.com",
                         "rules": list(rules.values()),
                     }
@@ -9665,14 +9667,14 @@ def _public_result(result: Mapping[str, Any]) -> Dict[str, Any]:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="agent-simulate",
-        description="Run Future AGI simulation/evaluation manifests locally or in CI.",
+        prog="agent-learn simulate",
+        description="Run Agent Learning simulation/evaluation manifests locally or in CI.",
     )
     subparsers = parser.add_subparsers(dest="command")
     init = subparsers.add_parser("init", help="Scaffold runnable CLI manifests and CI artifact directories.")
     init.add_argument("directory", nargs="?", default=".", help="Target directory for the scaffold.")
     init.add_argument("--preset", choices=["ci", "run", "redteam", "optimize", "all"], default="ci", help="Scaffold preset.")
-    init.add_argument("--name", default="agent-simulate", help="Base name for generated manifests.")
+    init.add_argument("--name", default="agent-learning", help="Base name for generated manifests.")
     init.add_argument("--required-env", action="append", default=[], help="Required environment variable for generated manifests; repeatable.")
     init.add_argument("--force", action="store_true", help="Overwrite existing scaffold files.")
     init.add_argument("-o", "--output", action="append", default=[], help="Write JSON init summary to this path.")
@@ -9748,7 +9750,7 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--dry-run", action="store_true", help="Validate manifests/env without executing simulations.")
     replay.add_argument("--fail-fast", action="store_true", help="Stop after the first failed child manifest.")
     replay.add_argument("--quiet", action="store_true", help="Do not print JSON summary when no output path is configured.")
-    optimize = subparsers.add_parser("optimize", help="Optimize a manifest with agent-opt over JSON search paths.")
+    optimize = subparsers.add_parser("optimize", help="Optimize a manifest with Agent Learning over JSON search paths.")
     optimize.add_argument("manifest", help="Path to a JSON/YAML optimization manifest.")
     optimize.add_argument("-o", "--output", action="append", default=[], help="Write JSON output to this path. .xml paths are treated as JUnit.")
     optimize.add_argument("--junit", action="append", default=[], help="Write compact JUnit XML output.")

@@ -734,7 +734,7 @@ def build_manifest_optimization_problem(
     manifest_path: str | Path = ".",
     name: Optional[str] = None,
 ) -> Any:
-    """Build an agent-opt ManifestOptimizationProblem for this manifest."""
+    """Build an Agent Learning ManifestOptimizationProblem for this manifest."""
 
     cli = _cli()
     manifest_path = Path(manifest_path).expanduser().resolve()
@@ -746,7 +746,9 @@ def build_manifest_optimization_problem(
     try:
         from fi.opt import ManifestOptimizationProblem
     except Exception as exc:  # pragma: no cover - optional dependency clarity
-        raise ManifestError("agent-opt is required for manifest optimization.") from exc
+        raise ManifestError(
+            "Agent Learning Kit optimizer engine is required for manifest optimization."
+        ) from exc
 
     def evaluate_manifest(candidate_manifest: Mapping[str, Any], candidate: Any) -> Any:
         if isinstance(candidate_manifest, dict):

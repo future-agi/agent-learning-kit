@@ -16,14 +16,15 @@ def evaluate_agent_report(
     attach: bool = True,
 ) -> Any:
     """
-    Evaluate a simulation report locally with ai-evaluation agent metrics.
+    Evaluate a simulation report locally with Agent Learning eval metrics.
 
     This is the no-cloud path for the trinity loop:
-    simulate-sdk captures messages/tool calls/events/artifacts, ai-evaluation
-    scores the agent trajectory and pentest signals, and agent-opt can optimize
-    against the attached numeric scores.
+    Agent Learning simulation captures messages/tool calls/events/artifacts,
+    Agent Learning evals score the agent trajectory and pentest signals, and
+    Agent Learning optimization can optimize against the attached numeric
+    scores.
 
-    Returns the ai-evaluation AgentReportEvaluation object. When `attach=True`,
+    Returns the AgentReportEvaluation object. When `attach=True`,
     each TestCaseResult receives an `evaluation["agent_report"]` payload and
     aggregate summary is copied into `result.metadata["agent_report_summary"]`.
     """
@@ -32,8 +33,8 @@ def evaluate_agent_report(
         from fi.evals.metrics.agents import evaluate_agent_report as evaluate
     except Exception as e:  # pragma: no cover - import error clarity
         raise RuntimeError(
-            "ai-evaluation>=1.1 with agent report metrics is required. "
-            "Install with `pip install ai-evaluation`."
+            "Agent Learning Kit eval metrics are required. "
+            "Reinstall `agent-learning-kit`."
         ) from e
 
     evaluation = evaluate(report, config=dict(config or {}), threshold=threshold)
@@ -53,22 +54,20 @@ def evaluate_report(
     extra_inputs: Mapping[str, str] | None = None,
 ) -> TestReport:
     """
-    Evaluate each test case transcript using Future AGI ai-evaluation SDK.
+    Evaluate each test case transcript using Agent Learning evals.
 
     - Templates like "task_completion" will receive input and output fields
       mapped from persona and transcript.
     - "tone" will receive the whole transcript as input.
 
-    Docs:
-    - GitHub: https://github.com/future-agi/ai-evaluation
-    - Getting started: https://docs.futureagi.com/future-agi/get-started/evaluation/running-your-first-eval#evaluate-using-sdk
+    Docs: https://docs.futureagi.com/future-agi/get-started/evaluation/running-your-first-eval#evaluate-using-sdk
     """
 
     try:
         from fi.evals import Evaluator
     except Exception as e:  # pragma: no cover - import error clarity
         raise RuntimeError(
-            "ai-evaluation package is required. Install with `pip install ai-evaluation`."
+            "Agent Learning Kit eval engine is required. Reinstall `agent-learning-kit`."
         ) from e
 
     evaluator = Evaluator(fi_api_key=api_key, fi_secret_key=secret_key)
