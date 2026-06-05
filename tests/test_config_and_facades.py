@@ -57,6 +57,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_task_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
+    assert simulate.build_realtime_run_manifest is not None
     assert simulate.write_manifest_file is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
@@ -1550,6 +1551,102 @@ def test_sdk_task_simulation_example_runs(monkeypatch, tmp_path):
     assert metrics["world_contract_quality"] == pytest.approx(1.0)
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     assert state["world_contract"]["state"]["refund"]["status"] == "approved"
+
+
+def test_sdk_realtime_voice_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REALTIME_SIMULATION_KEY",
+        "real-local-sdk-realtime-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_realtime_voice_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_realtime_voice_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_REALTIME_SIMULATION_KEY"]
+    assert manifest["simulation"]["modality"] == "voice"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "voice",
+        "streaming_trace",
+    ]
+    assert manifest["simulation"]["environments"][0]["data"]["framework"] == "livekit"
+    assert manifest["simulation"]["environments"][1]["data"]["framework"] == "livekit"
+
+    output_path = tmp_path / "sdk-realtime-voice-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    manifest_path = output_path.with_suffix(".manifest.json")
+    assert manifest_path.exists()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["name"] == (
+        "sdk-realtime-voice-simulation"
+    )
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-realtime-voice-simulation"
+    assert result["status"] == "passed"
+    case = result["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(state) >= {"voice", "streaming_trace"}
+
+    voice = state["voice"]
+    assert voice["sample_rate_hz"] == 16000
+    assert voice["last_transcript"] == "I need help with a refund on my order."
+    assert voice["route_history"] == [
+        {
+            "route": "support",
+            "reason": "refund support request",
+            "target": {"queue": "refund_support", "priority": "high"},
+        }
+    ]
+    assert voice["timing_distribution"]["stage_order"] == [
+        "vad",
+        "stt",
+        "llm",
+        "tts",
+    ]
+    assert voice["timing_distribution"]["sample_count"] == 12
+    assert voice["timing_distribution"]["stages"]["tts"]["p50_ms"] == 260.0
+    assert voice["tts_history"][0]["text"].startswith("Your refund request")
+
+    streaming = state["streaming_trace"]
+    assert streaming["framework"] == "livekit"
+    assert streaming["summary"]["event_count"] == 4
+    assert streaming["summary"]["tool_delta_count"] == 1
+    assert "tool_delta" in streaming["signals"]
+
+    assistant_tool_names = {
+        call["name"]
+        for message in case["messages"]
+        if message["role"] == "assistant"
+        for call in message.get("tool_calls", [])
+    }
+    assert {
+        "voice_status",
+        "voice_timing",
+        "transcribe_audio",
+        "route_call",
+        "streaming_trace_status",
+        "list_stream_events",
+        "inspect_stream_event",
+        "speak",
+    } <= assistant_tool_names
+    event_names = {(event["type"], event.get("name")) for event in case["events"]}
+    assert ("voice_trace", "voice_status") in event_names
+    assert ("voice_timing", "voice_timing_distribution") in event_names
+    assert ("voice_route", "call_routed") in event_names
+    assert ("voice", "tts_output") in event_names
+    assert ("streaming_trace", "streaming_trace_status") in event_names
+    assert ("streaming_trace", "streaming_events_listed") in event_names
+    assert ("streaming_trace", "streaming_event_inspected") in event_names
 
 
 def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):

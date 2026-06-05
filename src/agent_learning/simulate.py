@@ -354,6 +354,78 @@ def build_task_run_manifest(
     return manifest
 
 
+def build_realtime_run_manifest(
+    *,
+    name: str,
+    framework: str = "livekit",
+    voice: Optional[Mapping[str, Any]] = None,
+    streaming_trace: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    metadata: Optional[Mapping[str, Any]] = None,
+    simulation_engine: str = "local_text",
+    min_turns: int = 2,
+    max_turns: int = 2,
+    evaluation_enabled: bool = False,
+) -> dict[str, Any]:
+    """Build a local realtime voice + streaming simulation manifest.
+
+    This is the SDK counterpart to
+    ``examples/voice_streaming_realtime_manifest.json``: callers can simulate a
+    realtime provider stack with a ``voice`` environment, a ``streaming_trace``
+    environment, and a scripted agent that exercises transcript, routing,
+    streaming event, and TTS tools.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    framework_key = _framework_key(framework)
+    voice_data = copy.deepcopy(
+        dict(voice) if voice is not None else _default_realtime_voice(framework_key)
+    )
+    voice_data.setdefault("framework", framework_key)
+    streaming_data = copy.deepcopy(
+        dict(streaming_trace)
+        if streaming_trace is not None
+        else _default_realtime_streaming_trace(framework_key)
+    )
+    streaming_data.setdefault("framework", framework_key)
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(scenario)
+            if scenario is not None
+            else _default_realtime_scenario(str(name), framework_key)
+        ),
+        "agent": copy.deepcopy(dict(agent or _default_realtime_agent())),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "modality": "voice",
+            "max_turns": int(max_turns),
+            "min_turns": int(min_turns),
+            "environments": [
+                {"type": "voice", "data": voice_data},
+                {"type": "streaming_trace", "data": streaming_data},
+            ],
+        },
+        "evaluation": {"enabled": bool(evaluation_enabled)},
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_realtime_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -564,6 +636,182 @@ def _task_run_evaluation(
             "threshold": float(threshold),
             "config": config,
         },
+    }
+
+
+def _default_realtime_scenario(name: str, framework: str) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {"name": "Asha", "role": "realtime-agent-owner"},
+                "situation": (
+                    f"Asha needs a {framework} realtime voice session replayed "
+                    "with streaming tool evidence before routing a support call."
+                ),
+                "outcome": (
+                    "The call is routed to refund support with transcript, "
+                    "timing, streaming, and TTS evidence."
+                ),
+            }
+        ],
+    }
+
+
+def _default_realtime_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "Checking the realtime voice session before routing the call."
+                ),
+                "tool_calls": [
+                    {"id": "voice_status", "name": "voice_status", "arguments": {}},
+                    {"id": "voice_timing", "name": "voice_timing", "arguments": {}},
+                    {
+                        "id": "transcribe_user",
+                        "name": "transcribe_audio",
+                        "arguments": {"id": "utt_1"},
+                    },
+                    {
+                        "id": "route_support",
+                        "name": "route_call",
+                        "arguments": {
+                            "route": "support",
+                            "reason": "refund support request",
+                        },
+                    },
+                ],
+            },
+            {
+                "content": "Checking the streaming trace before speaking the answer.",
+                "tool_calls": [
+                    {
+                        "id": "stream_status",
+                        "name": "streaming_trace_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "stream_tool_events",
+                        "name": "list_stream_events",
+                        "arguments": {"signal": "tool_delta"},
+                    },
+                    {
+                        "id": "inspect_stream_tool",
+                        "name": "inspect_stream_event",
+                        "arguments": {"id": "stream_tool_delta"},
+                    },
+                    {
+                        "id": "speak_answer",
+                        "name": "speak",
+                        "arguments": {
+                            "text": (
+                                "Your refund request has been routed to support "
+                                "with realtime evidence."
+                            ),
+                            "latency_ms": 260,
+                            "duration_ms": 1800,
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _default_realtime_voice(framework: str) -> dict[str, Any]:
+    return {
+        "framework": framework,
+        "sample_rate_hz": 16000,
+        "stt_latency_ms": 140,
+        "tts_latency_ms": 280,
+        "utterances": [
+            {
+                "id": "utt_1",
+                "speaker": "user",
+                "transcript": "I need help with a refund on my order.",
+                "start_ms": 0,
+                "end_ms": 1720,
+                "latency_ms": 132,
+                "confidence": 0.97,
+                "language": "en",
+            }
+        ],
+        "frame_replay": [
+            {
+                "id": "frame_1",
+                "type": "audio_frame",
+                "speaker": "user",
+                "timestamp_ms": 80,
+                "duration_ms": 20,
+                "energy": 0.74,
+            },
+            {
+                "id": "frame_overlap",
+                "type": "audio_frame",
+                "speaker": "agent",
+                "timestamp_ms": 900,
+                "duration_ms": 20,
+                "overlap": True,
+                "energy": 0.42,
+            },
+        ],
+        "timing_distribution": {
+            "stage_order": ["vad", "stt", "llm", "tts"],
+            "stages": {
+                "vad": [24, 29, 31],
+                "stt": [120, 132, 148],
+                "llm": [210, 224, 241],
+                "tts": [250, 260, 280],
+            }
+        },
+        "routes": {
+            "support": {"queue": "refund_support", "priority": "high"},
+            "billing": {"queue": "billing"},
+        },
+        "initial_route": "support",
+        "allow_interruptions": True,
+        "noise_profile": {"snr_db": 24, "background": "office"},
+    }
+
+
+def _default_realtime_streaming_trace(framework: str) -> dict[str, Any]:
+    return {
+        "framework": framework,
+        "events": [
+            {
+                "id": "stream_start",
+                "type": "session_start",
+                "role": "system",
+                "content": "session opened",
+                "timestamp_ms": 0,
+            },
+            {
+                "id": "stream_token_1",
+                "type": "token_delta",
+                "role": "assistant",
+                "content": "Your refund",
+                "timestamp_ms": 120,
+            },
+            {
+                "id": "stream_tool_delta",
+                "type": "tool_delta",
+                "name": "route_call",
+                "role": "assistant",
+                "tool_name": "route_call",
+                "arguments": {"route": "support"},
+                "timestamp_ms": 240,
+            },
+            {
+                "id": "stream_end",
+                "type": "message_done",
+                "role": "assistant",
+                "content": "Your refund request has been routed to support.",
+                "timestamp_ms": 520,
+            },
+        ],
+        "metadata": {"cookbook": "sdk-realtime-voice-simulation"},
     }
 
 
@@ -1001,6 +1249,7 @@ __all__ = [
     "build_manifest_agent_callback",
     "build_manifest_environments",
     "build_multi_framework_suite_manifest",
+    "build_realtime_run_manifest",
     "build_task_run_manifest",
     "compare_result_files",
     "compare_results",

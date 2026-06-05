@@ -370,6 +370,10 @@ AGENT_LEARNING_SDK_TASK_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_task_simulation.py \
   artifacts/sdk-task-simulation.json
 
+AGENT_LEARNING_SDK_REALTIME_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_realtime_voice_simulation.py \
+  artifacts/sdk-realtime-voice-simulation.json
+
 AGENT_LEARNING_SDK_EVAL_SUITE_KEY=... \
   PYTHONPATH=src python examples/sdk_eval_suite.py \
   artifacts/sdk-eval-suite.json
@@ -493,6 +497,10 @@ The `voice_streaming_realtime_manifest.json` example makes `voice` and
 `streaming_trace` first-class manifest environments. It replays voice timing,
 transcription, call routing, TTS, and streaming token/tool events through one
 local realtime simulation artifact.
+`simulate.build_realtime_run_manifest()` and
+`examples/sdk_realtime_voice_simulation.py` expose the same LiveKit-style voice
+plus streaming replay from Python, including transcript, routing,
+timing-distribution, TTS, and streaming tool-delta evidence.
 
 The `voice_streaming_realtime_optimization.json` example optimizes the same
 voice plus streaming harness through `agent-learn optimize`, selecting the
