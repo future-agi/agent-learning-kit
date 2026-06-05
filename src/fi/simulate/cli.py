@@ -2311,10 +2311,10 @@ def _report_result(
         "markdown": markdown,
         "sections": sections,
     }
-    optimizer_replay = _optimizer_replay_card(source)
+    optimizer_replay = _optimizer_replay_card(source, source_path=source_path)
     if optimizer_replay is not None:
         report_payload["optimizer_replay"] = optimizer_replay
-    replay_card = _replay_report_card(source)
+    replay_card = _replay_report_card(source, source_path=source_path)
     if replay_card is not None:
         report_payload["replay"] = replay_card
     return {
@@ -2344,20 +2344,34 @@ def _optional_primary_score(result: Mapping[str, Any]) -> Optional[float]:
         return None
 
 
-def _optimizer_replay_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+def _optimizer_replay_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
     summary = dict(result.get("summary") or {})
     optimization = result.get("optimization")
     if isinstance(optimization, Mapping):
-        return _optimization_result_replay_card(summary, optimization)
+        return _optimization_result_replay_card(
+            summary,
+            optimization,
+            source_path=source_path,
+        )
     manifest = result.get("manifest")
     if isinstance(manifest, Mapping):
-        return _promotion_result_replay_card(summary, manifest)
+        return _promotion_result_replay_card(
+            summary,
+            manifest,
+            source_path=source_path,
+        )
     return None
 
 
 def _optimization_result_replay_card(
     summary: Mapping[str, Any],
     optimization: Mapping[str, Any],
+    *,
+    source_path: Path,
 ) -> Dict[str, Any]:
     best_config = optimization.get("best_config")
     history = [
@@ -2365,9 +2379,10 @@ def _optimization_result_replay_card(
         for item in _coerce_list(optimization.get("history"))
         if isinstance(item, Mapping)
     ]
-    return {
+    source_manifest_path = optimization.get("source_manifest_path")
+    card = {
         "kind": "optimization_result",
-        "source_manifest_path": optimization.get("source_manifest_path"),
+        "source_manifest_path": source_manifest_path,
         "source_manifest_present": isinstance(
             optimization.get("source_manifest"),
             Mapping,
@@ -2384,11 +2399,18 @@ def _optimization_result_replay_card(
         "candidate_history": _optimization_history_card(history),
         "optimizer_trace": _optimizer_trace_card(optimization.get("optimizer_trace")),
     }
+    card["actions"] = _optimization_result_actions(
+        source_path=source_path,
+        source_manifest_path=source_manifest_path,
+    )
+    return card
 
 
 def _promotion_result_replay_card(
     summary: Mapping[str, Any],
     manifest: Mapping[str, Any],
+    *,
+    source_path: Path,
 ) -> Dict[str, Any]:
     metadata = (
         manifest.get("metadata") if isinstance(manifest.get("metadata"), Mapping) else {}
@@ -2398,7 +2420,8 @@ def _promotion_result_replay_card(
         if isinstance(metadata, Mapping) and isinstance(metadata.get("regression"), Mapping)
         else {}
     )
-    return {
+    source_result_path = summary.get("source_path", regression.get("promoted_from"))
+    card = {
         "kind": "promotion_manifest",
         "promotion_kind": summary.get(
             "promotion_kind",
@@ -2429,7 +2452,16 @@ def _promotion_result_replay_card(
             summary.get("has_optimizer_trace", regression.get("has_optimizer_trace"))
         ),
         "promoted_manifest": _promoted_manifest_card(manifest),
+        "artifacts": {
+            "promoted_manifest": copy.deepcopy(dict(manifest)),
+        },
     }
+    card["actions"] = _promotion_result_actions(
+        source_path=source_path,
+        source_result_path=source_result_path,
+        manifest=manifest,
+    )
+    return card
 
 
 def _optimization_history_card(
@@ -2502,7 +2534,11 @@ def _leaf_records(value: Any, *, limit: int) -> List[Dict[str, Any]]:
     ]
 
 
-def _replay_report_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+def _replay_report_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
     replay = result.get("replay")
     if not isinstance(replay, Mapping):
         return None
@@ -2512,12 +2548,17 @@ def _replay_report_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         if isinstance(item, Mapping)
     ]
     summary = dict(result.get("summary") or {})
-    return {
+    card = {
         "kind": "replay_metrics",
         "manifest_count": len(manifests),
         "replay_pass_rate": summary.get("replay_pass_rate", summary.get("score")),
         "manifests": [_replay_manifest_report_card(item) for item in manifests],
     }
+    card["actions"] = _replay_result_actions(
+        source_path=source_path,
+        manifests=manifests,
+    )
+    return card
 
 
 def _replay_manifest_report_card(item: Mapping[str, Any]) -> Dict[str, Any]:
@@ -2541,6 +2582,218 @@ def _replay_manifest_report_card(item: Mapping[str, Any]) -> Dict[str, Any]:
         "warning_finding_count": max(0, finding_count - error_finding_count),
         "metrics": metrics,
     }
+
+
+def _optimization_result_actions(
+    *,
+    source_path: Path,
+    source_manifest_path: Any,
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_artifact",
+            "Render Report",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--markdown",
+                "artifacts/optimization-report.md",
+            ],
+        ),
+        _cli_action(
+            "promote_to_regression",
+            "Promote To Regression",
+            [
+                "agent-learn",
+                "promote-to-regression",
+                str(source_path),
+                "--output",
+                "artifacts/promotion.json",
+                "--manifest",
+                "artifacts/optimized-regression.json",
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+            ],
+        ),
+    ]
+    if source_manifest_path:
+        actions.insert(
+            0,
+            _cli_action(
+                "rerun_optimization",
+                "Rerun Optimization",
+                [
+                    "agent-learn",
+                    "optimize",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/optimization.json",
+                    "--markdown",
+                    "artifacts/optimization.md",
+                ],
+            ),
+        )
+    return actions
+
+
+def _promotion_result_actions(
+    *,
+    source_path: Path,
+    source_result_path: Any,
+    manifest: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    manifest_filename = f"{_slug(manifest.get('name'), default='optimized-regression')}.json"
+    actions = [
+        _cli_action(
+            "report_artifact",
+            "Render Report",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--markdown",
+                "artifacts/promotion-report.md",
+            ],
+        ),
+        _cli_action(
+            "replay_promoted_manifest",
+            "Replay Promoted Manifest",
+            [
+                "agent-learn",
+                "replay",
+                "{{manifest_path}}",
+                "--output",
+                "artifacts/replay.json",
+                "--junit",
+                "artifacts/replay.junit.xml",
+                "--sarif",
+                "artifacts/replay.sarif.json",
+                "--markdown",
+                "artifacts/replay.md",
+            ],
+            inputs=[
+                {
+                    "name": "manifest_path",
+                    "label": "Promoted manifest path",
+                    "default": f"artifacts/{manifest_filename}",
+                }
+            ],
+        ),
+        {
+            "id": "export_promoted_manifest",
+            "label": "Export Promoted Manifest",
+            "kind": "download",
+            "artifact_ref": "report.optimizer_replay.artifacts.promoted_manifest",
+            "default_filename": manifest_filename,
+        },
+    ]
+    if source_result_path:
+        actions.insert(
+            1,
+            _cli_action(
+                "recreate_promotion",
+                "Recreate Promotion",
+                [
+                    "agent-learn",
+                    "promote-to-regression",
+                    str(source_result_path),
+                    "--output",
+                    "artifacts/promotion.json",
+                    "--manifest",
+                    f"artifacts/{manifest_filename}",
+                    "--min-level",
+                    "note",
+                    "--max-findings",
+                    "1",
+                    *_required_env_cli_args(manifest.get("required_env")),
+                ],
+            ),
+        )
+    return actions
+
+
+def _replay_result_actions(
+    *,
+    source_path: Path,
+    manifests: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    manifest_paths = [
+        str(item.get("path"))
+        for item in manifests
+        if item.get("path") not in (None, "")
+    ]
+    actions = [
+        _cli_action(
+            "report_artifact",
+            "Render Report",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--markdown",
+                "artifacts/replay-report.md",
+            ],
+        )
+    ]
+    if manifest_paths:
+        actions.insert(
+            0,
+            _cli_action(
+                "rerun_replay",
+                "Rerun Replay",
+                [
+                    "agent-learn",
+                    "replay",
+                    *manifest_paths,
+                    "--output",
+                    "artifacts/replay.json",
+                    "--junit",
+                    "artifacts/replay.junit.xml",
+                    "--sarif",
+                    "artifacts/replay.sarif.json",
+                    "--markdown",
+                    "artifacts/replay.md",
+                ],
+            ),
+        )
+    return actions
+
+
+def _cli_action(
+    action_id: str,
+    label: str,
+    command_args: Sequence[Any],
+    *,
+    inputs: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    action = {
+        "id": action_id,
+        "label": label,
+        "kind": "cli",
+        "command": " ".join(_shell_token(str(item)) for item in command_args),
+        "command_args": [str(item) for item in command_args],
+    }
+    if inputs:
+        action["inputs"] = [dict(item) for item in inputs]
+    return action
+
+
+def _required_env_cli_args(required_env: Any) -> List[str]:
+    args: List[str] = []
+    for key in _unique_strings(_coerce_list(required_env)):
+        args.extend(["--required-env", key])
+    return args
+
+
+def _shell_token(value: str) -> str:
+    if not value:
+        return "''"
+    if all(char.isalnum() or char in "-_./:=@" for char in value):
+        return value
+    return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def _markdown_sections(result: Mapping[str, Any]) -> List[str]:

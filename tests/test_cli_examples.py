@@ -1065,6 +1065,35 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     assert replay_card["has_optimizer_trace"] is True
     assert replay_card["promoted_manifest"]["agent"]["method"] == "execute_task"
     assert replay_card["promoted_manifest"]["agent"]["input_mode"] == "dict"
+    assert replay_card["artifacts"]["promoted_manifest"]["agent"]["method"] == (
+        "execute_task"
+    )
+    action_ids = {action["id"] for action in replay_card["actions"]}
+    assert {
+        "report_artifact",
+        "recreate_promotion",
+        "replay_promoted_manifest",
+        "export_promoted_manifest",
+    } <= action_ids
+    replay_action = next(
+        action
+        for action in replay_card["actions"]
+        if action["id"] == "replay_promoted_manifest"
+    )
+    assert replay_action["command_args"][:3] == [
+        "agent-learn",
+        "replay",
+        "{{manifest_path}}",
+    ]
+    export_action = next(
+        action
+        for action in replay_card["actions"]
+        if action["id"] == "export_promoted_manifest"
+    )
+    assert export_action["kind"] == "download"
+    assert export_action["artifact_ref"] == (
+        "report.optimizer_replay.artifacts.promoted_manifest"
+    )
     report_markdown = report_markdown_path.read_text(encoding="utf-8")
     assert "## Optimization Replay" in report_markdown
     assert "Promotion kind" in report_markdown
@@ -1130,6 +1159,10 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     assert replay_report_card["kind"] == "replay_metrics"
     assert replay_report_card["manifest_count"] == 1
     assert replay_report_card["replay_pass_rate"] == pytest.approx(1.0)
+    assert {action["id"] for action in replay_report_card["actions"]} == {
+        "rerun_replay",
+        "report_artifact",
+    }
     replay_manifest_card = replay_report_card["manifests"][0]
     assert replay_manifest_card["status"] == "passed"
     assert replay_manifest_card["error_finding_count"] == 0

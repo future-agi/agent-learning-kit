@@ -629,6 +629,12 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert replay_card["promoted_manifest"]["agent"]["method"] == "execute_task"
     assert replay_card["promoted_manifest"]["agent"]["input_mode"] == "dict"
     assert replay_card["has_optimizer_trace"] is True
+    action_ids = {action["id"] for action in replay_card["actions"]}
+    assert "replay_promoted_manifest" in action_ids
+    assert "export_promoted_manifest" in action_ids
+    assert replay_card["artifacts"]["promoted_manifest"]["agent"]["method"] == (
+        "execute_task"
+    )
     markdown = report["report"]["markdown"]
     assert "## Optimization Replay" in markdown
     assert "optimized_manifest" in markdown
