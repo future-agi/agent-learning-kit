@@ -1045,6 +1045,96 @@ def build_framework_certification_run_manifest(
     return manifest
 
 
+def build_social_memory_framework_run_manifest(
+    *,
+    name: str,
+    framework: str = "custom_refund_orchestrator",
+    target: str = "framework_shims.py:build_custom_refund_orchestrator",
+    agent: Optional[Mapping[str, Any]] = None,
+    environments: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct social-memory framework simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not target:
+        raise ValueError("target is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_social_memory_framework_optimization_manifest(
+            name=name,
+            framework=framework,
+            target=target,
+            adapter_candidates=[copy.deepcopy(dict(agent))] if agent else None,
+            environment_candidates=[list(environments)] if environments else None,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            target_metadata=metadata,
+        )
+    )
+    search_space = (
+        optimization_manifest.get("optimization", {})
+        .get("target", {})
+        .get("search_space", {})
+    )
+    default_agents = list(search_space.get("agent") or [optimization_manifest["agent"]])
+    selected_agent = copy.deepcopy(dict(agent)) if agent else copy.deepcopy(default_agents[-1])
+    default_environments = list(
+        search_space.get("simulation.environments")
+        or [optimization_manifest["simulation"]["environments"]]
+    )[-1]
+    selected_environments = (
+        [_framework_trace_environment(item) for item in environments]
+        if environments is not None
+        else copy.deepcopy(default_environments)
+    )
+    if not selected_environments:
+        raise ValueError("environments must contain at least one environment")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": selected_agent,
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(selected_environments),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_social_memory_framework_run_manifest",
+            "framework": str(framework),
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_framework_run_manifest(
     *,
     name: str,
@@ -1937,6 +2027,18 @@ def _framework_certification_environment(item: Mapping[str, Any]) -> dict[str, A
     return {"type": "framework_lifecycle", "data": copied}
 
 
+def _framework_trace_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") == "framework_trace":
+        if copied.get("data") is not None:
+            return copied
+        copied.pop("type")
+        return {"type": "framework_trace", "data": copied}
+    if copied.get("framework_trace") is not None:
+        return {"type": "framework_trace", "data": copied["framework_trace"]}
+    return {"type": "framework_trace", "data": copied}
+
+
 def _framework_default_modality(framework: str) -> str:
     if framework in {
         "livekit",
@@ -2006,6 +2108,7 @@ __all__ = [
     "build_multimodal_image_run_manifest",
     "build_multi_framework_suite_manifest",
     "build_realtime_run_manifest",
+    "build_social_memory_framework_run_manifest",
     "build_task_run_manifest",
     "build_workspace_observability_run_manifest",
     "compare_result_files",

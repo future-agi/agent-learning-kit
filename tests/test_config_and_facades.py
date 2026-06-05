@@ -126,6 +126,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_redteam_campaign is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
     assert optimize.optimize_social_memory_framework is not None
+    assert simulate.build_social_memory_framework_run_manifest is not None
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
     assert evals.build_eval_suite_manifest is not None
@@ -557,6 +558,155 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     assert state["framework_runtime"]["summary"]["input_modes"] == ["dict"]
     assert state["framework_runtime"]["summary"]["tool_call_count"] == 1
     assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+
+
+def test_sdk_social_memory_framework_simulation_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_SIMULATION_KEY",
+        "real-local-sdk-social-memory-framework-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_social_memory_framework_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_social_memory_framework_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_SIMULATION_KEY"
+    ]
+    assert manifest["agent"]["framework"] == "custom_refund_orchestrator"
+    assert manifest["agent"]["target"] == module.TARGET
+    assert manifest["agent"]["target"].endswith(
+        "examples/framework_shims.py:build_custom_refund_orchestrator"
+    )
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["simulation"]["min_turns"] == 1
+    assert manifest["simulation"]["max_turns"] == 1
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "framework_trace"
+    ]
+    trace_data = manifest["simulation"]["environments"][0]["data"]
+    assert trace_data["spans"][0]["signals"] == ["planner", "tool", "policy"]
+    assert trace_data["adapter_required_signals"] == ["planner", "tool", "policy"]
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["framework_runtime_contract"]["method"] == "execute_task"
+    assert eval_config["framework_runtime_contract"]["input_mode"] == "dict"
+    assert eval_config["framework_runtime_contract"]["required_tools"] == [
+        "framework_trace_status"
+    ]
+    assert eval_config["required_tools"] == ["framework_trace_status"]
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_social_memory_framework_run_manifest(
+        name="custom-social-memory-framework-simulation",
+        framework="custom_framework",
+        target=module.TARGET,
+        agent={
+            "type": "framework",
+            "framework": "custom_framework",
+            "target": module.TARGET,
+            "factory": True,
+            "method": "execute_task",
+            "input_mode": "dict",
+            "trace_runtime": True,
+        },
+        environments=[
+            {
+                "framework_trace": {
+                    "framework": "custom_framework",
+                    "spans": [{"signals": ["planner", "tool"]}],
+                }
+            },
+            {
+                "type": "framework_trace",
+                "framework": "custom_framework",
+                "spans": [],
+            },
+        ],
+        min_turns=1,
+    )
+    assert custom_manifest["agent"]["framework"] == "custom_framework"
+    assert custom_manifest["simulation"]["environments"] == [
+        {
+            "type": "framework_trace",
+            "data": {
+                "framework": "custom_framework",
+                "spans": [{"signals": ["planner", "tool"]}],
+            },
+        },
+        {
+            "type": "framework_trace",
+            "data": {
+                "framework": "custom_framework",
+                "spans": [],
+            },
+        },
+    ]
+
+    output_path = tmp_path / "sdk-social-memory-framework-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-social-memory-framework-simulation"
+    assert generated_manifest["agent"]["target"] == module.TARGET
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-social-memory-framework-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.97
+    for metric in (
+        "framework_runtime_contract",
+        "framework_runtime_coverage",
+        "framework_trace_coverage",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"framework_runtime", "framework_trace"}
+    runtime = state["framework_runtime"]["summary"]
+    assert runtime["framework"] == "custom_refund_orchestrator"
+    assert runtime["methods"] == ["execute_task"]
+    assert runtime["input_modes"] == ["dict"]
+    assert runtime["invocation_count"] == 1
+    assert runtime["tool_call_count"] == 1
+    assert runtime["error_count"] == 0
+    assert runtime["output_types"] == ["AgentResponse"]
+    conformance = state["framework_trace"]["adapter_conformance"]
+    assert conformance["passed"] is True
+    assert conformance["score"] == pytest.approx(1.0)
+    assert set(conformance["observed_signals"]) >= {"planner", "tool", "policy"}
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "framework_trace_ready",
+        "framework_trace_status",
+        "framework_trace_status_state_update",
+        "CustomRefundOrchestrator.execute_task",
+        "agent_state_update",
+        "agent_tool_calls",
+        "execute_task",
+    } <= event_names
+    assert len(report_case["events"]) == 7
 
 
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):

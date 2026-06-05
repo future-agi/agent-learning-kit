@@ -247,6 +247,11 @@ The same adapter synthesis is available from Python through
 `optimize.build_social_memory_framework_optimization_manifest()` and
 `examples/sdk_social_memory_framework_optimization.py`, which generate the
 adapter candidates, trace candidates, and social-memory optimizer config.
+For direct, non-optimizer simulation,
+`simulate.build_social_memory_framework_run_manifest()` and
+`examples/sdk_social_memory_framework_simulation.py` run the selected
+`execute_task`/`dict` adapter plus complete `framework_trace` evidence as a
+normal `agent-learning.run.v1` artifact.
 
 SDK users can build the same kind of runnable framework optimization manifest
 without hand-writing JSON:
@@ -460,6 +465,10 @@ AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY=... \
 AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_social_memory_framework_optimization.py \
   artifacts/sdk-social-memory-framework-optimization.json
+
+AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_social_memory_framework_simulation.py \
+  artifacts/sdk-social-memory-framework-simulation.json
 
 AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_autonomous_redteam_task_world_optimization.py \
