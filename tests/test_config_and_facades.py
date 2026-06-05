@@ -76,6 +76,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.DualJudge is fi_code_security.DualJudge
     assert optimize.OptimizationTarget is not None
     assert optimize.optimize_eval_suite_file is not None
+    assert optimize.build_agent_integration_optimization_manifest is not None
+    assert optimize.optimize_agent_integration is not None
     assert optimize.build_artifact_optimization_suite is not None
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
@@ -1590,6 +1592,113 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     assert campaign_summary["artifact_count"] == 4
     assert campaign_summary["mitigation_count"] == 4
     assert campaign_summary["passed_run_count"] == 1
+
+
+def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY",
+        "real-local-sdk-agent-integration-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_agent_integration_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_agent_integration_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "integration",
+        "framework",
+        "voice",
+        "environment",
+        "evaluator",
+    ]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    quality = manifest["evaluation"]["agent_report"]["config"][
+        "agent_integration_quality"
+    ]
+    assert quality["required_provider_channels"]["vapi"] == [
+        "chat",
+        "voice",
+        "webrtc",
+        "phone",
+        "sip",
+        "websocket",
+    ]
+    assert quality["required_provider_channels"]["bland"] == [
+        "voice",
+        "phone",
+        "sip",
+        "web_call",
+        "websocket",
+    ]
+
+    output_path = tmp_path / "sdk-agent-integration-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    for metric in (
+        "agent_integration_coverage",
+        "agent_integration_quality",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"agent_integration_manifest"}
+    summary = state["agent_integration_manifest"]["summary"]
+    assert set(summary["observed_providers"]) >= {
+        "agora",
+        "bland",
+        "deepgram",
+        "elevenlabs",
+        "livekit",
+        "pipecat",
+        "retell",
+        "twilio",
+        "vapi",
+    }
+    assert set(summary["trace_frameworks"]) >= {
+        "autogen",
+        "crewai",
+        "langchain",
+        "langgraph",
+        "livekit",
+        "llamaindex",
+        "openai_agents",
+        "pipecat",
+        "pydantic_ai",
+    }
+    assert summary["verified_provider_count"] == 16
+    assert summary["failed_session_count"] == 0
+    assert summary["missing_required_providers"] == []
+    assert summary["missing_required_channels"] == []
+    assert summary["missing_required_trace_frameworks"] == []
+    assert summary["providers_without_verified_credentials"] == []
 
 
 def test_trinity_engines_are_vendored_in_agent_learning_kit():

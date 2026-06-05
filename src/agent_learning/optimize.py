@@ -143,6 +143,49 @@ _OPTIMIZER_EXPORT_NAMES = (
 _OPTIMIZE_EXPORTS = {name: "fi.opt" for name in _FI_OPT_EXPORT_NAMES}
 _OPTIMIZE_EXPORTS.update({name: "fi.opt.optimizers" for name in _OPTIMIZER_EXPORT_NAMES})
 
+_DEFAULT_AGENT_INTEGRATION_PROVIDERS = (
+    "livekit",
+    "vapi",
+    "retell",
+    "bland",
+    "elevenlabs",
+    "deepgram",
+    "agora",
+    "pipecat",
+    "twilio",
+)
+_DEFAULT_AGENT_INTEGRATION_CHANNELS = (
+    "chat",
+    "voice",
+    "webrtc",
+    "phone",
+    "sip",
+    "websocket",
+    "media_stream",
+)
+_DEFAULT_AGENT_INTEGRATION_TRACE_FRAMEWORKS = (
+    "langchain",
+    "langgraph",
+    "openai_agents",
+    "autogen",
+    "crewai",
+    "llamaindex",
+    "pydantic_ai",
+    "pipecat",
+    "livekit",
+)
+_DEFAULT_AGENT_INTEGRATION_PROVIDER_CHANNELS = {
+    "livekit": ("webrtc", "phone", "sip"),
+    "vapi": ("chat", "voice", "webrtc", "phone", "sip", "websocket"),
+    "retell": ("chat", "voice", "phone"),
+    "bland": ("voice", "phone", "sip", "web_call", "websocket"),
+    "elevenlabs": ("voice", "phone", "sip", "websocket"),
+    "deepgram": ("voice", "websocket"),
+    "agora": ("voice", "webrtc"),
+    "pipecat": ("voice", "webrtc", "sip"),
+    "twilio": ("phone", "sip", "media_stream"),
+}
+
 
 def _opt() -> Any:
     return optional_module("fi.opt", _OPTIMIZE_EXTRA)
@@ -941,6 +984,156 @@ def optimize_redteam_campaign(
     )
 
 
+def build_agent_integration_optimization_manifest(
+    *,
+    name: str,
+    integration_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    providers: Sequence[str] = _DEFAULT_AGENT_INTEGRATION_PROVIDERS,
+    channels: Sequence[str] = _DEFAULT_AGENT_INTEGRATION_CHANNELS,
+    trace_frameworks: Sequence[str] = _DEFAULT_AGENT_INTEGRATION_TRACE_FRAMEWORKS,
+    provider_channels: Optional[Mapping[str, Sequence[str]]] = None,
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build an optimization manifest for Future AGI agent integrations.
+
+    The search unit is the whole ``agent_integration`` environment bundle:
+    provider matrix, agent definition, personas, sessions, simulations,
+    observability hooks, evals, credentials, and TraceAI framework coverage.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    provider_values = _unique_strings(providers)
+    channel_values = _unique_strings(channels)
+    trace_values = _unique_strings(trace_frameworks)
+    if not provider_values:
+        raise ValueError("providers must contain at least one provider")
+    if not channel_values:
+        raise ValueError("channels must contain at least one channel")
+
+    provider_channel_values = _agent_integration_provider_channels(
+        providers=provider_values,
+        provider_channels=provider_channels,
+    )
+    candidates = (
+        [copy.deepcopy(dict(candidate)) for candidate in integration_candidates]
+        if integration_candidates is not None
+        else [
+            _seed_agent_integration_candidate(provider_values, channel_values),
+            _verified_agent_integration_candidate(
+                providers=provider_values,
+                channels=channel_values,
+                trace_frameworks=trace_values,
+                provider_channels=provider_channel_values,
+            ),
+        ]
+    )
+    if not candidates:
+        raise ValueError("integration_candidates must contain at least one candidate")
+
+    environment_candidates = [
+        [_agent_integration_environment(candidate)] for candidate in candidates
+    ]
+    search_space = {"simulation.environments": environment_candidates}
+    agent_config = copy.deepcopy(dict(agent or _default_agent_integration_agent()))
+    max_turns_value = int(
+        max_turns
+        if max_turns is not None
+        else _max_agent_response_count([agent_config], min_turns)
+    )
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_agent_integration_evaluation_config(
+            providers=provider_values,
+            channels=channel_values,
+            trace_frameworks=trace_values,
+            provider_channels=provider_channel_values,
+        )
+    )
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(
+            dict(scenario or _default_agent_integration_scenario(name))
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": [
+                    "integration",
+                    "framework",
+                    "voice",
+                    "environment",
+                    "evaluator",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": "agent_learning.optimize.build_agent_integration_optimization_manifest",
+                    "task_kind": "agent_integration",
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_agent_integration(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute an agent-integration optimization manifest."""
+
+    manifest = build_agent_integration_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -1393,6 +1586,23 @@ def _string_matrix(name: str, values: Sequence[Sequence[str]]) -> list[list[str]
     return matrix
 
 
+def _unique_strings(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, (str, bytes)):
+        values = [values]
+    elif isinstance(values, Mapping):
+        values = values.keys()
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
 def _default_task_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -1448,6 +1658,495 @@ def _default_orchestration_scenario(name: str) -> dict[str, Any]:
                 ),
             }
         ],
+    }
+
+
+def _default_agent_integration_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Ira", "role": "integration-lead"},
+                "situation": (
+                    "Validate Future AGI as the UI, observability, eval, "
+                    "persona, and simulation layer for provider integrations."
+                ),
+                "outcome": (
+                    "The optimized integration proves provider coverage, "
+                    "verified credentials, replayable sessions, traces, "
+                    "transcripts, observability hooks, and eval metrics."
+                ),
+            }
+        ],
+    }
+
+
+def _default_agent_integration_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "First, I inspect the Future AGI agent integration matrix "
+                    "for provider, persona, simulation, observability, eval, "
+                    "credential, trace, and transcript coverage."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "integration_status",
+                        "name": "agent_integration_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "voice_providers",
+                        "name": "list_agent_integration_providers",
+                        "arguments": {"channel": "voice"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Next, I verify LiveKit, Vapi, Retell, Bland, and Twilio "
+                    "routing for WebRTC, phone, SIP, media stream, and voice "
+                    "simulation coverage."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "livekit_provider",
+                        "name": "inspect_agent_integration_provider",
+                        "arguments": {"provider": "livekit"},
+                    },
+                    {
+                        "id": "vapi_provider",
+                        "name": "inspect_agent_integration_provider",
+                        "arguments": {"provider": "vapi"},
+                    },
+                    {
+                        "id": "retell_provider",
+                        "name": "inspect_agent_integration_provider",
+                        "arguments": {"provider": "retell"},
+                    },
+                    {
+                        "id": "bland_provider",
+                        "name": "inspect_agent_integration_provider",
+                        "arguments": {"provider": "bland"},
+                    },
+                    {
+                        "id": "twilio_provider",
+                        "name": "inspect_agent_integration_provider",
+                        "arguments": {"provider": "twilio"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Then I check replayable provider sessions and remaining "
+                    "integration gaps across chat, voice, WebRTC, phone, SIP, "
+                    "websocket, and media stream channels."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "livekit_sessions",
+                        "name": "list_agent_integration_sessions",
+                        "arguments": {"provider": "livekit"},
+                    },
+                    {
+                        "id": "phone_sessions",
+                        "name": "list_agent_integration_sessions",
+                        "arguments": {"channel": "phone"},
+                    },
+                    {
+                        "id": "integration_gaps",
+                        "name": "list_agent_integration_gaps",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Therefore the optimized Future AGI integration proves "
+                    "LiveKit, Vapi, Retell, Bland, ElevenLabs, Deepgram, "
+                    "Agora, Pipecat, Twilio, and TraceAI framework coverage "
+                    "with verified credentials, personas, simulations, "
+                    "observability hooks, eval metrics, transcripts, and "
+                    "traces."
+                ),
+                "tool_calls": [],
+            },
+        ],
+    }
+
+
+def _agent_integration_environment(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    candidate_dict = copy.deepcopy(dict(candidate))
+    if candidate_dict.get("type") == "agent_integration":
+        candidate_dict.setdefault("data", {})
+        return candidate_dict
+    return {"type": "agent_integration", "data": candidate_dict}
+
+
+def _agent_integration_provider_channels(
+    *,
+    providers: Sequence[str],
+    provider_channels: Optional[Mapping[str, Sequence[str]]],
+) -> dict[str, list[str]]:
+    configured = {
+        str(provider): _unique_strings(channels)
+        for provider, channels in (provider_channels or {}).items()
+    }
+    result: dict[str, list[str]] = {}
+    for provider in providers:
+        result[provider] = configured.get(
+            provider,
+            list(_DEFAULT_AGENT_INTEGRATION_PROVIDER_CHANNELS.get(provider, ("chat",))),
+        )
+    return result
+
+
+def _seed_agent_integration_candidate(
+    providers: Sequence[str],
+    channels: Sequence[str],
+) -> dict[str, Any]:
+    provider = providers[0]
+    channel = "webrtc" if "webrtc" in channels else channels[0]
+    return {
+        "name": "seed-agent-integration",
+        "platform": "futureagi",
+        "agent_definition": {"name": "support-agent", "type": "chat"},
+        "personas": [{"id": "support_admin", "role": "admin"}],
+        "providers": [
+            {
+                "provider": provider,
+                "channels": [channel],
+                "credential_status": "configured",
+            }
+        ],
+        "sessions": [
+            {
+                "id": f"seed_{provider}_{channel}",
+                "provider": provider,
+                "channel": channel,
+                "status": "passed",
+                "trace_id": f"trace_seed_{provider}_{channel}",
+                "transcript": f"{provider} {channel} seed session passed.",
+            }
+        ],
+        "simulations": [],
+        "observability": {},
+        "evals": {},
+    }
+
+
+def _verified_agent_integration_candidate(
+    *,
+    providers: Sequence[str],
+    channels: Sequence[str],
+    trace_frameworks: Sequence[str],
+    provider_channels: Mapping[str, Sequence[str]],
+) -> dict[str, Any]:
+    provider_records = [
+        {
+            "provider": provider,
+            "channels": list(provider_channels.get(provider) or ["chat"]),
+            "trace_framework": provider
+            if provider in {"livekit", "pipecat"}
+            else None,
+            "credential_ref": _agent_integration_credential_ref(provider),
+            "credential_status": "live_verified"
+            if provider not in {"pipecat"}
+            else "verified",
+        }
+        for provider in providers
+    ]
+    for framework in trace_frameworks:
+        if framework in {provider["provider"] for provider in provider_records}:
+            continue
+        provider_records.append(
+            {
+                "provider": framework,
+                "channels": ["chat"],
+                "trace_framework": framework,
+                "credential_ref": f"TRACEAI_{framework.upper()}",
+                "credential_status": "verified",
+            }
+        )
+    for provider in provider_records:
+        if provider.get("trace_framework") is None:
+            provider.pop("trace_framework", None)
+
+    sessions = _agent_integration_sessions(
+        providers=providers,
+        trace_frameworks=trace_frameworks,
+    )
+    simulations = [
+        {
+            "id": f"sim_{provider}",
+            "provider": provider,
+            "channel": _agent_integration_primary_channel(
+                provider,
+                provider_channels.get(provider) or channels,
+            ),
+            "passed": True,
+        }
+        for provider in providers
+    ]
+    trace_ids = [
+        str(session["trace_id"])
+        for session in sessions
+        if session.get("trace_id") not in (None, "")
+    ]
+
+    return {
+        "name": "verified-agent-integration",
+        "platform": "futureagi",
+        "agent_definition": {
+            "id": "support-agent",
+            "name": "Support Agent",
+            "type": "multi_modal",
+            "instructions": (
+                "Handle chat, voice, WebRTC, phone, SIP, websocket, and media "
+                "stream simulations with Future AGI observability and evals."
+            ),
+        },
+        "personas": [
+            {"id": "admin", "role": "workspace-admin", "channel": "chat"},
+            {"id": "caller", "role": "phone-caller", "channel": "phone"},
+            {"id": "reviewer", "role": "security-reviewer", "channel": "voice"},
+        ],
+        "providers": provider_records,
+        "sessions": sessions,
+        "simulations": simulations,
+        "observability": {
+            "platform": "futureagi",
+            "traces": trace_ids[:8],
+            "webhooks": [
+                "agent_integration.session.completed",
+                "agent_integration.eval.completed",
+            ],
+            "dashboards": ["futureagi/provider-matrix"],
+            "runs": ["provider-matrix-ci"],
+        },
+        "evals": {
+            "metrics": {
+                "agent_goal_accuracy": 1.0,
+                "tool_call_accuracy": 1.0,
+                "voice_turn_taking": 1.0,
+                "streaming_interaction_quality": 1.0,
+                "agent_integration_quality": 1.0,
+            },
+            "runs": [
+                {
+                    "id": "provider_matrix_eval",
+                    "metrics": {
+                        "agent_integration_coverage": 1.0,
+                        "agent_integration_quality": 1.0,
+                    },
+                }
+            ],
+        },
+        "required_providers": list(providers),
+        "required_channels": list(channels),
+        "required_trace_frameworks": list(trace_frameworks),
+        "metadata": {
+            "source": "agent-learning-kit-sdk",
+            "platform_role": "futureagi_ui_observability_evals",
+        },
+    }
+
+
+def _agent_integration_sessions(
+    *,
+    providers: Sequence[str],
+    trace_frameworks: Sequence[str],
+) -> list[dict[str, Any]]:
+    preferred = {
+        "livekit": ("webrtc", "LiveKit WebRTC simulated room completed."),
+        "vapi": ("phone", "Vapi phone simulation passed."),
+        "retell": ("chat", "Retell chat simulation passed."),
+        "bland": ("web_call", "Bland web-call simulation passed."),
+        "elevenlabs": ("voice", "ElevenLabs voice agent simulation passed."),
+        "deepgram": ("websocket", "Deepgram websocket voice replay passed."),
+        "agora": ("webrtc", "Agora WebRTC simulation passed."),
+        "pipecat": ("voice", "Pipecat LiveKit transport simulation passed."),
+        "twilio": ("media_stream", "Twilio media stream simulation passed."),
+    }
+    sessions: list[dict[str, Any]] = []
+    for provider in providers:
+        channel, transcript = preferred.get(
+            provider,
+            ("chat", f"{provider} integration simulation passed."),
+        )
+        sessions.append(
+            {
+                "id": f"{provider}_{channel}",
+                "provider": provider,
+                "channel": channel,
+                "status": "passed",
+                "trace_id": f"trace_{provider}_{channel}",
+                "transcript": transcript,
+            }
+        )
+    if "twilio" in providers:
+        sessions.append(
+            {
+                "id": "twilio_sip",
+                "provider": "twilio",
+                "channel": "sip",
+                "status": "passed",
+                "trace_id": "trace_twilio_sip",
+                "transcript": "Twilio SIP trunk simulation passed.",
+                "sip_trunk": "twilio-sip",
+            }
+        )
+    for framework in trace_frameworks:
+        if framework in providers:
+            continue
+        sessions.append(
+            {
+                "id": f"{framework}_trace",
+                "provider": framework,
+                "channel": "chat",
+                "status": "passed",
+                "trace_id": f"trace_{framework}",
+                "transcript": f"{framework} trace ingestion simulation passed.",
+                "framework": framework,
+            }
+        )
+    return sessions
+
+
+def _agent_integration_primary_channel(
+    provider: str,
+    channels: Sequence[str],
+) -> str:
+    preferred = {
+        "livekit": "webrtc",
+        "vapi": "phone",
+        "retell": "chat",
+        "bland": "web_call",
+        "elevenlabs": "voice",
+        "deepgram": "websocket",
+        "agora": "webrtc",
+        "pipecat": "voice",
+        "twilio": "media_stream",
+    }
+    if preferred.get(provider) in channels:
+        return str(preferred[provider])
+    return str(channels[0])
+
+
+def _agent_integration_credential_ref(provider: str) -> str:
+    special = {
+        "livekit": "LIVEKIT_API_KEY",
+        "vapi": "VAPI_API_KEY",
+        "retell": "RETELL_API_KEY",
+        "bland": "BLAND_API_KEY",
+        "elevenlabs": "ELEVENLABS_API_KEY",
+        "deepgram": "DEEPGRAM_API_KEY",
+        "agora": "AGORA_APP_ID",
+        "pipecat": "PIPECAT_PIPELINE_REF",
+        "twilio": "TWILIO_ACCOUNT_SID",
+    }
+    return special.get(provider, f"TRACEAI_{provider.upper()}")
+
+
+def _default_agent_integration_evaluation_config(
+    *,
+    providers: Sequence[str],
+    channels: Sequence[str],
+    trace_frameworks: Sequence[str],
+    provider_channels: Mapping[str, Sequence[str]],
+) -> dict[str, Any]:
+    required_integrations = _unique_strings(
+        [
+            "agent_integration",
+            "futureagi_platform",
+            "agent_definition",
+            "persona",
+            "provider",
+            "session",
+            "simulation",
+            "observability",
+            "eval",
+            "credential",
+            "traceai_framework",
+            *channels,
+            *providers,
+            *trace_frameworks,
+        ]
+    )
+    provider_channel_config = {
+        provider: list(provider_channels.get(provider) or [])
+        for provider in providers
+    }
+    return {
+        "task_description": (
+            "Optimize provider, persona, simulation, observability, eval, "
+            "credential, transcript, trace, and TraceAI framework integration "
+            "coverage for Future AGI."
+        ),
+        "expected_result": (
+            "The optimized integration proves all required providers, channels, "
+            "TraceAI frameworks, credentials, replayable sessions, "
+            "observability hooks, and eval metrics."
+        ),
+        "required_tools": [
+            "agent_integration_status",
+            "list_agent_integration_providers",
+            "inspect_agent_integration_provider",
+            "list_agent_integration_sessions",
+            "list_agent_integration_gaps",
+        ],
+        "available_tools": [
+            "agent_integration_status",
+            "list_agent_integration_providers",
+            "inspect_agent_integration_provider",
+            "list_agent_integration_sessions",
+            "list_agent_integration_gaps",
+        ],
+        "required_artifact_types": ["trace"],
+        "required_agent_integrations": required_integrations,
+        "agent_integration_quality": {
+            "require_agent_definition": True,
+            "require_persona": True,
+            "require_simulation": True,
+            "require_observability": True,
+            "require_evals": True,
+            "require_verified_credentials": True,
+            "min_provider_count": len(providers),
+            "min_session_count": len(providers),
+            "min_simulation_count": len(providers),
+            "min_persona_count": 3,
+            "min_observability_hooks": 5,
+            "min_eval_metric_count": 5,
+            "min_verified_providers": len(providers),
+            "min_passed_simulations": len(providers),
+            "min_trace_sessions": len(providers),
+            "min_transcript_sessions": len(providers),
+            "max_missing_credentials": 0,
+            "max_failed_sessions": 0,
+            "required_providers": list(providers),
+            "required_channels": list(channels),
+            "required_trace_frameworks": list(trace_frameworks),
+            "required_provider_channels": provider_channel_config,
+        },
+        "success_criteria": [
+            "required providers covered",
+            "required channels covered",
+            "TraceAI frameworks covered",
+            "verified credentials",
+            "personas and simulations",
+            "Future AGI observability hooks",
+            "eval metrics",
+            "replayable transcripts and traces",
+        ],
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "agent_integration_coverage": 6.0,
+            "agent_integration_quality": 10.0,
+            "tool_selection_accuracy": 2.0,
+            "final_response_quality": 2.0,
+        },
     }
 
 
@@ -1864,6 +2563,7 @@ __all__ = [
     "diagnose_report",
     "diagnose_text",
     "build_artifact_optimization_suite",
+    "build_agent_integration_optimization_manifest",
     "build_framework_optimization_manifest",
     "build_memory_optimization_manifest",
     "build_multi_agent_optimization_manifest",
@@ -1874,6 +2574,7 @@ __all__ = [
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_artifact_evidence",
+    "optimize_agent_integration",
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",

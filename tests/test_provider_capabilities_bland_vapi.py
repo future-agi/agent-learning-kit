@@ -15,6 +15,7 @@ from fi.evals.metrics.agents.report import (
     evaluate_agent_report,
 )
 from fi.opt.components import COMPONENT_SPECS, diagnose_text
+from agent_learning import optimize
 
 
 def test_bland_and_vapi_present_with_voice_capabilities():
@@ -36,6 +37,31 @@ def test_bland_aliases_resolve():
 def test_vapi_alias_resolves():
     assert _normalize_agent_integration_provider_name("vapi") == "vapi"
     assert _normalize_agent_integration_provider_name("vapi_ai") == "vapi"
+
+
+def test_agent_learning_builder_defaults_cover_vapi_and_bland_channels():
+    manifest = optimize.build_agent_integration_optimization_manifest(
+        name="builder-provider-channel-defaults"
+    )
+    required_channels = manifest["evaluation"]["agent_report"]["config"][
+        "agent_integration_quality"
+    ]["required_provider_channels"]
+
+    assert required_channels["vapi"] == [
+        "chat",
+        "voice",
+        "webrtc",
+        "phone",
+        "sip",
+        "websocket",
+    ]
+    assert required_channels["bland"] == [
+        "voice",
+        "phone",
+        "sip",
+        "web_call",
+        "websocket",
+    ]
 
 
 def test_report_aliases_resolve_like_simulation_layer():

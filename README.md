@@ -389,6 +389,10 @@ AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
 
+AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_agent_integration_optimization.py \
+  artifacts/sdk-agent-integration-optimization.json
+
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
   artifacts/sdk-multi-framework-simulation.json
@@ -449,6 +453,10 @@ It verifies agent definition, personas, simulations, observability hooks, eval
 metrics, credentials, sessions, and channel coverage across LiveKit, Vapi,
 Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and
 TraceAI-supported frameworks.
+The same workflow is available from Python through
+`optimize.build_agent_integration_optimization_manifest()` and
+`examples/sdk_agent_integration_optimization.py`, which generate the provider
+matrix and search it as one `agent_integration` environment candidate.
 
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,
