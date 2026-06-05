@@ -80,6 +80,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_eval_suite_file is not None
     assert optimize.build_agent_control_plane_optimization_manifest is not None
     assert optimize.optimize_agent_control_plane is not None
+    assert optimize.build_browser_cua_optimization_manifest is not None
+    assert optimize.optimize_browser_cua is not None
     assert optimize.build_agent_integration_optimization_manifest is not None
     assert optimize.optimize_agent_integration is not None
     assert optimize.build_workspace_observability_optimization_manifest is not None
@@ -1725,6 +1727,97 @@ def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path
     assert control_summary["gaps"] == []
     assert control_summary["has_kill_switch"] is True
     assert control_summary["has_drift_detection"] is True
+
+
+def test_sdk_browser_cua_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_BROWSER_CUA_EXAMPLE_KEY",
+        "real-local-sdk-browser-cua-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_browser_cua_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_browser_cua_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_BROWSER_CUA_EXAMPLE_KEY"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "browser",
+        "cua",
+        "security",
+        "evaluator",
+    ]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert [[env["type"] for env in candidate] for candidate in candidates] == [
+        ["browser"],
+        ["browser_cua"],
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == [
+        "browser_snapshot",
+        "browser_refresh_snapshot",
+        "browser_mutations",
+        "browser_click",
+        "browser_storage",
+        "browser_runtime",
+        "browser_network",
+    ]
+    assert "selector_alias" in config["required_browser_trace"]
+
+    output_path = tmp_path / "sdk-browser-cua-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    env_types = [
+        environment["type"]
+        for environment in result["optimization"]["best_config"]["simulation"][
+            "environments"
+        ]
+    ]
+    assert env_types == ["browser_cua"]
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    for metric in (
+        "browser_action_safety",
+        "browser_action_outcome",
+        "browser_grounding_quality",
+        "browser_mutation_resilience",
+        "browser_trace_coverage",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"browser"}
+    browser = state["browser"]
+    assert browser["checkout_complete"] is True
+    assert browser["order_id"] == "ord_123"
+    assert browser["url"] == "https://shop.example.test/confirmation"
+    assert browser["mutation_pack"]["summary"]["mutation_count"] == 2
+    replay = browser["action_replay"][0]
+    assert replay["mutation_id"] == "selector_drift_checkout"
+    assert replay["selector"] == "button[data-testid='place-order-safe']"
+    assert replay["success"] is True
+    assert replay["prompt_injection_touched"] is False
 
 
 def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):

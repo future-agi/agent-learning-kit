@@ -397,6 +397,10 @@ AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
   artifacts/sdk-agent-control-plane-optimization.json
 
+AGENT_LEARNING_SDK_BROWSER_CUA_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_browser_cua_optimization.py \
+  artifacts/sdk-browser-cua-optimization.json
+
 AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_integration_optimization.py \
   artifacts/sdk-agent-integration-optimization.json
@@ -530,6 +534,10 @@ red-team harness. It verifies selector-drift recovery, refreshed screenshots,
 coordinate grounding, semantic screenshot diffs, storage/runtime evidence,
 network traces, layout-shift resilience, mutation-pack mitigations, and
 prompt-injection surface avoidance.
+The same harness is available from Python through
+`optimize.build_browser_cua_optimization_manifest()` and
+`examples/sdk_browser_cua_optimization.py`, which search weak versus hardened
+browser/CUA replay candidates as one `simulation.environments` bundle.
 
 The `framework_certification_optimization.json` example optimizes a framework
 certification harness before rollout or migration. It verifies lifecycle
