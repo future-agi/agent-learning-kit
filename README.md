@@ -275,6 +275,11 @@ evidence without rerunning the agent. Assertions can target JSON paths such as
 containment checks, so artifact gates do not depend on serialized JSON
 formatting.
 
+For raw task evidence that is not yet a full run artifact, use
+`evals.build_task_evidence_artifact()` or `evals.evaluate_task_evidence()`.
+The SDK normalizes messages, tool calls, metrics, environment state, artifacts,
+and events into the same agent-report shape used by `agent-learn eval-artifact`.
+
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
@@ -299,6 +304,10 @@ AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
   artifacts/sdk-artifact-optimization.json
+
+AGENT_LEARNING_SDK_TASK_EVAL_KEY=... \
+  PYTHONPATH=src python examples/sdk_task_evaluation.py \
+  artifacts/sdk-task-evaluation.json
 
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \

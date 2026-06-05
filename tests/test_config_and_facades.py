@@ -89,6 +89,11 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_redteam_campaign is not None
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
+    assert evals.build_task_evaluation_config is not None
+    assert evals.build_task_evidence_artifact is not None
+    assert evals.evaluate_task_evidence is not None
+    assert evals.evaluate_task_evidence_file is not None
+    assert evals.write_task_evidence_file is not None
     assert suite.run_suite_file is not None
     assert suite.build_suite_manifest is not None
     assert suite.build_trinity_suite_manifest is not None
@@ -1024,6 +1029,56 @@ def test_sdk_artifact_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_history["patch"].keys() == {"providers.0.fields"}
     assert best_history["score"] == pytest.approx(1.0)
+
+
+def test_sdk_task_evaluation_example_runs(monkeypatch, tmp_path):
+    from agent_learning import evals
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TASK_EVAL_KEY",
+        "real-local-sdk-task-eval-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_task_evaluation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_task_evaluation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    config = module.evaluation_config()
+    assert config["required_tools"] == ["approve_refund", "write_safe_memory"]
+    artifact = evals.build_task_evidence_artifact(module.task_evidence())
+    assert artifact["kind"] == "agent-learning.task-evidence.v1"
+    assert artifact["report"]["results"][0]["metadata"]["environment_state"][
+        "task_evidence"
+    ]["verification_status"] == "approved"
+
+    artifact_path = tmp_path / "task-evidence.json"
+    evals.write_task_evidence_file(module.task_evidence(), artifact_path)
+    file_result = evals.evaluate_task_evidence_file(
+        artifact_path,
+        config=config,
+        threshold=0.85,
+    )
+    assert file_result["status"] == "passed"
+    assert file_result["summary"]["source_kind"] == "agent-learning.task-evidence.v1"
+
+    output_path = tmp_path / "sdk-task-evaluation-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["kind"] == "agent-learning.artifact-evaluation.v1"
+    assert result["summary"]["source_kind"] == "agent-learning.task-evidence.v1"
+    assert result["summary"]["score"] >= 0.95
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["task_completion"] == pytest.approx(1.0)
+    assert metrics["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert metrics["world_contract_quality"] == pytest.approx(1.0)
+    assert metrics["memory_integrity"] == pytest.approx(1.0)
 
 
 def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
