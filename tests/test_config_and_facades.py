@@ -7844,7 +7844,7 @@ def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp
     assert "## Optimization" in markdown_path.read_text(encoding="utf-8")
 
 
-def test_agent_learn_doctor_reports_module_availability(capsys):
+def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     from agent_learning import trinity
 
     exit_code = main(["doctor"])
@@ -7887,3 +7887,13 @@ def test_agent_learn_doctor_reports_module_availability(capsys):
     assert payload["modules"]["simulate"]["available"] is True
     assert payload["modules"]["evaluation"]["available"] is True
     assert payload["modules"]["optimize"]["available"] is True
+
+    output_path = tmp_path / "doctor-status.json"
+    exit_code = main(["doctor", "--output", str(output_path), "--quiet"])
+    captured = capsys.readouterr()
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert captured.out == ""
+    assert written["outputs_written"] == [str(output_path.resolve())]
+    assert written["consolidation"] == trinity.consolidation_metadata()
+    assert written["modules"]["engine.simulate"]["available"] is True

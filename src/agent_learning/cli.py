@@ -38,7 +38,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _help()
     command = args[0]
     if command == "doctor":
-        return _doctor()
+        return _doctor(args[1:])
     if command == "init":
         return _init(args[1:])
     if command in {"actions", "list-actions"}:
@@ -2492,11 +2492,37 @@ def _run_async(awaitable: Any) -> Any:
     return asyncio.run(awaitable)
 
 
-def _doctor() -> int:
+def _doctor(args: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn doctor",
+        description="Verify the Agent Learning Kit trinity consolidation boundary.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Write the doctor status JSON payload to this path.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print the status payload to stdout.",
+    )
+    parsed = parser.parse_args(list(args))
+
     from agent_learning import trinity
 
     payload = trinity.trinity_status()
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    if parsed.output:
+        output_path = Path(parsed.output).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload.setdefault("outputs_written", []).append(str(output_path))
+        output_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 

@@ -130,7 +130,7 @@ agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
   --output artifacts/voice-streaming-realtime.json
 agent-learn eval-cli list categories --format json
 agent-learn eval-cli init ./eval-project --template basic --force
-agent-learn doctor
+agent-learn doctor --output artifacts/agent-learning-doctor.json
 ```
 
 `agent-learn init` scaffolds runnable Agent Learning projects. The optimize
