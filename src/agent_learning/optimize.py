@@ -6,6 +6,7 @@ from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from ._facade import optional_module
+from ._module_alias import install_lazy_module_aliases
 from ._schema import public_payload
 
 _OPTIMIZE_EXTRA = "optimize"
@@ -174,6 +175,63 @@ _OPTIMIZE_EXPORTS.update(
 )
 _OPTIMIZE_EXPORTS.update(
     {name: "fi.opt.generators" for name in _GENERATOR_EXPORT_NAMES}
+)
+
+_OPTIMIZE_SUBMODULE_ALIASES = {
+    "base": "fi.opt.base",
+    "base.base_generator": "fi.opt.base.base_generator",
+    "base.base_mapper": "fi.opt.base.base_mapper",
+    "base.base_optimizer": "fi.opt.base.base_optimizer",
+    "base.evaluator": "fi.opt.base.evaluator",
+    "components": "fi.opt.components",
+    "datamappers": "fi.opt.datamappers",
+    "datamappers.basic_mapper": "fi.opt.datamappers.basic_mapper",
+    "deployment": "fi.opt.deployment",
+    "evidence": "fi.opt.evidence",
+    "generators": "fi.opt.generators",
+    "generators.litellm": "fi.opt.generators.litellm",
+    "integrations": "fi.opt.integrations",
+    "integrations.simulate": "fi.opt.integrations.simulate",
+    "mutations": "fi.opt.mutations",
+    "observability": "fi.opt.observability",
+    "optimizer_trace": "fi.opt.optimizer_trace",
+    "optimizers": "fi.opt.optimizers",
+    "optimizers.agent": "fi.opt.optimizers.agent",
+    "optimizers.agent_bandit": "fi.opt.optimizers.agent_bandit",
+    "optimizers.agent_curriculum": "fi.opt.optimizers.agent_curriculum",
+    "optimizers.agent_evolution": "fi.opt.optimizers.agent_evolution",
+    "optimizers.agent_feedback": "fi.opt.optimizers.agent_feedback",
+    "optimizers.agent_pareto": "fi.opt.optimizers.agent_pareto",
+    "optimizers.agent_social_memory": "fi.opt.optimizers.agent_social_memory",
+    "optimizers.agent_tpe": "fi.opt.optimizers.agent_tpe",
+    "optimizers.bayesian_search": "fi.opt.optimizers.bayesian_search",
+    "optimizers.council": "fi.opt.optimizers.council",
+    "optimizers.futureagi_replay": "fi.opt.optimizers.futureagi_replay",
+    "optimizers.gepa": "fi.opt.optimizers.gepa",
+    "optimizers.metaprompt": "fi.opt.optimizers.metaprompt",
+    "optimizers.promptwizard": "fi.opt.optimizers.promptwizard",
+    "optimizers.protegi": "fi.opt.optimizers.protegi",
+    "optimizers.random_search": "fi.opt.optimizers.random_search",
+    "research": "fi.opt.research",
+    "simulation": "fi.opt.simulation",
+    "targets": "fi.opt.targets",
+    "types": "fi.opt.types",
+    "utils": "fi.opt.utils",
+    "utils.early_stopping": "fi.opt.utils.early_stopping",
+    "utils.setup_logging": "fi.opt.utils.setup_logging",
+}
+_OPTIMIZE_PACKAGE_ALIASES = {
+    alias
+    for alias in _OPTIMIZE_SUBMODULE_ALIASES
+    if "." not in alias or any(
+        child.startswith(f"{alias}.") for child in _OPTIMIZE_SUBMODULE_ALIASES
+    )
+}
+
+install_lazy_module_aliases(
+    __name__,
+    _OPTIMIZE_SUBMODULE_ALIASES,
+    package_aliases=_OPTIMIZE_PACKAGE_ALIASES,
 )
 
 _DEFAULT_AGENT_INTEGRATION_PROVIDERS = (

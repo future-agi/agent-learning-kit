@@ -8,7 +8,7 @@ import pytest
 
 from agent_learning import evals as agent_evals
 from agent_learning import optimize as agent_optimize
-from fi.opt import diagnose_agent_report_evaluation
+from agent_learning.optimize import diagnose_agent_report_evaluation
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -195,6 +195,14 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_opt_simulate = _assert_vendored_module("fi.opt.integrations.simulate")
     fi_agent_metrics = _assert_vendored_module("fi.evals.metrics.agents")
     fi_hallucination = _assert_vendored_module("fi.evals.metrics.hallucination")
+    public_opt_components = _assert_vendored_module("agent_learning.optimize.components")
+    public_opt_simulate = _assert_vendored_module(
+        "agent_learning.optimize.integrations.simulate"
+    )
+    public_opt_agent = _assert_vendored_module("agent_learning.optimize.optimizers.agent")
+    public_opt_base = _assert_vendored_module(
+        "agent_learning.optimize.base.base_optimizer"
+    )
 
     assert set(fi_evals.__all__) <= set(agent_evals.__all__)
     assert set(fi_metrics.__all__) <= set(agent_evals.__all__)
@@ -366,6 +374,14 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         assert getattr(agent_optimize, name) is getattr(fi_opt_base, name)
     assert agent_optimize.BasicDataMapper is fi_opt_datamappers.BasicDataMapper
     assert agent_optimize.LiteLLMGenerator is fi_opt_generators.LiteLLMGenerator
+    assert public_opt_components.COMPONENT_SPECS is agent_optimize.COMPONENT_SPECS
+    assert public_opt_components.diagnose_text.__module__ == "fi.opt.components"
+    assert callable(agent_optimize.diagnose_text)
+    assert public_opt_agent.AgentOptimizer is agent_optimize.AgentOptimizer
+    assert public_opt_base.BaseOptimizer is agent_optimize.BaseOptimizer
+    assert public_opt_simulate.ManifestOptimizationProblem is (
+        agent_optimize.ManifestOptimizationProblem
+    )
     mapper = agent_optimize.BasicDataMapper(
         {"answer": "generated_output", "question": "prompt"}
     )

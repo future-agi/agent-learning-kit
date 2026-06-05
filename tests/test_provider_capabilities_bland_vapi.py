@@ -14,7 +14,7 @@ from fi.evals.metrics.agents.report import (
     _normalize_agent_integration_provider as normalize_report_provider,
     evaluate_agent_report,
 )
-from fi.opt.components import COMPONENT_SPECS, diagnose_text
+from agent_learning.optimize.components import COMPONENT_SPECS, diagnose_text
 from agent_learning import optimize
 
 
