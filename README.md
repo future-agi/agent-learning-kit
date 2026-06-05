@@ -409,6 +409,10 @@ AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_observability_optimization.py \
   artifacts/sdk-workspace-observability-optimization.json
 
+AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_framework_certification_optimization.py \
+  artifacts/sdk-framework-certification-optimization.json
+
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
   artifacts/sdk-multi-framework-simulation.json
@@ -543,6 +547,11 @@ The `framework_certification_optimization.json` example optimizes a framework
 certification harness before rollout or migration. It verifies lifecycle
 session evidence, capability matrices, adapter smoke probes, and source-target
 portability mappings for framework-neutral agent stacks.
+The same harness is available from Python through
+`optimize.build_framework_certification_optimization_manifest()` and
+`examples/sdk_framework_certification_optimization.py`, which search weak
+versus certified lifecycle, capability, probe, and portability candidates as
+one `simulation.environments` bundle.
 
 The `autonomous_redteam_task_world_optimization.json` example optimizes a
 local autonomous task/world red-team harness. It verifies structured artifacts,

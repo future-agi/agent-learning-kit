@@ -1527,6 +1527,150 @@ def optimize_workspace_observability(
     )
 
 
+def build_framework_certification_optimization_manifest(
+    *,
+    name: str,
+    framework: str = "langgraph",
+    target_framework: str = "openai_agents",
+    certification_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a framework-certification optimization manifest.
+
+    The search unit is the whole certification evidence bundle: lifecycle
+    trace, capability matrix, smoke probe suite, and source-target portability
+    mapping. This is stricter than an adapter-only candidate because the
+    optimizer selects a runnable framework certificate before rollout or
+    migration.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not target_framework:
+        raise ValueError("target_framework is required")
+
+    environment_candidates = (
+        [
+            [_framework_certification_environment(item) for item in candidate]
+            for candidate in certification_candidates
+        ]
+        if certification_candidates is not None
+        else [
+            _seed_framework_certification_candidate(
+                framework=framework,
+                target_framework=target_framework,
+            ),
+            _certified_framework_certification_candidate(
+                framework=framework,
+                target_framework=target_framework,
+            ),
+        ]
+    )
+    if not environment_candidates:
+        raise ValueError("certification_candidates must contain at least one candidate")
+    for index, candidate in enumerate(environment_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"certification_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": environment_candidates}
+    agent_config = copy.deepcopy(dict(agent or _default_framework_certification_agent()))
+    max_turns_value = int(
+        max_turns
+        if max_turns is not None
+        else _max_agent_response_count([agent_config], min_turns)
+    )
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_framework_certification_evaluation_config(
+            framework=framework,
+            target_framework=target_framework,
+        )
+    )
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(
+            dict(scenario or _default_framework_certification_scenario(name))
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": ["framework", "integration", "harness", "evaluator"],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_framework_certification_optimization_manifest"
+                    ),
+                    "task_kind": "framework_certification",
+                    "framework": framework,
+                    "target_framework": target_framework,
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_framework_certification(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a framework-certification optimization manifest."""
+
+    manifest = build_framework_certification_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -1638,6 +1782,658 @@ def _framework_agent_candidate(
         "trace_runtime": bool(candidate_dict.pop("trace_runtime", trace_runtime)),
         "metadata": merged_metadata,
         **candidate_dict,
+    }
+
+
+_FRAMEWORK_CERT_REQUIRED_STAGES = (
+    "initialize",
+    "tool_registration",
+    "start_session",
+    "invoke",
+    "stream",
+    "checkpoint",
+    "retry",
+    "cancel",
+    "resume",
+    "shutdown",
+)
+_FRAMEWORK_CERT_REQUIRED_CAPABILITIES = (
+    "tool_calling",
+    "long_term_memory",
+    "streaming_deltas",
+    "checkpoint_resume",
+    "workflow_graph",
+    "policy_guardrails",
+    "otel_trace_export",
+    "futureagi_export",
+)
+_FRAMEWORK_CERT_REQUIRED_CATEGORIES = (
+    "tools",
+    "memory",
+    "streaming",
+    "lifecycle",
+    "orchestration",
+    "security",
+    "observability",
+    "exports",
+)
+_FRAMEWORK_CERT_PROBES: tuple[tuple[str, str], ...] = (
+    ("invoke", "runtime"),
+    ("list_tools", "tools"),
+    ("tool_call", "tools"),
+    ("write_memory", "memory"),
+    ("read_memory", "memory"),
+    ("stream", "streaming"),
+    ("checkpoint_save", "lifecycle"),
+    ("checkpoint_resume", "lifecycle"),
+    ("handoff", "orchestration"),
+    ("guardrail", "security"),
+    ("trace_export", "observability"),
+    ("export", "exports"),
+)
+_FRAMEWORK_CERT_MAPPINGS: tuple[tuple[str, str, str, str], ...] = (
+    ("invoke", "runtime", "graph.invoke", "Runner.run"),
+    ("tool_discovery", "tools", "tools/list", "Agents SDK tools"),
+    ("tool_call", "tools", "ToolNode", "function tool"),
+    ("short_term_state", "memory", "graph state", "session state"),
+    ("streaming_events", "streaming", "astream_events", "run stream events"),
+    ("checkpoint_resume", "lifecycle", "checkpointer", "session resume"),
+    ("handoff", "orchestration", "graph route", "agent handoff"),
+    ("guardrail", "security", "policy node", "guardrail"),
+    ("otel_trace", "observability", "otel spans", "tracing processor"),
+    ("futureagi_export", "exports", "dataset export", "Future AGI row"),
+)
+
+
+def _default_framework_certification_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Neel", "role": "framework-platform-owner"},
+                "situation": (
+                    "Optimize a framework certification harness before routing "
+                    "production agents through a new adapter or migration path."
+                ),
+                "outcome": (
+                    "The optimized certificate proves lifecycle setup, "
+                    "capability coverage, smoke probes, and source-target "
+                    "portability with trace evidence."
+                ),
+            }
+        ],
+    }
+
+
+def _default_framework_certification_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "First I will verify the framework lifecycle and inspect "
+                    "the active session evidence."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "lifecycle_status",
+                        "name": "framework_lifecycle_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "lifecycle_phases",
+                        "name": "list_framework_lifecycle_phases",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "session_thread",
+                        "name": "inspect_framework_session",
+                        "arguments": {"session_id": "thread-123"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Next I will check capability coverage, task surfaces, and "
+                    "Future AGI plus MCP integration evidence."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "capability_status",
+                        "name": "framework_capability_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "capabilities",
+                        "name": "list_framework_capabilities",
+                        "arguments": {"status": "supported"},
+                    },
+                    {
+                        "id": "task_surfaces",
+                        "name": "list_framework_task_surfaces",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "futureagi_export_capability",
+                        "name": "inspect_framework_capability",
+                        "arguments": {"name": "futureagi_export"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Then I will run through adapter smoke probes and confirm "
+                    "there are no blocked or failed framework operations."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "probe_status",
+                        "name": "framework_probe_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "probe_list",
+                        "name": "list_framework_probes",
+                        "arguments": {"status": "passed"},
+                    },
+                    {
+                        "id": "probe_failures",
+                        "name": "list_framework_probe_failures",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "trace_probe",
+                        "name": "inspect_framework_probe",
+                        "arguments": {"id": "trace_export"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Finally I will verify the source-target portability map "
+                    "and list any migration gaps before rollout."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "portability_status",
+                        "name": "framework_portability_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "portability_mappings",
+                        "name": "list_framework_portability_mappings",
+                        "arguments": {"status": "mapped"},
+                    },
+                    {
+                        "id": "portability_gaps",
+                        "name": "list_framework_portability_gaps",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "checkpoint_mapping",
+                        "name": "inspect_framework_portability_mapping",
+                        "arguments": {"id": "checkpoint_resume"},
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _framework_certification_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    framework_types = {
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    }
+    if copied.get("type") in framework_types:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("framework_lifecycle") is not None:
+        return {"type": "framework_lifecycle", "data": copied["framework_lifecycle"]}
+    if copied.get("framework_capability") is not None:
+        return {"type": "framework_capability", "data": copied["framework_capability"]}
+    if copied.get("framework_probe") is not None:
+        return {"type": "framework_probe", "data": copied["framework_probe"]}
+    if copied.get("framework_portability") is not None:
+        return {"type": "framework_portability", "data": copied["framework_portability"]}
+    if copied.get("mappings") is not None:
+        return {"type": "framework_portability", "data": copied}
+    if copied.get("probes") is not None:
+        return {"type": "framework_probe", "data": copied}
+    if copied.get("capabilities") is not None:
+        return {"type": "framework_capability", "data": copied}
+    return {"type": "framework_lifecycle", "data": copied}
+
+
+def _seed_framework_certification_candidate(
+    *,
+    framework: str,
+    target_framework: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "framework_lifecycle",
+            "data": {
+                "name": "weak-lifecycle",
+                "framework": framework,
+                "session_id": "thread-123",
+                "phases": [
+                    {"id": "init", "stage": "initialize", "status": "completed"},
+                    {"id": "invoke", "stage": "invoke", "status": "completed"},
+                ],
+            },
+        },
+        {
+            "type": "framework_capability",
+            "data": {
+                "name": "weak-capabilities",
+                "framework": framework,
+                "capabilities": [
+                    {
+                        "name": "tool_calling",
+                        "category": "tools",
+                        "status": "supported",
+                    }
+                ],
+            },
+        },
+        {
+            "type": "framework_probe",
+            "data": {
+                "name": "weak-probes",
+                "framework": framework,
+                "probes": [
+                    {
+                        "id": "invoke",
+                        "operation": "invoke",
+                        "category": "runtime",
+                        "status": "passed",
+                        "latency_ms": 160,
+                    }
+                ],
+            },
+        },
+        {
+            "type": "framework_portability",
+            "data": {
+                "name": "weak-portability",
+                "source_framework": framework,
+                "target_framework": target_framework,
+                "mappings": [
+                    {
+                        "id": "invoke",
+                        "source": "graph.invoke",
+                        "target": "Runner.run",
+                        "category": "runtime",
+                        "status": "mapped",
+                    }
+                ],
+            },
+        },
+    ]
+
+
+def _certified_framework_certification_candidate(
+    *,
+    framework: str,
+    target_framework: str,
+) -> list[dict[str, Any]]:
+    return [
+        _framework_lifecycle_certificate(framework),
+        _framework_capability_certificate(framework),
+        _framework_probe_certificate(framework),
+        _framework_portability_certificate(
+            source_framework=framework,
+            target_framework=target_framework,
+        ),
+    ]
+
+
+def _framework_lifecycle_certificate(framework: str) -> dict[str, Any]:
+    return {
+        "type": "framework_lifecycle",
+        "data": {
+            "name": f"{framework}-lifecycle-certificate",
+            "framework": framework,
+            "session_id": "thread-123",
+            "state": {"thread_id": "thread-123", "case": {"status": "resolved"}},
+            "phases": [
+                {
+                    "id": "init",
+                    "stage": "initialize",
+                    "status": "completed",
+                    "state": {"config": "loaded"},
+                },
+                {
+                    "id": "tools",
+                    "stage": "register_tools",
+                    "registered_tools": ["search_order", "issue_refund"],
+                },
+                {
+                    "id": "start",
+                    "stage": "start_session",
+                    "state_keys": ["thread_id", "messages"],
+                },
+                {
+                    "id": "invoke",
+                    "stage": "invoke",
+                    "latency_ms": 42,
+                    "state_keys": ["messages"],
+                },
+                {"id": "stream", "stage": "stream", "status": "completed"},
+                {
+                    "id": "checkpoint",
+                    "stage": "checkpoint",
+                    "checkpoint": {"thread_id": "thread-123", "step": 1},
+                },
+                {
+                    "id": "retry",
+                    "stage": "retry",
+                    "retry_of": "invoke",
+                    "error": "tool timeout",
+                    "recovered": True,
+                },
+                {"id": "cancel", "stage": "cancel", "status": "cancelled"},
+                {
+                    "id": "resume",
+                    "stage": "resume",
+                    "status": "resumed",
+                    "state_persisted": True,
+                },
+                {"id": "shutdown", "stage": "shutdown", "status": "completed"},
+            ],
+            "metadata": {"candidate": "certified"},
+        },
+    }
+
+
+def _framework_capability_certificate(framework: str) -> dict[str, Any]:
+    capability_rows = [
+        ("tool_calling", "tools", ["tools/list", "tools/call"]),
+        ("mcp_tool_session", "tools", ["mcp tool session"]),
+        ("long_term_memory", "memory", ["memory store adapter"]),
+        ("streaming_deltas", "streaming", ["stream_events"]),
+        ("checkpoint_resume", "lifecycle", ["checkpoint replay"]),
+        ("workflow_graph", "orchestration", ["graph nodes and edges"]),
+        ("policy_guardrails", "security", ["policy gate"]),
+        ("otel_trace_export", "observability", ["OTel spans"]),
+        ("futureagi_export", "exports", ["Future AGI regression row"]),
+    ]
+    return {
+        "type": "framework_capability",
+        "data": {
+            "name": f"{framework}-capability-certificate",
+            "framework": framework,
+            "version": "1.0",
+            "task_surfaces": [
+                "support_chat",
+                "refund_workflow",
+                "browser_research",
+            ],
+            "integrations": ["futureagi", "mcp", "otel"],
+            "capabilities": [
+                {
+                    "name": name,
+                    "category": category,
+                    "status": "supported",
+                    "evidence": list(evidence),
+                }
+                for name, category, evidence in capability_rows
+            ],
+            "metadata": {"candidate": "certified"},
+        },
+    }
+
+
+def _framework_probe_certificate(framework: str) -> dict[str, Any]:
+    evidence_labels = {
+        "invoke": "ainvoke dry run",
+        "list_tools": "tools/list",
+        "tool_call": "lookup_policy result",
+        "write_memory": "memory write",
+        "read_memory": "memory read",
+        "stream": "stream chunk",
+        "checkpoint_save": "checkpoint",
+        "checkpoint_resume": "resume",
+        "handoff": "handoff contract",
+        "guardrail": "policy gate",
+        "trace_export": "OTel span",
+        "export": "Future AGI row",
+    }
+    latencies = [18, 12, 21, 9, 8, 28, 16, 17, 24, 19, 15, 13]
+    return {
+        "type": "framework_probe",
+        "data": {
+            "name": f"{framework}-adapter-probes",
+            "framework": framework,
+            "version": "1.0",
+            "probes": [
+                {
+                    "id": operation,
+                    "operation": operation,
+                    "category": category,
+                    "status": "passed",
+                    "evidence": [evidence_labels[operation]],
+                    "latency_ms": latencies[index],
+                }
+                for index, (operation, category) in enumerate(_FRAMEWORK_CERT_PROBES)
+            ],
+            "metadata": {"candidate": "certified"},
+        },
+    }
+
+
+def _framework_portability_certificate(
+    *,
+    source_framework: str,
+    target_framework: str,
+) -> dict[str, Any]:
+    evidence_labels = {
+        "invoke": "dry run",
+        "tool_discovery": "schema map",
+        "tool_call": "call/result replay",
+        "short_term_state": "state projection",
+        "streaming_events": "chunk replay",
+        "checkpoint_resume": "resume replay",
+        "handoff": "route map",
+        "guardrail": "policy gate",
+        "otel_trace": "span map",
+        "futureagi_export": "export row",
+    }
+    return {
+        "type": "framework_portability",
+        "data": {
+            "name": f"{source_framework}-to-{target_framework}-portability",
+            "source_framework": source_framework,
+            "target_framework": target_framework,
+            "version": "2026-06",
+            "constraints": ["preserve tool schemas", "preserve trace ids"],
+            "mappings": [
+                {
+                    "id": mapping_id,
+                    "source": source,
+                    "target": target,
+                    "category": category,
+                    "status": "mapped",
+                    "evidence": [evidence_labels[mapping_id]],
+                }
+                for mapping_id, category, source, target in _FRAMEWORK_CERT_MAPPINGS
+            ],
+            "metadata": {"candidate": "certified"},
+        },
+    }
+
+
+def _default_framework_certification_evaluation_config(
+    *,
+    framework: str,
+    target_framework: str,
+) -> dict[str, Any]:
+    required_tools = [
+        "framework_lifecycle_status",
+        "list_framework_lifecycle_phases",
+        "inspect_framework_session",
+        "framework_capability_status",
+        "list_framework_capabilities",
+        "inspect_framework_capability",
+        "list_framework_task_surfaces",
+        "framework_probe_status",
+        "list_framework_probes",
+        "inspect_framework_probe",
+        "list_framework_probe_failures",
+        "framework_portability_status",
+        "list_framework_portability_mappings",
+        "inspect_framework_portability_mapping",
+        "list_framework_portability_gaps",
+    ]
+    required_probes = [operation for operation, _category in _FRAMEWORK_CERT_PROBES]
+    required_mappings = [
+        mapping_id
+        for mapping_id, _category, _source, _target in _FRAMEWORK_CERT_MAPPINGS
+    ]
+    return {
+        "task_description": (
+            "Optimize a framework certification harness that proves lifecycle, "
+            "capabilities, smoke probes, and migration portability before rollout."
+        ),
+        "expected_result": (
+            "The optimized framework certificate proves lifecycle, capability, "
+            "probe, and portability evidence before rollout."
+        ),
+        "success_criteria": [
+            "lifecycle evidence",
+            "capability evidence",
+            "probe evidence",
+            "portability evidence",
+            "before rollout",
+        ],
+        "required_tools": required_tools,
+        "available_tools": required_tools,
+        "required_artifact_types": ["trace"],
+        "required_framework_lifecycle": [
+            "framework_lifecycle",
+            "initialize",
+            "tool_registration",
+            "start_session",
+            "invocation",
+            "streaming",
+            "checkpoint",
+            "retry",
+            "cancellation",
+            "resume",
+            "cleanup",
+            "state_persistence",
+            "session",
+        ],
+        "framework_lifecycle_quality": {
+            "framework": framework,
+            "required_sessions": ["thread-123"],
+            "required_stages": list(_FRAMEWORK_CERT_REQUIRED_STAGES),
+            "min_phase_count": 10,
+            "min_tool_registrations": 1,
+            "min_invocations": 1,
+            "min_recovered_errors": 1,
+            "require_streaming": True,
+            "require_checkpoint": True,
+            "require_retry": True,
+            "require_cancellation": True,
+            "require_resume": True,
+            "require_cleanup": True,
+            "require_state_persistence": True,
+            "terminal_status": "completed",
+            "max_error_count": 1,
+        },
+        "required_framework_capabilities": [
+            "framework_capability",
+            *list(_FRAMEWORK_CERT_REQUIRED_CAPABILITIES),
+        ],
+        "framework_capability_quality": {
+            "framework": framework,
+            "required_capabilities": list(_FRAMEWORK_CERT_REQUIRED_CAPABILITIES),
+            "required_categories": list(_FRAMEWORK_CERT_REQUIRED_CATEGORIES),
+            "required_task_surfaces": [
+                "support_chat",
+                "refund_workflow",
+                "browser_research",
+            ],
+            "required_integrations": ["futureagi", "mcp"],
+            "min_supported_capabilities": 8,
+            "min_support_rate": 0.85,
+            "require_evidence": True,
+            "max_missing_capabilities": 0,
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+            "require_lifecycle": True,
+            "require_orchestration": True,
+            "require_security": True,
+            "require_observability": True,
+            "require_exports": True,
+        },
+        "required_framework_probes": ["framework_probe", *required_probes],
+        "framework_probe_quality": {
+            "framework": framework,
+            "required_operations": required_probes,
+            "required_categories": list(_FRAMEWORK_CERT_REQUIRED_CATEGORIES),
+            "min_passed_probes": 12,
+            "min_required_pass_rate": 1.0,
+            "max_failed_probes": 0,
+            "max_blocked_probes": 0,
+            "require_evidence": True,
+            "max_latency_ms": 80,
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+            "require_lifecycle": True,
+            "require_orchestration": True,
+            "require_security": True,
+            "require_observability": True,
+            "require_exports": True,
+        },
+        "required_framework_portability": [
+            "framework_portability",
+            *required_mappings,
+        ],
+        "framework_portability_quality": {
+            "source_framework": framework,
+            "target_framework": target_framework,
+            "required_mappings": required_mappings,
+            "required_categories": [
+                "runtime",
+                *list(_FRAMEWORK_CERT_REQUIRED_CATEGORIES),
+            ],
+            "min_mapped_mappings": 10,
+            "min_mapping_rate": 0.9,
+            "min_required_mapping_rate": 0.9,
+            "max_missing_mappings": 0,
+            "max_blocked_mappings": 0,
+            "require_evidence": True,
+            "require_tools": True,
+            "require_memory": True,
+            "require_streaming": True,
+            "require_lifecycle": True,
+            "require_orchestration": True,
+            "require_security": True,
+            "require_observability": True,
+            "require_exports": True,
+            "require_runtime": True,
+        },
+        "metric_weights": {
+            "framework_lifecycle_coverage": 5.0,
+            "framework_lifecycle_quality": 8.0,
+            "framework_capability_coverage": 5.0,
+            "framework_capability_quality": 8.0,
+            "framework_probe_coverage": 5.0,
+            "framework_probe_quality": 8.0,
+            "framework_portability_coverage": 5.0,
+            "framework_portability_quality": 8.0,
+            "tool_selection_accuracy": 3.0,
+            "tool_usage_effectiveness": 2.0,
+            "task_completion": 2.0,
+        },
     }
 
 
@@ -4908,6 +5704,7 @@ __all__ = [
     "build_artifact_optimization_suite",
     "build_agent_integration_optimization_manifest",
     "build_browser_cua_optimization_manifest",
+    "build_framework_certification_optimization_manifest",
     "build_framework_optimization_manifest",
     "build_memory_optimization_manifest",
     "build_multi_agent_optimization_manifest",
@@ -4922,6 +5719,7 @@ __all__ = [
     "optimize_agent_control_plane",
     "optimize_agent_integration",
     "optimize_browser_cua",
+    "optimize_framework_certification",
     "optimize_framework_adapter",
     "optimize_manifest",
     "optimize_manifest_file",
