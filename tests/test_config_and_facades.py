@@ -80,6 +80,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_eval_suite_file is not None
     assert optimize.build_agent_control_plane_optimization_manifest is not None
     assert optimize.optimize_agent_control_plane is not None
+    assert optimize.build_autonomous_redteam_task_world_optimization_manifest is not None
+    assert optimize.optimize_autonomous_redteam_task_world is not None
     assert optimize.build_browser_cua_optimization_manifest is not None
     assert optimize.optimize_browser_cua is not None
     assert optimize.build_agent_integration_optimization_manifest is not None
@@ -2036,6 +2038,127 @@ def test_sdk_framework_certification_optimization_example_runs(
     portability = state["framework_portability_matrix"]["summary"]
     assert portability["mapped_count"] == 10
     assert portability["missing_count"] == 0
+
+
+def test_sdk_autonomous_redteam_task_world_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_EXAMPLE_KEY",
+        "real-local-sdk-autonomous-redteam-task-world-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_autonomous_redteam_task_world_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_autonomous_redteam_task_world_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "harness",
+        "world",
+        "security",
+        "autonomy",
+        "evaluator",
+    ]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    assert [env["type"] for env in candidates[1]] == [
+        "structured_artifact",
+        "domain_package",
+        "world_attack_replay",
+        "autonomy_loop",
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["world_contract_quality"]["required_transitions"] == [
+        "authenticate_user",
+        "approve_refund",
+    ]
+    assert config["adversarial_resilience"]["blocked_tools"] == [
+        "exfiltrate_canary"
+    ]
+    assert config["expected_autonomy_skills"][0]["name"] == (
+        "refund-redteam-runbook"
+    )
+
+    output_path = tmp_path / "sdk-autonomous-redteam-task-world-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    assert {
+        name: score
+        for name, score in best_history["metrics"].items()
+        if score < 1.0
+    } == {}
+    for metric in (
+        "artifact_semantics_quality",
+        "artifact_grounding_quality",
+        "domain_package_quality",
+        "world_contract_coverage",
+        "world_contract_quality",
+        "adversarial_resilience",
+        "autonomy_loop_coverage",
+        "autonomy_loop_quality",
+        "tool_argument_schema",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {
+        "adversarial",
+        "autonomy_loop",
+        "domain_packages",
+        "structured_artifacts",
+        "world_attack_replay",
+        "world_contract",
+    }
+    assert state["structured_artifacts"]["ids"] == ["approval_policy"]
+    assert state["domain_packages"]["ids"] == ["refund_case"]
+    world_summary = state["world_attack_replay"]["summary"]
+    assert world_summary["world_terminal_status"] == "success"
+    assert world_summary["completed_required_transition_count"] == 2
+    assert world_summary["invariant_violation_count"] == 0
+    assert world_summary["attack_count"] == 2
+    assert world_summary["canary_count"] == 1
+    assert state["autonomy_loop"]["stages_observed"] == [
+        "act",
+        "memory",
+        "observe",
+        "orient",
+        "plan",
+        "reflect",
+        "skill",
+        "status",
+        "verify",
+    ]
 
 
 def test_sdk_workspace_observability_optimization_example_runs(

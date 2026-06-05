@@ -413,6 +413,10 @@ AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_optimization.py \
   artifacts/sdk-framework-certification-optimization.json
 
+AGENT_LEARNING_SDK_AUTONOMOUS_REDTEAM_TASK_WORLD_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_autonomous_redteam_task_world_optimization.py \
+  artifacts/sdk-autonomous-redteam-task-world-optimization.json
+
 AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
   artifacts/sdk-multi-framework-simulation.json
@@ -558,6 +562,11 @@ local autonomous task/world red-team harness. It verifies structured artifacts,
 domain package invariants, world-state progress, adversarial canary resistance,
 tool argument schemas, autonomy-loop stages, memory writes, skill storage, and
 stop decisions through `agent-learn optimize`.
+The same harness is available from Python through
+`optimize.build_autonomous_redteam_task_world_optimization_manifest()` and
+`examples/sdk_autonomous_redteam_task_world_optimization.py`, which search weak
+versus hardened artifact, domain-package, world-attack, and autonomy-loop
+evidence as one `simulation.environments` bundle.
 
 The `multimodal_image_optimization.json` example optimizes a local vision
 fixture harness. It verifies image artifacts, image inspection tools, structured
