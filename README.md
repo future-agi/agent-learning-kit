@@ -65,6 +65,8 @@ agent-learn optimize examples/long_horizon_redteam_optimization.json \
   --output artifacts/long-horizon-redteam-optimization.json
 agent-learn optimize examples/redteam_society_optimization.json \
   --output artifacts/redteam-society-optimization.json
+agent-learn optimize examples/redteam_causal_attribution_optimization.json \
+  --output artifacts/redteam-causal-attribution-optimization.json
 agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability-optimization.json
 agent-learn optimize examples/agent_integration_optimization.json \
@@ -486,6 +488,10 @@ AGENT_LEARNING_SDK_REDTEAM_SOCIETY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_society_optimization.py \
   artifacts/sdk-redteam-society-optimization.json
 
+AGENT_LEARNING_SDK_REDTEAM_CAUSAL_ATTRIBUTION_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_causal_attribution_optimization.py \
+  artifacts/sdk-redteam-causal-attribution-optimization.json
+
 AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
   artifacts/sdk-agent-control-plane-optimization.json
@@ -646,6 +652,16 @@ explicit handoff contracts, review, reconciliation, and full 25-cell red-team
 campaign evidence. The same society search is available from Python through
 `optimize.build_redteam_society_optimization_manifest()` and
 `examples/sdk_redteam_society_optimization.py`.
+
+The `redteam_causal_attribution_optimization.json` example takes the council one
+step further: it searches for a candidate that can diagnose a multi-agent
+red-team failure with an acyclic causal graph, mapped root causes, mitigations,
+and run evidence. The design builds on 2026 causal graph tracing, strategy
+network red-teaming, and client-side agent optimization research, then adds our
+own deterministic contract for root-cause and mitigation closure. The same
+causal search is available from Python through
+`optimize.build_redteam_causal_attribution_optimization_manifest()` and
+`examples/sdk_redteam_causal_attribution_optimization.py`.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It

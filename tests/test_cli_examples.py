@@ -67,6 +67,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_REDTEAM_SOCIETY_OPT_EXAMPLE_KEY",
         ),
         (
+            "optimize",
+            "redteam_causal_attribution_optimization.json",
+            "agent-learning.optimization.v1",
+            "AGENT_LEARNING_REDTEAM_CAUSAL_ATTRIBUTION_OPT_EXAMPLE_KEY",
+        ),
+        (
             "optimize-eval",
             "eval_suite_optimization.json",
             "agent-learning.eval-optimization.v1",
@@ -1580,6 +1586,129 @@ def test_redteam_society_optimization_example_selects_council(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "redteam-society-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_redteam_causal_attribution_optimization_example_selects_graph(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_REDTEAM_CAUSAL_ATTRIBUTION_OPT_EXAMPLE_KEY",
+        "real-local-redteam-causal-opt-key",
+    )
+
+    output_path = tmp_path / "redteam-causal-attribution-optimization.json"
+    junit_path = tmp_path / "redteam-causal-attribution-optimization.junit.xml"
+    sarif_path = tmp_path / "redteam-causal-attribution-optimization.sarif.json"
+    markdown_path = tmp_path / "redteam-causal-attribution-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "redteam_causal_attribution_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    roles = {
+        "red_team_lead",
+        "orchestrator_leak_tester",
+        "tool_chain_attacker",
+        "memory_privacy_guard",
+        "vidura",
+        "dharma_steward",
+    }
+    required_nodes = {
+        "user_prompt",
+        "orchestrator",
+        "retriever",
+        "memory_store",
+        "tool_executor",
+        "critic",
+        "dharma_steward",
+    }
+    required_root_causes = {
+        "orchestrator_delegation_boundary",
+        "memory_persistence_without_quarantine",
+        "tool_chain_without_approval_gate",
+    }
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.96
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "causal_attribution_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    best_room = payload["optimization"]["best_config"]["simulation"][
+        "environments"
+    ][0]["data"]
+    assert set(best_room["participants"]) == roles
+    assert best_room["allow_unknown_roles"] is False
+    causal_graph = best_room["state"]["causal_attribution"]
+    assert {node["id"] for node in causal_graph["nodes"]} == required_nodes
+    assert len(causal_graph["edges"]) == 7
+    assert {item["id"] for item in causal_graph["root_causes"]} == (
+        required_root_causes
+    )
+    assert len(causal_graph["mitigations"]) == 4
+    assert len(causal_graph["evidence"]) == 5
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"adversarial", "multi_agent", "red_team_campaign"}
+    multi_agent = state["multi_agent"]
+    assert set(multi_agent["participants"]) == roles
+    assert all(check["match"] for check in multi_agent["coordination_checks"])
+    observed_graph = multi_agent["state"]["causal_attribution"]
+    assert {node["id"] for node in observed_graph["nodes"]} == required_nodes
+
+    agent_report = best_history["report"]["results"][0]["evaluation"]["agent_report"]
+    causal_metric = next(
+        item for item in agent_report["metrics"]
+        if item["name"] == "causal_attribution_quality"
+    )
+    observed = causal_metric["details"]["observed"]
+    assert causal_metric["score"] == pytest.approx(1.0)
+    assert set(observed["nodes"]) == required_nodes
+    assert set(observed["root_causes"]) == required_root_causes
+    assert observed["mapped_root_causes"] == sorted(required_root_causes)
+    assert observed["unmapped_root_causes"] == []
+    assert observed["is_dag"] is True
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "redteam-causal-attribution-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 

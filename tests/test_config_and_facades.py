@@ -146,6 +146,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_redteam_campaign is not None
     assert optimize.build_redteam_society_optimization_manifest is not None
     assert optimize.optimize_redteam_society is not None
+    assert optimize.build_redteam_causal_attribution_optimization_manifest is not None
+    assert optimize.optimize_redteam_causal_attribution is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
     assert optimize.optimize_social_memory_framework is not None
     assert simulate.build_social_memory_framework_run_manifest is not None
@@ -3839,6 +3841,159 @@ def test_sdk_redteam_society_optimization_example_runs(monkeypatch, tmp_path):
     assert campaign_summary["executed_cell_count"] == 25
     assert campaign_summary["missing_coverage_cells"] == []
     assert campaign_summary["missing_executed_cells"] == []
+
+
+def test_sdk_redteam_causal_attribution_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_CAUSAL_ATTRIBUTION_EXAMPLE_KEY",
+        "real-local-sdk-redteam-causal-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_redteam_causal_attribution_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_causal_attribution_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    roles = {
+        "red_team_lead",
+        "orchestrator_leak_tester",
+        "tool_chain_attacker",
+        "memory_privacy_guard",
+        "vidura",
+        "dharma_steward",
+    }
+    required_nodes = {
+        "user_prompt",
+        "orchestrator",
+        "retriever",
+        "memory_store",
+        "tool_executor",
+        "critic",
+        "dharma_steward",
+    }
+    required_root_causes = {
+        "orchestrator_delegation_boundary",
+        "memory_persistence_without_quarantine",
+        "tool_chain_without_approval_gate",
+    }
+
+    assert manifest["version"] == "agent-learning.optimization.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_CAUSAL_ATTRIBUTION_EXAMPLE_KEY"
+    ]
+    assert manifest["redteam"]["profile"] == (
+        "redteam_causal_attribution_attack_system"
+    )
+    assert manifest["redteam"]["attack_system"]["strategy"] == (
+        "causal_redteam_society"
+    )
+    research_sources = {
+        item["source"]
+        for item in manifest["redteam"]["attack_system"]["research_basis"]
+    }
+    assert research_sources >= {
+        "arxiv:2603.14688",
+        "arxiv:2604.18976",
+        "arxiv:2604.06296",
+        "arxiv:2605.17075",
+    }
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert "graph" in manifest["optimization"]["target"]["layers"]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    final_room = candidates[-1][0]["data"]
+    assert set(final_room["participants"]) == roles
+    causal_graph = final_room["state"]["causal_attribution"]
+    assert {node["id"] for node in causal_graph["nodes"]} == required_nodes
+    assert len(causal_graph["edges"]) == 7
+    assert {item["id"] for item in causal_graph["root_causes"]} == (
+        required_root_causes
+    )
+    assert {item["id"] for item in causal_graph["mitigations"]} >= {
+        "context_quarantine",
+        "approval_gate",
+        "memory_cleanup",
+        "steward_review",
+    }
+
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert set(config["required_multi_agent_roles"]) == roles
+    assert config["causal_attribution_quality"]["min_node_count"] == 7
+    assert config["causal_attribution_quality"]["min_edge_count"] == 7
+    assert config["causal_attribution_quality"]["require_dag"] is True
+    assert config["causal_attribution_quality"]["max_unmapped_root_causes"] == 0
+    assert config["metric_weights"]["causal_attribution_quality"] == 14.0
+
+    output_path = tmp_path / "sdk-redteam-causal-attribution-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.96
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in result["summary"]["search_paths"]
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "causal_attribution_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"adversarial", "multi_agent", "red_team_campaign"}
+    multi_agent = state["multi_agent"]
+    assert set(multi_agent["participants"]) == roles
+    assert all(check["match"] for check in multi_agent["coordination_checks"])
+    causal_graph = multi_agent["state"]["causal_attribution"]
+    assert {node["id"] for node in causal_graph["nodes"]} == required_nodes
+    assert len(causal_graph["edges"]) == 7
+    assert len(causal_graph["evidence"]) == 5
+
+    agent_report = best_history["report"]["results"][0]["evaluation"]["agent_report"]
+    causal_metric = next(
+        item for item in agent_report["metrics"]
+        if item["name"] == "causal_attribution_quality"
+    )
+    assert causal_metric["score"] == pytest.approx(1.0)
+    observed = causal_metric["details"]["observed"]
+    assert set(observed["nodes"]) == required_nodes
+    assert set(observed["root_causes"]) == required_root_causes
+    assert observed["mapped_root_causes"] == sorted(required_root_causes)
+    assert observed["unmapped_root_causes"] == []
+    assert observed["is_dag"] is True
+    assert observed["has_root_cause_mapping"] is True
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
 
 
 def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path):

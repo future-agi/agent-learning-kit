@@ -171,6 +171,8 @@ class AgentReportEvalConfig(BaseModel):
     expected_multi_agent_handoffs: List[Any] = Field(default_factory=list)
     expected_multi_agent_reviews: List[Any] = Field(default_factory=list)
     expected_multi_agent_reconciliation: Dict[str, Any] = Field(default_factory=dict)
+    required_causal_attribution: List[str] = Field(default_factory=list)
+    causal_attribution_quality: Dict[str, Any] = Field(default_factory=dict)
     required_orchestration_trace: List[str] = Field(default_factory=list)
     orchestration_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_streaming_trace: List[str] = Field(default_factory=list)
@@ -450,6 +452,7 @@ class AgentReportEvaluator:
                 *_source_contradiction_metrics(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _multi_agent_coordination_quality_metric(report_context, config),
+                *_causal_attribution_quality_metrics(report_context, config),
                 _orchestration_trace_coverage_metric(report_context, config),
                 _orchestration_flow_quality_metric(report_context, config),
                 _streaming_trace_coverage_metric(report_context, config),
@@ -5620,6 +5623,575 @@ def _multi_agent_coordination_quality_metric(
         reason=f"{matched}/{len(checks)} multi-agent coordination check(s) matched.",
         details={"checks": checks, "findings": findings},
     )
+
+
+def _causal_attribution_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_causal_attribution and not config.causal_attribution_quality:
+        return []
+    return [_causal_attribution_quality_metric(context, config)]
+
+
+def _causal_attribution_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    requirements = _as_dict(config.causal_attribution_quality)
+    payloads = _causal_attribution_payloads_from_context(context)
+    observed = _causal_attribution_summary(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for key, observed_key, finding_type in (
+        ("min_node_count", "node_count", "causal_attribution_node_count_low"),
+        ("min_edge_count", "edge_count", "causal_attribution_edge_count_low"),
+        (
+            "min_root_cause_count",
+            "root_cause_count",
+            "causal_attribution_root_cause_count_low",
+        ),
+        (
+            "min_evidence_count",
+            "evidence_count",
+            "causal_attribution_evidence_count_low",
+        ),
+        (
+            "min_mitigation_count",
+            "mitigation_count",
+            "causal_attribution_mitigation_count_low",
+        ),
+    ):
+        minimum = _as_int(requirements.get(key))
+        if minimum is None:
+            continue
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check=key,
+            expected=minimum,
+            actual=observed[observed_key],
+            match=observed[observed_key] >= minimum,
+            finding_type=finding_type,
+        )
+
+    for item in [
+        *config.required_causal_attribution,
+        *_string_list(requirements.get("required_signals") or requirements.get("signals")),
+    ]:
+        normalized = _normalize_causal_attribution_key(item)
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="required_signal",
+            expected=normalized,
+            actual=observed["signals"],
+            match=normalized in observed["signals"],
+            finding_type="causal_attribution_signal_missing",
+        )
+
+    for item in _string_list(requirements.get("required_nodes") or requirements.get("nodes")):
+        normalized = _normalize_causal_attribution_key(item)
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="required_node",
+            expected=normalized,
+            actual=observed["nodes"],
+            match=normalized in observed["nodes"],
+            finding_type="causal_attribution_node_missing",
+        )
+
+    for item in _string_list(
+        requirements.get("required_root_causes") or requirements.get("root_causes")
+    ):
+        normalized = _normalize_causal_attribution_key(item)
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="required_root_cause",
+            expected=normalized,
+            actual=observed["root_causes"],
+            match=normalized in observed["root_causes"],
+            finding_type="causal_attribution_root_cause_missing",
+        )
+
+    for item in _string_list(
+        requirements.get("required_mitigations") or requirements.get("mitigations")
+    ):
+        normalized = _normalize_causal_attribution_key(item)
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="required_mitigation",
+            expected=normalized,
+            actual=observed["mitigations"],
+            match=normalized in observed["mitigations"],
+            finding_type="causal_attribution_mitigation_missing",
+        )
+
+    for item in _string_list(
+        requirements.get("required_evidence") or requirements.get("evidence")
+    ):
+        normalized = _normalize_causal_attribution_key(item)
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="required_evidence",
+            expected=normalized,
+            actual=observed["evidence"],
+            match=normalized in observed["evidence"],
+            finding_type="causal_attribution_evidence_missing",
+        )
+
+    for expected in _as_list(requirements.get("required_edges") or requirements.get("edges")):
+        expected_dict = _as_dict(expected)
+        match = any(
+            _causal_attribution_edge_matches(edge, expected_dict)
+            for edge in observed["edge_records"]
+        )
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="required_edge",
+            expected=expected_dict,
+            actual=observed["edge_records"],
+            match=match,
+            finding_type="causal_attribution_edge_missing",
+        )
+
+    if requirements.get("require_root_cause_mapping") is not None:
+        required = bool(requirements.get("require_root_cause_mapping"))
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="require_root_cause_mapping",
+            expected=required,
+            actual=observed["has_root_cause_mapping"],
+            match=observed["has_root_cause_mapping"] is required,
+            finding_type="causal_attribution_root_cause_unmapped",
+        )
+
+    max_unmapped = _as_int(requirements.get("max_unmapped_root_causes"))
+    if max_unmapped is not None:
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="max_unmapped_root_causes",
+            expected=max_unmapped,
+            actual=len(observed["unmapped_root_causes"]),
+            match=len(observed["unmapped_root_causes"]) <= max_unmapped,
+            finding_type="causal_attribution_root_cause_unmapped",
+        )
+
+    if requirements.get("require_mitigations") is not None:
+        required = bool(requirements.get("require_mitigations"))
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="require_mitigations",
+            expected=required,
+            actual=observed["has_mitigations"],
+            match=observed["has_mitigations"] is required,
+            finding_type="causal_attribution_mitigation_missing",
+        )
+
+    if requirements.get("require_evidence") is not None:
+        required = bool(requirements.get("require_evidence"))
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="require_evidence",
+            expected=required,
+            actual=observed["has_evidence"],
+            match=observed["has_evidence"] is required,
+            finding_type="causal_attribution_evidence_missing",
+        )
+
+    if requirements.get("require_dag") is not None:
+        required = bool(requirements.get("require_dag"))
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check="require_dag",
+            expected=required,
+            actual=observed["is_dag"],
+            match=observed["is_dag"] is required,
+            finding_type="causal_attribution_cycle_detected",
+        )
+
+    for path, expected in _flatten_state(_as_dict(requirements.get("expected_summary"))).items():
+        actual = _get_path(observed, path)
+        _append_causal_attribution_check(
+            checks,
+            findings,
+            check=f"summary.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="causal_attribution_summary_mismatch",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="causal_attribution_quality",
+            score=1.0,
+            reason="No causal attribution checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="causal_attribution_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} causal attribution check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _causal_attribution_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    for key in ("causal_attribution", "causal_interaction_graph"):
+        payload = _as_dict(final_state.get(key))
+        if payload:
+            payloads.append(payload)
+    multi_agent = _as_dict(final_state.get("multi_agent"))
+    for key in ("causal_attribution", "causal_interaction_graph", "causal_graph"):
+        payload = _as_dict(_as_dict(multi_agent.get("state")).get(key))
+        if payload:
+            payloads.append(payload)
+    red_team = _as_dict(final_state.get("red_team_campaign"))
+    for key in ("causal_attribution", "causal_interaction_graph", "causal_graph"):
+        payload = _as_dict(red_team.get(key))
+        if payload:
+            payloads.append(payload)
+
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    for key in ("causal_attribution", "causal_interaction_graph"):
+        payload = _as_dict(metadata_state.get(key))
+        if payload:
+            payloads.append(payload)
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_causal_attribution(data, metadata):
+            payloads.append(data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_causal_attribution(payload, metadata) or "causal" in event_type:
+            payloads.append(payload)
+
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        key = json.dumps(payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload)
+    return deduped
+
+
+def _looks_like_causal_attribution(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind in {"causal_attribution", "causal_interaction_graph"} or (
+        ("root_causes" in data or "causes" in data)
+        and ("edges" in data or "links" in data or "nodes" in data)
+    )
+
+
+def _causal_attribution_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    node_records: list[dict[str, Any]] = []
+    edge_records: list[dict[str, Any]] = []
+    root_cause_records: list[dict[str, Any]] = []
+    mitigation_records: list[dict[str, Any]] = []
+    evidence_records: list[Any] = []
+    signals: set[str] = {"causal_attribution"} if payloads else set()
+
+    for payload in payloads:
+        signals.update(
+            _normalize_causal_attribution_key(item)
+            for item in _as_list(payload.get("signals", []))
+            if _normalize_causal_attribution_key(item)
+        )
+        node_records.extend(_as_dict(item) for item in _as_list(payload.get("nodes", [])))
+        edge_records.extend(
+            _as_dict(item)
+            for item in _as_list(payload.get("edges") or payload.get("links") or [])
+        )
+        root_cause_records.extend(
+            _as_dict(item)
+            for item in _as_list(
+                payload.get("root_causes")
+                or payload.get("causes")
+                or payload.get("root_cause")
+                or []
+            )
+        )
+        mitigation_records.extend(
+            _as_dict(item)
+            for item in _as_list(payload.get("mitigations") or payload.get("remediations") or [])
+        )
+        evidence_records.extend(_as_list(payload.get("evidence") or payload.get("artifacts") or []))
+        summary = _as_dict(payload.get("summary"))
+        signals.update(
+            _normalize_causal_attribution_key(item)
+            for item in _as_list(summary.get("signals", []))
+            if _normalize_causal_attribution_key(item)
+        )
+
+    nodes = {
+        _normalize_causal_attribution_key(
+            item.get("id") or item.get("node") or item.get("name")
+        )
+        for item in node_records
+        if _normalize_causal_attribution_key(
+            item.get("id") or item.get("node") or item.get("name")
+        )
+    }
+    mitigations = {
+        _normalize_causal_attribution_key(
+            item.get("id") or item.get("name") or item.get("action") or item.get("mitigation")
+        )
+        for item in mitigation_records
+        if _normalize_causal_attribution_key(
+            item.get("id") or item.get("name") or item.get("action") or item.get("mitigation")
+        )
+    }
+    evidence = {
+        _normalize_causal_attribution_key(
+            _get(item, "id")
+            or _get(item, "name")
+            or _get(item, "signal")
+            or _get(item, "type")
+            or item
+        )
+        for item in evidence_records
+        if _normalize_causal_attribution_key(
+            _get(item, "id")
+            or _get(item, "name")
+            or _get(item, "signal")
+            or _get(item, "type")
+            or item
+        )
+    }
+    roots = {
+        _normalize_causal_attribution_key(
+            item.get("id") or item.get("node") or item.get("cause") or item.get("name")
+        )
+        for item in root_cause_records
+        if _normalize_causal_attribution_key(
+            item.get("id") or item.get("node") or item.get("cause") or item.get("name")
+        )
+    }
+    for root in roots:
+        signals.add(root)
+    signals.update(mitigations)
+    signals.update(evidence)
+    for edge in edge_records:
+        for key in ("cause", "effect", "label", "type", "category"):
+            normalized = _normalize_causal_attribution_key(edge.get(key))
+            if normalized:
+                signals.add(normalized)
+    for mitigation in mitigation_records:
+        normalized = _normalize_causal_attribution_key(
+            mitigation.get("root_cause") or mitigation.get("cause")
+        )
+        if normalized:
+            signals.add(normalized)
+
+    return {
+        "node_count": len(nodes),
+        "edge_count": len(edge_records),
+        "root_cause_count": len(roots),
+        "evidence_count": len(evidence_records),
+        "mitigation_count": len(mitigation_records),
+        "nodes": sorted(nodes),
+        "root_causes": sorted(roots),
+        "mitigations": sorted(mitigations),
+        "evidence": sorted(evidence),
+        "signals": sorted(item for item in signals if item),
+        "edge_records": edge_records,
+        "root_cause_records": root_cause_records,
+        "mitigation_records": mitigation_records,
+        "evidence_records": evidence_records,
+        **_causal_attribution_root_mapping(root_cause_records, roots, nodes, edge_records),
+        "has_mitigations": bool(mitigation_records),
+        "has_evidence": bool(evidence_records),
+        "is_dag": _causal_attribution_is_dag(edge_records),
+    }
+
+
+def _causal_attribution_root_mapping(
+    records: Sequence[Mapping[str, Any]],
+    roots: set[str],
+    nodes: set[str],
+    edges: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    if not roots:
+        return {
+            "has_root_cause_mapping": False,
+            "mapped_root_causes": [],
+            "unmapped_root_causes": [],
+        }
+
+    edge_ids = {_causal_attribution_edge_id(edge) for edge in edges}
+    edge_ids = {item for item in edge_ids if item}
+    edge_nodes = {
+        item
+        for edge in edges
+        for item in (
+            _normalize_causal_attribution_key(edge.get("from") or edge.get("source")),
+            _normalize_causal_attribution_key(edge.get("to") or edge.get("target")),
+        )
+        if item
+    }
+    root_records = {
+        _normalize_causal_attribution_key(
+            item.get("id") or item.get("node") or item.get("cause") or item.get("name")
+        ): item
+        for item in records
+        if _normalize_causal_attribution_key(
+            item.get("id") or item.get("node") or item.get("cause") or item.get("name")
+        )
+    }
+    mapped: set[str] = set()
+    for root in roots:
+        record = root_records.get(root, {})
+        references = {
+            _normalize_causal_attribution_key(record.get(key))
+            for key in (
+                "node",
+                "agent",
+                "component",
+                "from",
+                "source",
+                "to",
+                "target",
+                "edge",
+                "edge_id",
+                "edge_ref",
+            )
+            if _normalize_causal_attribution_key(record.get(key))
+        }
+        edge_ref = _causal_attribution_edge_id(record)
+        if edge_ref:
+            references.add(edge_ref)
+        if root in nodes or root in edge_nodes or references & nodes or references & edge_ids:
+            mapped.add(root)
+
+    unmapped = sorted(roots - mapped)
+    return {
+        "has_root_cause_mapping": bool(roots) and not unmapped,
+        "mapped_root_causes": sorted(mapped),
+        "unmapped_root_causes": unmapped,
+    }
+
+
+def _causal_attribution_is_dag(edges: Sequence[Mapping[str, Any]]) -> bool:
+    graph: dict[str, set[str]] = {}
+    for edge in edges:
+        source = _normalize_causal_attribution_key(edge.get("from") or edge.get("source"))
+        target = _normalize_causal_attribution_key(edge.get("to") or edge.get("target"))
+        if not source or not target:
+            continue
+        graph.setdefault(source, set()).add(target)
+        graph.setdefault(target, set())
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str) -> bool:
+        if node in visiting:
+            return False
+        if node in visited:
+            return True
+        visiting.add(node)
+        for child in graph.get(node, set()):
+            if not visit(child):
+                return False
+        visiting.remove(node)
+        visited.add(node)
+        return True
+
+    return all(visit(node) for node in list(graph))
+
+
+def _causal_attribution_edge_matches(
+    edge: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    for source_key, edge_keys in (
+        ("from", ("from", "source")),
+        ("to", ("to", "target")),
+    ):
+        expected_value = _normalize_causal_attribution_key(expected.get(source_key))
+        if not expected_value:
+            continue
+        actual = {
+            _normalize_causal_attribution_key(edge.get(key))
+            for key in edge_keys
+            if _normalize_causal_attribution_key(edge.get(key))
+        }
+        if expected_value not in actual:
+            return False
+    for contains_key, edge_key in (
+        ("cause_contains", "cause"),
+        ("effect_contains", "effect"),
+        ("evidence_contains", "evidence"),
+    ):
+        expected_text = str(expected.get(contains_key) or "").lower()
+        if expected_text and expected_text not in _stringify(edge.get(edge_key)).lower():
+            return False
+    return True
+
+
+def _causal_attribution_edge_id(edge: Mapping[str, Any]) -> str:
+    explicit = _normalize_causal_attribution_key(
+        edge.get("id") or edge.get("edge") or edge.get("edge_id")
+    )
+    if explicit:
+        return explicit
+    source = _normalize_causal_attribution_key(edge.get("from") or edge.get("source"))
+    target = _normalize_causal_attribution_key(edge.get("to") or edge.get("target"))
+    cause = _normalize_causal_attribution_key(edge.get("cause") or edge.get("label"))
+    return "|".join(item for item in (source, target, cause) if item)
+
+
+def _append_causal_attribution_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    item = {
+        "check": check,
+        "expected": expected,
+        "actual": actual,
+        "match": bool(match),
+    }
+    checks.append(item)
+    if not match:
+        findings.append({"type": finding_type, **item})
+
+
+def _normalize_causal_attribution_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
 def _orchestration_trace_coverage_metric(
