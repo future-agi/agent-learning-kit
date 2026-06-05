@@ -366,6 +366,10 @@ AGENT_LEARNING_SDK_TASK_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_task_simulation.py \
   artifacts/sdk-task-simulation.json
 
+AGENT_LEARNING_SDK_EVAL_SUITE_KEY=... \
+  PYTHONPATH=src python examples/sdk_eval_suite.py \
+  artifacts/sdk-eval-suite.json
+
 PYTHONPATH=src agent-learn eval-task examples/task_evidence.json \
   --config examples/task_evidence_eval_config.json \
   --output artifacts/task-evidence-eval.json
@@ -409,6 +413,11 @@ completion, verification status, framework runtime, and world-contract metrics,
 then runs structured promptfoo-style JSON-path assertions through
 `agent-learn eval`. This is the CI path for evaluating task/world artifacts
 without rerunning the agent.
+`evals.build_eval_suite_manifest()` and `evals.write_eval_suite_file()` provide
+the same promptfoo-style eval-suite path from Python; the
+`sdk_eval_suite.py` cookbook writes an eval manifest plus a one-job
+`agent-learning.suite.v1` wrapper so SDK-built evals can run through both
+`agent-learn eval` and `agent-learn suite`.
 For direct agent-report metrics over an existing artifact, `agent-learn
 eval-artifact` consumes the same saved artifact plus
 `artifact_task_eval_config.json` and emits JSON, JUnit, SARIF, and Markdown

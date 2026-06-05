@@ -800,6 +800,33 @@ def load_eval_suite_file(path: str | Path) -> dict[str, Any]:
     return _suite().load_eval_suite_file(path)
 
 
+def build_eval_suite_manifest(
+    *,
+    name: str,
+    providers: Optional[Sequence[Mapping[str, Any]]] = None,
+    prompts: Optional[Sequence[Mapping[str, Any]]] = None,
+    tests: Optional[Sequence[Mapping[str, Any]]] = None,
+    threshold: float = 1.0,
+    outputs: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    version: str = "agent-learning.eval.v1",
+) -> dict[str, Any]:
+    return _suite().build_eval_suite_manifest(
+        name=name,
+        providers=providers,
+        prompts=prompts,
+        tests=tests,
+        threshold=threshold,
+        outputs=outputs,
+        metadata=metadata,
+        version=version,
+    )
+
+
+def write_eval_suite_file(suite: Mapping[str, Any], path: str | Path) -> Path:
+    return _suite().write_eval_suite_file(suite, path)
+
+
 def run_eval_suite_file(
     path: str | Path,
     *,
@@ -969,6 +996,7 @@ __all__ = [
     "AGENT_LEARNING_RUN_KIND",
     "AGENT_LEARNING_SUITE_KIND",
     "apply_manifest_env",
+    "build_eval_suite_manifest",
     "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",
@@ -1002,5 +1030,6 @@ __all__ = [
     "run_manifest_file",
     "supported_manifest_environment_types",
     "validate_manifest_env",
+    "write_eval_suite_file",
     "write_manifest_file",
 ]

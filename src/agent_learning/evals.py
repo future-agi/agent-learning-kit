@@ -517,6 +517,33 @@ def load_eval_suite_file(path: str | Path) -> dict[str, Any]:
     return _suite().load_eval_suite_file(path)
 
 
+def build_eval_suite_manifest(
+    *,
+    name: str,
+    providers: Optional[Sequence[Mapping[str, Any]]] = None,
+    prompts: Optional[Sequence[Mapping[str, Any]]] = None,
+    tests: Optional[Sequence[Mapping[str, Any]]] = None,
+    threshold: float = 1.0,
+    outputs: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    version: str = "agent-learning.eval.v1",
+) -> dict[str, Any]:
+    return _suite().build_eval_suite_manifest(
+        name=name,
+        providers=providers,
+        prompts=prompts,
+        tests=tests,
+        threshold=threshold,
+        outputs=outputs,
+        metadata=metadata,
+        version=version,
+    )
+
+
+def write_eval_suite_file(suite: Mapping[str, Any], path: str | Path) -> Path:
+    return _suite().write_eval_suite_file(suite, path)
+
+
 def run_eval_suite_file(
     path: str | Path,
     *,
@@ -783,6 +810,7 @@ __all__ = [
     "AGENT_LEARNING_TASK_EVIDENCE_KIND",
     "build_task_evaluation_config",
     "build_task_evidence_artifact",
+    "build_eval_suite_manifest",
     "evaluate",
     "evaluate_agent_report",
     "evaluate_artifact",
@@ -794,5 +822,6 @@ __all__ = [
     "optimize_eval_suite_file",
     "run_eval_suite",
     "run_eval_suite_file",
+    "write_eval_suite_file",
     "write_task_evidence_file",
 ]

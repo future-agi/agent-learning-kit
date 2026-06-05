@@ -16,6 +16,7 @@ from .manifest import CLI_SCHEMA_VERSION, ManifestError
 
 
 EVAL_SUITE_SCHEMA_VERSION = "agent-simulate.eval.v1"
+AGENT_LEARNING_EVAL_SUITE_SCHEMA_VERSION = "agent-learning.eval.v1"
 EVAL_SUITE_OPTIMIZATION_SCHEMA_VERSION = "agent-learning.eval-optimization.v1"
 
 _JSON_PATH_EQUALS_ASSERTIONS = {
@@ -77,6 +78,82 @@ class EvalSuiteOptimizationOptions:
     threshold: Optional[float] = None
     max_candidates: Optional[int] = None
     dry_run: bool = False
+
+
+def build_eval_suite_manifest(
+    *,
+    name: str,
+    providers: Optional[Sequence[Mapping[str, Any]]] = None,
+    prompts: Optional[Sequence[Mapping[str, Any]]] = None,
+    tests: Optional[Sequence[Mapping[str, Any]]] = None,
+    threshold: float = 1.0,
+    outputs: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    version: str = AGENT_LEARNING_EVAL_SUITE_SCHEMA_VERSION,
+) -> Dict[str, Any]:
+    """Build a promptfoo-style eval suite manifest from SDK data."""
+
+    if not name:
+        raise ValueError("name is required")
+    provider_values = _copy_mapping_sequence(
+        providers
+        if providers is not None
+        else (
+            {
+                "id": "echo",
+                "type": "echo",
+            },
+        ),
+        field="providers",
+    )
+    prompt_values = _copy_mapping_sequence(
+        prompts
+        if prompts is not None
+        else (
+            {
+                "id": "support-policy-question",
+                "template": "{{question}}",
+            },
+        ),
+        field="prompts",
+    )
+    test_values = _copy_mapping_sequence(
+        tests
+        if tests is not None
+        else (
+            {
+                "id": "policy-grounding",
+                "vars": {"question": "Where is the refund policy?"},
+                "assert": [{"type": "contains", "value": "policy"}],
+            },
+        ),
+        field="tests",
+    )
+    manifest: Dict[str, Any] = {
+        "version": str(version),
+        "name": str(name),
+        "threshold": float(threshold),
+        "providers": provider_values,
+        "prompts": prompt_values,
+        "tests": test_values,
+    }
+    if outputs:
+        manifest["outputs"] = copy.deepcopy(dict(outputs))
+    if metadata:
+        manifest["metadata"] = copy.deepcopy(dict(metadata))
+    return manifest
+
+
+def write_eval_suite_file(suite: Mapping[str, Any], path: str | Path) -> Path:
+    """Write an eval suite manifest as formatted JSON and return the path."""
+
+    suite_path = Path(path).expanduser().resolve()
+    suite_path.parent.mkdir(parents=True, exist_ok=True)
+    suite_path.write_text(
+        json.dumps(dict(suite), indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return suite_path
 
 
 def load_eval_suite_file(path: str | Path) -> Dict[str, Any]:
@@ -891,14 +968,30 @@ def _as_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _copy_mapping_sequence(
+    values: Sequence[Mapping[str, Any]],
+    *,
+    field: str,
+) -> List[Dict[str, Any]]:
+    if isinstance(values, (str, bytes)) or isinstance(values, Mapping):
+        raise ValueError(f"{field} must be a sequence of mappings")
+    copied = [copy.deepcopy(dict(value)) for value in values]
+    if not copied:
+        raise ValueError(f"{field} must contain at least one item")
+    return copied
+
+
 __all__ = [
+    "AGENT_LEARNING_EVAL_SUITE_SCHEMA_VERSION",
     "EVAL_SUITE_SCHEMA_VERSION",
     "EVAL_SUITE_OPTIMIZATION_SCHEMA_VERSION",
     "EvalSuiteOptimizationOptions",
     "EvalSuiteOptions",
+    "build_eval_suite_manifest",
     "load_eval_suite_file",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "run_eval_suite",
     "run_eval_suite_file",
+    "write_eval_suite_file",
 ]

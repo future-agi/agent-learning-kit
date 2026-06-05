@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -622,6 +623,63 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert "refund-agent-trinity-suite" in suite_markdown.read_text(
         encoding="utf-8",
     )
+
+
+def test_sdk_built_eval_suite_runs_through_cli_and_suite(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_EVAL_SUITE_KEY",
+        "real-local-sdk-eval-suite-key",
+    )
+    example_path = EXAMPLES / "sdk_eval_suite.py"
+    spec = importlib.util.spec_from_file_location("sdk_eval_suite", example_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    sdk_output = tmp_path / "sdk-eval-result.json"
+    direct = module.run(sdk_output)
+    manifest_path = sdk_output.with_suffix(".manifest.json")
+    suite_path = sdk_output.with_suffix(".suite.json")
+    assert direct["status"] == "passed"
+    assert json.loads(suite_path.read_text(encoding="utf-8"))["required_env"] == []
+
+    cli_output = tmp_path / "sdk-eval-cli.json"
+    junit_path = tmp_path / "sdk-eval-cli.junit.xml"
+    sarif_path = tmp_path / "sdk-eval-cli.sarif.json"
+    markdown_path = tmp_path / "sdk-eval-cli.md"
+    exit_code = main([
+        "eval",
+        str(manifest_path),
+        "--output",
+        str(cli_output),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+    assert exit_code == 0
+    cli_payload = json.loads(cli_output.read_text(encoding="utf-8"))
+    assert cli_payload["kind"] == "agent-learning.eval.v1"
+    assert cli_payload["status"] == "passed"
+    assert cli_payload["summary"]["score"] == pytest.approx(1.0)
+    assert cli_payload["summary"]["assertion_count"] == 2
+    assert 'failures="0"' in junit_path.read_text(encoding="utf-8")
+    assert json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0][
+        "results"
+    ] == []
+    assert "sdk-local-eval-suite" in markdown_path.read_text(encoding="utf-8")
+
+    suite_output = tmp_path / "sdk-eval-suite-result.json"
+    suite_exit = main(["suite", str(suite_path), "--output", str(suite_output)])
+    assert suite_exit == 0
+    suite_payload = json.loads(suite_output.read_text(encoding="utf-8"))
+    assert suite_payload["kind"] == "agent-learning.suite.v1"
+    assert suite_payload["status"] == "passed"
+    assert suite_payload["summary"]["score"] == pytest.approx(1.0)
+    assert suite_payload["children"][0]["kind"] == "agent-learning.eval.v1"
 
 
 def test_world_framework_memory_optimization_example_runs_evidence_gates(

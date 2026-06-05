@@ -1232,7 +1232,8 @@ def _suite_path_text(path: str | Path) -> str:
 def _unique_strings(values: Sequence[Any]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
-    for value in _as_list(values):
+    items = values if isinstance(values, (list, tuple, set)) else _as_list(values)
+    for value in items:
         text = str(value)
         if text and text not in seen:
             seen.add(text)

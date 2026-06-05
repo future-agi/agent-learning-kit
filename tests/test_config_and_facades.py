@@ -52,6 +52,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
     assert set(fi_code_security.__all__) <= set(redteam.__all__)
     assert simulate.run_eval_suite_file is not None
+    assert simulate.build_eval_suite_manifest is not None
+    assert simulate.write_eval_suite_file is not None
     assert simulate.build_task_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
@@ -96,10 +98,12 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_redteam_campaign is not None
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
+    assert evals.build_eval_suite_manifest is not None
     assert evals.build_task_evaluation_config is not None
     assert evals.build_task_evidence_artifact is not None
     assert evals.evaluate_task_evidence is not None
     assert evals.evaluate_task_evidence_file is not None
+    assert evals.write_eval_suite_file is not None
     assert evals.write_task_evidence_file is not None
     assert suite.run_suite_file is not None
     assert suite.build_suite_manifest is not None
@@ -1256,6 +1260,47 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         if child["id"] == "agent-optimizer"
     )
     assert optimizer_child["summary"]["optimization_score"] >= 0.84
+
+
+def test_eval_suite_builder_and_sdk_cookbook_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_EVAL_SUITE_KEY",
+        "real-local-sdk-eval-suite-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_eval_suite.py"
+    spec = importlib.util.spec_from_file_location("sdk_eval_suite", example_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.eval.v1"
+    assert manifest["name"] == "sdk-local-eval-suite"
+    assert manifest["threshold"] == pytest.approx(1.0)
+    assert manifest["providers"] == [{"id": "echo", "type": "echo"}]
+    assert manifest["tests"][0]["assert"][0] == {
+        "type": "contains",
+        "value": "refund policy",
+    }
+
+    output_path = tmp_path / "sdk-eval-suite-result.json"
+    result = module.run(output_path)
+    manifest_path = output_path.with_suffix(".manifest.json")
+    wrapper_path = output_path.with_suffix(".suite.json")
+
+    assert output_path.exists()
+    assert manifest_path.exists()
+    assert wrapper_path.exists()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["version"] == (
+        "agent-learning.eval.v1"
+    )
+    assert json.loads(wrapper_path.read_text(encoding="utf-8"))["required_env"] == []
+    assert result["kind"] == "agent-simulate.eval.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["score"] == pytest.approx(1.0)
+    assert result["summary"]["assertion_count"] == 2
+    assert result["summary"]["failed_assertion_count"] == 0
 
 
 def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
