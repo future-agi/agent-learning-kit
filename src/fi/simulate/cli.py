@@ -2323,6 +2323,9 @@ def _report_result(
     orchestration_strategy = _orchestration_strategy_card(source, source_path=source_path)
     if orchestration_strategy is not None:
         report_payload["orchestration_strategy"] = orchestration_strategy
+    framework_readiness = _framework_readiness_card(source, source_path=source_path)
+    if framework_readiness is not None:
+        report_payload["framework_readiness"] = framework_readiness
     harness_diagnosis = _harness_diagnosis_card(source, source_path=source_path)
     if harness_diagnosis is not None:
         report_payload["harness_diagnosis"] = harness_diagnosis
@@ -3300,6 +3303,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("redteam_strategy")
     if _has_orchestration_strategy_card(result, source_path=source_path):
         sections.append("orchestration_strategy")
+    if _has_framework_readiness_card(result, source_path=source_path):
+        sections.append("framework_readiness")
     if result.get("compare") is not None:
         sections.append("compare")
     if result.get("optimization") is not None:
@@ -3351,6 +3356,8 @@ def _result_markdown(
         lines.extend(_redteam_strategy_markdown(result, source_path=source_path))
     if "orchestration_strategy" in sections:
         lines.extend(_orchestration_strategy_markdown(result, source_path=source_path))
+    if "framework_readiness" in sections:
+        lines.extend(_framework_readiness_markdown(result, source_path=source_path))
     if "compare" in sections:
         lines.extend(_compare_markdown(result))
     if "optimization" in sections:
@@ -4532,6 +4539,733 @@ def _orchestration_strategy_markdown(
         lines.extend(
             [
                 "### Orchestration Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Status", "Target layers", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+_FRAMEWORK_READINESS_STATE_KEYS = {
+    "framework_lifecycle_trace",
+    "framework_capability_matrix",
+    "framework_probe_suite",
+    "framework_portability_matrix",
+    "framework_import_manifest",
+    "framework_trace",
+}
+
+_FRAMEWORK_READINESS_TRIGGER_STATE_KEYS = {
+    "framework_lifecycle_trace",
+    "framework_capability_matrix",
+    "framework_probe_suite",
+    "framework_portability_matrix",
+    "framework_import_manifest",
+}
+
+_FRAMEWORK_READINESS_METRICS = {
+    "framework_lifecycle_coverage",
+    "framework_lifecycle_quality",
+    "framework_capability_coverage",
+    "framework_capability_quality",
+    "framework_probe_coverage",
+    "framework_probe_quality",
+    "framework_portability_coverage",
+    "framework_portability_quality",
+    "framework_import_coverage",
+    "framework_import_quality",
+    "framework_trace_coverage",
+    "framework_adapter_conformance",
+}
+
+_FRAMEWORK_READINESS_TRIGGER_METRICS = {
+    name
+    for name in _FRAMEWORK_READINESS_METRICS
+    if name not in {"framework_trace_coverage", "framework_adapter_conformance"}
+}
+
+_FRAMEWORK_ENVIRONMENT_STATE_KEYS = {
+    "framework_lifecycle": "framework_lifecycle_trace",
+    "framework_lifecycle_trace": "framework_lifecycle_trace",
+    "framework_capability": "framework_capability_matrix",
+    "framework_capability_matrix": "framework_capability_matrix",
+    "framework_probe": "framework_probe_suite",
+    "framework_probe_suite": "framework_probe_suite",
+    "framework_portability": "framework_portability_matrix",
+    "framework_portability_matrix": "framework_portability_matrix",
+    "framework_import": "framework_import_manifest",
+    "framework_import_manifest": "framework_import_manifest",
+    "framework_trace": "framework_trace",
+}
+
+
+def _has_framework_readiness_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("framework_readiness"), Mapping):
+        return True
+    return _framework_readiness_card(result, source_path=source_path) is not None
+
+
+def _framework_readiness_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    existing = result.get("framework_readiness")
+    if not isinstance(existing, Mapping):
+        report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+        existing = report.get("framework_readiness") if isinstance(report, Mapping) else None
+    existing_card = copy.deepcopy(dict(existing)) if isinstance(existing, Mapping) else {}
+    existing_manifest_path = existing_card.get("source_manifest_path")
+    if source_manifest_path is None and existing_manifest_path not in (None, ""):
+        source_manifest_path = Path(str(existing_manifest_path))
+    if source_manifest_path is None:
+        source_manifest_path = _framework_source_manifest_path(result)
+
+    state = _framework_readiness_state(result)
+    metrics = {
+        name: value
+        for name, value in _result_metric_averages(result).items()
+        if name in _FRAMEWORK_READINESS_METRICS
+    }
+    has_trigger_metric = any(name in metrics for name in _FRAMEWORK_READINESS_TRIGGER_METRICS)
+    if (
+        not _has_framework_readiness_state(state)
+        and not has_trigger_metric
+        and existing_card
+    ):
+        existing_card["source_path"] = str(source_path)
+        if source_manifest_path is not None:
+            existing_card["source_manifest_path"] = str(source_manifest_path)
+        return existing_card
+    if not _has_framework_readiness_state(state) and not has_trigger_metric:
+        return None
+
+    layer_records = _framework_readiness_layer_records(state, metrics)
+    if not layer_records:
+        return None
+    weak_layers = [
+        str(record["layer"])
+        for record in layer_records
+        if record.get("status") == "needs_attention"
+    ]
+    weak_metrics = [
+        name
+        for name, value in sorted(metrics.items())
+        if float(value) < 1.0
+    ]
+    status = "needs_attention" if weak_layers or weak_metrics else "ready"
+    frameworks, target_frameworks = _framework_readiness_frameworks(state)
+    card = {
+        "kind": "framework_readiness_map",
+        "taxonomy": "lifecycle_capability_probe_portability_import_adapter",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "frameworks": frameworks,
+        "target_frameworks": target_frameworks,
+        "layers": layer_records,
+        "present_layers": [
+            str(record["layer"])
+            for record in layer_records
+            if record.get("present") or record.get("verified")
+        ],
+        "weak_layers": weak_layers,
+        "weak_metrics": weak_metrics,
+        "metrics": metrics,
+        "lifecycle": _framework_lifecycle_summary(
+            state.get("framework_lifecycle_trace")
+        ),
+        "capability": _framework_capability_summary(
+            state.get("framework_capability_matrix")
+        ),
+        "probe": _framework_probe_summary(state.get("framework_probe_suite")),
+        "portability": _framework_portability_summary(
+            state.get("framework_portability_matrix")
+        ),
+        "import": _framework_import_summary(state.get("framework_import_manifest")),
+        "adapter": _orchestration_framework_summary(state.get("framework_trace")),
+        "research_sources": [
+            "https://arxiv.org/abs/2606.06324",
+            "https://arxiv.org/abs/2604.03610",
+            "https://arxiv.org/abs/2603.01209",
+            "https://arxiv.org/abs/2604.06296",
+        ],
+    }
+    if source_manifest_path is not None:
+        card["source_manifest_path"] = str(source_manifest_path)
+    card["actions"] = _framework_readiness_actions(
+        source_path=source_path,
+        source_manifest_path=source_manifest_path,
+        source_kind=str(result.get("kind") or ""),
+        status=status,
+        weak_layers=weak_layers,
+    )
+    return card
+
+
+def _framework_source_manifest_path(result: Mapping[str, Any]) -> Optional[Path]:
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        source_manifest_path = optimization.get("source_manifest_path")
+        if source_manifest_path not in (None, ""):
+            return Path(str(source_manifest_path))
+    return None
+
+
+def _framework_readiness_state(result: Mapping[str, Any]) -> Dict[str, Any]:
+    state = result.get("state")
+    if isinstance(state, Mapping) and _has_framework_readiness_state(state):
+        return {
+            key: dict(value)
+            for key, value in state.items()
+            if key in _FRAMEWORK_READINESS_STATE_KEYS and isinstance(value, Mapping)
+        }
+    report_state = _environment_state_from_report(result.get("report"))
+    if _has_framework_readiness_state(report_state):
+        return report_state
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        best_history = _best_optimization_history_item(optimization)
+        if best_history is not None:
+            history_state = _environment_state_from_report(best_history.get("report"))
+            if _has_framework_readiness_state(history_state):
+                return history_state
+        best_config = optimization.get("best_config")
+        if isinstance(best_config, Mapping):
+            config_state = _framework_state_from_environments(
+                dict(best_config.get("simulation") or {}).get("environments")
+            )
+            if _has_framework_readiness_state(config_state):
+                return config_state
+    return {}
+
+
+def _framework_state_from_environments(environments: Any) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for item in _coerce_list(environments):
+        if not isinstance(item, Mapping):
+            continue
+        environment_type = str(item.get("type") or item.get("kind") or "").lower().replace("-", "_")
+        state_key = _FRAMEWORK_ENVIRONMENT_STATE_KEYS.get(environment_type)
+        if state_key is None:
+            continue
+        data = item.get("data")
+        if not isinstance(data, Mapping):
+            data = {
+                key: value
+                for key, value in item.items()
+                if key not in {"type", "kind"}
+            }
+        state[state_key] = dict(data)
+    return state
+
+
+def _has_framework_readiness_state(state: Mapping[str, Any]) -> bool:
+    return any(
+        key in state and state.get(key) not in (None, {}, [])
+        for key in _FRAMEWORK_READINESS_TRIGGER_STATE_KEYS
+    )
+
+
+def _framework_readiness_layer_records(
+    state: Mapping[str, Any],
+    metrics: Mapping[str, float],
+) -> List[Dict[str, Any]]:
+    specs = [
+        ("lifecycle", "framework_lifecycle_trace", ["framework_lifecycle_coverage", "framework_lifecycle_quality"]),
+        ("capability", "framework_capability_matrix", ["framework_capability_coverage", "framework_capability_quality"]),
+        ("probe", "framework_probe_suite", ["framework_probe_coverage", "framework_probe_quality"]),
+        ("portability", "framework_portability_matrix", ["framework_portability_coverage", "framework_portability_quality"]),
+        ("import", "framework_import_manifest", ["framework_import_coverage", "framework_import_quality"]),
+        ("adapter", "framework_trace", ["framework_adapter_conformance"]),
+    ]
+    records: List[Dict[str, Any]] = []
+    for layer, state_key, metric_names in specs:
+        present = state_key in state and state.get(state_key) not in (None, {}, [])
+        layer_metrics = {
+            name: metrics[name]
+            for name in metric_names
+            if name in metrics
+        }
+        if not present and not layer_metrics:
+            continue
+        weak_metric_names = [
+            name
+            for name, value in layer_metrics.items()
+            if float(value) < 1.0
+        ]
+        verified = present or any(value >= 1.0 for value in layer_metrics.values())
+        status = "ready" if verified and not weak_metric_names else "needs_attention"
+        records.append(
+            {
+                "layer": layer,
+                "state_key": state_key,
+                "present": present,
+                "verified": verified,
+                "status": status,
+                "metrics": layer_metrics,
+                "weak_metrics": weak_metric_names,
+                "signals": _framework_layer_signals(layer, state.get(state_key)),
+            }
+        )
+    return records
+
+
+def _framework_layer_signals(layer: str, payload: Any) -> List[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    summary = dict(payload.get("summary") or {})
+    if layer == "lifecycle":
+        return _unique_strings([
+            payload.get("framework"),
+            summary.get("terminal_status"),
+            *_coerce_list(summary.get("blocking_gaps")),
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "capability":
+        missing = [
+            item.get("name") or item.get("id")
+            for item in _coerce_list(payload.get("capabilities"))
+            if isinstance(item, Mapping)
+            and str(item.get("status") or "").lower() in {"missing", "unsupported", "failed"}
+        ]
+        return _unique_strings([
+            payload.get("framework"),
+            *_coerce_list(summary.get("missing_capabilities")),
+            *missing,
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "probe":
+        failed = [
+            item.get("id") or item.get("name")
+            for item in _coerce_list(payload.get("probes"))
+            if isinstance(item, Mapping)
+            and str(item.get("status") or "").lower() not in {"passed", "pass", "ok"}
+        ]
+        return _unique_strings([
+            *_coerce_list(summary.get("failed_probe_ids")),
+            *failed,
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "portability":
+        missing = [
+            item.get("id") or item.get("source") or item.get("name")
+            for item in _coerce_list(payload.get("mappings"))
+            if isinstance(item, Mapping)
+            and str(item.get("status") or "").lower() not in {"mapped", "passed", "pass", "ok"}
+        ]
+        return _unique_strings([
+            *_coerce_list(summary.get("missing_mappings")),
+            *missing,
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "import":
+        return _unique_strings([
+            *_coerce_list(summary.get("observed_frameworks")),
+            *_coerce_list(summary.get("missing_required_sources")),
+            *_coerce_list(payload.get("signals")),
+        ])
+    return _orchestration_layer_signals("framework", payload)
+
+
+def _framework_readiness_frameworks(
+    state: Mapping[str, Any],
+) -> tuple[List[str], List[str]]:
+    frameworks: List[Any] = []
+    targets: List[Any] = []
+    for key in (
+        "framework_lifecycle_trace",
+        "framework_capability_matrix",
+        "framework_probe_suite",
+        "framework_portability_matrix",
+        "framework_trace",
+    ):
+        payload = state.get(key)
+        if not isinstance(payload, Mapping):
+            continue
+        frameworks.append(payload.get("framework"))
+        targets.append(payload.get("target_framework"))
+    import_payload = state.get("framework_import_manifest")
+    if isinstance(import_payload, Mapping):
+        summary = dict(import_payload.get("summary") or {})
+        frameworks.extend(_coerce_list(summary.get("observed_frameworks")))
+        targets.extend(_coerce_list(summary.get("target_frameworks")))
+    return _unique_strings(frameworks), _unique_strings(targets)
+
+
+def _framework_lifecycle_summary(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    summary = dict(payload.get("summary") or {})
+    phases = _coerce_list(payload.get("phases") or payload.get("events"))
+    return {
+        "framework": payload.get("framework"),
+        "target_framework": payload.get("target_framework"),
+        "terminal_status": summary.get("terminal_status") or summary.get("status"),
+        "phase_count": _int_or_none(summary.get("phase_count")) or len(phases),
+        "recovered_error_count": _int_or_none(summary.get("recovered_error_count")),
+    }
+
+
+def _framework_capability_summary(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    summary = dict(payload.get("summary") or {})
+    capabilities = [
+        item for item in _coerce_list(payload.get("capabilities")) if isinstance(item, Mapping)
+    ]
+    supported_count = _int_or_none(summary.get("supported_count"))
+    missing_count = _int_or_none(summary.get("missing_count"))
+    if supported_count is None:
+        supported_count = sum(
+            1
+            for item in capabilities
+            if str(item.get("status") or "").lower() in {"supported", "passed", "pass", "ok"}
+        )
+    if missing_count is None:
+        missing_count = sum(
+            1
+            for item in capabilities
+            if str(item.get("status") or "").lower() in {"missing", "unsupported", "failed"}
+        )
+    return {
+        "framework": payload.get("framework"),
+        "supported_count": supported_count,
+        "missing_count": missing_count,
+        "support_rate": summary.get("support_rate"),
+        "has_tools": summary.get("has_tools"),
+        "has_memory": summary.get("has_memory"),
+        "has_streaming": summary.get("has_streaming"),
+        "has_lifecycle": summary.get("has_lifecycle"),
+        "has_orchestration": summary.get("has_orchestration"),
+        "has_security": summary.get("has_security"),
+        "has_observability": summary.get("has_observability"),
+        "has_exports": summary.get("has_exports"),
+    }
+
+
+def _framework_probe_summary(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    summary = dict(payload.get("summary") or {})
+    probes = [item for item in _coerce_list(payload.get("probes")) if isinstance(item, Mapping)]
+    passed_count = _int_or_none(summary.get("passed_count"))
+    failed_count = _int_or_none(summary.get("failed_count"))
+    if passed_count is None:
+        passed_count = sum(
+            1
+            for item in probes
+            if str(item.get("status") or "").lower() in {"passed", "pass", "ok"}
+        )
+    if failed_count is None:
+        failed_count = sum(
+            1
+            for item in probes
+            if str(item.get("status") or "").lower() not in {"passed", "pass", "ok"}
+        )
+    return {
+        "passed_count": passed_count,
+        "failed_count": failed_count,
+        "required_pass_rate": summary.get("required_pass_rate"),
+    }
+
+
+def _framework_portability_summary(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    summary = dict(payload.get("summary") or {})
+    mappings = [
+        item for item in _coerce_list(payload.get("mappings")) if isinstance(item, Mapping)
+    ]
+    mapped_count = _int_or_none(summary.get("mapped_count"))
+    missing_count = _int_or_none(summary.get("missing_count"))
+    if mapped_count is None:
+        mapped_count = sum(
+            1
+            for item in mappings
+            if str(item.get("status") or "").lower() in {"mapped", "passed", "pass", "ok"}
+        )
+    if missing_count is None:
+        missing_count = sum(
+            1
+            for item in mappings
+            if str(item.get("status") or "").lower() not in {"mapped", "passed", "pass", "ok"}
+        )
+    return {
+        "mapped_count": mapped_count,
+        "missing_count": missing_count,
+        "required_mapping_rate": summary.get("required_mapping_rate"),
+    }
+
+
+def _framework_import_summary(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    summary = dict(payload.get("summary") or {})
+    return {
+        "source_count": summary.get("source_count"),
+        "passed_source_count": summary.get("passed_source_count"),
+        "failed_source_count": summary.get("failed_source_count"),
+        "observed_frameworks": summary.get("observed_frameworks"),
+        "observed_export_types": summary.get("observed_export_types"),
+        "missing_required_sources": summary.get("missing_required_sources"),
+        "has_adapter": summary.get("has_adapter"),
+        "has_target": summary.get("has_target"),
+        "has_observability": summary.get("has_observability"),
+        "has_artifacts": summary.get("has_artifacts"),
+    }
+
+
+def _framework_readiness_actions(
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path],
+    source_kind: str,
+    status: str,
+    weak_layers: Sequence[str],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_framework_readiness",
+            "Report Framework Readiness",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/framework-readiness-report.json",
+                "--markdown",
+                "artifacts/framework-readiness-report.md",
+            ],
+        )
+    ]
+    is_optimization = (
+        "optimization" in source_kind
+        or "optimize" in source_kind
+        or source_path.name.endswith("optimization.json")
+    )
+    if source_manifest_path is not None and is_optimization:
+        actions.append(
+            _cli_action(
+                "rerun_framework_optimization",
+                "Rerun Framework Optimization",
+                [
+                    "agent-learn",
+                    "optimize",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/framework-optimization-rerun.json",
+                    "--junit",
+                    "artifacts/framework-optimization-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/framework-optimization-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/framework-optimization-rerun.md",
+                ],
+            )
+        )
+    elif source_manifest_path is not None:
+        actions.append(
+            _cli_action(
+                "rerun_framework_certification",
+                "Rerun Framework Certification",
+                [
+                    "agent-learn",
+                    "run",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/framework-certification-rerun.json",
+                    "--junit",
+                    "artifacts/framework-certification-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/framework-certification-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/framework-certification-rerun.md",
+                ],
+            )
+        )
+    else:
+        actions.append(
+            _cli_action(
+                "rerun_framework_certification",
+                "Rerun Framework Certification",
+                [
+                    "agent-learn",
+                    "run",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/framework-certification-rerun.json",
+                    "--junit",
+                    "artifacts/framework-certification-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/framework-certification-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/framework-certification-rerun.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "Framework certification manifest",
+                        "default": "manifests/framework-certification.json",
+                    }
+                ],
+            )
+        )
+    actions.append(
+        _cli_action(
+            "optimize_framework_readiness",
+            "Optimize Framework Readiness",
+            [
+                "agent-learn",
+                "optimize",
+                "{{optimization_manifest_path}}",
+                "--output",
+                "artifacts/framework-readiness-optimization.json",
+                "--markdown",
+                "artifacts/framework-readiness-optimization.md",
+            ],
+            inputs=[
+                {
+                    "name": "optimization_manifest_path",
+                    "label": "Framework readiness optimization manifest",
+                    "default": "manifests/framework-certification-optimization.json",
+                }
+            ],
+        )
+    )
+    for action in actions:
+        action["readiness_status"] = status
+        action["target_layers"] = list(weak_layers)
+    return actions
+
+
+def _framework_readiness_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = report.get("framework_readiness") if isinstance(report, Mapping) else None
+    if not isinstance(card, Mapping):
+        card = _framework_readiness_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+    layer_rows = [
+        [
+            item.get("layer"),
+            item.get("status"),
+            item.get("present"),
+            item.get("verified"),
+            _join_values(item.get("weak_metrics")),
+            _join_values(item.get("signals")),
+        ]
+        for item in _coerce_list(card.get("layers"))
+        if isinstance(item, Mapping)
+    ]
+    evidence_rows = [
+        [
+            "lifecycle",
+            dict(card.get("lifecycle") or {}).get("phase_count"),
+            dict(card.get("lifecycle") or {}).get("terminal_status"),
+            dict(card.get("lifecycle") or {}).get("recovered_error_count"),
+        ],
+        [
+            "capability",
+            dict(card.get("capability") or {}).get("supported_count"),
+            dict(card.get("capability") or {}).get("missing_count"),
+            dict(card.get("capability") or {}).get("has_exports"),
+        ],
+        [
+            "probe",
+            dict(card.get("probe") or {}).get("passed_count"),
+            dict(card.get("probe") or {}).get("failed_count"),
+            dict(card.get("probe") or {}).get("required_pass_rate"),
+        ],
+        [
+            "portability",
+            dict(card.get("portability") or {}).get("mapped_count"),
+            dict(card.get("portability") or {}).get("missing_count"),
+            dict(card.get("portability") or {}).get("required_mapping_rate"),
+        ],
+        [
+            "import",
+            dict(card.get("import") or {}).get("source_count"),
+            dict(card.get("import") or {}).get("failed_source_count"),
+            _join_values(dict(card.get("import") or {}).get("observed_frameworks")),
+        ],
+    ]
+    evidence_rows = [
+        row
+        for row in evidence_rows
+        if any(value not in (None, "", [], {}) for value in row[1:])
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("readiness_status"),
+            _join_values(item.get("target_layers")),
+            item.get("command"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping) and item.get("kind") == "cli"
+    ]
+    lines = [
+        "## Framework Readiness",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Status", card.get("status")),
+                ("Frameworks", _join_values(card.get("frameworks"))),
+                ("Target frameworks", _join_values(card.get("target_frameworks"))),
+                ("Present layers", _join_values(card.get("present_layers"))),
+                ("Weak layers", _join_values(card.get("weak_layers"))),
+                ("Weak metrics", _join_values(card.get("weak_metrics"))),
+                ("Research sources", _join_values(card.get("research_sources"))),
+            ]
+        ),
+        "",
+    ]
+    if layer_rows:
+        lines.extend(
+            [
+                "### Framework Layers",
+                "",
+                *_markdown_table(
+                    ["Layer", "Status", "Present", "Verified", "Weak metrics", "Signals"],
+                    layer_rows,
+                ),
+                "",
+            ]
+        )
+    if evidence_rows:
+        lines.extend(
+            [
+                "### Framework Evidence",
+                "",
+                *_markdown_table(
+                    ["Layer", "Signal 1", "Signal 2", "Signal 3"],
+                    evidence_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Framework Actions",
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Status", "Target layers", "Command"],

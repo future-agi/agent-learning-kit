@@ -490,6 +490,13 @@ async def run_manifest(
     )
     if orchestration_strategy is not None:
         result["orchestration_strategy"] = orchestration_strategy
+    framework_readiness = cli._framework_readiness_card(
+        result,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if framework_readiness is not None:
+        result["framework_readiness"] = framework_readiness
     return result
 
 
@@ -711,6 +718,13 @@ def optimize_manifest(
     )
     if orchestration_strategy is not None:
         payload["orchestration_strategy"] = orchestration_strategy
+    framework_readiness = cli._framework_readiness_card(
+        payload,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if framework_readiness is not None:
+        payload["framework_readiness"] = framework_readiness
     return payload
 
 

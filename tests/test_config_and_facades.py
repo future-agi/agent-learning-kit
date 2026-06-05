@@ -4767,6 +4767,28 @@ def test_sdk_framework_import_repair_optimization_example_runs(
     assert summary["has_observability"] is True
     assert summary["has_artifacts"] is True
 
+    readiness = result["framework_readiness"]
+    assert readiness["kind"] == "framework_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["present_layers"] == ["import"]
+    assert readiness["weak_layers"] == []
+    assert readiness["import"]["source_count"] == 24
+    assert readiness["import"]["failed_source_count"] == 0
+    assert readiness["import"]["observed_frameworks"] == [
+        "langchain",
+        "langgraph",
+        "livekit",
+        "pipecat",
+    ]
+    assert {
+        action["id"]
+        for action in readiness["actions"]
+    } >= {
+        "report_framework_readiness",
+        "rerun_framework_optimization",
+        "optimize_framework_readiness",
+    }
+
     candidate = optimize.AgentCandidate.from_config(
         result["optimization"]["best_config"],
         layers=manifest["optimization"]["target"]["layers"],
@@ -5546,6 +5568,30 @@ def test_sdk_framework_certification_optimization_example_runs(
     assert portability["mapped_count"] == 10
     assert portability["missing_count"] == 0
 
+    readiness = result["framework_readiness"]
+    assert readiness["kind"] == "framework_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["present_layers"] == [
+        "lifecycle",
+        "capability",
+        "probe",
+        "portability",
+    ]
+    assert readiness["weak_layers"] == []
+    assert readiness["weak_metrics"] == []
+    assert readiness["lifecycle"]["phase_count"] == 10
+    assert readiness["capability"]["supported_count"] == 9
+    assert readiness["probe"]["passed_count"] == 12
+    assert readiness["portability"]["mapped_count"] == 10
+    assert {
+        action["id"]
+        for action in readiness["actions"]
+    } >= {
+        "report_framework_readiness",
+        "rerun_framework_optimization",
+        "optimize_framework_readiness",
+    }
+
 
 def test_sdk_framework_certification_simulation_example_runs(
     monkeypatch,
@@ -5698,6 +5744,54 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert portability["mapped_count"] == 10
     assert portability["missing_count"] == 0
     assert portability["required_mapping_rate"] == pytest.approx(1.0)
+
+    readiness = result["framework_readiness"]
+    assert readiness["kind"] == "framework_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["present_layers"] == [
+        "lifecycle",
+        "capability",
+        "probe",
+        "portability",
+    ]
+    assert readiness["lifecycle"]["terminal_status"] == "completed"
+    assert readiness["capability"]["missing_count"] == 0
+    assert readiness["probe"]["failed_count"] == 0
+    assert readiness["portability"]["missing_count"] == 0
+    assert {
+        action["id"]
+        for action in readiness["actions"]
+    } >= {
+        "report_framework_readiness",
+        "rerun_framework_certification",
+        "optimize_framework_readiness",
+    }
+
+    report_path = tmp_path / "sdk-framework-certification-report.json"
+    report_md_path = tmp_path / "sdk-framework-certification-report.md"
+    assert main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_md_path),
+    ]) == 0
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "framework_readiness" in report_payload["summary"]["sections"]
+    report_readiness = report_payload["report"]["framework_readiness"]
+    assert report_readiness["status"] == "ready"
+    assert {
+        action["id"]
+        for action in report_readiness["actions"]
+    } >= {
+        "report_framework_readiness",
+        "rerun_framework_certification",
+        "optimize_framework_readiness",
+    }
+    report_markdown = report_md_path.read_text(encoding="utf-8")
+    assert "## Framework Readiness" in report_markdown
+    assert "### Framework Actions" in report_markdown
     event_names = {event["name"] for event in report_case["events"]}
     assert {
         "framework_lifecycle_ready",

@@ -156,6 +156,13 @@ multi-agent, and orchestration layers; summarizes graph nodes, edges, routes,
 and steps; and emits report, rerun, and optimization commands so users can move
 from a selected orchestration stack to the next verified simulation or optimizer
 run.
+Framework certification and import artifacts also expose a
+`framework_readiness` card plus `## Framework Readiness` Markdown. The card
+normalizes lifecycle, capability, probe, portability, import, and adapter
+evidence into readiness layers, names weak framework metrics, and emits
+`report_framework_readiness`, `rerun_framework_certification` or
+`rerun_framework_optimization`, and `optimize_framework_readiness` commands for
+CLI, SDK, CI, and Future AGI UI surfaces.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,
@@ -875,7 +882,10 @@ For direct, non-optimizer simulation,
 `simulate.build_framework_certification_run_manifest()` and
 `examples/sdk_framework_certification_simulation.py` run the certified
 lifecycle, capability, probe, and portability evidence as a normal
-`agent-learning.run.v1` artifact.
+`agent-learning.run.v1` artifact. Both run and optimization artifacts include a
+`framework_readiness` report card; run artifacts rerun with `agent-learn run`,
+optimization artifacts rerun with `agent-learn optimize`, and both expose
+`optimize_framework_readiness` for the next certification/search pass.
 
 The `autonomous_redteam_task_world_optimization.json` example optimizes a
 local autonomous task/world red-team harness. It verifies structured artifacts,
