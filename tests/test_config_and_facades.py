@@ -174,6 +174,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_long_horizon_redteam is not None
     assert optimize.build_redteam_optimization_manifest is not None
     assert optimize.optimize_redteam_campaign is not None
+    assert optimize.build_persistent_state_redteam_optimization_manifest is not None
+    assert optimize.optimize_persistent_state_redteam is not None
     assert optimize.build_redteam_society_optimization_manifest is not None
     assert optimize.optimize_redteam_society is not None
     assert optimize.build_redteam_causal_attribution_optimization_manifest is not None
@@ -3719,6 +3721,114 @@ def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_p
     assert summary["missing_write_cases"] == []
     assert summary["missing_incorporation_cases"] == []
     assert summary["missing_activation_cases"] == []
+
+
+def test_sdk_persistent_state_redteam_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize
+
+    assert optimize.build_persistent_state_redteam_optimization_manifest is not None
+    assert optimize.optimize_persistent_state_redteam is not None
+
+    diagnoses = optimize.diagnose_agent_report_evaluation(
+        {
+            "cases": [
+                {
+                    "metrics": [
+                        {
+                            "name": "persistent_state_attack_quality",
+                            "score": 0.0,
+                            "reason": "stored prompt-injection activated",
+                            "details": {
+                                "findings": [
+                                    {
+                                        "type": "persistent_state_e2e_asr_high",
+                                        "metric": "persistent_state_attack_quality",
+                                        "score": 0.0,
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ]
+        },
+        failing_threshold=0.99,
+    )
+    assert {"security", "memory", "policy", "environment", "harness"} <= {
+        diagnosis.component for diagnosis in diagnoses
+    }
+    assert any(
+        "persistent_state_attack.write_policy" in diagnosis.suggested_paths
+        for diagnosis in diagnoses
+    )
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_OPT_KEY",
+        "real-local-sdk-persistent-redteam-opt-key",
+    )
+    example_path = (
+        PROJECT_ROOT / "examples" / "sdk_persistent_state_redteam_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_persistent_state_redteam_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.optimization.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_OPT_KEY"
+    ]
+    assert manifest["optimization"]["optimizer"]["auto_diagnose"] is True
+    assert manifest["optimization"]["target"]["layers"] == [
+        "harness",
+        "security",
+        "memory",
+        "policy",
+        "environment",
+        "evaluator",
+    ]
+    search_space = manifest["optimization"]["target"]["search_space"]
+    assert set(search_space) == {"simulation.environments"}
+    assert [
+        candidate[0]["data"]["metadata"]["profile"]
+        for candidate in search_space["simulation.environments"]
+    ] == ["vulnerable", "partial", "hardened"]
+
+    output_path = tmp_path / "sdk-persistent-state-redteam-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert output_path.with_suffix(".manifest.json").exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.99
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in result["summary"]["search_paths"]
+    best_config = result["optimization"]["best_config"]
+    best_env = best_config["simulation"]["environments"][0]
+    assert best_env["data"]["metadata"]["profile"] == "hardened"
+    best_history = max(result["optimization"]["history"], key=lambda item: item["score"])
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    assert metrics["persistent_state_attack_coverage"] == pytest.approx(1.0)
+    assert metrics["persistent_state_attack_quality"] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    summary = state["persistent_state_attack"]["summary"]
+    assert summary["case_count"] == 2
+    assert summary["write_attempt_count"] == 2
+    assert summary["incorporation_attempt_count"] == 2
+    assert summary["activation_attempt_count"] == 2
+    assert summary["write_success_rate"] == 0.0
+    assert summary["incorporation_rate"] == 0.0
+    assert summary["activation_rate"] == 0.0
+    assert summary["e2e_attack_success_rate"] == 0.0
 
 
 def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path):

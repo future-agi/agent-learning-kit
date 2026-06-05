@@ -905,12 +905,18 @@ COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
             "tools.permissions",
             "tools.allowlist",
             "memory.write_policy",
+            "memory.write_quarantine",
             "memory.isolation",
             "memory.untrusted_context",
+            "memory.provenance",
+            "memory.trust_labels",
+            "memory.rehydration_policy",
             "memory.lineage.poison_tests",
             "memory.lineage.tenant_isolation",
             "memory.lineage.canaries",
             "security.memory_poisoning",
+            "security.persistent_state_attack",
+            "security.stored_prompt_injection",
             "security.memory_lineage",
             "security.memory_isolation",
             "browser.injection_surfaces",
@@ -944,9 +950,16 @@ COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
             "red_team.readiness.control_plane",
             "red_team.readiness.observability",
             "red_team.readiness.artifacts",
+            "persistent_state_attack",
+            "persistent_state_attack.write_policy",
+            "persistent_state_attack.context_rehydration",
+            "persistent_state_attack.activation_guard",
+            "persistent_state_attack.provenance",
         ],
         metrics=[
             "adversarial_resilience",
+            "persistent_state_attack_coverage",
+            "persistent_state_attack_quality",
             "red_team_campaign_coverage",
             "red_team_campaign_quality",
             "red_team_readiness_coverage",
@@ -1146,8 +1159,8 @@ COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
     ),
     "memory": AgentComponentSpec(
         name="memory",
-        config_paths=["memory", "memory.cross_trial", "memory.recall_policy", "memory.persistence", "memory.state_persistence", "memory.checkpoint_state", "memory.checkpoint_lineage", "memory.lineage", "memory.lineage.stores", "memory.lineage.memories", "memory.lineage.operations", "memory.lineage.source_attribution", "memory.lineage.tenant_isolation", "memory.lineage.audit", "memory.lineage.retention", "memory.lineage.deletion", "memory.lineage.redaction", "memory.lineage.canaries", "memory.lineage.poison_tests", "memory.lineage.observability", "memory.write_policy", "memory.isolation", "memory.untrusted_context", "memory.control_plane", "memory.audit", "memory.drift_detection", "state", "scratchpad", "episodic_memory", "memory.attribution", "memory.correctness", "trajectory.memory", "framework.memory", "framework.portability.memory", "framework.portability.lifecycle", "framework.checkpoints", "framework.checkpoints.state", "framework.sessions", "framework.sessions.thread_id", "framework.lifecycle.sessions", "framework.lifecycle.checkpoints", "framework.lifecycle.resume", "framework.lifecycle.state_persistence", "framework.transcript.state", "orchestration.state", "orchestration.checkpoints", "workflow.state", "sessions"],
-        metrics=["memory_precision", "memory_recall", "cross_trial_memory_skill", "supportedness", "retrieval_memory_attribution", "agent_memory_lineage_coverage", "agent_memory_lineage_quality", "retrieval_context_quality", "source_grounding", "source_contradiction", "adversarial_resilience", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "trial_reliability", "memory_correctness", "framework_lifecycle_quality", "framework_portability_quality", "framework_transcript_quality", "orchestration_flow_quality"],
+        config_paths=["memory", "memory.cross_trial", "memory.recall_policy", "memory.persistence", "memory.state_persistence", "memory.checkpoint_state", "memory.checkpoint_lineage", "memory.lineage", "memory.lineage.stores", "memory.lineage.memories", "memory.lineage.operations", "memory.lineage.source_attribution", "memory.lineage.tenant_isolation", "memory.lineage.audit", "memory.lineage.retention", "memory.lineage.deletion", "memory.lineage.redaction", "memory.lineage.canaries", "memory.lineage.poison_tests", "memory.lineage.observability", "memory.write_policy", "memory.write_quarantine", "memory.isolation", "memory.untrusted_context", "memory.provenance", "memory.trust_labels", "memory.rehydration_policy", "memory.control_plane", "memory.audit", "memory.drift_detection", "persistent_state_attack", "persistent_state_attack.write_policy", "persistent_state_attack.context_rehydration", "persistent_state_attack.activation_guard", "persistent_state_attack.provenance", "state", "scratchpad", "episodic_memory", "memory.attribution", "memory.correctness", "trajectory.memory", "framework.memory", "framework.portability.memory", "framework.portability.lifecycle", "framework.checkpoints", "framework.checkpoints.state", "framework.sessions", "framework.sessions.thread_id", "framework.lifecycle.sessions", "framework.lifecycle.checkpoints", "framework.lifecycle.resume", "framework.lifecycle.state_persistence", "framework.transcript.state", "orchestration.state", "orchestration.checkpoints", "workflow.state", "sessions"],
+        metrics=["memory_precision", "memory_recall", "cross_trial_memory_skill", "supportedness", "retrieval_memory_attribution", "agent_memory_lineage_coverage", "agent_memory_lineage_quality", "retrieval_context_quality", "source_grounding", "source_contradiction", "adversarial_resilience", "persistent_state_attack_coverage", "persistent_state_attack_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "trial_reliability", "memory_correctness", "framework_lifecycle_quality", "framework_portability_quality", "framework_transcript_quality", "orchestration_flow_quality"],
         failure_modes=[
             "memory_write_failure",
             "memory_retrieval_failure",
@@ -1174,8 +1187,8 @@ COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
     ),
     "policy": AgentComponentSpec(
         name="policy",
-        config_paths=["policy", "guardrails", "constraints", "safety", "trajectory.policy", "policy.trust_boundary", "policy.control_plane", "policy.action_gates", "policy.permissions", "policy.approvals", "policy.rollback", "policy.kill_switch", "policy.circuit_breakers", "policy.rate_limits", "policy.risk_budgets", "policy.data_boundary", "policy.secret_handling", "policy.network_egress", "policy.untrusted_context", "policy.blocked_tools", "policy.canary_filter", "policy.memory_lineage", "policy.memory_source_attribution", "policy.memory_tenant_isolation", "policy.memory_retention", "policy.memory_deletion", "policy.memory_redaction", "security.guardrails"],
-        metrics=["policy_adherence", "risk_score", "unsafe_action_rate", "adversarial_resilience", "agent_memory_lineage_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "tool_fault_tolerance", "trial_reliability", "trajectory_browser_action_safety"],
+        config_paths=["policy", "guardrails", "constraints", "safety", "trajectory.policy", "policy.trust_boundary", "policy.control_plane", "policy.action_gates", "policy.permissions", "policy.approvals", "policy.rollback", "policy.kill_switch", "policy.circuit_breakers", "policy.rate_limits", "policy.risk_budgets", "policy.data_boundary", "policy.secret_handling", "policy.network_egress", "policy.untrusted_context", "policy.blocked_tools", "policy.canary_filter", "policy.memory_lineage", "policy.memory_source_attribution", "policy.memory_tenant_isolation", "policy.memory_retention", "policy.memory_deletion", "policy.memory_redaction", "policy.persistent_state_attack", "policy.persistent_state_write_gate", "policy.context_rehydration", "policy.activation_guard", "security.guardrails"],
+        metrics=["policy_adherence", "risk_score", "unsafe_action_rate", "adversarial_resilience", "persistent_state_attack_quality", "agent_memory_lineage_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "tool_fault_tolerance", "trial_reliability", "trajectory_browser_action_safety"],
         failure_modes=["policy_violation", "unsafe_action", "adversarial_resilience_failure", "trust_boundary_gap", "control_plane_gap", "reliability_failure", "fault_tolerance_failure"],
         patch_strategies=["add explicit decision gates", "block irreversible actions"],
     ),
@@ -1188,8 +1201,8 @@ COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
     ),
     "environment": AgentComponentSpec(
         name="environment",
-        config_paths=["environment", "fixtures", "mocks", "state", "environment.world", "environment.contract", "environment.agent_integration", "environment.integrations", "environment.agent_trust_boundary", "environment.trust_boundary", "environment.agent_control_plane", "environment.control_plane", "environment.agent_memory_lineage", "environment.memory_lineage", "environment.memory_provenance", "environment.memory_poisoning", "environment.adversarial", "environment.attack_pack", "environment.red_team_campaign", "environment.red_team_readiness", "environment.red_team_preflight", "environment.observability_replay", "environment.replay_pack", "world.contract", "world.state", "world.transitions", "world.invariants", "adversarial.attacks", "adversarial.surfaces", "red_team.campaign", "red_team.readiness", "red_team.preflight", "red_team.scenarios", "red_team.runs", "red_team.artifacts", "red_team.observability", "observability.replay", "observability.replay_pack", "futureagi.regression_replay", "environment.structured_artifacts", "structured_artifacts", "environment.domain_packages", "domain_packages"],
-        metrics=["environment_success", "state_goal_accuracy", "agent_memory_lineage_coverage", "agent_memory_lineage_quality", "agent_integration_coverage", "agent_integration_quality", "workspace_run_coverage", "workspace_run_quality", "observability_replay_coverage", "observability_replay_quality", "world_contract_coverage", "world_contract_quality", "adversarial_resilience", "red_team_campaign_coverage", "red_team_campaign_quality", "red_team_readiness_coverage", "red_team_readiness_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "tool_outcome", "tool_fault_tolerance", "browser_action_outcome", "browser_grounding_quality", "artifact_semantics_quality", "domain_package_quality"],
+        config_paths=["environment", "fixtures", "mocks", "state", "environment.world", "environment.contract", "environment.agent_integration", "environment.integrations", "environment.agent_trust_boundary", "environment.trust_boundary", "environment.agent_control_plane", "environment.control_plane", "environment.agent_memory_lineage", "environment.memory_lineage", "environment.memory_provenance", "environment.memory_poisoning", "environment.persistent_state_attack", "environment.stored_prompt_injection", "environment.adversarial", "environment.attack_pack", "environment.red_team_campaign", "environment.red_team_readiness", "environment.red_team_preflight", "environment.observability_replay", "environment.replay_pack", "world.contract", "world.state", "world.transitions", "world.invariants", "adversarial.attacks", "adversarial.surfaces", "red_team.campaign", "red_team.readiness", "red_team.preflight", "red_team.scenarios", "red_team.runs", "red_team.artifacts", "red_team.observability", "persistent_state_attack", "persistent_state_attack.lifecycle", "persistent_state_attack.write_policy", "persistent_state_attack.context_rehydration", "persistent_state_attack.activation_guard", "observability.replay", "observability.replay_pack", "futureagi.regression_replay", "environment.structured_artifacts", "structured_artifacts", "environment.domain_packages", "domain_packages"],
+        metrics=["environment_success", "state_goal_accuracy", "agent_memory_lineage_coverage", "agent_memory_lineage_quality", "agent_integration_coverage", "agent_integration_quality", "workspace_run_coverage", "workspace_run_quality", "observability_replay_coverage", "observability_replay_quality", "world_contract_coverage", "world_contract_quality", "adversarial_resilience", "persistent_state_attack_coverage", "persistent_state_attack_quality", "red_team_campaign_coverage", "red_team_campaign_quality", "red_team_readiness_coverage", "red_team_readiness_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "tool_outcome", "tool_fault_tolerance", "browser_action_outcome", "browser_grounding_quality", "artifact_semantics_quality", "domain_package_quality"],
         failure_modes=["environment_mismatch", "integration_gap", "world_contract_gap", "world_contract_violation", "adversarial_resilience_failure", "trust_boundary_gap", "control_plane_gap", "implementation_bug", "fault_tolerance_failure", "browser_action_failure", "artifact_semantics_failure", "domain_package_failure"],
         patch_strategies=["mock external state", "snapshot/restore environment"],
     ),
@@ -1202,8 +1215,8 @@ COMPONENT_SPECS: Dict[AgentComponent, AgentComponentSpec] = {
     ),
     "evaluator": AgentComponentSpec(
         name="evaluator",
-        config_paths=["evaluation", "metrics", "rubric", "evaluation.trajectory_templates", "trajectory_templates", "evaluation.agent_memory_lineage", "evaluation.agent_memory_lineage_quality", "evaluation.agent_memory_lineage_quality.required_evidence", "evaluation.agent_memory_lineage_quality.required_signals", "evaluation.agent_memory_lineage_quality.required_operation_types", "evaluation.agent_memory_lineage_quality.required_policies", "evaluation.agent_memory_lineage_quality.max_open_poisoning", "evaluation.agent_memory_lineage_quality.max_unattributed_memories", "evaluation.agent_memory_lineage_quality.max_isolation_violations", "evaluation.agent_memory_lineage_quality.max_retention_violations", "evaluation.agent_memory_lineage_quality.max_policy_violations", "evaluation.agent_integration", "evaluation.agent_integration_quality", "evaluation.framework_import", "evaluation.framework_import_quality", "evaluation.framework_import_quality.required_frameworks", "evaluation.framework_import_quality.required_export_types", "evaluation.framework_import_quality.required_signals", "evaluation.framework_import_quality.max_failed_sources", "evaluation.red_team_readiness", "evaluation.red_team_readiness_quality", "evaluation.red_team_readiness_quality.required_evidence", "evaluation.red_team_readiness_quality.required_signals", "evaluation.red_team_readiness_quality.required_ready_components", "evaluation.red_team_readiness_quality.max_blocking_gaps", "evaluation.observability_replay", "evaluation.observability_replay_quality", "evaluation.optimizer_trace", "evaluation.optimizer_trace_quality", "evaluation.optimizer_trace_quality.required_roles", "evaluation.optimizer_trace_quality.required_search_paths", "evaluation.optimizer_trace_quality.required_governance_signals", "evaluation.optimizer_trace_quality.min_governance_checks", "evaluation.manifest_optimization", "evaluation.required_manifest_optimization", "evaluation.manifest_optimization_quality", "evaluation.manifest_optimization_quality.required_search_paths", "evaluation.manifest_optimization_quality.required_metrics", "evaluation.framework_runtime", "evaluation.framework_runtime_contract", "evaluation.framework_lifecycle", "evaluation.framework_lifecycle_quality", "evaluation.framework_capability_quality", "evaluation.framework_probe_quality", "evaluation.framework_portability_quality", "evaluation.agent_trust_boundary_quality", "evaluation.agent_trust_boundary_quality.required_controls", "evaluation.agent_trust_boundary_quality.required_categories", "evaluation.agent_trust_boundary_quality.min_control_rate", "evaluation.agent_trust_boundary_quality.max_high_risk_unmitigated_threats", "evaluation.agent_control_plane_quality", "evaluation.agent_control_plane_quality.required_controls", "evaluation.agent_control_plane_quality.required_categories", "evaluation.agent_control_plane_quality.min_control_rate", "evaluation.agent_control_plane_quality.max_high_risk_uncontained_incidents", "evaluation.framework_transcript_quality", "evaluation.orchestration_trace_quality", "evaluation.streaming_trace_quality", "evaluation.world_contract_quality", "evaluation.adversarial_resilience", "evaluation.red_team_campaign", "evaluation.red_team_campaign_quality", "evaluation.red_team_campaign_quality.required_taxonomies", "evaluation.red_team_campaign_quality.required_attack_types", "evaluation.red_team_campaign_quality.required_surfaces", "evaluation.red_team_campaign_quality.required_channels", "evaluation.red_team_campaign_quality.required_providers", "evaluation.red_team_campaign_quality.required_frameworks", "evaluation.red_team_campaign_quality.max_open_high_findings", "evaluation.red_team_campaign_quality.max_failed_runs", "evaluation.cross_trial_memory_skill", "evaluation.voice_timing_distribution", "optimizer", "optimizer.trace", "optimizer.society_trace", "optimizer.roles", "optimizer.role_graph", "optimizer.proposals", "optimizer.credit", "optimizer.diagnostics", "optimizer.governance", "optimization", "optimization.target", "optimization.target.search_space", "optimization.optimizer", "optimization.optimizer.max_candidates", "manifest_optimization", "optimization.manifest_optimization", "framework.import_manifest", "framework.import.sources", "framework.runtime", "framework.lifecycle", "framework.capabilities", "framework.probes", "framework.portability", "framework.trust_boundary", "framework.control_plane", "framework.transcript", "orchestration.trace", "streaming.trace", "world.contract", "adversarial.attack_pack", "red_team.campaign", "red_team.readiness", "observability.replay", "observability.replay_pack", "evaluation.artifact_semantics", "evaluation.domain_packages"],
-        metrics=["judge_agreement", "eval_coverage", "agent_goal_accuracy", "tool_call_accuracy", "tool_call_f1", "policy_adherence", "memory_correctness", "agent_memory_lineage_coverage", "agent_memory_lineage_quality", "multimodal_faithfulness", "artifact_grounding_quality", "artifact_semantics_quality", "domain_package_quality", "source_contradiction", "agent_integration_coverage", "agent_integration_quality", "workspace_run_coverage", "workspace_run_quality", "red_team_campaign_coverage", "red_team_campaign_quality", "red_team_readiness_coverage", "red_team_readiness_quality", "observability_replay_coverage", "observability_replay_quality", "optimizer_trace_coverage", "optimizer_trace_quality", "manifest_optimization_coverage", "manifest_optimization_quality", "framework_import_coverage", "framework_import_quality", "framework_runtime_coverage", "framework_runtime_contract", "framework_lifecycle_coverage", "framework_lifecycle_quality", "framework_capability_coverage", "framework_capability_quality", "framework_probe_coverage", "framework_probe_quality", "framework_portability_coverage", "framework_portability_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "framework_transcript_quality", "orchestration_trace_coverage", "orchestration_flow_quality", "streaming_trace_coverage", "streaming_interaction_quality", "world_contract_coverage", "world_contract_quality", "adversarial_resilience", "cross_trial_memory_skill", "voice_timing_distribution_quality"],
+        config_paths=["evaluation", "metrics", "rubric", "evaluation.trajectory_templates", "trajectory_templates", "evaluation.agent_memory_lineage", "evaluation.agent_memory_lineage_quality", "evaluation.agent_memory_lineage_quality.required_evidence", "evaluation.agent_memory_lineage_quality.required_signals", "evaluation.agent_memory_lineage_quality.required_operation_types", "evaluation.agent_memory_lineage_quality.required_policies", "evaluation.agent_memory_lineage_quality.max_open_poisoning", "evaluation.agent_memory_lineage_quality.max_unattributed_memories", "evaluation.agent_memory_lineage_quality.max_isolation_violations", "evaluation.agent_memory_lineage_quality.max_retention_violations", "evaluation.agent_memory_lineage_quality.max_policy_violations", "evaluation.persistent_state_attack", "evaluation.required_persistent_state_attack", "evaluation.persistent_state_attack_quality", "evaluation.persistent_state_attack_quality.required_channels", "evaluation.persistent_state_attack_quality.required_attack_types", "evaluation.persistent_state_attack_quality.max_write_success_rate", "evaluation.persistent_state_attack_quality.max_incorporation_rate", "evaluation.persistent_state_attack_quality.max_activation_rate", "evaluation.persistent_state_attack_quality.max_e2e_attack_success_rate", "evaluation.agent_integration", "evaluation.agent_integration_quality", "evaluation.framework_import", "evaluation.framework_import_quality", "evaluation.framework_import_quality.required_frameworks", "evaluation.framework_import_quality.required_export_types", "evaluation.framework_import_quality.required_signals", "evaluation.framework_import_quality.max_failed_sources", "evaluation.red_team_readiness", "evaluation.red_team_readiness_quality", "evaluation.red_team_readiness_quality.required_evidence", "evaluation.red_team_readiness_quality.required_signals", "evaluation.red_team_readiness_quality.required_ready_components", "evaluation.red_team_readiness_quality.max_blocking_gaps", "evaluation.observability_replay", "evaluation.observability_replay_quality", "evaluation.optimizer_trace", "evaluation.optimizer_trace_quality", "evaluation.optimizer_trace_quality.required_roles", "evaluation.optimizer_trace_quality.required_search_paths", "evaluation.optimizer_trace_quality.required_governance_signals", "evaluation.optimizer_trace_quality.min_governance_checks", "evaluation.manifest_optimization", "evaluation.required_manifest_optimization", "evaluation.manifest_optimization_quality", "evaluation.manifest_optimization_quality.required_search_paths", "evaluation.manifest_optimization_quality.required_metrics", "evaluation.framework_runtime", "evaluation.framework_runtime_contract", "evaluation.framework_lifecycle", "evaluation.framework_lifecycle_quality", "evaluation.framework_capability_quality", "evaluation.framework_probe_quality", "evaluation.framework_portability_quality", "evaluation.agent_trust_boundary_quality", "evaluation.agent_trust_boundary_quality.required_controls", "evaluation.agent_trust_boundary_quality.required_categories", "evaluation.agent_trust_boundary_quality.min_control_rate", "evaluation.agent_trust_boundary_quality.max_high_risk_unmitigated_threats", "evaluation.agent_control_plane_quality", "evaluation.agent_control_plane_quality.required_controls", "evaluation.agent_control_plane_quality.required_categories", "evaluation.agent_control_plane_quality.min_control_rate", "evaluation.agent_control_plane_quality.max_high_risk_uncontained_incidents", "evaluation.framework_transcript_quality", "evaluation.orchestration_trace_quality", "evaluation.streaming_trace_quality", "evaluation.world_contract_quality", "evaluation.adversarial_resilience", "evaluation.red_team_campaign", "evaluation.red_team_campaign_quality", "evaluation.red_team_campaign_quality.required_taxonomies", "evaluation.red_team_campaign_quality.required_attack_types", "evaluation.red_team_campaign_quality.required_surfaces", "evaluation.red_team_campaign_quality.required_channels", "evaluation.red_team_campaign_quality.required_providers", "evaluation.red_team_campaign_quality.required_frameworks", "evaluation.red_team_campaign_quality.max_open_high_findings", "evaluation.red_team_campaign_quality.max_failed_runs", "evaluation.cross_trial_memory_skill", "evaluation.voice_timing_distribution", "optimizer", "optimizer.trace", "optimizer.society_trace", "optimizer.roles", "optimizer.role_graph", "optimizer.proposals", "optimizer.credit", "optimizer.diagnostics", "optimizer.governance", "optimization", "optimization.target", "optimization.target.search_space", "optimization.optimizer", "optimization.optimizer.max_candidates", "manifest_optimization", "optimization.manifest_optimization", "framework.import_manifest", "framework.import.sources", "framework.runtime", "framework.lifecycle", "framework.capabilities", "framework.probes", "framework.portability", "framework.trust_boundary", "framework.control_plane", "framework.transcript", "orchestration.trace", "streaming.trace", "world.contract", "adversarial.attack_pack", "red_team.campaign", "red_team.readiness", "observability.replay", "observability.replay_pack", "evaluation.artifact_semantics", "evaluation.domain_packages"],
+        metrics=["judge_agreement", "eval_coverage", "agent_goal_accuracy", "tool_call_accuracy", "tool_call_f1", "policy_adherence", "memory_correctness", "agent_memory_lineage_coverage", "agent_memory_lineage_quality", "persistent_state_attack_coverage", "persistent_state_attack_quality", "multimodal_faithfulness", "artifact_grounding_quality", "artifact_semantics_quality", "domain_package_quality", "source_contradiction", "agent_integration_coverage", "agent_integration_quality", "workspace_run_coverage", "workspace_run_quality", "red_team_campaign_coverage", "red_team_campaign_quality", "red_team_readiness_coverage", "red_team_readiness_quality", "observability_replay_coverage", "observability_replay_quality", "optimizer_trace_coverage", "optimizer_trace_quality", "manifest_optimization_coverage", "manifest_optimization_quality", "framework_import_coverage", "framework_import_quality", "framework_runtime_coverage", "framework_runtime_contract", "framework_lifecycle_coverage", "framework_lifecycle_quality", "framework_capability_coverage", "framework_capability_quality", "framework_probe_coverage", "framework_probe_quality", "framework_portability_coverage", "framework_portability_quality", "agent_trust_boundary_coverage", "agent_trust_boundary_quality", "agent_control_plane_coverage", "agent_control_plane_quality", "framework_transcript_quality", "orchestration_trace_coverage", "orchestration_flow_quality", "streaming_trace_coverage", "streaming_interaction_quality", "world_contract_coverage", "world_contract_quality", "adversarial_resilience", "cross_trial_memory_skill", "voice_timing_distribution_quality"],
         failure_modes=["evaluation_gap", "integration_gap", "framework_trace_gap", "framework_lifecycle_gap", "framework_capability_gap", "framework_probe_gap", "framework_portability_gap", "trust_boundary_gap", "control_plane_gap", "reliability_failure", "framework_transcript_gap", "orchestration_trace_gap", "orchestration_flow_failure", "streaming_trace_gap", "streaming_interaction_failure", "world_contract_gap", "world_contract_violation", "adversarial_resilience_failure", "cross_trial_memory_skill_failure", "artifact_semantics_failure", "domain_package_failure", "voice_timing_distribution_failure"],
         patch_strategies=["add trajectory/step evals", "add deterministic state checks"],
     ),
@@ -2488,7 +2501,65 @@ METRIC_FAILURES: Dict[str, FailureMode] = {
     "red_team_campaign_quality": "adversarial_resilience_failure",
     "red_team_readiness_coverage": "integration_gap",
     "red_team_readiness_quality": "adversarial_resilience_failure",
+    "persistent_state_attack_coverage": "integration_gap",
+    "persistent_state_attack_quality": "adversarial_resilience_failure",
 }
+
+
+PERSISTENT_STATE_ATTACK_REPAIR_PATHS = [
+    "persistent_state_attack",
+    "persistent_state_attack.lifecycle",
+    "persistent_state_attack.write_policy",
+    "persistent_state_attack.context_rehydration",
+    "persistent_state_attack.activation_guard",
+    "persistent_state_attack.provenance",
+    "memory.write_policy",
+    "memory.write_quarantine",
+    "memory.provenance",
+    "memory.trust_labels",
+    "memory.rehydration_policy",
+    "policy.persistent_state_attack",
+    "policy.persistent_state_write_gate",
+    "policy.context_rehydration",
+    "policy.activation_guard",
+    "security.persistent_state_attack",
+    "security.stored_prompt_injection",
+    "environment.persistent_state_attack",
+    "environment.stored_prompt_injection",
+    "evaluation.required_persistent_state_attack",
+    "evaluation.persistent_state_attack_quality",
+    "evaluation.persistent_state_attack_quality.max_write_success_rate",
+    "evaluation.persistent_state_attack_quality.max_incorporation_rate",
+    "evaluation.persistent_state_attack_quality.max_activation_rate",
+    "evaluation.persistent_state_attack_quality.max_e2e_attack_success_rate",
+]
+
+
+PERSISTENT_STATE_ATTACK_FINDINGS = [
+    "missing_persistent_state_attack_key",
+    "persistent_state_case_count_low",
+    "persistent_state_channel_count_low",
+    "persistent_state_write_count_low",
+    "persistent_state_incorporation_count_low",
+    "persistent_state_activation_count_low",
+    "persistent_state_mitigation_count_low",
+    "persistent_state_artifact_count_low",
+    "persistent_state_written_count_high",
+    "persistent_state_incorporated_count_high",
+    "persistent_state_activated_count_high",
+    "persistent_state_wsr_high",
+    "persistent_state_ir_high",
+    "persistent_state_ar_high",
+    "persistent_state_e2e_asr_high",
+    "persistent_state_session_reset_missing",
+    "persistent_state_stage_metrics_missing",
+    "persistent_state_provenance_missing",
+    "persistent_state_channel_missing",
+    "persistent_state_attack_type_missing",
+    "persistent_state_write_case_missing",
+    "persistent_state_incorporation_case_missing",
+    "persistent_state_activation_case_missing",
+]
 
 
 RED_TEAM_MATRIX_REPAIR_PATHS = [
@@ -2694,6 +2765,18 @@ FINDING_REPAIR_HINTS: Dict[str, Dict[str, Any]] = {
         "failure_mode": "adversarial_resilience_failure",
         "suggested_paths": RED_TEAM_MATRIX_REPAIR_PATHS,
         "patch_strategy": "map mitigations back to each covered red-team matrix cell",
+    },
+    **{
+        finding_type: {
+            "failure_mode": "adversarial_resilience_failure",
+            "suggested_paths": PERSISTENT_STATE_ATTACK_REPAIR_PATHS,
+            "patch_strategy": (
+                "quarantine untrusted durable writes, require provenance, "
+                "filter clean-session context rehydration, and contain "
+                "activation-time attacker instructions"
+            ),
+        }
+        for finding_type in PERSISTENT_STATE_ATTACK_FINDINGS
     },
     **{
         finding_type: {

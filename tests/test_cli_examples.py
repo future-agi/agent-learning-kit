@@ -1557,6 +1557,90 @@ def test_long_horizon_redteam_optimization_example_selects_attack_system(
     )
 
 
+def test_persistent_state_redteam_optimization_example_selects_hardened_policy(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_PERSISTENT_REDTEAM_OPT_EXAMPLE_KEY",
+        "real-local-persistent-redteam-opt-key",
+    )
+
+    output_path = tmp_path / "persistent-state-redteam-optimization.json"
+    junit_path = tmp_path / "persistent-state-redteam-optimization.junit.xml"
+    sarif_path = tmp_path / "persistent-state-redteam-optimization.sarif.json"
+    markdown_path = tmp_path / "persistent-state-redteam-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "persistent_state_redteam_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.99
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    manifest = json.loads(
+        (EXAMPLES / "persistent_state_redteam_optimization.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert {
+        item["year"]
+        for item in manifest["optimization"]["target"]["metadata"]["research_sources"]
+    } == {2026}
+
+    best_env = payload["optimization"]["best_config"]["simulation"][
+        "environments"
+    ][0]
+    assert best_env["type"] == "persistent_state_attack"
+    assert best_env["data"]["metadata"]["profile"] == "hardened"
+    assert best_env["data"]["metadata"]["controls"] == {
+        "write_policy": "quarantine_untrusted_durable_writes",
+        "context_rehydration": "trusted_context_only",
+        "activation_guard": "block_untrusted_persistent_instruction",
+    }
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    assert metrics["persistent_state_attack_coverage"] == pytest.approx(1.0)
+    assert metrics["persistent_state_attack_quality"] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    summary = state["persistent_state_attack"]["summary"]
+    assert summary["case_count"] == 1
+    assert summary["write_attempt_count"] == 1
+    assert summary["incorporation_attempt_count"] == 1
+    assert summary["activation_attempt_count"] == 1
+    assert summary["write_success_rate"] == 0.0
+    assert summary["incorporation_rate"] == 0.0
+    assert summary["activation_rate"] == 0.0
+    assert summary["e2e_attack_success_rate"] == 0.0
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "persistent-state-redteam-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_redteam_society_optimization_example_selects_council(
     tmp_path,
     monkeypatch,
