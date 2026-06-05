@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from agent_learning import configure, current_config, get_api_key
+from agent_learning._facade import optional_module
 from agent_learning.cli import main
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,8 +19,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_configure_sets_unified_key_environment(monkeypatch):
     for key in (
         "AGENT_LEARNING_API_KEY",
+        "AGENT_LEARNING_SECRET_KEY",
         "FUTURE_AGI_API_KEY",
+        "FUTURE_AGI_SECRET_KEY",
         "FI_API_KEY",
+        "FI_SECRET_KEY",
         "AGENT_LEARNING_PROJECT_ID",
         "FUTURE_AGI_PROJECT_ID",
     ):
@@ -31,11 +35,36 @@ def test_configure_sets_unified_key_environment(monkeypatch):
     )
 
     assert config.api_key == "real-local-agent-learning-key"
+    assert config.secret_key == "real-local-agent-learning-key"
     assert current_config().project_id == "project_123"
     assert get_api_key(required=True) == "real-local-agent-learning-key"
     assert os.environ["AGENT_LEARNING_API_KEY"] == "real-local-agent-learning-key"
+    assert os.environ["AGENT_LEARNING_SECRET_KEY"] == "real-local-agent-learning-key"
     assert os.environ["FUTURE_AGI_API_KEY"] == "real-local-agent-learning-key"
+    assert os.environ["FUTURE_AGI_SECRET_KEY"] == "real-local-agent-learning-key"
     assert os.environ["FI_API_KEY"] == "real-local-agent-learning-key"
+    assert os.environ["FI_SECRET_KEY"] == "real-local-agent-learning-key"
+
+    config = configure(
+        api_key="real-local-agent-learning-key-2",
+        secret_key="real-local-agent-learning-secret",
+    )
+    assert config.api_key == "real-local-agent-learning-key-2"
+    assert config.secret_key == "real-local-agent-learning-secret"
+    assert os.environ["AGENT_LEARNING_API_KEY"] == "real-local-agent-learning-key-2"
+    assert os.environ["AGENT_LEARNING_SECRET_KEY"] == (
+        "real-local-agent-learning-secret"
+    )
+    assert os.environ["FUTURE_AGI_API_KEY"] == "real-local-agent-learning-key-2"
+    assert os.environ["FUTURE_AGI_SECRET_KEY"] == "real-local-agent-learning-secret"
+    assert os.environ["FI_API_KEY"] == "real-local-agent-learning-key-2"
+    assert os.environ["FI_SECRET_KEY"] == "real-local-agent-learning-secret"
+
+    from fi.simulate.simulation.engines.cloud import CloudEngine
+
+    cloud_engine = CloudEngine()
+    assert cloud_engine.api_key == "real-local-agent-learning-key-2"
+    assert cloud_engine.secret_key == "real-local-agent-learning-secret"
 
 
 def test_facades_expose_unified_agent_learning_modules():
@@ -58,6 +87,7 @@ def test_facades_expose_unified_agent_learning_modules():
         "simulate",
         "suite",
     }
+
     assert set(fi_simulate.__all__) <= set(simulate.__all__)
     assert set(fi_guardrails.__all__) <= set(redteam.__all__)
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
@@ -272,6 +302,16 @@ def test_facades_expose_unified_agent_learning_modules():
     )
     assert scan.passed is False
     assert scan.blocked_by
+
+
+def test_optional_module_error_uses_unified_install_guidance():
+    with pytest.raises(RuntimeError) as exc_info:
+        optional_module("agent_learning_missing_engine_for_test", "simulate")
+
+    message = str(exc_info.value)
+    assert "reinstall `agent-learning-kit`" in message.lower()
+    assert "agent-learning-kit[trinity]" in message
+    assert "agent-learning-kit[simulate]" not in message
 
 
 def test_optimize_facade_exposes_advanced_governance_surfaces():
@@ -6763,6 +6803,33 @@ def test_agent_learn_doctor_reports_module_availability(capsys):
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
+    assert payload["consolidation"] == {
+        "public_package": "agent-learning-kit",
+        "public_import": "agent_learning",
+        "public_cli": "agent-learn",
+        "new_development_home": True,
+        "shared_key_env": "AGENT_LEARNING_API_KEY",
+        "shared_secret_env": "AGENT_LEARNING_SECRET_KEY",
+        "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
+        "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
+        "unified_python_modules": [
+            "agent_learning.simulate",
+            "agent_learning.evals",
+            "agent_learning.redteam",
+            "agent_learning.optimize",
+            "agent_learning.suite",
+        ],
+        "vendored_engine_modules": [
+            "fi.simulate",
+            "fi.evals",
+            "fi.opt",
+        ],
+        "legacy_python_distributions": [
+            "agent-simulate",
+            "ai-evaluation",
+            "agent-opt",
+        ],
+    }
     assert payload["modules"]["simulate"]["available"] is True
     assert payload["modules"]["evaluation"]["available"] is True
     assert payload["modules"]["optimize"]["available"] is True

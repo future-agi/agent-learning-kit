@@ -12,8 +12,10 @@ All new public SDK work should land here first:
   `agent_learning.*` for public APIs or vendored `fi.*` engine packages while
   migration is in progress.
 - Shared configuration and keys should flow through `agent_learning.configure()`
-  and `AGENT_LEARNING_*` environment variables, with Future AGI aliases only as
-  compatibility inputs.
+  and `AGENT_LEARNING_*` environment variables. Vendored engine aliases
+  (`FI_API_KEY`, `FI_SECRET_KEY`, and Future AGI variants) are synced from that
+  public config for compatibility only; new public code should not introduce a
+  separate key model.
 
 The older repositories (`simulate-sdk`, `agent-opt`, and `ai-evaluation`) are
 legacy source/history during the migration. New runtime code should be moved

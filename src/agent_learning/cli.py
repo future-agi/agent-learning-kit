@@ -67,17 +67,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return _help(f"unknown command: {command}")
 
 
+def _vendored_import_failed(command: str, exc: Exception) -> int:
+    print(
+        f"{command} could not import the vendored Agent Learning Kit engine.",
+        file=sys.stderr,
+    )
+    print(
+        "Reinstall `agent-learning-kit`; use `agent-learning-kit[trinity]` "
+        "only for optional heavier integrations.",
+        file=sys.stderr,
+    )
+    print(f"agent-learn: import failed: {exc}", file=sys.stderr)
+    return 2
+
+
 def _simulate(args: Sequence[str]) -> int:
     try:
         cli = importlib.import_module("fi.simulate.cli")
     except Exception as exc:
-        print(
-            "agent-learn: simulation commands require "
-            "`agent-learning-kit[simulate]` or `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn simulate", exc)
     return int(cli.main(list(args)))
 
 
@@ -131,13 +139,7 @@ def _init(args: Sequence[str]) -> int:
     try:
         cli = importlib.import_module("fi.simulate.cli")
     except Exception as exc:
-        print(
-            "agent-learn init requires `agent-learning-kit[simulate]` "
-            "or `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn init", exc)
 
     target_dir = Path(parsed.directory).expanduser().resolve()
     required_env = [str(value) for value in _as_list(parsed.required_env)] or [
@@ -197,13 +199,7 @@ def _eval_cli(args: Sequence[str]) -> int:
 
         app = importlib.import_module("fi.cli.main").app
     except Exception as exc:
-        print(
-            "agent-learn eval-cli requires `agent-learning-kit[evaluation]` "
-            "or `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn eval-cli", exc)
 
     try:
         command = get_command(app)
@@ -235,13 +231,7 @@ def _run(args: Sequence[str]) -> int:
     try:
         from agent_learning import simulate
     except Exception as exc:
-        print(
-            "agent-learn run requires `agent-learning-kit[simulate]` "
-            "or `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn run", exc)
 
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
@@ -286,13 +276,7 @@ def _eval(args: Sequence[str]) -> int:
     try:
         from agent_learning import evals, simulate
     except Exception as exc:
-        print(
-            "agent-learn eval requires `agent-learning-kit[simulate]` "
-            "or `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn eval", exc)
 
     suite_path = Path(parsed.suite).expanduser().resolve()
     try:
@@ -337,12 +321,7 @@ def _eval_artifact(args: Sequence[str]) -> int:
     try:
         from agent_learning import evals, simulate
     except Exception as exc:
-        print(
-            "agent-learn eval-artifact requires `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn eval-artifact", exc)
 
     artifact_path = Path(parsed.artifact).expanduser().resolve()
     try:
@@ -387,12 +366,7 @@ def _eval_task(args: Sequence[str]) -> int:
     try:
         from agent_learning import evals, simulate
     except Exception as exc:
-        print(
-            "agent-learn eval-task requires `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn eval-task", exc)
 
     evidence_path = Path(parsed.evidence).expanduser().resolve()
     try:
@@ -434,13 +408,7 @@ def _redteam(args: Sequence[str]) -> int:
     try:
         from agent_learning import redteam
     except Exception as exc:
-        print(
-            "agent-learn redteam requires `agent-learning-kit[simulate]` "
-            "or `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn redteam", exc)
 
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
@@ -484,12 +452,7 @@ def _optimize(args: Sequence[str]) -> int:
     try:
         from agent_learning import optimize, simulate
     except Exception as exc:
-        print(
-            "agent-learn optimize requires `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn optimize", exc)
 
     manifest_path = Path(parsed.manifest).expanduser().resolve()
     try:
@@ -541,13 +504,7 @@ def _optimize_eval(args: Sequence[str]) -> int:
     try:
         from agent_learning import evals, optimize, simulate
     except Exception as exc:
-        print(
-            "agent-learn optimize-eval requires "
-            "`agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn optimize-eval", exc)
 
     suite_path = Path(parsed.suite).expanduser().resolve()
     try:
@@ -593,12 +550,7 @@ def _suite(args: Sequence[str]) -> int:
     try:
         from agent_learning import suite
     except Exception as exc:
-        print(
-            "agent-learn suite requires `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn suite", exc)
 
     suite_path = Path(parsed.suite).expanduser().resolve()
     try:
@@ -645,12 +597,7 @@ def _optimize_suite(args: Sequence[str]) -> int:
     try:
         from agent_learning import simulate, suite
     except Exception as exc:
-        print(
-            "agent-learn optimize-suite requires `agent-learning-kit[trinity]`.",
-            file=sys.stderr,
-        )
-        print(f"agent-learn: import failed: {exc}", file=sys.stderr)
-        return 2
+        return _vendored_import_failed("agent-learn optimize-suite", exc)
 
     suite_path = Path(parsed.suite).expanduser().resolve()
     try:
@@ -1956,6 +1903,33 @@ def _doctor() -> int:
             "api_url": current_config().api_url,
             "project_id_configured": bool(current_config().project_id),
             "workspace_id_configured": bool(current_config().workspace_id),
+        },
+        "consolidation": {
+            "public_package": "agent-learning-kit",
+            "public_import": "agent_learning",
+            "public_cli": "agent-learn",
+            "new_development_home": True,
+            "shared_key_env": "AGENT_LEARNING_API_KEY",
+            "shared_secret_env": "AGENT_LEARNING_SECRET_KEY",
+            "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
+            "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
+            "unified_python_modules": [
+                "agent_learning.simulate",
+                "agent_learning.evals",
+                "agent_learning.redteam",
+                "agent_learning.optimize",
+                "agent_learning.suite",
+            ],
+            "vendored_engine_modules": [
+                "fi.simulate",
+                "fi.evals",
+                "fi.opt",
+            ],
+            "legacy_python_distributions": [
+                "agent-simulate",
+                "ai-evaluation",
+                "agent-opt",
+            ],
         },
         "modules": {},
     }

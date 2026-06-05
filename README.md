@@ -34,6 +34,14 @@ automation should use `agent_learning.*` and `agent-learn`.
 
 New public SDK development belongs here. See [DEVELOPMENT.md](DEVELOPMENT.md)
 for the boundary between this package and the backing engine repos.
+Run `agent-learn doctor` to verify the active consolidation boundary: the
+public package/CLI, shared `AGENT_LEARNING_API_KEY` /
+`AGENT_LEARNING_SECRET_KEY` config, unified
+`agent_learning.{simulate,evals,redteam,optimize,suite}` APIs, vendored
+`fi.{simulate,evals,opt}` engines, and legacy Python distributions that should
+not be project dependencies. For one-key local usage,
+`configure(api_key=...)` mirrors the key into legacy `FI_API_KEY` and
+`FI_SECRET_KEY` engine paths.
 
 CLI entrypoint:
 
