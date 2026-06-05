@@ -715,7 +715,11 @@ framework integration coverage for the Future AGI UI/observability/evals layer.
 It verifies agent definition, personas, simulations, observability hooks, eval
 metrics, credentials, sessions, and channel coverage across LiveKit, Vapi,
 Retell, Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and
-TraceAI-supported frameworks.
+TraceAI-supported frameworks. The optimizer uses deterministic
+`simulation_evidence` scoring for the integration manifest, so provider,
+channel, provider-channel, TraceAI/framework trace, credential, transcript,
+session, observability, and eval-metric evidence must all close before the
+candidate scores as integrated.
 The same workflow is available from Python through
 `optimize.build_agent_integration_optimization_manifest()` and
 `examples/sdk_agent_integration_optimization.py`, which generate the provider

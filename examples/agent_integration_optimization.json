@@ -917,13 +917,198 @@
       },
       "metadata": {
         "source": "agent-learning-kit",
-        "cookbook": "agent-integration-optimization"
+        "cookbook": "agent-integration-optimization",
+        "research_sources": [
+          {
+            "title": "AgentTrace: Causal Graph Tracing for Root Cause Analysis in Deployed Multi-Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.14688",
+            "used_for": "framework-neutral process traces and integration failure localization"
+          },
+          {
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": "portable provenance across tools, memory, environment, and recovery"
+          },
+          {
+            "title": "Agents Learn Their Runtime: Interpreter Persistence as Training-Time Semantics",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "runtime/interface semantics as provider and framework integration constraints"
+          },
+          {
+            "title": "VeRO: A Harness for Agents to Optimize Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.22480",
+            "used_for": "versioned candidate rewards from structured execution observations"
+          },
+          {
+            "title": "TRACE: Capability-Targeted Agentic Training",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.05336",
+            "used_for": "environment-specific failed/successful trajectory contrast for integration gaps"
+          }
+        ],
+        "original_synthesis": "Agent/provider integration readiness is scored as a deterministic evidence contract: provider and channel coverage, TraceAI/framework trace coverage, verified credentials, replayable sessions, simulations, observability hooks, eval metrics, transcripts, and zero failed sessions must all close before Future AGI treats a BYO agent as fully integrated."
       }
     },
     "optimizer": {
       "max_candidates": 3,
       "include_seed": true,
       "auto_diagnose": false
+    },
+    "scoring": {
+      "method": "simulation_evidence",
+      "enabled": true,
+      "layers": [
+        "agent_integration"
+      ],
+      "required_tools": [
+        "agent_integration_status",
+        "list_agent_integration_providers",
+        "inspect_agent_integration_provider",
+        "list_agent_integration_sessions",
+        "list_agent_integration_gaps"
+      ],
+      "required_agent_integrations": [
+        "agent_integration",
+        "futureagi_platform",
+        "agent_definition",
+        "persona",
+        "provider",
+        "session",
+        "simulation",
+        "observability",
+        "eval",
+        "credential",
+        "traceai_framework",
+        "chat",
+        "voice",
+        "webrtc",
+        "phone",
+        "sip",
+        "websocket",
+        "media_stream",
+        "livekit",
+        "vapi",
+        "retell",
+        "bland",
+        "elevenlabs",
+        "deepgram",
+        "agora",
+        "pipecat",
+        "twilio",
+        "langchain",
+        "langgraph",
+        "openai_agents",
+        "autogen",
+        "crewai"
+      ],
+      "agent_integration_quality": {
+        "require_agent_definition": true,
+        "require_persona": true,
+        "require_simulation": true,
+        "require_observability": true,
+        "require_evals": true,
+        "require_verified_credentials": true,
+        "min_provider_count": 16,
+        "min_session_count": 14,
+        "min_simulation_count": 9,
+        "min_persona_count": 3,
+        "min_observability_hooks": 5,
+        "min_eval_metric_count": 5,
+        "min_verified_providers": 16,
+        "min_passed_simulations": 9,
+        "min_trace_sessions": 14,
+        "min_transcript_sessions": 14,
+        "max_missing_credentials": 0,
+        "max_failed_sessions": 0,
+        "required_providers": [
+          "livekit",
+          "vapi",
+          "retell",
+          "bland",
+          "elevenlabs",
+          "deepgram",
+          "agora",
+          "pipecat",
+          "twilio"
+        ],
+        "required_channels": [
+          "chat",
+          "voice",
+          "webrtc",
+          "phone",
+          "sip",
+          "websocket",
+          "media_stream"
+        ],
+        "required_trace_frameworks": [
+          "langchain",
+          "langgraph",
+          "openai_agents",
+          "autogen",
+          "crewai",
+          "pipecat",
+          "livekit"
+        ],
+        "required_provider_channels": {
+          "livekit": [
+            "webrtc",
+            "phone",
+            "sip"
+          ],
+          "vapi": [
+            "chat",
+            "voice",
+            "webrtc",
+            "phone",
+            "sip",
+            "websocket"
+          ],
+          "retell": [
+            "chat",
+            "voice",
+            "phone"
+          ],
+          "bland": [
+            "voice",
+            "phone",
+            "sip",
+            "web_call",
+            "websocket"
+          ],
+          "elevenlabs": [
+            "voice",
+            "phone",
+            "sip",
+            "websocket"
+          ],
+          "deepgram": [
+            "voice",
+            "websocket"
+          ],
+          "agora": [
+            "voice",
+            "webrtc"
+          ],
+          "pipecat": [
+            "voice",
+            "webrtc",
+            "sip"
+          ],
+          "twilio": [
+            "phone",
+            "sip",
+            "media_stream"
+          ]
+        }
+      },
+      "weights": {
+        "agent_integration": 6.0,
+        "tool_coverage": 1.0
+      }
     }
   }
 }

@@ -2349,7 +2349,7 @@ def build_agent_integration_optimization_manifest(
         )
     )
 
-    return {
+    manifest = {
         "version": "agent-learning.optimization.v1",
         "name": name,
         "required_env": [str(key) for key in required_env],
@@ -2390,6 +2390,16 @@ def build_agent_integration_optimization_manifest(
                 "metadata": {
                     "source": "agent_learning.optimize.build_agent_integration_optimization_manifest",
                     "task_kind": "agent_integration",
+                    "research_sources": _default_agent_integration_research_sources(),
+                    "original_synthesis": (
+                        "Agent/provider integration readiness is scored as a "
+                        "deterministic evidence contract: provider and channel "
+                        "coverage, TraceAI/framework trace coverage, verified "
+                        "credentials, replayable sessions, simulations, "
+                        "observability hooks, eval metrics, transcripts, and "
+                        "zero failed sessions must all close before Future AGI "
+                        "treats a BYO agent as fully integrated."
+                    ),
                     **copy.deepcopy(dict(target_metadata or {})),
                 },
             },
@@ -2398,6 +2408,19 @@ def build_agent_integration_optimization_manifest(
             ),
         },
     }
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["agent_integration"],
+        "required_tools": config.get("required_tools", []),
+        "required_agent_integrations": config.get("required_agent_integrations", []),
+        "agent_integration_quality": config.get("agent_integration_quality", {}),
+        "weights": {
+            "agent_integration": 6.0,
+            "tool_coverage": 1.0,
+        },
+    }
+    return manifest
 
 
 def optimize_agent_integration(
@@ -9771,6 +9794,41 @@ def _default_agent_integration_evaluation_config(
             "final_response_quality": 2.0,
         },
     }
+
+
+def _default_agent_integration_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "AgentTrace: Causal Graph Tracing for Root Cause Analysis in Deployed Multi-Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.14688",
+            "used_for": "framework-neutral process traces and integration failure localization",
+        },
+        {
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": "portable provenance across tools, memory, environment, and recovery",
+        },
+        {
+            "title": "Agents Learn Their Runtime: Interpreter Persistence as Training-Time Semantics",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "runtime/interface semantics as provider and framework integration constraints",
+        },
+        {
+            "title": "VeRO: A Harness for Agents to Optimize Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.22480",
+            "used_for": "versioned candidate rewards from structured execution observations",
+        },
+        {
+            "title": "TRACE: Capability-Targeted Agentic Training",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.05336",
+            "used_for": "environment-specific failed/successful trajectory contrast for integration gaps",
+        },
+    ]
 
 
 def _agent_control_plane_environment(item: Mapping[str, Any]) -> dict[str, Any]:

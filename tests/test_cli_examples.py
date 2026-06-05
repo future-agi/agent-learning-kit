@@ -2012,6 +2012,8 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
     tmp_path,
     monkeypatch,
 ):
+    from agent_learning import optimize
+
     monkeypatch.setenv(
         "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
         "real-local-agent-integration-opt-key",
@@ -2042,6 +2044,17 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
     assert payload["summary"]["optimization_score"] >= 0.98
     assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
     assert "simulation.environments" in payload["summary"]["search_paths"]
+    manifest = json.loads(
+        (EXAMPLES / "agent_integration_optimization.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["optimization"]["scoring"]["method"] == "simulation_evidence"
+    assert manifest["optimization"]["scoring"]["layers"] == ["agent_integration"]
+    assert {
+        item["year"]
+        for item in manifest["optimization"]["target"]["metadata"]["research_sources"]
+    } == {2026}
 
     env_types = [
         environment["type"]
@@ -2119,6 +2132,25 @@ def test_agent_integration_optimization_example_runs_provider_matrix(
     assert summary["missing_required_channels"] == []
     assert summary["missing_required_trace_frameworks"] == []
     assert summary["providers_without_verified_credentials"] == []
+
+    candidate = optimize.AgentCandidate.from_config(
+        payload["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "agent_integration": 1.0,
+    }
 
     assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
     sarif = json.loads(sarif_path.read_text(encoding="utf-8"))

@@ -9,6 +9,7 @@ from .targets import AgentCandidate, CandidateEvaluation
 
 DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "tool_coverage": 1.0,
+    "agent_integration": 3.0,
     "framework_trace": 2.0,
     "framework_import": 2.0,
     "red_team_readiness": 3.0,
@@ -30,9 +31,10 @@ def score_simulation_evidence(
 
     The scorer intentionally stays deterministic. It consumes the environment
     evidence emitted by simulate engines (``metadata.environment_state``) and
-    turns framework trace, framework-import readiness, red-team readiness,
-    runtime semantic, memory-lineage, orchestration, tool, and world-contract
-    evidence into a single optimizer-grade score.
+    turns provider/framework integration, framework trace, framework-import
+    readiness, red-team readiness, runtime semantic, memory-lineage,
+    orchestration, tool, and world-contract evidence into a single
+    optimizer-grade score.
     """
 
     cfg = copy.deepcopy(dict(config or {}))
@@ -56,6 +58,15 @@ def score_simulation_evidence(
     )
     if tool_component is not None:
         components.append(tool_component)
+
+    if _should_score("agent_integration", layers, env_states, cfg):
+        components.append(
+            _score_agent_integration_manifest(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
 
     if _should_score("framework", layers, env_states, cfg):
         components.append(
@@ -161,6 +172,7 @@ def score_simulation_evidence(
                     "Runtime-persistence 2026: framework runtime semantics are part of trace validity.",
                     "VeRO 2026: harness optimization needs versioned rewards and structured observations.",
                     "Agent red-team 2026: readiness evidence must cover target, campaign, runtime, controls, and observability.",
+                    "Agent observability 2026: integration readiness needs framework-neutral traces, sessions, and evaluation hooks.",
                 ],
             }
         },
@@ -325,6 +337,84 @@ def _score_runtime_semantics(
             "candidate_method": method,
             "expected_input_mode": contract.get("input_mode"),
             "candidate_input_mode": input_mode,
+        },
+    }
+
+
+def _score_agent_integration_manifest(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "agent_integration_manifest")
+    if not payload:
+        return _missing_component(
+            "agent_integration",
+            "No agent_integration_manifest environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("agent_integration_quality"),
+        manifest_config.get("agent_integration_quality"),
+    )
+    summary = _agent_integration_summary(payload)
+    signals = {_norm(item) for item in _as_list(payload.get("signals")) if _norm(item)}
+    observed = _agent_integration_observed(payload, summary, signals)
+    required_integration = _configured_norm_set(
+        "required_agent_integrations",
+        cfg,
+        manifest_config,
+    ) | _configured_norm_set("required_agent_integration", cfg, manifest_config)
+    coverage_matched = sorted(required_integration & observed)
+    coverage_missing = sorted(required_integration - observed)
+    coverage_score = (
+        len(coverage_matched) / len(required_integration)
+        if required_integration
+        else (1.0 if observed else 0.0)
+    )
+
+    checks: list[dict[str, Any]] = []
+    _append_agent_integration_count_checks(checks, summary, quality)
+    _append_agent_integration_boolean_checks(checks, summary, quality)
+    _append_agent_integration_required_checks(
+        checks,
+        summary,
+        quality=quality,
+    )
+    quality_score = (
+        sum(1 for check in checks if check["match"]) / len(checks)
+        if checks
+        else 1.0
+    )
+    blocking_gaps = {
+        "missing_required_providers": _as_list(summary.get("missing_required_providers")),
+        "missing_required_channels": _as_list(summary.get("missing_required_channels")),
+        "missing_required_trace_frameworks": _as_list(summary.get("missing_required_trace_frameworks")),
+        "providers_without_verified_credentials": _as_list(
+            summary.get("providers_without_verified_credentials")
+        ),
+        "failed_sessions": _as_list(summary.get("failed_sessions")),
+    }
+    gap_count = sum(len(values) for values in blocking_gaps.values()) + len(
+        coverage_missing
+    )
+    gap_score = 1.0 if gap_count == 0 else 0.0
+    score = round(0.35 * coverage_score + 0.45 * quality_score + 0.20 * gap_score, 4)
+    return {
+        "name": "agent_integration",
+        "score": score,
+        "reason": (
+            "agent integration evidence is complete and provider-ready"
+            if score >= 0.99
+            else "agent integration evidence incomplete"
+        ),
+        "details": {
+            "matched_required": coverage_matched,
+            "missing_required": coverage_missing,
+            "checks": checks,
+            "blocking_gaps": blocking_gaps,
+            "summary": copy.deepcopy(summary),
         },
     }
 
@@ -736,6 +826,14 @@ def _should_score(
     if explicit:
         return _norm(layer) in explicit
     aliases = {
+        "agent_integration": {
+            "agent_integration",
+            "integration",
+            "provider",
+            "providers",
+            "channel",
+            "futureagi_platform",
+        },
         "framework": {"framework", "runtime", "integration"},
         "framework_import": {
             "framework_import",
@@ -763,6 +861,13 @@ def _should_score(
     if layers & aliases.get(layer, {layer}):
         return True
     keys = _environment_keys(env_states)
+    if layer == "agent_integration":
+        return (
+            "agent_integration_manifest" in keys
+            or bool(cfg.get("agent_integration_quality"))
+            or bool(cfg.get("required_agent_integrations"))
+            or bool(cfg.get("required_agent_integration"))
+        )
     if layer == "framework":
         return "framework_trace" in keys
     if layer == "framework_import":
@@ -818,6 +923,445 @@ def _framework_import_observed(
         observed.add("framework_import")
         observed.add("framework_import_manifest")
     return {item for item in observed if item}
+
+
+def _agent_integration_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    summary = _as_mapping(payload.get("summary"))
+    providers = [_as_mapping(item) for item in _as_list(payload.get("providers"))]
+    sessions = [_as_mapping(item) for item in _as_list(payload.get("sessions"))]
+    simulations = [_as_mapping(item) for item in _as_list(payload.get("simulations"))]
+    personas = _as_list(payload.get("personas"))
+    observability = _as_mapping(payload.get("observability"))
+    evals = _as_mapping(payload.get("evals"))
+    result = copy.deepcopy(summary)
+
+    observed_providers = {
+        _agent_integration_provider_norm(item)
+        for item in _as_list(summary.get("observed_providers"))
+        if _agent_integration_provider_norm(item)
+    }
+    observed_channels = {
+        _agent_integration_channel_norm(item)
+        for item in _as_list(summary.get("observed_channels"))
+        if _agent_integration_channel_norm(item)
+    }
+    trace_frameworks = {
+        _agent_integration_provider_norm(item)
+        for item in _as_list(summary.get("trace_frameworks"))
+        if _agent_integration_provider_norm(item)
+    }
+    eval_metrics = {
+        _norm(item)
+        for item in _as_list(summary.get("eval_metrics"))
+        if _norm(item)
+    }
+    provider_channels = {
+        _agent_integration_provider_norm(provider): {
+            _agent_integration_channel_norm(channel)
+            for channel in _as_list(channels)
+            if _agent_integration_channel_norm(channel)
+        }
+        for provider, channels in _as_mapping(summary.get("provider_channels")).items()
+        if _agent_integration_provider_norm(provider)
+    }
+    failed_sessions = {
+        str(item)
+        for item in _as_list(summary.get("failed_sessions"))
+        if str(item)
+    }
+    missing_credentials = {
+        _norm(item)
+        for item in _as_list(summary.get("providers_without_verified_credentials"))
+        if _norm(item)
+    }
+
+    for provider in providers:
+        provider_key = _agent_integration_provider_norm(
+            provider.get("provider") or provider.get("name") or provider.get("id")
+        )
+        if provider_key:
+            observed_providers.add(provider_key)
+            provider_channels.setdefault(provider_key, set()).update(
+                _agent_integration_channel_norm(channel)
+                for channel in _as_list(provider.get("channels"))
+                if _agent_integration_channel_norm(channel)
+            )
+        trace_framework = _agent_integration_provider_norm(
+            provider.get("trace_framework") or provider.get("framework")
+        )
+        if trace_framework:
+            trace_frameworks.add(trace_framework)
+        if provider_key and provider.get("credential_status") not in {
+            "verified",
+            "live_verified",
+        }:
+            missing_credentials.add(provider_key)
+    for session in sessions:
+        provider_key = _agent_integration_provider_norm(
+            session.get("provider") or session.get("framework")
+        )
+        channel = _agent_integration_channel_norm(
+            session.get("channel") or session.get("modality")
+        )
+        if provider_key:
+            observed_providers.add(provider_key)
+        if channel:
+            observed_channels.add(channel)
+            if provider_key:
+                provider_channels.setdefault(provider_key, set()).add(channel)
+        trace_framework = _agent_integration_provider_norm(
+            session.get("framework") or session.get("trace_framework")
+        )
+        if trace_framework:
+            trace_frameworks.add(trace_framework)
+        if session.get("status") in {
+            "failed",
+            "error",
+            "timeout",
+            "dial_failed",
+            "cancelled",
+            "canceled",
+        }:
+            failed_sessions.add(str(session.get("id") or session.get("name") or "session"))
+    for simulation in simulations:
+        provider_key = _agent_integration_provider_norm(
+            simulation.get("provider") or simulation.get("framework")
+        )
+        channel = _agent_integration_channel_norm(
+            simulation.get("channel") or simulation.get("modality")
+        )
+        if provider_key:
+            observed_providers.add(provider_key)
+        if channel:
+            observed_channels.add(channel)
+            if provider_key:
+                provider_channels.setdefault(provider_key, set()).add(channel)
+    eval_metrics.update(
+        _norm(metric)
+        for metric in _as_mapping(evals.get("metrics")).keys()
+        if _norm(metric)
+    )
+    for run in _as_list(evals.get("runs")):
+        eval_metrics.update(
+            _norm(metric)
+            for metric in _as_mapping(_as_mapping(run).get("metrics")).keys()
+            if _norm(metric)
+        )
+    observability_hook_count = int(result.get("observability_hook_count", 0) or 0)
+    if not observability_hook_count:
+        observability_hook_count = sum(
+            len(_as_list(observability.get(key)))
+            for key in ("traces", "webhooks", "alerts", "incidents", "dashboards", "runs")
+        )
+        if observability and not observability_hook_count:
+            observability_hook_count = 1
+
+    result.update(
+        {
+            "has_agent_definition": bool(
+                result.get("has_agent_definition")
+                or _as_mapping(payload.get("agent_definition"))
+            ),
+            "has_persona": bool(result.get("has_persona") or personas),
+            "has_simulation": bool(result.get("has_simulation") or simulations),
+            "has_observability": bool(
+                result.get("has_observability")
+                or observability
+                or observability_hook_count
+            ),
+            "has_evals": bool(result.get("has_evals") or evals or eval_metrics),
+            "has_verified_credentials": bool(
+                result.get("has_verified_credentials")
+                or int(result.get("verified_provider_count", 0) or 0) > 0
+            ),
+            "persona_count": max(int(result.get("persona_count", 0) or 0), len(personas)),
+            "provider_count": max(
+                int(result.get("provider_count", 0) or 0),
+                len(providers),
+                len(observed_providers),
+            ),
+            "session_count": max(int(result.get("session_count", 0) or 0), len(sessions)),
+            "simulation_count": max(
+                int(result.get("simulation_count", 0) or 0),
+                len(simulations),
+            ),
+            "passed_simulation_count": max(
+                int(result.get("passed_simulation_count", 0) or 0),
+                sum(1 for item in simulations if item.get("passed")),
+            ),
+            "failed_session_count": max(
+                int(result.get("failed_session_count", 0) or 0),
+                len(failed_sessions),
+            ),
+            "observability_hook_count": observability_hook_count,
+            "eval_metric_count": max(
+                int(result.get("eval_metric_count", 0) or 0),
+                len(eval_metrics),
+            ),
+            "verified_provider_count": max(
+                int(result.get("verified_provider_count", 0) or 0),
+                sum(
+                    1
+                    for item in providers
+                    if item.get("credential_status") in {"verified", "live_verified"}
+                ),
+            ),
+            "transcript_session_count": max(
+                int(result.get("transcript_session_count", 0) or 0),
+                sum(
+                    1
+                    for item in sessions
+                    if "transcript" in {
+                        _norm(signal) for signal in _as_list(item.get("signals"))
+                    }
+                    or bool(item.get("transcript"))
+                ),
+            ),
+            "trace_session_count": max(
+                int(result.get("trace_session_count", 0) or 0),
+                sum(
+                    1
+                    for item in sessions
+                    if "trace" in {
+                        _norm(signal) for signal in _as_list(item.get("signals"))
+                    }
+                    or bool(item.get("trace_id"))
+                ),
+            ),
+            "observed_providers": sorted(observed_providers),
+            "observed_channels": sorted(observed_channels),
+            "trace_frameworks": sorted(trace_frameworks),
+            "eval_metrics": sorted(eval_metrics),
+            "provider_channels": {
+                provider: sorted(channels)
+                for provider, channels in sorted(provider_channels.items())
+            },
+            "providers_without_verified_credentials": sorted(missing_credentials),
+            "failed_sessions": sorted(failed_sessions),
+        }
+    )
+    return result
+
+
+def _agent_integration_observed(
+    payload: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    signals: set[str],
+) -> set[str]:
+    observed = set(signals)
+    for key in (
+        "observed_providers",
+        "observed_channels",
+        "trace_frameworks",
+        "eval_metrics",
+    ):
+        observed.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+    for provider, channels in _as_mapping(summary.get("provider_channels")).items():
+        provider_key = _agent_integration_provider_norm(provider)
+        if provider_key:
+            observed.add(provider_key)
+        observed.update(
+            _agent_integration_channel_norm(channel)
+            for channel in _as_list(channels)
+            if _agent_integration_channel_norm(channel)
+        )
+    for boolean_key, signal in (
+        ("has_agent_definition", "agent_definition"),
+        ("has_persona", "persona"),
+        ("has_simulation", "simulation"),
+        ("has_observability", "observability"),
+        ("has_evals", "eval"),
+        ("has_verified_credentials", "credential"),
+    ):
+        if summary.get(boolean_key):
+            observed.add(signal)
+    platform = _norm(payload.get("platform"))
+    if platform:
+        observed.update({"platform", platform})
+    if platform == "futureagi":
+        observed.add("futureagi_platform")
+    if summary:
+        observed.update({"agent_integration", "provider", "channel"})
+    return {item for item in observed if item}
+
+
+def _append_agent_integration_count_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for requirement, observed_key in (
+        ("min_provider_count", "provider_count"),
+        ("min_session_count", "session_count"),
+        ("min_simulation_count", "simulation_count"),
+        ("min_persona_count", "persona_count"),
+        ("min_observability_hooks", "observability_hook_count"),
+        ("min_eval_metric_count", "eval_metric_count"),
+        ("min_verified_providers", "verified_provider_count"),
+        ("min_passed_simulations", "passed_simulation_count"),
+        ("min_trace_sessions", "trace_session_count"),
+        ("min_transcript_sessions", "transcript_session_count"),
+    ):
+        minimum = _int_or_none(quality.get(requirement))
+        if minimum is None:
+            continue
+        actual = int(summary.get(observed_key, 0) or 0)
+        checks.append(
+            {
+                "check": requirement,
+                "expected": minimum,
+                "actual": actual,
+                "match": actual >= minimum,
+            }
+        )
+    max_missing = _int_or_none(quality.get("max_missing_credentials"))
+    if max_missing is not None:
+        actual = len(_as_list(summary.get("providers_without_verified_credentials")))
+        checks.append(
+            {
+                "check": "max_missing_credentials",
+                "expected": max_missing,
+                "actual": actual,
+                "match": actual <= max_missing,
+            }
+        )
+    max_failed = _int_or_none(quality.get("max_failed_sessions"))
+    if max_failed is not None:
+        actual = int(summary.get("failed_session_count", 0) or 0)
+        checks.append(
+            {
+                "check": "max_failed_sessions",
+                "expected": max_failed,
+                "actual": actual,
+                "match": actual <= max_failed,
+            }
+        )
+
+
+def _append_agent_integration_boolean_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for requirement, summary_key in (
+        ("require_agent_definition", "has_agent_definition"),
+        ("require_persona", "has_persona"),
+        ("require_simulation", "has_simulation"),
+        ("require_observability", "has_observability"),
+        ("require_evals", "has_evals"),
+        ("require_verified_credentials", "has_verified_credentials"),
+    ):
+        if requirement not in quality:
+            continue
+        expected = bool(quality.get(requirement))
+        actual = bool(summary.get(summary_key))
+        checks.append(
+            {
+                "check": requirement,
+                "expected": expected,
+                "actual": actual,
+                "match": actual is expected,
+            }
+        )
+
+
+def _append_agent_integration_required_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    *,
+    quality: Mapping[str, Any],
+) -> None:
+    for primary, alias, observed_key, check_name in (
+        ("required_providers", "providers", "observed_providers", "required_provider"),
+        ("required_channels", "channels", "observed_channels", "required_channel"),
+        (
+            "required_trace_frameworks",
+            "trace_frameworks",
+            "trace_frameworks",
+            "required_trace_framework",
+        ),
+    ):
+        normalizer = (
+            _agent_integration_channel_norm
+            if observed_key == "observed_channels"
+            else _agent_integration_provider_norm
+        )
+        required = {
+            normalizer(item)
+            for item in _as_list(quality.get(primary) or quality.get(alias))
+            if normalizer(item)
+        }
+        observed = {
+            normalizer(item)
+            for item in _as_list(summary.get(observed_key))
+            if normalizer(item)
+        }
+        for item in sorted(required):
+            checks.append(
+                {
+                    "check": check_name,
+                    "expected": item,
+                    "actual": sorted(observed),
+                    "match": item in observed,
+                }
+            )
+    provider_channels = _as_mapping(quality.get("required_provider_channels"))
+    observed_provider_channels = _as_mapping(summary.get("provider_channels"))
+    for provider, channels in provider_channels.items():
+        provider_key = _agent_integration_provider_norm(provider)
+        observed_channels = {
+            _agent_integration_channel_norm(channel)
+            for channel in _as_list(observed_provider_channels.get(provider_key))
+            if _agent_integration_channel_norm(channel)
+        }
+        for channel in {
+            _agent_integration_channel_norm(item)
+            for item in _as_list(channels)
+            if _agent_integration_channel_norm(item)
+        }:
+            checks.append(
+                {
+                    "check": "required_provider_channel",
+                    "expected": {"provider": provider_key, "channel": channel},
+                    "actual": sorted(observed_channels),
+                    "match": channel in observed_channels,
+                }
+            )
+
+
+def _agent_integration_channel_norm(value: Any) -> str:
+    normalized = _norm(value)
+    aliases = {
+        "audio": "voice",
+        "conversation": "chat",
+        "media_streaming": "media_stream",
+        "media_streams": "media_stream",
+        "pstn": "phone",
+        "rtc": "webrtc",
+        "telephony": "phone",
+        "text": "chat",
+        "web": "webrtc",
+        "web_call": "webrtc",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _agent_integration_provider_norm(value: Any) -> str:
+    normalized = _norm(value)
+    aliases = {
+        "bland_ai": "bland",
+        "blandai": "bland",
+        "eleven_labs": "elevenlabs",
+        "elevenlabs_convai": "elevenlabs",
+        "livekit_agents": "livekit",
+        "openai_agent": "openai_agents",
+        "openai_agents_sdk": "openai_agents",
+        "pydantic": "pydantic_ai",
+        "pydanticai": "pydantic_ai",
+        "retell_ai": "retell",
+        "vapi_ai": "vapi",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _red_team_readiness_observed(
@@ -1240,6 +1784,25 @@ def _configured_list(
             if value:
                 return [str(item) for item in _as_list(value)]
     return []
+
+
+def _configured_norm_set(
+    key: str,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+    *,
+    nested_keys: tuple[str, str] = (),
+) -> set[str]:
+    return {
+        _norm(item)
+        for item in _configured_list(
+            key,
+            cfg,
+            manifest_config,
+            nested_keys=nested_keys,
+        )
+        if _norm(item)
+    }
 
 
 def _first_mapping(*values: Any) -> dict[str, Any]:

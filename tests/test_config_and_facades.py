@@ -4647,6 +4647,12 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
         "environment",
         "evaluator",
     ]
+    assert manifest["optimization"]["scoring"]["method"] == "simulation_evidence"
+    assert manifest["optimization"]["scoring"]["layers"] == ["agent_integration"]
+    assert {
+        item["year"]
+        for item in manifest["optimization"]["target"]["metadata"]["research_sources"]
+    } == {2026}
     candidates = manifest["optimization"]["target"]["search_space"][
         "simulation.environments"
     ]
@@ -4723,6 +4729,27 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
     assert summary["missing_required_channels"] == []
     assert summary["missing_required_trace_frameworks"] == []
     assert summary["providers_without_verified_credentials"] == []
+
+    from agent_learning import optimize
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "agent_integration": 1.0,
+    }
 
 
 def test_sdk_agent_integration_simulation_example_runs(monkeypatch, tmp_path):
