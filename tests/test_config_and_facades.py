@@ -5919,6 +5919,8 @@ def test_sdk_framework_certification_simulation_example_runs(
 
     actions_path = tmp_path / "sdk-framework-certification-actions.json"
     actions_md_path = tmp_path / "sdk-framework-certification-actions.md"
+    actions_junit_path = tmp_path / "sdk-framework-certification-actions.junit.xml"
+    actions_sarif_path = tmp_path / "sdk-framework-certification-actions.sarif.json"
     assert main([
         "actions",
         str(output_path),
@@ -5926,6 +5928,10 @@ def test_sdk_framework_certification_simulation_example_runs(
         "rerun_framework_certification",
         "--output",
         str(actions_path),
+        "--junit",
+        str(actions_junit_path),
+        "--sarif",
+        str(actions_sarif_path),
         "--markdown",
         str(actions_md_path),
     ]) == 0
@@ -5933,6 +5939,16 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert action_payload["kind"] == "agent-learning.actions.v1"
     assert action_payload["summary"]["action_count"] == 1
     assert action_payload["actions"][0]["id"] == "rerun_framework_certification"
+    assert set(action_payload["outputs_written"]) == {
+        str(actions_path.resolve()),
+        str(actions_junit_path.resolve()),
+        str(actions_sarif_path.resolve()),
+        str(actions_md_path.resolve()),
+    }
+    assert "failures=\"0\"" in actions_junit_path.read_text(encoding="utf-8")
+    assert json.loads(actions_sarif_path.read_text(encoding="utf-8"))["runs"][0][
+        "results"
+    ] == []
     action_markdown = actions_md_path.read_text(encoding="utf-8")
     assert "## Actions" in action_markdown
     assert "rerun_framework_certification" in action_markdown
@@ -5940,6 +5956,8 @@ def test_sdk_framework_certification_simulation_example_runs(
     action_run_dir = tmp_path / "sdk-framework-certification-action-run"
     action_run_path = tmp_path / "sdk-framework-certification-action-run.json"
     action_run_md_path = tmp_path / "sdk-framework-certification-action-run.md"
+    action_run_junit_path = tmp_path / "sdk-framework-certification-action-run.junit.xml"
+    action_run_sarif_path = tmp_path / "sdk-framework-certification-action-run.sarif.json"
     assert main([
         "action-run",
         str(output_path),
@@ -5951,6 +5969,10 @@ def test_sdk_framework_certification_simulation_example_runs(
         str(action_run_path),
         "--markdown",
         str(action_run_md_path),
+        "--junit",
+        str(action_run_junit_path),
+        "--sarif",
+        str(action_run_sarif_path),
     ]) == 0
     action_run = json.loads(action_run_path.read_text(encoding="utf-8"))
     assert action_run["kind"] == "agent-learning.action-run.v1"
@@ -5958,6 +5980,14 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert action_run["summary"]["command_exit_code"] == 0
     assert action_run["summary"]["action_id"] == "rerun_framework_certification"
     assert action_run["summary"]["output_completion_rate"] == pytest.approx(1.0)
+    assert action_run["summary"]["stdout_bytes"] >= 0
+    assert action_run["summary"]["stderr_bytes"] >= 0
+    assert set(action_run["logs"]) == {
+        "stdout",
+        "stderr",
+        "stdout_bytes",
+        "stderr_bytes",
+    }
     assert action_run["command_args"][:2] == ["agent-learn", "run"]
     assert {
         Path(item["path"]).name
@@ -5969,7 +5999,19 @@ def test_sdk_framework_certification_simulation_example_runs(
         "framework-certification-rerun.sarif.json",
         "framework-certification-rerun.md",
     }
-    assert "## Outputs" in action_run_md_path.read_text(encoding="utf-8")
+    assert {
+        str(action_run_path.resolve()),
+        str(action_run_junit_path.resolve()),
+        str(action_run_sarif_path.resolve()),
+        str(action_run_md_path.resolve()),
+    } <= set(action_run["outputs_written"])
+    assert "failures=\"0\"" in action_run_junit_path.read_text(encoding="utf-8")
+    assert json.loads(action_run_sarif_path.read_text(encoding="utf-8"))["runs"][0][
+        "results"
+    ] == []
+    action_run_markdown = action_run_md_path.read_text(encoding="utf-8")
+    assert "## Outputs" in action_run_markdown
+    assert "## Logs" in action_run_markdown
 
     suite_action_run_dir = tmp_path / "sdk-framework-certification-suite-action-run"
     suite_child_output_path = tmp_path / "sdk-framework-certification-suite-child.json"
@@ -6153,6 +6195,12 @@ def test_sdk_framework_certification_simulation_example_runs(
     action_cli_markdown_path = tmp_path / (
         "sdk-framework-certification-action-cli-result.md"
     )
+    action_cli_junit_path = tmp_path / (
+        "sdk-framework-certification-action-cli-result.junit.xml"
+    )
+    action_cli_sarif_path = tmp_path / (
+        "sdk-framework-certification-action-cli-result.sarif.json"
+    )
     action_cli_suite_path = tmp_path / (
         "sdk-framework-certification-action-cli-suite.json"
     )
@@ -6177,12 +6225,24 @@ def test_sdk_framework_certification_simulation_example_runs(
         str(action_cli_output_path),
         "--markdown",
         str(action_cli_markdown_path),
+        "--junit",
+        str(action_cli_junit_path),
+        "--sarif",
+        str(action_cli_sarif_path),
     ]) == 0
     action_cli = json.loads(action_cli_output_path.read_text(encoding="utf-8"))
     assert action_cli["kind"] == "agent-learning.suite-optimization.v1"
     assert action_cli["status"] == "passed"
     assert action_cli["artifact_action_plan"]["selected_action_id"] == (
         "rerun_framework_certification"
+    )
+    assert str(action_cli_junit_path.resolve()) in action_cli["outputs_written"]
+    assert str(action_cli_sarif_path.resolve()) in action_cli["outputs_written"]
+    assert "failures=\"0\"" in action_cli_junit_path.read_text(encoding="utf-8")
+    action_cli_sarif = json.loads(action_cli_sarif_path.read_text(encoding="utf-8"))
+    assert all(
+        result["level"] != "error"
+        for result in action_cli_sarif["runs"][0]["results"]
     )
     action_cli_suite = json.loads(action_cli_suite_path.read_text(encoding="utf-8"))
     assert action_cli_suite["metadata"]["scope_filters"]["source_card_paths"] == [

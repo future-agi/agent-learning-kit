@@ -190,11 +190,12 @@ any saved run/report/optimization artifact. `agent-learn action-run <artifact>
 `agent_learning.actions.run_action()` execute one selected CLI action without
 shelling out, rewrite relative action output paths into the requested `--cwd`,
 and return an `agent-learning.action-run.v1` artifact that records the command,
-exit code, declared outputs, and generated files. Suites can include the same
-loop with `{"command": "action-run", "path": "...artifact.json",
-"action_id": "..."}` jobs, so CI can run a saved artifact, inspect the
-recommended next action, execute it, and keep the action-run result inside one
-`agent-learning.suite.v1` artifact.
+exit code, captured stdout/stderr logs, declared outputs, and generated files.
+`actions` and `action-run` both write JSON/JUnit/SARIF/Markdown outputs for CI.
+Suites can include the same loop with `{"command": "action-run", "path":
+"...artifact.json", "action_id": "..."}` jobs, so CI can run a saved artifact,
+inspect the recommended next action, execute it, and keep the action-run result
+inside one `agent-learning.suite.v1` artifact.
 `optimize.build_artifact_action_optimization_manifest()` and
 `optimize.optimize_artifact_actions()` turn the same action catalog into an
 AgentOptimizer-backed suite search over `jobs.0`. `agent-learn action-optimize
@@ -203,10 +204,11 @@ target-layer, and subcommand filters, optional generated suite output, and
 normal JSON/JUnit/SARIF/Markdown result outputs. CLI or SDK users can let the
 optimizer choose between report, rerun, replay, repair, or follow-up
 optimization actions from a real artifact trajectory and still get child
-JSON/Markdown logs for the selected `action-run`. Suite optimization artifacts
-and reports also include an `artifact_action_plan` card with the selected
-action, candidate score lineage, output completion, evidence depth, generated
-files, and the selection reason for Future AGI UI/API rendering.
+JSON/JUnit/SARIF/Markdown outputs plus captured logs for the selected
+`action-run`. Suite optimization artifacts and reports also include an
+`artifact_action_plan` card with the selected action, candidate score lineage,
+output completion, evidence depth, generated files, and the selection reason for
+Future AGI UI/API rendering.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,

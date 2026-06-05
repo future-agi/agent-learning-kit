@@ -241,6 +241,18 @@ def _actions(args: Sequence[str]) -> int:
         help="Write Markdown action catalog to this path.",
     )
     parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write JUnit XML action catalog status output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 action catalog findings output.",
+    )
+    parser.add_argument(
         "--name",
         default=None,
         help="Override the action catalog artifact name.",
@@ -253,7 +265,7 @@ def _actions(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import actions
+        from agent_learning import actions, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn actions", exc)
 
@@ -270,17 +282,14 @@ def _actions(args: Sequence[str]) -> int:
         print(f"agent-learn actions: {exc}", file=sys.stderr)
         return 1
 
-    written = _write_json_outputs(
+    written = _write_action_outputs(
         payload,
-        _as_list(parsed.output),
-        base_dir=artifact_path.parent,
+        parsed,
+        artifact_path,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=lambda item, *, source_path: actions.render_markdown(item),
     )
-    for value in _as_list(parsed.markdown):
-        path = _resolve_output_path(str(value), artifact_path.parent)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(actions.render_markdown(payload), encoding="utf-8")
-        written.append(str(path))
-    payload["outputs_written"] = written
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
@@ -332,6 +341,18 @@ def _action_run(args: Sequence[str]) -> int:
         help="Write Markdown action-run result to this path.",
     )
     parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write JUnit XML action-run status output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 action-run findings output.",
+    )
+    parser.add_argument(
         "--name",
         default=None,
         help="Override the action-run artifact name.",
@@ -344,7 +365,7 @@ def _action_run(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        from agent_learning import actions
+        from agent_learning import actions, simulate
     except Exception as exc:
         return _vendored_import_failed("agent-learn action-run", exc)
 
@@ -364,17 +385,16 @@ def _action_run(args: Sequence[str]) -> int:
         print(f"agent-learn action-run: {exc}", file=sys.stderr)
         return 1
 
-    written = _write_json_outputs(
+    written = _write_action_outputs(
         payload,
-        _as_list(parsed.output),
-        base_dir=artifact_path.parent,
+        parsed,
+        artifact_path,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=lambda item, *, source_path: actions.render_action_run_markdown(
+            item
+        ),
     )
-    for value in _as_list(parsed.markdown):
-        path = _resolve_output_path(str(value), artifact_path.parent)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(actions.render_action_run_markdown(payload), encoding="utf-8")
-        written.append(str(path))
-    payload["outputs_written"].extend(path for path in written if path not in payload["outputs_written"])
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
@@ -1477,6 +1497,16 @@ def _write_result_outputs(
     render_markdown: Any,
 ) -> List[str]:
     output_paths = _result_output_paths(suite, args, suite_path.parent)
+    planned = [
+        str(path)
+        for key in ("json", "junit", "sarif", "markdown")
+        for path in output_paths[key]
+    ]
+    existing_outputs = list(payload.get("outputs_written") or [])
+    payload["outputs_written"] = [
+        *existing_outputs,
+        *[path for path in planned if path not in existing_outputs],
+    ]
     written: List[str] = []
     for path in output_paths["json"]:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1496,6 +1526,49 @@ def _write_result_outputs(
     for path in output_paths["markdown"]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render_markdown(payload, source_path=suite_path), encoding="utf-8")
+        written.append(str(path))
+    return written
+
+
+def _write_action_outputs(
+    payload: Dict[str, Any],
+    args: argparse.Namespace,
+    source_path: Path,
+    *,
+    render_junit: Any,
+    render_sarif: Any,
+    render_markdown: Any,
+) -> List[str]:
+    output_paths = _result_output_paths({}, args, source_path.parent)
+    planned = [
+        str(path)
+        for key in ("json", "junit", "sarif", "markdown")
+        for path in output_paths[key]
+    ]
+    existing_outputs = list(payload.get("outputs_written") or [])
+    payload["outputs_written"] = [
+        *existing_outputs,
+        *[path for path in planned if path not in existing_outputs],
+    ]
+    written: List[str] = []
+    for path in output_paths["json"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        written.append(str(path))
+    for path in output_paths["junit"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_junit(payload), encoding="utf-8")
+        written.append(str(path))
+    for path in output_paths["sarif"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_sarif(payload, manifest_path=source_path), encoding="utf-8")
+        written.append(str(path))
+    for path in output_paths["markdown"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_markdown(payload, source_path=source_path), encoding="utf-8")
         written.append(str(path))
     return written
 

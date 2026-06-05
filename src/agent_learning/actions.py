@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -88,8 +90,16 @@ def run_action(
     command_args = _absolutize_output_args(command_args, run_cwd)
     output_records = _command_output_records(command_args, run_cwd)
     exit_code = 0
+    logs = {"stdout": "", "stderr": "", "stdout_bytes": 0, "stderr_bytes": 0}
     if not dry_run:
-        exit_code = _dispatch_action_command(command_args, cwd=run_cwd)
+        dispatch = _dispatch_action_command(command_args, cwd=run_cwd)
+        exit_code = int(dispatch["exit_code"])
+        logs = {
+            "stdout": str(dispatch.get("stdout") or ""),
+            "stderr": str(dispatch.get("stderr") or ""),
+            "stdout_bytes": int(dispatch.get("stdout_bytes") or 0),
+            "stderr_bytes": int(dispatch.get("stderr_bytes") or 0),
+        }
         output_records = _command_output_records(command_args, run_cwd)
     status = "passed" if exit_code == 0 else "failed"
     outputs_written_count = sum(
@@ -113,6 +123,7 @@ def run_action(
         "action": action,
         "command": " ".join(_shell_token(arg) for arg in command_args),
         "command_args": command_args,
+        "logs": logs,
         "outputs": output_records,
         "outputs_written": [
             str(item["path"])
@@ -125,6 +136,8 @@ def run_action(
             "source_card_path": action.get("source_card_path"),
             "requires_input": bool(action.get("inputs")),
             "command_exit_code": exit_code,
+            "stdout_bytes": logs["stdout_bytes"],
+            "stderr_bytes": logs["stderr_bytes"],
             "output_count": output_count,
             "outputs_written_count": outputs_written_count,
             "output_completion_rate": output_completion_rate,
@@ -261,6 +274,7 @@ def render_action_run_markdown(result: Mapping[str, Any]) -> str:
     if len(rows) == 2:
         rows.append("| No declared outputs |  |")
     summary = dict(result.get("summary") or {})
+    logs = dict(result.get("logs") or {})
     lines = [
         f"# {_md_text(result.get('name') or 'action-run')}",
         "",
@@ -274,7 +288,18 @@ def render_action_run_markdown(result: Mapping[str, Any]) -> str:
         "",
         *rows,
         "",
+        "## Logs",
+        "",
+        f"- Stdout bytes: {_md_text(summary.get('stdout_bytes') or 0)}",
+        f"- Stderr bytes: {_md_text(summary.get('stderr_bytes') or 0)}",
+        "",
     ]
+    stdout = str(logs.get("stdout") or "")
+    stderr = str(logs.get("stderr") or "")
+    if stdout:
+        lines.extend(["### Stdout", "", "```text", stdout.rstrip(), "```", ""])
+    if stderr:
+        lines.extend(["### Stderr", "", "```text", stderr.rstrip(), "```", ""])
     return "\n".join(lines)
 
 
@@ -323,18 +348,30 @@ def _resolved_command_args(
     return resolved
 
 
-def _dispatch_action_command(command_args: list[str], *, cwd: Path) -> int:
+def _dispatch_action_command(command_args: list[str], *, cwd: Path) -> dict[str, Any]:
     previous_cwd = Path.cwd()
     cwd.mkdir(parents=True, exist_ok=True)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
     try:
         os.chdir(cwd)
-        if command_args[0] == "agent-learn":
-            cli = importlib.import_module("agent_learning.cli")
-        else:
-            cli = importlib.import_module("fi.simulate.cli")
-        return int(cli.main(command_args[1:]))
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            if command_args[0] == "agent-learn":
+                cli = importlib.import_module("agent_learning.cli")
+            else:
+                cli = importlib.import_module("fi.simulate.cli")
+            exit_code = int(cli.main(command_args[1:]))
     finally:
         os.chdir(previous_cwd)
+    stdout_text = stdout.getvalue()
+    stderr_text = stderr.getvalue()
+    return {
+        "exit_code": exit_code,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+        "stdout_bytes": len(stdout_text.encode("utf-8")),
+        "stderr_bytes": len(stderr_text.encode("utf-8")),
+    }
 
 
 def _command_output_records(command_args: list[str], cwd: Path) -> list[dict[str, Any]]:
