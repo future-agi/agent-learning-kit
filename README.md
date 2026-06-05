@@ -381,6 +381,10 @@ AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \
   artifacts/sdk-multi-agent-optimization.json
 
+AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_multi_agent_framework_handoff_optimization.py \
+  artifacts/sdk-multi-agent-framework-handoff-optimization.json
+
 AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_realtime_voice_optimization.py \
   artifacts/sdk-realtime-voice-optimization.json
@@ -498,6 +502,11 @@ CrewAI, and LangGraph. It uses `AgentEvolutionOptimizer` through
 `agent-learn optimize` and verifies handoffs, review, reconciliation, source
 grounding, checkpoint lineage, and framework transcript quality from local JSONL
 fixtures.
+The same harness is available from Python through
+`optimize.build_multi_agent_framework_handoff_optimization_manifest()` and
+`examples/sdk_multi_agent_framework_handoff_optimization.py`, which search
+weak, partial, and complete framework-transcript plus multi-agent-room bundles
+with the evolutionary optimizer.
 
 The `optimizer_governance_optimization.json` example optimizes an optimizer
 society trace, making multi-interaction search auditable. It verifies roles,

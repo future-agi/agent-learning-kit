@@ -94,6 +94,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
     assert optimize.optimize_framework_adapter is not None
+    assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
+    assert optimize.optimize_multi_agent_framework_handoff is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -948,6 +950,129 @@ def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
     assert best_history["metrics"]["multi_agent_coordination_quality"] == (
         pytest.approx(1.0)
     )
+
+
+def test_sdk_multi_agent_framework_handoff_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_EXAMPLE_KEY",
+        "real-local-sdk-multi-agent-framework-handoff-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_multi_agent_framework_handoff_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_framework_handoff_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "framework",
+        "multi_agent",
+        "orchestration",
+        "memory",
+    ]
+    assert manifest["optimization"]["optimizer"]["algorithm"] == "evolution"
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    best_candidate = candidates[2]
+    assert [environment["type"] for environment in best_candidate] == [
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "multi_agent_room",
+    ]
+    assert [
+        environment["data"]["framework"]
+        for environment in best_candidate
+        if environment["type"] == "framework_trace"
+    ] == ["openai_agents", "autogen", "crewai", "langgraph"]
+    quality = manifest["evaluation"]["agent_report"]["config"][
+        "framework_transcript_quality"
+    ]
+    assert quality["required_sessions"] == ["refund-thread-2026"]
+    assert quality["required_checkpoint_ids"] == ["ckpt-retrieval"]
+
+    output_path = tmp_path / "sdk-multi-agent-framework-handoff-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.99
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["optimization"]["optimizer_trace"]["optimizer"] == (
+        "AgentEvolutionOptimizer"
+    )
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "framework_transcript_quality",
+        "multi_agent_trace_coverage",
+        "multi_agent_coordination_quality",
+        "task_completion",
+        "trajectory_score",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"framework_trace", "multi_agent"}
+    transcript_metric = next(
+        metric
+        for metric in best_history["report"]["results"][0]["evaluation"][
+            "agent_report"
+        ]["metrics"]
+        if metric["name"] == "framework_transcript_quality"
+    )
+    observed = transcript_metric["details"]["observed"]
+    assert set(observed["speaker_sequence"]) >= {
+        "triage_agent",
+        "retrieval_agent",
+        "critic_agent",
+        "planner",
+        "researcher",
+        "reviewer",
+        "manager",
+        "analyst",
+        "qa",
+        "retriever",
+        "critic",
+    }
+    assert {handoff["to"] for handoff in observed["handoffs"]} >= {
+        "retrieval_agent",
+        "critic_agent",
+        "researcher",
+        "analyst",
+        "retriever",
+    }
+    assert "ckpt_retrieval" in {
+        checkpoint["id"].replace("-", "_")
+        for checkpoint in observed["checkpoints"]
+    }
+    assert observed["errors"] == []
 
 
 def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):

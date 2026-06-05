@@ -1795,6 +1795,131 @@ def optimize_autonomous_redteam_task_world(
     )
 
 
+def build_multi_agent_framework_handoff_optimization_manifest(
+    *,
+    name: str,
+    handoff_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a multi-agent framework handoff optimization manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+
+    environment_candidates = (
+        [
+            [_multi_agent_framework_handoff_environment(item) for item in candidate]
+            for candidate in handoff_candidates
+        ]
+        if handoff_candidates is not None
+        else [
+            _seed_multi_agent_framework_handoff_candidate(),
+            _partial_multi_agent_framework_handoff_candidate(),
+            _verified_multi_agent_framework_handoff_candidate(),
+        ]
+    )
+    if not environment_candidates:
+        raise ValueError("handoff_candidates must contain at least one candidate")
+    for index, candidate in enumerate(environment_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"handoff_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": environment_candidates}
+    agent_config = copy.deepcopy(
+        dict(agent or _default_multi_agent_framework_handoff_agent())
+    )
+    max_turns_value = int(
+        max_turns
+        if max_turns is not None
+        else _max_agent_response_count([agent_config], min_turns)
+    )
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_multi_agent_framework_handoff_evaluation_config()
+    )
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(
+            dict(scenario or _default_multi_agent_framework_handoff_scenario(name))
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": ["framework", "multi_agent", "orchestration", "memory"],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_multi_agent_framework_handoff_optimization_manifest"
+                    ),
+                    "task_kind": "multi_agent_framework_handoff",
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_multi_agent_framework_handoff_optimizer())
+            ),
+        },
+    }
+
+
+def optimize_multi_agent_framework_handoff(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute a multi-agent framework handoff optimization."""
+
+    manifest = build_multi_agent_framework_handoff_optimization_manifest(
+        **manifest_kwargs
+    )
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -3242,6 +3367,446 @@ def _default_autonomous_redteam_task_world_evaluation_config() -> dict[str, Any]
                     "steps": {"type": "array"},
                 },
             },
+        },
+    }
+
+
+_MULTI_AGENT_FRAMEWORK_HANDOFF_FRAMEWORKS = (
+    "openai_agents",
+    "autogen",
+    "crewai",
+    "langgraph",
+)
+
+
+def _default_multi_agent_framework_handoff_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Ira", "role": "multi-agent-platform-owner"},
+                "situation": (
+                    "Optimize captured cross-framework multi-agent handoff "
+                    "evidence before routing real agent teams through the "
+                    "same harness."
+                ),
+                "outcome": (
+                    "The selected candidate proves framework transcript "
+                    "quality, handoff contracts, critic review, reconciliation, "
+                    "source grounding, and checkpoint lineage."
+                ),
+            }
+        ],
+    }
+
+
+def _default_multi_agent_framework_handoff_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "Inspecting captured framework transcript evidence before "
+                    "optimizing the handoff harness."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "framework_status",
+                        "name": "framework_trace_status",
+                        "arguments": {},
+                    }
+                ],
+            },
+            {
+                "content": (
+                    "Replaying the platform handoff contract through the "
+                    "simulated multi-agent room."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "handoff_retriever",
+                        "name": "handoff",
+                        "arguments": {
+                            "to": "retriever",
+                            "task": (
+                                "Collect the current refund policy evidence "
+                                "and preserve citation context."
+                            ),
+                            "reason": (
+                                "source grounding is required before final "
+                                "answer"
+                            ),
+                            "context": {
+                                "doc_id": "doc_refund_2026",
+                                "world_state": "refund_case_open",
+                            },
+                        },
+                    },
+                    {
+                        "id": "review_critic",
+                        "name": "request_review",
+                        "arguments": {
+                            "reviewer": "critic",
+                            "target": "framework handoff and refund policy answer",
+                            "criteria": [
+                                "policy",
+                                "handoff",
+                                "checkpoint",
+                                "source",
+                            ],
+                            "context": {
+                                "frameworks": list(
+                                    _MULTI_AGENT_FRAMEWORK_HANDOFF_FRAMEWORKS
+                                )
+                            },
+                        },
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "The optimized candidate proves cross-framework handoff "
+                    "quality across OpenAI Agents, AutoGen, CrewAI, and "
+                    "LangGraph with review, reconciliation, source grounding, "
+                    "and checkpoint lineage: openai_agents transcript includes "
+                    "retrieval handoff and critic review; autogen transcript "
+                    "includes planner/researcher/reviewer group handoff; "
+                    "crewai transcript includes manager/analyst/qa crew "
+                    "handoff; langgraph transcript includes graph checkpoint "
+                    "lineage and critic reconciliation; multi-agent room "
+                    "handoff contract, review, and reconciliation all pass."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "reconcile_answer",
+                        "name": "reconcile",
+                        "arguments": {
+                            "summary": (
+                                "approved refund answer reconciled across "
+                                "captured framework handoffs"
+                            ),
+                            "decision": "ship complete cross-framework handoff harness",
+                            "accepted_source": "critic",
+                            "conflicts": [],
+                            "participants": ["planner", "retriever", "critic"],
+                        },
+                    },
+                    {
+                        "id": "room_status_after",
+                        "name": "room_status",
+                        "arguments": {},
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _multi_agent_framework_handoff_environment(
+    item: Mapping[str, Any],
+) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"framework_trace", "multi_agent_room"}:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("framework_trace") is not None:
+        return {"type": "framework_trace", "data": copied["framework_trace"]}
+    if copied.get("multi_agent_room") is not None:
+        return {"type": "multi_agent_room", "data": copied["multi_agent_room"]}
+    if copied.get("participants") is not None or copied.get("handoff_contracts") is not None:
+        return {"type": "multi_agent_room", "data": copied}
+    return {"type": "framework_trace", "data": copied}
+
+
+def _seed_multi_agent_framework_handoff_candidate() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "framework_trace",
+            "data": {
+                "framework": "openai_agents",
+                "events": [
+                    {
+                        "id": "weak-oa-001",
+                        "type": "message",
+                        "method": "message",
+                        "speaker": "triage_agent",
+                        "message_text": (
+                            "Weak seed has only one message and no handoff."
+                        ),
+                    }
+                ],
+            },
+        }
+    ]
+
+
+def _partial_multi_agent_framework_handoff_candidate() -> list[dict[str, Any]]:
+    return [
+        _framework_trace_fixture_environment("openai_agents"),
+        _framework_trace_fixture_environment("autogen"),
+    ]
+
+
+def _verified_multi_agent_framework_handoff_candidate() -> list[dict[str, Any]]:
+    return [
+        *[
+            _framework_trace_fixture_environment(framework)
+            for framework in _MULTI_AGENT_FRAMEWORK_HANDOFF_FRAMEWORKS
+        ],
+        _multi_agent_handoff_room_environment(),
+    ]
+
+
+def _framework_trace_fixture_environment(framework: str) -> dict[str, Any]:
+    return {
+        "type": "framework_trace",
+        "data": {
+            "framework": framework,
+            "export_source": f"fixtures/framework_transcripts/{framework}.jsonl",
+        },
+    }
+
+
+def _multi_agent_handoff_room_environment() -> dict[str, Any]:
+    return {
+        "type": "multi_agent_room",
+        "data": {
+            "participants": {
+                "planner": {"name": "planner", "role": "triage planner"},
+                "retriever": {
+                    "name": "retriever",
+                    "role": "policy evidence retriever",
+                },
+                "critic": {"name": "critic", "role": "grounding reviewer"},
+            },
+            "handoff_contracts": {
+                "retriever": {
+                    "requires_reason": True,
+                    "required_context_keys": ["doc_id", "world_state"],
+                    "required_task_terms": ["refund policy"],
+                    "forbidden_terms": ["guess"],
+                }
+            },
+            "expected_handoffs": [
+                {
+                    "to": "retriever",
+                    "task_contains": "current refund policy",
+                    "reason_contains": "source grounding",
+                    "context_keys": ["doc_id", "world_state"],
+                    "contract_matched": True,
+                }
+            ],
+            "expected_reviews": [
+                {
+                    "reviewer": "critic",
+                    "target_contains": "framework handoff",
+                    "criteria": ["policy", "handoff", "checkpoint", "source"],
+                }
+            ],
+            "expected_reconciliation": {
+                "summary_contains": "approved refund answer",
+                "accepted_source": "critic",
+                "conflicts_empty": True,
+            },
+            "state": {"case": {"status": "resolved"}},
+            "allow_unknown_roles": False,
+        },
+    }
+
+
+def _default_multi_agent_framework_handoff_optimizer() -> dict[str, Any]:
+    return {
+        "algorithm": "evolution",
+        "population_size": 4,
+        "generations": 1,
+        "elite_count": 1,
+        "mutation_rate": 0.0,
+        "crossover_rate": 0.0,
+        "max_mutations_per_candidate": 1,
+        "tournament_size": 2,
+        "seed": 20260605,
+        "include_seed": True,
+        "auto_diagnose": False,
+        "target_score": 0.98,
+        "mutation_library": False,
+    }
+
+
+def _default_multi_agent_framework_handoff_evaluation_config() -> dict[str, Any]:
+    frameworks = list(_MULTI_AGENT_FRAMEWORK_HANDOFF_FRAMEWORKS)
+    required_tools = [
+        "framework_trace_status",
+        "room_status",
+        "handoff",
+        "request_review",
+        "reconcile",
+    ]
+    return {
+        "task_description": (
+            "Optimize the captured multi-agent framework handoff harness."
+        ),
+        "expected_result": (
+            "The optimized candidate proves cross-framework handoff quality "
+            "across OpenAI Agents, AutoGen, CrewAI, and LangGraph with review, "
+            "reconciliation, source grounding, and checkpoint lineage."
+        ),
+        "required_tools": required_tools,
+        "available_tools": required_tools,
+        "success_criteria": [
+            "openai_agents transcript includes retrieval handoff and critic review",
+            "autogen transcript includes planner/researcher/reviewer group handoff",
+            "crewai transcript includes manager/analyst/qa crew handoff",
+            "langgraph transcript includes graph checkpoint lineage and critic reconciliation",
+            "multi-agent room handoff contract, review, and reconciliation all pass",
+        ],
+        "required_framework_trace": [
+            "framework_trace",
+            *frameworks,
+            "handoff",
+            "tool",
+            "state",
+        ],
+        "framework_transcript_quality": {
+            "required_event_methods": [
+                "message",
+                "handoff",
+                "tool_call",
+                "task_started",
+                "crew_handoff",
+                "task_completed",
+                "checkpoints",
+                "values",
+                "final_answer",
+            ],
+            "required_nodes": [
+                "triage_agent",
+                "retrieval_agent",
+                "critic_agent",
+                "planner",
+                "researcher",
+                "reviewer",
+                "manager",
+                "analyst",
+                "qa",
+                "retriever",
+                "critic",
+            ],
+            "required_subgraphs": ["refund_subgraph"],
+            "expected_tool_sequence": [
+                "retrieve_documents",
+                "read_document",
+                "cite_sources",
+                "retrieve_documents",
+            ],
+            "required_speakers": [
+                "triage_agent",
+                "retrieval_agent",
+                "critic_agent",
+                "planner",
+                "researcher",
+                "reviewer",
+                "manager",
+                "analyst",
+                "qa",
+                "retriever",
+                "critic",
+            ],
+            "min_turns": 18,
+            "expected_messages": [
+                {
+                    "speaker": "triage_agent",
+                    "contains": ["current policy grounding"],
+                },
+                {"speaker": "qa", "contains": ["approved refund answer"]},
+                {"speaker": "critic", "contains": ["completed graph"]},
+            ],
+            "expected_handoffs": [
+                {
+                    "from": "triage_agent",
+                    "to": "retrieval_agent",
+                    "task_contains": ["current refund policy"],
+                },
+                {
+                    "from": "retrieval_agent",
+                    "to": "critic_agent",
+                    "task_contains": ["Review"],
+                },
+                {
+                    "from": "planner",
+                    "to": "researcher",
+                    "task_contains": ["refund policy evidence"],
+                },
+                {
+                    "from": "manager",
+                    "to": "analyst",
+                    "task_contains": ["refund eligibility"],
+                },
+                {
+                    "from": "planner",
+                    "to": "retriever",
+                    "task_contains": ["current refund policy"],
+                },
+            ],
+            "required_tools_by_speaker": {
+                "retrieval_agent": ["retrieve_documents"],
+                "researcher": ["read_document"],
+                "analyst": ["cite_sources"],
+                "retriever": ["retrieve_documents"],
+            },
+            "output_contains": ["approved refund answer"],
+            "require_termination": True,
+            "termination_contains": ["completed"],
+            "expected_state": {
+                "case": {"status": "resolved"},
+                "handoff": {"reviewed": True},
+            },
+            "min_checkpoints": 1,
+            "required_checkpoint_ids": ["ckpt-retrieval"],
+            "required_checkpoint_namespaces": ["refund_subgraph"],
+            "required_sessions": ["refund-thread-2026"],
+            "expected_checkpoint_state": {
+                "case": {"status": "resolved"},
+                "handoff": {"reviewed": True},
+            },
+            "require_checkpoint_parent": True,
+            "allow_errors": False,
+        },
+        "required_multi_agent_trace": [
+            "trace",
+            "role",
+            "handoff",
+            "review_requested",
+            "reconciled",
+        ],
+        "required_multi_agent_roles": ["planner", "retriever", "critic"],
+        "expected_multi_agent_handoffs": [
+            {
+                "to": "retriever",
+                "task_contains": "current refund policy",
+                "reason_contains": "source grounding",
+                "context_keys": ["doc_id", "world_state"],
+                "contract_matched": True,
+            }
+        ],
+        "expected_multi_agent_reviews": [
+            {
+                "reviewer": "critic",
+                "target_contains": "framework handoff",
+                "criteria": ["policy", "handoff", "checkpoint", "source"],
+            }
+        ],
+        "expected_multi_agent_reconciliation": {
+            "summary_contains": "approved refund answer",
+            "accepted_source": "critic",
+            "conflicts_empty": True,
+        },
+        "metric_weights": {
+            "framework_trace_coverage": 3.0,
+            "framework_transcript_quality": 10.0,
+            "multi_agent_trace_coverage": 4.0,
+            "multi_agent_coordination_quality": 7.0,
+            "tool_selection_accuracy": 2.0,
+            "task_completion": 2.0,
         },
     }
 
@@ -6517,6 +7082,7 @@ __all__ = [
     "build_framework_certification_optimization_manifest",
     "build_framework_optimization_manifest",
     "build_memory_optimization_manifest",
+    "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_orchestration_optimization_manifest",
     "build_realtime_optimization_manifest",
@@ -6535,6 +7101,7 @@ __all__ = [
     "optimize_manifest",
     "optimize_manifest_file",
     "optimize_memory_layer",
+    "optimize_multi_agent_framework_handoff",
     "optimize_multi_agent_coordination",
     "optimize_orchestration_stack",
     "optimize_realtime_stack",
