@@ -3986,6 +3986,24 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     assert strategy["executed_cell_count"] == 4
     assert strategy["coverage_ratio"] == pytest.approx(1.0)
     assert strategy["execution_ratio"] == pytest.approx(1.0)
+    assert {
+        item["surface"]: (
+            item["status"],
+            item["coverage_ratio"],
+            item["execution_ratio"],
+            item["gap_rate"],
+        )
+        for item in strategy["surface_matrix"]
+    } == {
+        "tool": ("covered", 1.0, 1.0, 0.0),
+        "memory": ("covered", 1.0, 1.0, 0.0),
+    }
+    assert strategy["adaptive_surface_risk"]["status"] == "covered"
+    assert strategy["adaptive_surface_risk"]["adaptive_gap_rate"] == pytest.approx(
+        0.0,
+    )
+    assert strategy["adaptive_surface_risk"]["blind_spot_surfaces"] == []
+    assert "https://arxiv.org/abs/2605.30454" in strategy["research_sources"]
     assert {item["attack_type"] for item in strategy["strategy_families"]} == {
         "prompt_injection",
         "credential_exfiltration",
@@ -4291,6 +4309,20 @@ def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path)
     assert strategy["executed_cell_count"] == 25
     assert strategy["coverage_ratio"] == pytest.approx(1.0)
     assert strategy["execution_ratio"] == pytest.approx(1.0)
+    assert strategy["adaptive_surface_risk"]["status"] == "covered"
+    assert strategy["adaptive_surface_risk"]["adaptive_gap_rate"] == pytest.approx(
+        0.0,
+    )
+    assert {
+        item["surface"]: item["strategy_cell_count"]
+        for item in strategy["surface_matrix"]
+    } == {
+        "instruction": 5,
+        "tool": 5,
+        "memory": 5,
+        "retrieval": 5,
+        "environment": 5,
+    }
     assert {item["attack_type"] for item in strategy["strategy_families"]} == set(attacks)
 
     state = result["report"]["results"][0]["metadata"]["environment_state"]
@@ -7700,6 +7732,26 @@ def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
     assert strategy["strategy_cell_count"] == 4
     assert strategy["status"] == "needs_attention"
     assert strategy["coverage_ratio"] == pytest.approx(0.0)
+    assert {
+        item["surface"]: (
+            item["status"],
+            item["coverage_ratio"],
+            item["execution_ratio"],
+            item["gap_rate"],
+        )
+        for item in strategy["surface_matrix"]
+    } == {
+        "tool": ("needs_attention", 0.0, 0.0, 1.0),
+        "memory": ("needs_attention", 0.0, 0.0, 1.0),
+    }
+    assert strategy["adaptive_surface_risk"]["status"] == "needs_attention"
+    assert strategy["adaptive_surface_risk"]["adaptive_gap_rate"] == pytest.approx(
+        1.0,
+    )
+    assert strategy["adaptive_surface_risk"]["blind_spot_surfaces"] == [
+        "tool",
+        "memory",
+    ]
     assert set(strategy["risk_focus"]) >= {
         "instruction_integrity",
         "secret_protection",
@@ -7718,6 +7770,8 @@ def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
     direct_markdown = markdown_path.read_text(encoding="utf-8")
     assert "agent-learning-redteam" in direct_markdown
     assert "## Red Team Strategy" in direct_markdown
+    assert "### Surface Matrix" in direct_markdown
+    assert "Adaptive gap rate" in direct_markdown
     assert "### Strategy Actions" in direct_markdown
 
     report_exit_code = main([
@@ -7734,6 +7788,10 @@ def test_agent_learn_redteam_runs_unified_command_and_writes_artifacts(
     assert "redteam_strategy" in report["summary"]["sections"]
     report_strategy = report["report"]["redteam_strategy"]
     assert report_strategy["strategy_cell_count"] == 4
+    assert report_strategy["adaptive_surface_risk"]["blind_spot_surfaces"] == [
+        "tool",
+        "memory",
+    ]
     assert {
         "report_redteam_strategy",
         "rerun_redteam_campaign",

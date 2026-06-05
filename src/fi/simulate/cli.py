@@ -3508,10 +3508,26 @@ def _redteam_strategy_card(
     executed_cell_count = _int_or_none(campaign_summary.get("executed_cell_count"))
     coverage_ratio = _bounded_ratio(coverage_cell_count, strategy_cell_count)
     execution_ratio = _bounded_ratio(executed_cell_count, strategy_cell_count)
+    surface_matrix = _redteam_surface_matrix(
+        attack_types=attack_types,
+        surfaces=surfaces,
+        channels=channels,
+        providers=providers,
+        coverage_cell_count=coverage_cell_count,
+        executed_cell_count=executed_cell_count,
+        missing_coverage_cells=set(missing_coverage_cells),
+        missing_executed_cells=set(missing_executed_cells),
+    )
+    adaptive_surface_risk = _redteam_adaptive_surface_risk(surface_matrix)
     error_findings = int(_float_or_none(redteam.get("error_finding_count")) or 0)
     status = (
         "needs_attention"
-        if error_findings or missing_cells or (coverage_ratio is not None and coverage_ratio < 1.0)
+        if (
+            error_findings
+            or missing_cells
+            or (coverage_ratio is not None and coverage_ratio < 1.0)
+            or adaptive_surface_risk.get("status") == "needs_attention"
+        )
         else "covered"
     )
 
@@ -3532,6 +3548,8 @@ def _redteam_strategy_card(
         "executed_cell_count": executed_cell_count,
         "coverage_ratio": coverage_ratio if coverage_ratio is not None else 1.0,
         "execution_ratio": execution_ratio,
+        "surface_matrix": surface_matrix,
+        "adaptive_surface_risk": adaptive_surface_risk,
         "missing_coverage_cells": missing_coverage_cells,
         "missing_executed_cells": missing_executed_cells,
         "risk_focus": _redteam_risk_focus(attack_types),
@@ -3556,6 +3574,8 @@ def _redteam_strategy_card(
             "https://arxiv.org/abs/2602.03117",
             "https://arxiv.org/abs/2604.04989",
             "https://arxiv.org/abs/2605.17075",
+            "https://arxiv.org/abs/2605.30454",
+            "https://arxiv.org/abs/2606.02240",
         ],
     }
     if source_manifest_path is not None:
@@ -3644,6 +3664,149 @@ def _redteam_strategy_families(
             }
         )
     return families
+
+
+def _redteam_surface_matrix(
+    *,
+    attack_types: Sequence[str],
+    surfaces: Sequence[str],
+    channels: Sequence[str],
+    providers: Sequence[str],
+    coverage_cell_count: Optional[int],
+    executed_cell_count: Optional[int],
+    missing_coverage_cells: set[str],
+    missing_executed_cells: set[str],
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    all_cells = _redteam_strategy_cells(
+        attack_types=attack_types,
+        surfaces=surfaces,
+        channels=channels,
+        providers=providers,
+    )
+    total_cell_count = len(all_cells)
+    global_coverage_ratio = _bounded_ratio(coverage_cell_count, total_cell_count)
+    global_execution_ratio = _bounded_ratio(executed_cell_count, total_cell_count)
+    for surface in surfaces:
+        cells = _redteam_strategy_cells(
+            attack_types=attack_types,
+            surfaces=[surface],
+            channels=channels,
+            providers=providers,
+        )
+        missing_coverage = [cell for cell in cells if cell in missing_coverage_cells]
+        missing_executed = [cell for cell in cells if cell in missing_executed_cells]
+        cell_count = len(cells)
+        surface_coverage_cell_count = _redteam_surface_observed_cell_count(
+            cell_count=cell_count,
+            missing_cells=missing_coverage,
+            global_ratio=global_coverage_ratio,
+        )
+        surface_executed_cell_count = _redteam_surface_observed_cell_count(
+            cell_count=cell_count,
+            missing_cells=missing_executed,
+            global_ratio=global_execution_ratio,
+        )
+        coverage_ratio = _bounded_ratio(surface_coverage_cell_count, cell_count)
+        execution_ratio = _bounded_ratio(surface_executed_cell_count, cell_count)
+        gap_rate = round(
+            1.0 - min(coverage_ratio or 0.0, execution_ratio or 0.0),
+            4,
+        )
+        records.append(
+            {
+                "surface": surface,
+                "status": "needs_attention" if gap_rate > 0.0 else "covered",
+                "strategy_cell_count": cell_count,
+                "coverage_cell_count": surface_coverage_cell_count,
+                "executed_cell_count": surface_executed_cell_count,
+                "coverage_ratio": coverage_ratio if coverage_ratio is not None else 0.0,
+                "execution_ratio": execution_ratio if execution_ratio is not None else 0.0,
+                "gap_rate": gap_rate,
+                "missing_coverage_cell_count": (
+                    cell_count - surface_coverage_cell_count
+                ),
+                "missing_executed_cell_count": (
+                    cell_count - surface_executed_cell_count
+                ),
+                "missing_coverage_cells": missing_coverage,
+                "missing_executed_cells": missing_executed,
+                "inferred_from_global_counts": bool(
+                    not missing_coverage
+                    and not missing_executed
+                    and (
+                        (global_coverage_ratio is not None and global_coverage_ratio < 1.0)
+                        or (global_execution_ratio is not None and global_execution_ratio < 1.0)
+                    )
+                ),
+                "risk_focus": _redteam_risk_focus(attack_types),
+            }
+        )
+    return records
+
+
+def _redteam_surface_observed_cell_count(
+    *,
+    cell_count: int,
+    missing_cells: Sequence[str],
+    global_ratio: Optional[float],
+) -> int:
+    if missing_cells:
+        return max(0, cell_count - len(missing_cells))
+    if global_ratio is not None:
+        return max(0, min(cell_count, round(cell_count * global_ratio)))
+    return cell_count
+
+
+def _redteam_adaptive_surface_risk(
+    surface_matrix: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    surfaces = [dict(item) for item in surface_matrix if isinstance(item, Mapping)]
+    if not surfaces:
+        return {
+            "method": "worst_surface_gap",
+            "status": "unknown",
+            "surface_count": 0,
+            "blind_spot_surfaces": [],
+            "adaptive_gap_rate": None,
+            "minimum_surface_coverage_ratio": None,
+            "minimum_surface_execution_ratio": None,
+        }
+    blind_spots = [
+        str(item.get("surface"))
+        for item in surfaces
+        if _float_or_none(item.get("gap_rate")) and _float_or_none(item.get("gap_rate")) > 0.0
+    ]
+    adaptive_gap_rate = max(
+        _float_or_none(item.get("gap_rate")) or 0.0 for item in surfaces
+    )
+    minimum_coverage = min(
+        _float_or_none(item.get("coverage_ratio")) or 0.0 for item in surfaces
+    )
+    minimum_execution = min(
+        _float_or_none(item.get("execution_ratio")) or 0.0 for item in surfaces
+    )
+    worst_surface = max(
+        surfaces,
+        key=lambda item: _float_or_none(item.get("gap_rate")) or 0.0,
+    )
+    return {
+        "method": "worst_surface_gap",
+        "status": "needs_attention" if blind_spots else "covered",
+        "surface_count": len(surfaces),
+        "blind_spot_surfaces": blind_spots,
+        "worst_surface": worst_surface.get("surface"),
+        "adaptive_gap_rate": round(adaptive_gap_rate, 4),
+        "minimum_surface_coverage_ratio": round(minimum_coverage, 4),
+        "minimum_surface_execution_ratio": round(minimum_execution, 4),
+        "interpretation": (
+            "Worst-surface coverage/execution gap, not model attack success rate."
+        ),
+        "research_sources": [
+            "https://arxiv.org/abs/2605.30454",
+            "https://arxiv.org/abs/2606.02240",
+        ],
+    }
 
 
 def _redteam_strategy_edges(
@@ -3811,6 +3974,22 @@ def _redteam_strategy_markdown(
         for item in _coerce_list(card.get("actions"))
         if isinstance(item, Mapping) and item.get("kind") == "cli"
     ]
+    surface_rows = [
+        [
+            item.get("surface"),
+            item.get("status"),
+            item.get("strategy_cell_count"),
+            item.get("coverage_ratio"),
+            item.get("execution_ratio"),
+            item.get("gap_rate"),
+            item.get("missing_coverage_cell_count"),
+            item.get("missing_executed_cell_count"),
+        ]
+        for item in _coerce_list(card.get("surface_matrix"))
+        if isinstance(item, Mapping)
+    ]
+    adaptive = card.get("adaptive_surface_risk")
+    adaptive = adaptive if isinstance(adaptive, Mapping) else {}
     lines = [
         "## Red Team Strategy",
         "",
@@ -3823,6 +4002,10 @@ def _redteam_strategy_markdown(
                 ("Executed cells", card.get("executed_cell_count")),
                 ("Coverage ratio", card.get("coverage_ratio")),
                 ("Execution ratio", card.get("execution_ratio")),
+                ("Adaptive surface status", adaptive.get("status")),
+                ("Worst surface", adaptive.get("worst_surface")),
+                ("Adaptive gap rate", adaptive.get("adaptive_gap_rate")),
+                ("Blind spot surfaces", _join_values(adaptive.get("blind_spot_surfaces"))),
                 ("Risk focus", _join_values(card.get("risk_focus"))),
                 ("Research sources", _join_values(card.get("research_sources"))),
             ]
@@ -3849,6 +4032,27 @@ def _redteam_strategy_markdown(
                 *_markdown_table(
                     ["Action", "Label", "Status", "Command"],
                     action_rows,
+                ),
+                "",
+            ]
+        )
+    if surface_rows:
+        lines.extend(
+            [
+                "### Surface Matrix",
+                "",
+                *_markdown_table(
+                    [
+                        "Surface",
+                        "Status",
+                        "Cells",
+                        "Coverage",
+                        "Execution",
+                        "Gap",
+                        "Missing coverage",
+                        "Missing execution",
+                    ],
+                    surface_rows,
                 ),
                 "",
             ]

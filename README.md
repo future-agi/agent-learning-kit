@@ -163,9 +163,12 @@ diagnosis to a reproducible next step without inventing ad hoc commands.
 Red-team run artifacts and reports also include a `redteam_strategy` card plus
 `## Red Team Strategy` Markdown. The card maps attack types, surfaces,
 channels, providers, frameworks, campaign coverage, and risk focus into a
-strategy-response matrix, then emits report, rerun, and optimization commands
-so promptfoo-style CLI users and SDK callers can move from a red-team result to
-the next campaign or optimization step from the same artifact.
+strategy-response matrix. It also reports per-surface coverage/execution,
+blind-spot surfaces, and a worst-surface adaptive gap rate so aggregate
+campaign pass/fail cannot hide an untested tool, memory, retrieval, or
+environment surface. The card then emits report, rerun, and optimization
+commands so promptfoo-style CLI users and SDK callers can move from a red-team
+result to the next campaign or optimization step from the same artifact.
 World/framework/memory/multi-agent orchestration artifacts and reports include
 an `orchestration_strategy` card plus `## Orchestration Strategy` Markdown. The
 card normalizes runtime evidence into world, framework, retrieval, memory,
@@ -743,7 +746,9 @@ The same generated-matrix workflow is available from Python through
 `optimize.build_redteam_autogen_optimization_manifest()` and
 `examples/sdk_redteam_autogen_optimization.py`, which starts from a tool-only
 prompt-injection seed and searches the tool-plus-memory prompt-injection plus
-credential-exfiltration campaign.
+credential-exfiltration campaign. Red-team reports expose `surface_matrix` and
+`adaptive_surface_risk` fields so CI and the Future AGI UI can show which
+attack surface is still blind even when aggregate campaign quality is high.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of
