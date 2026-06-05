@@ -2320,6 +2320,9 @@ def _report_result(
     redteam_strategy = _redteam_strategy_card(source, source_path=source_path)
     if redteam_strategy is not None:
         report_payload["redteam_strategy"] = redteam_strategy
+    orchestration_strategy = _orchestration_strategy_card(source, source_path=source_path)
+    if orchestration_strategy is not None:
+        report_payload["orchestration_strategy"] = orchestration_strategy
     harness_diagnosis = _harness_diagnosis_card(source, source_path=source_path)
     if harness_diagnosis is not None:
         report_payload["harness_diagnosis"] = harness_diagnosis
@@ -3295,6 +3298,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("redteam")
     if _has_redteam_strategy_card(result, source_path=source_path):
         sections.append("redteam_strategy")
+    if _has_orchestration_strategy_card(result, source_path=source_path):
+        sections.append("orchestration_strategy")
     if result.get("compare") is not None:
         sections.append("compare")
     if result.get("optimization") is not None:
@@ -3344,6 +3349,8 @@ def _result_markdown(
         lines.extend(_redteam_markdown(result))
     if "redteam_strategy" in sections:
         lines.extend(_redteam_strategy_markdown(result, source_path=source_path))
+    if "orchestration_strategy" in sections:
+        lines.extend(_orchestration_strategy_markdown(result, source_path=source_path))
     if "compare" in sections:
         lines.extend(_compare_markdown(result))
     if "optimization" in sections:
@@ -3827,6 +3834,707 @@ def _redteam_strategy_markdown(
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Status", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+_ORCHESTRATION_STATE_KEYS = {
+    "world_orchestration_replay",
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent",
+    "multi_agent_room",
+}
+
+_ORCHESTRATION_METRICS = {
+    "orchestration_trace_coverage",
+    "orchestration_flow_quality",
+    "world_contract_quality",
+    "world_contract_coverage",
+    "framework_trace_coverage",
+    "retrieval_context_quality",
+    "retrieval_memory_attribution",
+    "agent_memory_lineage_coverage",
+    "agent_memory_lineage_quality",
+    "multi_agent_trace_coverage",
+    "multi_agent_coordination_quality",
+}
+
+
+def _has_orchestration_strategy_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("orchestration_strategy"), Mapping):
+        return True
+    return _orchestration_strategy_card(result, source_path=source_path) is not None
+
+
+def _orchestration_strategy_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    existing = result.get("orchestration_strategy")
+    if not isinstance(existing, Mapping):
+        report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+        existing = report.get("orchestration_strategy") if isinstance(report, Mapping) else None
+    existing_card = copy.deepcopy(dict(existing)) if isinstance(existing, Mapping) else {}
+    existing_manifest_path = existing_card.get("source_manifest_path")
+    if source_manifest_path is None and existing_manifest_path not in (None, ""):
+        source_manifest_path = Path(str(existing_manifest_path))
+    if source_manifest_path is None:
+        source_manifest_path = _orchestration_source_manifest_path(result)
+
+    state = _orchestration_environment_state(result)
+    metrics = {
+        name: value
+        for name, value in _result_metric_averages(result).items()
+        if name in _ORCHESTRATION_METRICS
+    }
+    if not state and not metrics and not existing_card:
+        return None
+
+    normalized_state = _normalize_orchestration_state(state)
+    layer_records = _orchestration_layer_records(normalized_state, metrics)
+    if not layer_records:
+        return None
+    graph = _orchestration_graph(normalized_state)
+    weak_layers = [
+        str(record["layer"])
+        for record in layer_records
+        if record.get("status") == "needs_attention"
+    ]
+    weak_metrics = [
+        name
+        for name, value in sorted(metrics.items())
+        if float(value) < 1.0
+    ]
+    status = "needs_attention" if weak_layers or weak_metrics else "covered"
+    card = {
+        "kind": "orchestration_strategy_map",
+        "taxonomy": "runtime_graph_world_framework_memory_multi_agent",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "layers": layer_records,
+        "present_layers": [
+            str(record["layer"])
+            for record in layer_records
+            if record.get("present")
+        ],
+        "weak_layers": weak_layers,
+        "weak_metrics": weak_metrics,
+        "metrics": metrics,
+        "graph": graph,
+        "graph_summary": {
+            "node_count": len(graph["nodes"]),
+            "edge_count": len(graph["edges"]),
+            "step_count": len(graph["steps"]),
+            "route_count": len(graph["routes"]),
+        },
+        "world": _orchestration_world_summary(normalized_state.get("world_contract")),
+        "framework": _orchestration_framework_summary(normalized_state.get("framework_trace")),
+        "retrieval": _orchestration_retrieval_summary(normalized_state.get("retrieval_memory")),
+        "memory": _orchestration_memory_summary(normalized_state.get("agent_memory_lineage")),
+        "multi_agent": _orchestration_multi_agent_summary(normalized_state.get("multi_agent")),
+        "research_sources": [
+            "https://arxiv.org/abs/2605.02801",
+            "https://arxiv.org/abs/2605.22566",
+            "https://arxiv.org/abs/2602.16873",
+            "https://arxiv.org/abs/2603.19896",
+        ],
+    }
+    if source_manifest_path is not None:
+        card["source_manifest_path"] = str(source_manifest_path)
+    card["actions"] = _orchestration_strategy_actions(
+        source_path=source_path,
+        source_manifest_path=source_manifest_path,
+        source_kind=str(result.get("kind") or ""),
+        status=status,
+        weak_layers=weak_layers,
+    )
+    return card
+
+
+def _orchestration_source_manifest_path(result: Mapping[str, Any]) -> Optional[Path]:
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        source_manifest_path = optimization.get("source_manifest_path")
+        if source_manifest_path not in (None, ""):
+            return Path(str(source_manifest_path))
+    return None
+
+
+def _orchestration_environment_state(result: Mapping[str, Any]) -> Dict[str, Any]:
+    state = result.get("state")
+    if isinstance(state, Mapping) and _has_orchestration_state(state):
+        return dict(state)
+    report_state = _environment_state_from_report(result.get("report"))
+    if _has_orchestration_state(report_state):
+        return report_state
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        best_history = _best_optimization_history_item(optimization)
+        if best_history is not None:
+            history_state = _environment_state_from_report(best_history.get("report"))
+            if _has_orchestration_state(history_state):
+                return history_state
+        best_config = optimization.get("best_config")
+        if isinstance(best_config, Mapping):
+            config_state = _orchestration_state_from_environments(
+                dict(best_config.get("simulation") or {}).get("environments")
+            )
+            if _has_orchestration_state(config_state):
+                return config_state
+    return {}
+
+
+def _environment_state_from_report(report: Any) -> Dict[str, Any]:
+    if not isinstance(report, Mapping):
+        return {}
+    for item in _coerce_list(report.get("results")):
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        environment_state = metadata.get("environment_state")
+        if isinstance(environment_state, Mapping):
+            return dict(environment_state)
+    return {}
+
+
+def _best_optimization_history_item(
+    optimization: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    history = [
+        dict(item)
+        for item in _coerce_list(optimization.get("history"))
+        if isinstance(item, Mapping)
+    ]
+    if not history:
+        return None
+    return max(history, key=lambda item: float(item.get("score") or 0.0))
+
+
+def _orchestration_state_from_environments(environments: Any) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for item in _coerce_list(environments):
+        if not isinstance(item, Mapping):
+            continue
+        environment_type = str(item.get("type") or item.get("kind") or "").lower().replace("-", "_")
+        data = item.get("data")
+        if not isinstance(data, Mapping):
+            data = {
+                key: value
+                for key, value in item.items()
+                if key not in {"type", "kind"}
+            }
+        if environment_type == "multi_agent_room":
+            state["multi_agent"] = dict(data)
+        elif environment_type in _ORCHESTRATION_STATE_KEYS:
+            state[environment_type] = dict(data)
+    return state
+
+
+def _has_orchestration_state(state: Mapping[str, Any]) -> bool:
+    return any(key in state and state.get(key) not in (None, {}, []) for key in _ORCHESTRATION_STATE_KEYS)
+
+
+def _normalize_orchestration_state(state: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized = {
+        key: dict(value)
+        for key, value in state.items()
+        if isinstance(value, Mapping)
+    }
+    replay = normalized.get("world_orchestration_replay")
+    if isinstance(replay, Mapping):
+        world_contract = replay.get("world_contract")
+        if isinstance(world_contract, Mapping) and "world_contract" not in normalized:
+            normalized["world_contract"] = dict(world_contract)
+        trace = replay.get("orchestration_trace")
+        if isinstance(trace, Mapping):
+            normalized.setdefault("orchestration_trace", dict(trace))
+    if "multi_agent_room" in normalized and "multi_agent" not in normalized:
+        normalized["multi_agent"] = dict(normalized["multi_agent_room"])
+    return normalized
+
+
+def _orchestration_layer_records(
+    state: Mapping[str, Any],
+    metrics: Mapping[str, float],
+) -> List[Dict[str, Any]]:
+    specs = [
+        ("world", "world_contract", ["world_contract_quality", "world_contract_coverage"]),
+        ("framework", "framework_trace", ["framework_trace_coverage"]),
+        ("retrieval", "retrieval_memory", ["retrieval_context_quality", "retrieval_memory_attribution"]),
+        ("memory", "agent_memory_lineage", ["agent_memory_lineage_coverage", "agent_memory_lineage_quality"]),
+        ("multi_agent", "multi_agent", ["multi_agent_trace_coverage", "multi_agent_coordination_quality"]),
+        ("orchestration", "orchestration_trace", ["orchestration_trace_coverage", "orchestration_flow_quality"]),
+    ]
+    records: List[Dict[str, Any]] = []
+    for layer, state_key, metric_names in specs:
+        present = state_key in state and state.get(state_key) not in (None, {}, [])
+        layer_metrics = {
+            name: metrics[name]
+            for name in metric_names
+            if name in metrics
+        }
+        metric_values = list(layer_metrics.values())
+        verified = present or any(value >= 1.0 for value in metric_values)
+        weak_metric_names = [
+            name
+            for name, value in layer_metrics.items()
+            if float(value) < 1.0
+        ]
+        status = "covered" if verified and not weak_metric_names else "needs_attention"
+        records.append(
+            {
+                "layer": layer,
+                "state_key": state_key,
+                "present": present,
+                "status": status,
+                "metrics": layer_metrics,
+                "weak_metrics": weak_metric_names,
+                "signals": _orchestration_layer_signals(layer, state.get(state_key)),
+            }
+        )
+    return records
+
+
+def _orchestration_layer_signals(layer: str, payload: Any) -> List[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    if layer == "world":
+        summary = dict(payload.get("summary") or {})
+        blocking_gaps = (
+            summary.get("blocking_gaps")
+            if isinstance(summary.get("blocking_gaps"), list)
+            else []
+        )
+        return _unique_strings([
+            summary.get("terminal_status"),
+            *blocking_gaps,
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "framework":
+        return _unique_strings([
+            payload.get("framework"),
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "retrieval":
+        return _unique_strings([
+            *[
+                item.get("id")
+                for item in _coerce_list(payload.get("documents"))
+                if isinstance(item, Mapping)
+            ],
+        ])
+    if layer == "memory":
+        summary = dict(payload.get("summary") or {})
+        operation_types = (
+            summary.get("operation_types")
+            if isinstance(summary.get("operation_types"), list)
+            else []
+        )
+        return _unique_strings([
+            *operation_types,
+            *_coerce_list(payload.get("signals")),
+        ])
+    if layer == "multi_agent":
+        return _unique_strings(_multi_agent_roles(payload))
+    return _unique_strings(_coerce_list(payload.get("signals")))
+
+
+def _orchestration_graph(state: Mapping[str, Any]) -> Dict[str, Any]:
+    nodes: Dict[str, Dict[str, Any]] = {}
+    edges: Dict[str, Dict[str, Any]] = {}
+    steps: List[Dict[str, Any]] = []
+    routes: List[Dict[str, Any]] = []
+
+    def add_node(node_id: Any, layer: str, label: Optional[Any] = None) -> None:
+        text = str(node_id or "").strip()
+        if not text:
+            return
+        key = f"{layer}:{_slug(text, default=layer)}"
+        nodes.setdefault(key, {"id": key, "layer": layer, "label": str(label or text)})
+
+    def add_edge(source: Any, target: Any, edge_type: str, layer: str) -> None:
+        if source in (None, "") or target in (None, ""):
+            return
+        source_id = f"{layer}:{_slug(source, default=layer)}"
+        target_id = f"{layer}:{_slug(target, default=layer)}"
+        key = f"{source_id}->{target_id}:{edge_type}"
+        edges.setdefault(
+            key,
+            {"from": source_id, "to": target_id, "type": edge_type, "layer": layer},
+        )
+
+    framework = state.get("framework_trace")
+    if isinstance(framework, Mapping):
+        add_node(framework.get("framework") or "framework", "framework", framework.get("framework"))
+        for span in _coerce_list(framework.get("spans")):
+            if isinstance(span, Mapping):
+                add_node(span.get("id") or span.get("name"), "framework")
+                parent = span.get("parent_id") or span.get("parent")
+                if parent:
+                    add_edge(parent, span.get("id") or span.get("name"), "span", "framework")
+
+    world = state.get("world_contract")
+    if isinstance(world, Mapping):
+        for transition in _coerce_list(world.get("transitions")):
+            if isinstance(transition, Mapping):
+                add_node(transition.get("id") or transition.get("action"), "world")
+        for record in _coerce_list(world.get("transition_log")):
+            if isinstance(record, Mapping):
+                add_node(record.get("transition_id") or record.get("id") or record.get("action"), "world")
+                steps.append({"layer": "world", **dict(record)})
+
+    retrieval = state.get("retrieval_memory")
+    if isinstance(retrieval, Mapping):
+        for document in _coerce_list(retrieval.get("documents")):
+            if isinstance(document, Mapping):
+                add_node(document.get("id"), "retrieval")
+
+    memory = state.get("agent_memory_lineage")
+    if isinstance(memory, Mapping):
+        for store in _coerce_list(memory.get("stores")):
+            if isinstance(store, Mapping):
+                add_node(store.get("id") or store.get("name"), "memory")
+        for item in _coerce_list(memory.get("lineage")):
+            if isinstance(item, Mapping):
+                add_edge(item.get("from"), item.get("to"), str(item.get("type") or "lineage"), "memory")
+        for operation in _coerce_list(memory.get("operations")):
+            if isinstance(operation, Mapping):
+                steps.append({"layer": "memory", **dict(operation)})
+
+    multi_agent = state.get("multi_agent")
+    if isinstance(multi_agent, Mapping):
+        for role in _multi_agent_roles(multi_agent):
+            add_node(role, "multi_agent")
+        for handoff in _coerce_list(multi_agent.get("handoffs") or multi_agent.get("expected_handoffs")):
+            if isinstance(handoff, Mapping):
+                source = handoff.get("from") or handoff.get("source")
+                target = handoff.get("to") or handoff.get("target")
+                add_edge(source, target, "handoff", "multi_agent")
+                routes.append({"layer": "multi_agent", **dict(handoff)})
+
+    trace = state.get("orchestration_trace")
+    if isinstance(trace, Mapping):
+        for node in _coerce_list(trace.get("nodes")):
+            if isinstance(node, Mapping):
+                add_node(node.get("id") or node.get("name"), "orchestration")
+            else:
+                add_node(node, "orchestration")
+        for edge in _coerce_list(trace.get("edges")):
+            if isinstance(edge, Mapping):
+                source = edge.get("from") or edge.get("source")
+                target = edge.get("to") or edge.get("target")
+                add_edge(source, target, str(edge.get("type") or "route"), "orchestration")
+                routes.append({"layer": "orchestration", **dict(edge)})
+        for step in _coerce_list(trace.get("steps") or trace.get("events")):
+            if isinstance(step, Mapping):
+                steps.append({"layer": "orchestration", **dict(step)})
+
+    return {
+        "nodes": list(nodes.values())[:100],
+        "edges": list(edges.values())[:100],
+        "steps": steps[:50],
+        "routes": routes[:50],
+    }
+
+
+def _orchestration_world_summary(world: Any) -> Dict[str, Any]:
+    if not isinstance(world, Mapping):
+        return {}
+    summary = dict(world.get("summary") or {})
+    return {
+        "terminal_status": summary.get("terminal_status"),
+        "transition_count": summary.get("transition_count"),
+        "completed_transition_count": summary.get("completed_transition_count"),
+        "required_transition_count": summary.get("required_transition_count"),
+        "violation_count": summary.get("violation_count"),
+    }
+
+
+def _orchestration_framework_summary(framework: Any) -> Dict[str, Any]:
+    if not isinstance(framework, Mapping):
+        return {}
+    conformance = framework.get("adapter_conformance")
+    return {
+        "framework": framework.get("framework"),
+        "span_count": len(_coerce_list(framework.get("spans"))),
+        "event_count": len(_coerce_list(framework.get("events"))),
+        "adapter_conformance_passed": (
+            dict(conformance).get("passed")
+            if isinstance(conformance, Mapping)
+            else None
+        ),
+    }
+
+
+def _orchestration_retrieval_summary(retrieval: Any) -> Dict[str, Any]:
+    if not isinstance(retrieval, Mapping):
+        return {}
+    documents = [
+        dict(item)
+        for item in _coerce_list(retrieval.get("documents"))
+        if isinstance(item, Mapping)
+    ]
+    return {
+        "document_count": len(documents),
+        "current_document_count": sum(1 for item in documents if item.get("current") is True),
+        "citation_count": len(_coerce_list(retrieval.get("citations"))),
+        "query_count": len(_coerce_list(retrieval.get("queries"))),
+    }
+
+
+def _orchestration_memory_summary(memory: Any) -> Dict[str, Any]:
+    if not isinstance(memory, Mapping):
+        return {}
+    summary = dict(memory.get("summary") or {})
+    return {
+        "operation_count": summary.get("operation_count"),
+        "operation_types": summary.get("operation_types"),
+        "blocking_gap_count": summary.get("blocking_gap_count"),
+        "has_tenant_isolation": summary.get("has_tenant_isolation"),
+        "has_retention_policy": summary.get("has_retention_policy"),
+        "has_deletion_policy": summary.get("has_deletion_policy"),
+    }
+
+
+def _orchestration_multi_agent_summary(multi_agent: Any) -> Dict[str, Any]:
+    if not isinstance(multi_agent, Mapping):
+        return {}
+    return {
+        "roles": _multi_agent_roles(multi_agent),
+        "handoff_count": len(_coerce_list(multi_agent.get("handoffs") or multi_agent.get("expected_handoffs"))),
+        "review_count": len(_coerce_list(multi_agent.get("reviews") or multi_agent.get("expected_reviews"))),
+        "reconciliation_count": len(_coerce_list(multi_agent.get("reconciliations"))),
+    }
+
+
+def _multi_agent_roles(multi_agent: Mapping[str, Any]) -> List[str]:
+    participants = multi_agent.get("participants")
+    roles = multi_agent.get("roles")
+    values: List[Any] = []
+    if isinstance(participants, Mapping):
+        values.extend(participants.keys())
+    else:
+        values.extend(_coerce_list(participants))
+    if isinstance(roles, Mapping):
+        values.extend(roles.keys())
+    else:
+        values.extend(_coerce_list(roles))
+    return _unique_strings(values)
+
+
+def _orchestration_strategy_actions(
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path],
+    source_kind: str,
+    status: str,
+    weak_layers: Sequence[str],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_orchestration_strategy",
+            "Report Orchestration Strategy",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/orchestration-strategy-report.json",
+                "--markdown",
+                "artifacts/orchestration-strategy-report.md",
+            ],
+        )
+    ]
+    is_optimization = (
+        "optimization" in source_kind
+        or "optimize" in source_kind
+        or source_path.name.endswith("optimization.json")
+    )
+    if source_manifest_path is not None and is_optimization:
+        actions.append(
+            _cli_action(
+                "rerun_orchestration_optimization",
+                "Rerun Orchestration Optimization",
+                [
+                    "agent-learn",
+                    "optimize",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/orchestration-optimization-rerun.json",
+                    "--junit",
+                    "artifacts/orchestration-optimization-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/orchestration-optimization-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/orchestration-optimization-rerun.md",
+                ],
+            )
+        )
+    elif source_manifest_path is not None:
+        actions.append(
+            _cli_action(
+                "rerun_orchestration_simulation",
+                "Rerun Orchestration Simulation",
+                [
+                    "agent-learn",
+                    "run",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/orchestration-rerun.json",
+                    "--junit",
+                    "artifacts/orchestration-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/orchestration-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/orchestration-rerun.md",
+                ],
+            )
+        )
+    else:
+        actions.append(
+            _cli_action(
+                "rerun_orchestration_simulation",
+                "Rerun Orchestration Simulation",
+                [
+                    "agent-learn",
+                    "run",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/orchestration-rerun.json",
+                    "--junit",
+                    "artifacts/orchestration-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/orchestration-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/orchestration-rerun.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "Orchestration run manifest",
+                        "default": "manifests/orchestration.json",
+                    }
+                ],
+            )
+        )
+    actions.append(
+        _cli_action(
+            "optimize_orchestration_strategy",
+            "Optimize Orchestration Strategy",
+            [
+                "agent-learn",
+                "optimize",
+                "{{optimization_manifest_path}}",
+                "--output",
+                "artifacts/orchestration-strategy-optimization.json",
+                "--markdown",
+                "artifacts/orchestration-strategy-optimization.md",
+            ],
+            inputs=[
+                {
+                    "name": "optimization_manifest_path",
+                    "label": "Orchestration optimization manifest",
+                    "default": "manifests/orchestration-optimization.json",
+                }
+            ],
+        )
+    )
+    for action in actions:
+        action["strategy_status"] = status
+        action["target_layers"] = list(weak_layers)
+    return actions
+
+
+def _orchestration_strategy_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = report.get("orchestration_strategy") if isinstance(report, Mapping) else None
+    if not isinstance(card, Mapping):
+        card = _orchestration_strategy_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+    layer_rows = [
+        [
+            item.get("layer"),
+            item.get("status"),
+            item.get("present"),
+            _join_values(item.get("weak_metrics")),
+            _join_values(item.get("signals")),
+        ]
+        for item in _coerce_list(card.get("layers"))
+        if isinstance(item, Mapping)
+    ]
+    graph_summary = dict(card.get("graph_summary") or {})
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("strategy_status"),
+            _join_values(item.get("target_layers")),
+            item.get("command"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping) and item.get("kind") == "cli"
+    ]
+    lines = [
+        "## Orchestration Strategy",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Status", card.get("status")),
+                ("Present layers", _join_values(card.get("present_layers"))),
+                ("Weak layers", _join_values(card.get("weak_layers"))),
+                ("Weak metrics", _join_values(card.get("weak_metrics"))),
+                ("Nodes", graph_summary.get("node_count")),
+                ("Edges", graph_summary.get("edge_count")),
+                ("Steps", graph_summary.get("step_count")),
+                ("Routes", graph_summary.get("route_count")),
+                ("Research sources", _join_values(card.get("research_sources"))),
+            ]
+        ),
+        "",
+    ]
+    if layer_rows:
+        lines.extend(
+            [
+                "### Orchestration Layers",
+                "",
+                *_markdown_table(
+                    ["Layer", "Status", "Present", "Weak metrics", "Signals"],
+                    layer_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Orchestration Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Status", "Target layers", "Command"],
                     action_rows,
                 ),
                 "",

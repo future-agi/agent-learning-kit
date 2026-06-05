@@ -477,12 +477,20 @@ async def run_manifest(
 
     report = await run_local_text_manifest(runtime_manifest, manifest_path)
     evaluation = evaluate_manifest_report(runtime_manifest, report)
-    return cli._run_result(
+    result = cli._run_result(
         manifest=runtime_manifest,
         report=report,
         evaluation=evaluation,
         duration_seconds=round(time.time() - started, 4),
     )
+    orchestration_strategy = cli._orchestration_strategy_card(
+        result,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if orchestration_strategy is not None:
+        result["orchestration_strategy"] = orchestration_strategy
+    return result
 
 
 async def redteam_manifest_file(
@@ -696,6 +704,13 @@ def optimize_manifest(
     if redteam_summary is not None:
         payload["redteam"] = redteam_summary
         payload.setdefault("summary", {})["redteam"] = redteam_summary
+    orchestration_strategy = cli._orchestration_strategy_card(
+        payload,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if orchestration_strategy is not None:
+        payload["orchestration_strategy"] = orchestration_strategy
     return payload
 
 

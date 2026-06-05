@@ -149,6 +149,13 @@ channels, providers, frameworks, campaign coverage, and risk focus into a
 strategy-response matrix, then emits report, rerun, and optimization commands
 so promptfoo-style CLI users and SDK callers can move from a red-team result to
 the next campaign or optimization step from the same artifact.
+World/framework/memory/multi-agent orchestration artifacts and reports include
+an `orchestration_strategy` card plus `## Orchestration Strategy` Markdown. The
+card normalizes runtime evidence into world, framework, retrieval, memory,
+multi-agent, and orchestration layers; summarizes graph nodes, edges, routes,
+and steps; and emits report, rerun, and optimization commands so users can move
+from a selected orchestration stack to the next verified simulation or optimizer
+run.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
 `agent-learn optimize`, `agent-learn optimize-eval`,
@@ -375,6 +382,10 @@ For direct, non-optimizer orchestration simulation,
 `simulate.build_orchestration_stack_run_manifest()` and
 `examples/sdk_orchestration_simulation.py` run a selected world/framework/
 retrieval/memory/multi-agent stack as a normal `agent-learning.run.v1` artifact.
+Both simulation and optimization artifacts expose an `orchestration_strategy`
+report card for Future AGI UI, CLI, SDK, and CI surfaces; run artifacts rerun
+with `agent-learn run`, while optimization artifacts rerun with
+`agent-learn optimize`.
 
 For retrieval and memory layers, pass candidates with `retrieval_memory` and
 `agent_memory_lineage` data. The SDK builds a runnable local manifest that

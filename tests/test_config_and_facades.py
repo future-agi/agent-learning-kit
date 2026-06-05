@@ -1281,6 +1281,33 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     assert lineage_summary["has_deletion_policy"] is True
     assert lineage_summary["blocking_gap_count"] == 0
     assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+    strategy = result["orchestration_strategy"]
+    assert strategy["kind"] == "orchestration_strategy_map"
+    assert strategy["status"] == "covered"
+    assert strategy["present_layers"] == [
+        "world",
+        "framework",
+        "retrieval",
+        "memory",
+        "multi_agent",
+    ]
+    assert strategy["weak_layers"] == []
+    assert strategy["graph_summary"] == {
+        "edge_count": 1,
+        "node_count": 8,
+        "route_count": 0,
+        "step_count": 4,
+    }
+    assert strategy["world"]["terminal_status"] == "success"
+    assert strategy["framework"]["framework"] == "langgraph"
+    assert strategy["retrieval"]["document_count"] == 1
+    assert strategy["memory"]["operation_types"] == ["read", "recall", "write"]
+    assert set(strategy["multi_agent"]["roles"]) == {"planner", "retriever", "critic"}
+    assert {
+        "report_orchestration_strategy",
+        "rerun_orchestration_optimization",
+        "optimize_orchestration_strategy",
+    } <= {action["id"] for action in strategy["actions"]}
 
 
 def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
@@ -1410,6 +1437,8 @@ def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
     generated_manifest_path = output_path.with_suffix(".manifest.json")
     generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
     saved = json.loads(output_path.read_text(encoding="utf-8"))
+    report_path = tmp_path / "sdk-orchestration-report.json"
+    report_markdown_path = tmp_path / "sdk-orchestration-report.md"
 
     assert output_path.exists()
     assert generated_manifest_path.exists()
@@ -1438,6 +1467,48 @@ def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):
     ):
         assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
     assert result["summary"]["metric_averages"]["source_grounding"] >= 0.7
+    strategy = result["orchestration_strategy"]
+    assert strategy["kind"] == "orchestration_strategy_map"
+    assert strategy["status"] == "covered"
+    assert strategy["present_layers"] == [
+        "world",
+        "framework",
+        "retrieval",
+        "memory",
+        "multi_agent",
+    ]
+    assert strategy["graph_summary"]["node_count"] == 8
+    assert strategy["graph_summary"]["step_count"] == 4
+    assert strategy["world"]["terminal_status"] == "success"
+    assert strategy["framework"]["adapter_conformance_passed"] is True
+    assert strategy["memory"]["blocking_gap_count"] == 0
+    assert {
+        "report_orchestration_strategy",
+        "rerun_orchestration_simulation",
+        "optimize_orchestration_strategy",
+    } <= {action["id"] for action in strategy["actions"]}
+    report_exit_code = main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_markdown_path),
+    ])
+    assert report_exit_code == 0
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "orchestration_strategy" in report_payload["summary"]["sections"]
+    report_strategy = report_payload["report"]["orchestration_strategy"]
+    assert report_strategy["status"] == "covered"
+    assert report_strategy["graph_summary"]["node_count"] == 8
+    assert {
+        "report_orchestration_strategy",
+        "rerun_orchestration_simulation",
+        "optimize_orchestration_strategy",
+    } <= {action["id"] for action in report_strategy["actions"]}
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "## Orchestration Strategy" in report_markdown
+    assert "### Orchestration Actions" in report_markdown
 
     report_case = result["report"]["results"][0]
     state = report_case["metadata"]["environment_state"]
