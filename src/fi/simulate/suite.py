@@ -280,6 +280,7 @@ def optimize_eval_suite(
     optimization_result = problem.optimize()
     payload = cli._optimization_result(
         manifest=prepared,
+        manifest_path=suite_path,
         optimization_result=optimization_result,
         threshold=float(optimization.get("threshold", 1.0)),
         duration_seconds=round(time.time() - started, 4),

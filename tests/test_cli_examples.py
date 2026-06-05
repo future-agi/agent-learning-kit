@@ -919,9 +919,15 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     )
 
     output_path = tmp_path / "custom-framework-optimization.json"
+    promotion_path = tmp_path / "custom-framework-optimization-promotion.json"
+    manifest_path = tmp_path / "custom-framework-optimization-regression.json"
+    replay_path = tmp_path / "custom-framework-optimization-replay.json"
     junit_path = tmp_path / "custom-framework-optimization.junit.xml"
     sarif_path = tmp_path / "custom-framework-optimization.sarif.json"
     markdown_path = tmp_path / "custom-framework-optimization.md"
+    replay_junit_path = tmp_path / "custom-framework-optimization-replay.junit.xml"
+    replay_sarif_path = tmp_path / "custom-framework-optimization-replay.sarif.json"
+    replay_markdown_path = tmp_path / "custom-framework-optimization-replay.md"
 
     exit_code = main([
         "optimize",
@@ -943,6 +949,12 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     assert payload["summary"]["optimization_score"] >= 0.95
     assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
     assert "agent" in payload["summary"]["search_paths"]
+    assert payload["optimization"]["source_manifest_path"] == str(
+        EXAMPLES / "custom_framework_optimization.json"
+    )
+    source_manifest = payload["optimization"]["source_manifest"]
+    assert "optimization" not in source_manifest
+    assert source_manifest["agent"]["method"] == "run"
 
     best_agent = payload["optimization"]["best_config"]["agent"]
     assert best_agent["framework"] == "custom_refund_orchestrator"
@@ -978,6 +990,94 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "custom-framework-adapter-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+    exit_code = main([
+        "promote-to-regression",
+        str(output_path),
+        "--output",
+        str(promotion_path),
+        "--manifest",
+        str(manifest_path),
+        "--min-level",
+        "note",
+        "--max-findings",
+        "1",
+        "--required-env",
+        "AGENT_LEARNING_CUSTOM_FRAMEWORK_REGRESSION_KEY",
+    ])
+    assert exit_code == 0
+
+    promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == "optimized_manifest"
+    assert promotion["summary"]["promoted_finding_count"] == 0
+    assert promotion["summary"]["promoted_manifest_count"] == 1
+    assert promotion["summary"]["best_candidate_id"] == payload["summary"][
+        "best_candidate_id"
+    ]
+    assert "agent.method" in promotion["summary"]["search_paths"]
+    assert promotion["summary"]["has_optimizer_trace"] is True
+
+    promoted_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    promoted_agent = promoted_manifest["agent"]
+    assert promoted_agent["method"] == "execute_task"
+    assert promoted_agent["input_mode"] == "dict"
+    assert promoted_agent["target"].endswith(
+        "framework_shims.py:build_custom_refund_orchestrator"
+    )
+    assert Path(promoted_agent["target"].split(":", 1)[0]).is_absolute()
+    assert promoted_manifest["required_env"] == [
+        "AGENT_LEARNING_CUSTOM_FRAMEWORK_REGRESSION_KEY"
+    ]
+    environment_types = {
+        environment["type"]
+        for environment in promoted_manifest["simulation"]["environments"]
+    }
+    assert {"framework_trace", "optimizer_trace"} <= environment_types
+    assert promoted_manifest["metadata"]["regression"]["promotion_kind"] == (
+        "optimized_manifest"
+    )
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_CUSTOM_FRAMEWORK_REGRESSION_KEY",
+        "real-local-custom-framework-regression-key",
+    )
+    exit_code = main([
+        "replay",
+        str(manifest_path),
+        "--output",
+        str(replay_path),
+        "--junit",
+        str(replay_junit_path),
+        "--sarif",
+        str(replay_sarif_path),
+        "--markdown",
+        str(replay_markdown_path),
+    ])
+    assert exit_code == 0
+
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    assert replay["status"] == "passed"
+    assert replay["summary"]["replay_pass_rate"] == pytest.approx(1.0)
+    child = replay["replay"]["manifests"][0]
+    assert child["command"] == "run"
+    assert child["status"] == "passed"
+    replay_metrics = child["summary"]["metric_averages"]
+    assert replay_metrics["framework_runtime_contract"] == pytest.approx(1.0)
+    assert replay_metrics["framework_runtime_coverage"] == pytest.approx(1.0)
+    assert replay_metrics["framework_trace_coverage"] == pytest.approx(1.0)
+
+    assert "failures=\"0\"" in replay_junit_path.read_text(encoding="utf-8")
+    replay_sarif = json.loads(replay_sarif_path.read_text(encoding="utf-8"))
+    assert replay_sarif["version"] == "2.1.0"
+    assert not [
+        result
+        for result in replay_sarif["runs"][0]["results"]
+        if result.get("level") == "error"
+    ]
+    assert "custom-framework-optimization-regression" in replay_markdown_path.read_text(
         encoding="utf-8"
     )
 

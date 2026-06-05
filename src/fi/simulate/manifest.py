@@ -674,6 +674,7 @@ def optimize_manifest(
     result = problem.optimize()
     payload = cli._optimization_result(
         manifest=runtime_manifest,
+        manifest_path=manifest_path,
         optimization_result=result,
         threshold=float(optimization.get("threshold", 0.7)),
         duration_seconds=round(time.time() - started, 4),

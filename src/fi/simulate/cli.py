@@ -3223,6 +3223,40 @@ def _regression_promotion_result(
                 "manifest": persistent_manifest,
                 "duration_seconds": duration_seconds,
             }
+        optimized_manifest = _optimized_manifest_regression_manifest(
+            source=source,
+            source_path=source_path,
+            source_name=source_name,
+            manifest_name=name or f"{source_name}-optimized-regression",
+            required_env=required_env,
+        )
+        if optimized_manifest is not None:
+            optimized_summary = _optimized_manifest_regression_promotion_summary(
+                source=source,
+                manifest=optimized_manifest,
+            )
+            return {
+                "schema_version": CLI_SCHEMA_VERSION,
+                "kind": "agent-simulate.regression_promotion.v1",
+                "name": str(optimized_manifest.get("name") or manifest_name),
+                "status": "passed",
+                "exit_code": 0,
+                "summary": {
+                    "source_name": source_name,
+                    "source_path": str(source_path),
+                    "source_status": source.get("status"),
+                    "source_schema_version": source.get("schema_version"),
+                    "candidate_finding_count": len(promotable),
+                    "promoted_finding_count": 0,
+                    "promoted_manifest_count": 1,
+                    "min_level": min_level,
+                    "max_findings": max_findings,
+                    "promotion_kind": "optimized_manifest",
+                    **optimized_summary,
+                },
+                "manifest": optimized_manifest,
+                "duration_seconds": duration_seconds,
+            }
         raise ManifestError(f"no findings at level {min_level} or above to promote")
     source_redteam = dict(source.get("redteam") or {})
     default_attack_types = _redteam_values(source_redteam, "attacks", "attack_types", "probes") if source_redteam else []
@@ -3808,6 +3842,192 @@ def _persistent_state_regression_promotion_summary(
         "required_attack_types": attack_types,
         "best_profile": _persistent_state_best_profile(environments),
         "source_score": _persistent_state_source_score(source),
+    }
+
+
+def _optimized_manifest_regression_manifest(
+    *,
+    source: Mapping[str, Any],
+    source_path: Path,
+    source_name: str,
+    manifest_name: str,
+    required_env: Sequence[Any],
+) -> Optional[Dict[str, Any]]:
+    optimization = source.get("optimization")
+    if not isinstance(optimization, Mapping):
+        return None
+    best_config = optimization.get("best_config")
+    source_manifest = optimization.get("source_manifest")
+    if not isinstance(best_config, Mapping) or not isinstance(source_manifest, Mapping):
+        return None
+
+    manifest = copy.deepcopy(dict(source_manifest))
+    manifest.pop("optimization", None)
+    manifest = _deep_merge(manifest, copy.deepcopy(dict(best_config)))
+    manifest["version"] = CLI_SCHEMA_VERSION
+    manifest["name"] = manifest_name
+    if required_env:
+        manifest["required_env"] = _unique_strings(required_env)
+    else:
+        manifest["required_env"] = _unique_strings(
+            _coerce_list(manifest.get("required_env"))
+        )
+
+    source_manifest_path = optimization.get("source_manifest_path")
+    base_dir = (
+        Path(str(source_manifest_path)).expanduser().resolve().parent
+        if source_manifest_path
+        else None
+    )
+    if base_dir is not None:
+        _absolutize_manifest_sources(manifest, base_dir)
+
+    _append_optimizer_trace_environment(manifest, optimization.get("optimizer_trace"))
+    _annotate_optimized_manifest_regression(
+        manifest=manifest,
+        source=source,
+        source_path=source_path,
+        source_name=source_name,
+        optimization=optimization,
+    )
+    return manifest
+
+
+def _annotate_optimized_manifest_regression(
+    *,
+    manifest: Dict[str, Any],
+    source: Mapping[str, Any],
+    source_path: Path,
+    source_name: str,
+    optimization: Mapping[str, Any],
+) -> None:
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    metadata["regression"] = {
+        "promotion_kind": "optimized_manifest",
+        "promoted_from": str(source_path),
+        "source_name": source_name,
+        "source_status": source.get("status"),
+        "source_schema_version": source.get("schema_version"),
+        "source_kind": source.get("kind"),
+        "source_score": _persistent_state_source_score(source),
+        "best_candidate_id": optimization.get("best_candidate_id"),
+        "search_paths": _unique_strings(
+            _coerce_list(dict(source.get("summary") or {}).get("search_paths"))
+        ),
+        "history_count": len(_coerce_list(optimization.get("history"))),
+        "has_optimizer_trace": isinstance(optimization.get("optimizer_trace"), Mapping),
+        "original_synthesis": (
+            "Promote the selected optimized manifest into a replayable regression "
+            "gate with candidate behavior plus optimizer trace evidence."
+        ),
+    }
+    evaluation = manifest.setdefault("evaluation", {})
+    if not isinstance(evaluation, dict):
+        evaluation = {}
+        manifest["evaluation"] = evaluation
+    agent_report = evaluation.setdefault("agent_report", {})
+    if not isinstance(agent_report, dict):
+        agent_report = {}
+        evaluation["agent_report"] = agent_report
+    config = agent_report.setdefault("config", {})
+    if not isinstance(config, dict):
+        config = {}
+        agent_report["config"] = config
+    config_metadata = config.setdefault("metadata", {})
+    if isinstance(config_metadata, dict):
+        config_metadata["promotion_kind"] = "optimized_manifest"
+        config_metadata["best_candidate_id"] = optimization.get("best_candidate_id")
+
+
+def _append_optimizer_trace_environment(manifest: Dict[str, Any], optimizer_trace: Any) -> None:
+    if not isinstance(optimizer_trace, Mapping):
+        return
+    simulation = manifest.setdefault("simulation", {})
+    if not isinstance(simulation, dict):
+        simulation = {}
+        manifest["simulation"] = simulation
+    environments = simulation.get("environments", simulation.get("environment", []))
+    if environments is None:
+        env_list: List[Any] = []
+    elif isinstance(environments, list):
+        env_list = list(environments)
+    elif isinstance(environments, Mapping):
+        env_list = [dict(environments)]
+    else:
+        env_list = []
+    env_list.append(
+        {"type": "optimizer_trace", "data": copy.deepcopy(dict(optimizer_trace))}
+    )
+    simulation["environments"] = env_list
+    simulation.pop("environment", None)
+
+
+def _absolutize_manifest_sources(value: Any, base_dir: Path) -> None:
+    if isinstance(value, dict):
+        for key, item in list(value.items()):
+            if key in {
+                "target",
+                "callable",
+                "source",
+                "export_source",
+            } and isinstance(item, str):
+                value[key] = _absolutize_manifest_source_value(item, base_dir)
+            else:
+                _absolutize_manifest_sources(item, base_dir)
+    elif isinstance(value, list):
+        for item in value:
+            _absolutize_manifest_sources(item, base_dir)
+
+
+def _absolutize_manifest_source_value(value: str, base_dir: Path) -> str:
+    if not value or urlparse(value).scheme:
+        return value
+    path_text = value
+    suffix = ""
+    if ".py:" in value:
+        path_text, suffix_value = value.split(".py:", 1)
+        path_text = f"{path_text}.py"
+        suffix = f":{suffix_value}"
+    path = Path(path_text)
+    if path.is_absolute():
+        return value
+    looks_like_file = path.suffix in {".py", ".json", ".yaml", ".yml"} or (
+        "/" in path_text
+    )
+    if not looks_like_file:
+        return value
+    resolved = (base_dir / path).resolve()
+    if not resolved.exists():
+        return value
+    return f"{resolved}{suffix}"
+
+
+def _optimized_manifest_regression_promotion_summary(
+    *,
+    source: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> Dict[str, Any]:
+    optimization = (
+        source.get("optimization")
+        if isinstance(source.get("optimization"), Mapping)
+        else {}
+    )
+    summary = (
+        source.get("summary") if isinstance(source.get("summary"), Mapping) else {}
+    )
+    return {
+        "best_candidate_id": optimization.get("best_candidate_id")
+        or summary.get("best_candidate_id"),
+        "source_score": _persistent_state_source_score(source),
+        "threshold": summary.get("threshold"),
+        "search_paths": _unique_strings(_coerce_list(summary.get("search_paths"))),
+        "history_count": len(_coerce_list(optimization.get("history"))),
+        "environment_types": _redteam_environment_types(manifest),
+        "has_optimizer_trace": isinstance(optimization.get("optimizer_trace"), Mapping),
+        "required_env": _unique_strings(_coerce_list(manifest.get("required_env"))),
     }
 
 
@@ -4565,6 +4785,7 @@ def _build_optimizer_inputs(optimization: Mapping[str, Any]) -> tuple[Any, Dict[
 def _optimization_result(
     *,
     manifest: Mapping[str, Any],
+    manifest_path: Path,
     optimization_result: Any,
     threshold: float,
     duration_seconds: float,
@@ -4660,6 +4881,8 @@ def _optimization_result(
             "final_score": final_score,
             "best_candidate_id": best_candidate_id,
             "best_config": best_config,
+            "source_manifest": _optimization_source_manifest(manifest),
+            "source_manifest_path": str(manifest_path),
             "history": history,
             "manifest_optimization": manifest_optimization,
             "optimizer_trace": optimizer_trace,
@@ -4667,6 +4890,12 @@ def _optimization_result(
         "evaluation": evaluation,
         "duration_seconds": duration_seconds,
     }
+
+
+def _optimization_source_manifest(manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    source_manifest = copy.deepcopy(dict(manifest))
+    source_manifest.pop("optimization", None)
+    return source_manifest
 
 
 def _optimization_history_findings(agent_eval: Mapping[str, Any]) -> List[Dict[str, Any]]:

@@ -465,7 +465,7 @@ def test_optimize_facade_exposes_advanced_governance_surfaces():
 
 
 def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch):
-    from agent_learning import optimize
+    from agent_learning import optimize, simulate
 
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY",
@@ -590,6 +590,31 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert best_history["report"]["results"][0]["metadata"]["environment_state"][
         "framework_runtime"
     ]["summary"]["tool_call_count"] == 1
+
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=PROJECT_ROOT / "examples" / "sdk-framework-optimization-result.json",
+        min_level="note",
+        max_findings=1,
+        required_env=["AGENT_LEARNING_SDK_FRAMEWORK_REGRESSION_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == "optimized_manifest"
+    assert promotion["summary"]["promoted_finding_count"] == 0
+    assert promotion["summary"]["promoted_manifest_count"] == 1
+    promoted_agent = promotion["manifest"]["agent"]
+    assert promoted_agent["method"] == "execute_task"
+    assert promoted_agent["input_mode"] == "dict"
+    assert promoted_agent["target"].endswith(
+        "framework_shims.py:build_custom_refund_orchestrator"
+    )
+    assert Path(promoted_agent["target"].split(":", 1)[0]).is_absolute()
+    assert promotion["manifest"]["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_REGRESSION_KEY"
+    ]
+    assert promotion["manifest"]["simulation"]["environments"][-1]["type"] == (
+        "optimizer_trace"
+    )
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(
