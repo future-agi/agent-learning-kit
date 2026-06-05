@@ -752,6 +752,7 @@ def _score_agent_learning_suite(
     summary = _mapping_summary(result)
     raw_score = _score_from_value(result)
     score = float(raw_score if raw_score is not None else 0.0)
+    action_run_score: Optional[float] = None
     if isinstance(result, Mapping):
         status = str(result.get("status") or "")
         exit_code = int(result.get("exit_code", 1) or 0)
@@ -767,15 +768,51 @@ def _score_agent_learning_suite(
             score = min(score, execution_score)
         if not capability_gate:
             score = min(score, 0.5)
+        action_run_score = _action_run_suite_score(result)
+        if action_run_score is not None:
+            score = min(score, action_run_score)
     return {
         "score": round(score, 4),
         "reason": str(result.get("status") if isinstance(result, Mapping) else ""),
         "metadata": {
             "suite_summary": summary,
+            "action_run_score": action_run_score,
             "candidate_suite_name": candidate_suite.get("name"),
             "candidate_id": candidate.id,
         },
     }
+
+
+def _action_run_suite_score(result: Mapping[str, Any]) -> Optional[float]:
+    children = [
+        child
+        for child in result.get("children") or result.get("jobs") or []
+        if isinstance(child, Mapping)
+    ]
+    action_children = [
+        child
+        for child in children
+        if str(child.get("command") or "").replace("-", "_") == "action_run"
+    ]
+    if not action_children:
+        return None
+    scores: list[float] = []
+    for child in action_children:
+        exit_code = child.get("exit_code", 1)
+        if int(exit_code if exit_code is not None else 1) != 0:
+            scores.append(0.0)
+            continue
+        child_summary = _mapping_summary(child.get("result"))
+        output_count = float(child_summary.get("output_count") or 0.0)
+        written_count = float(child_summary.get("outputs_written_count") or 0.0)
+        completion = (
+            float(child_summary.get("output_completion_rate"))
+            if child_summary.get("output_completion_rate") is not None
+            else (written_count / output_count if output_count else 1.0)
+        )
+        evidence_depth = min(written_count / 4.0, 1.0)
+        scores.append((0.8 * completion) + (0.2 * evidence_depth))
+    return round(sum(scores) / len(scores), 4) if scores else None
 
 
 def _target_config(optimization: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -3267,10 +3267,7 @@ def test_sdk_artifact_action_optimization_example_runs(monkeypatch, tmp_path):
     assert result["summary"]["child_command_count"] == {"action_run": 1}
     best_job = result["optimization"]["best_config"]["jobs"][0]
     assert best_job["command"] == "action-run"
-    assert best_job["action_id"] in {
-        "report_framework_readiness",
-        "rerun_framework_certification",
-    }
+    assert best_job["action_id"] == "rerun_framework_certification"
     assert result["optimization"]["suite_optimization"]["source"] == (
         "agent_learning_suite"
     )
@@ -5915,6 +5912,7 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert action_run["status"] == "passed"
     assert action_run["summary"]["command_exit_code"] == 0
     assert action_run["summary"]["action_id"] == "rerun_framework_certification"
+    assert action_run["summary"]["output_completion_rate"] == pytest.approx(1.0)
     assert action_run["command_args"][:2] == ["agent-learn", "run"]
     assert {
         Path(item["path"]).name
@@ -5976,6 +5974,9 @@ def test_sdk_framework_certification_simulation_example_runs(
         "rerun_framework_certification"
     )
     assert suite_child["result"]["summary"]["command_exit_code"] == 0
+    assert suite_child["result"]["summary"]["output_completion_rate"] == pytest.approx(
+        1.0
+    )
     assert {
         Path(item["path"]).name
         for item in suite_child["result"]["outputs"]
@@ -6047,10 +6048,7 @@ def test_sdk_framework_certification_simulation_example_runs(
     assert "jobs.0" in action_opt["summary"]["search_paths"]
     best_action_job = action_opt["optimization"]["best_config"]["jobs"][0]
     assert best_action_job["command"] == "action-run"
-    assert best_action_job["action_id"] in {
-        "report_framework_readiness",
-        "rerun_framework_certification",
-    }
+    assert best_action_job["action_id"] == "rerun_framework_certification"
     assert action_opt["optimization"]["suite_optimization"]["source"] == (
         "agent_learning_suite"
     )

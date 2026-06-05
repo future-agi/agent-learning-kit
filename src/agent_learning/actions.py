@@ -92,6 +92,15 @@ def run_action(
         exit_code = _dispatch_action_command(command_args, cwd=run_cwd)
         output_records = _command_output_records(command_args, run_cwd)
     status = "passed" if exit_code == 0 else "failed"
+    outputs_written_count = sum(
+        1 for item in output_records if item.get("exists") is True
+    )
+    output_count = len(output_records)
+    output_completion_rate = (
+        round(outputs_written_count / output_count, 4)
+        if output_count
+        else 1.0
+    )
     payload = {
         "schema_version": AGENT_LEARNING_CLI_SCHEMA_VERSION,
         "kind": AGENT_LEARNING_ACTION_RUN_KIND,
@@ -116,8 +125,9 @@ def run_action(
             "source_card_path": action.get("source_card_path"),
             "requires_input": bool(action.get("inputs")),
             "command_exit_code": exit_code,
-            "output_count": len(output_records),
-            "outputs_written_count": sum(1 for item in output_records if item.get("exists") is True),
+            "output_count": output_count,
+            "outputs_written_count": outputs_written_count,
+            "output_completion_rate": output_completion_rate,
         },
     }
     return payload
