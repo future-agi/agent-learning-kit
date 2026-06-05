@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Type
 from ..optimizers.agent import AgentOptimizer
 from ..optimizers.agent_evolution import AgentEvolutionOptimizer
 from ..optimizers.agent_social_memory import AgentSocialMemoryOptimizer
+from ..evidence import score_simulation_evidence
 from ..simulation import _coerce_score, _iter_report_scores, _run_sync
 from ..targets import (
     AgentCandidate,
@@ -37,6 +38,7 @@ class SimulateManifestOptimizationProblem:
     target: OptimizationTarget
     evaluate_manifest: ManifestRunner
     score_manifest: Optional[ManifestScorer] = None
+    evidence_scorer_config: Optional[Mapping[str, Any]] = None
     threshold: float = 0.7
     optimizer_kwargs: Mapping[str, Any] = field(default_factory=dict)
     optimizer_cls: Type[Any] = AgentOptimizer
@@ -61,6 +63,11 @@ class SimulateManifestOptimizationProblem:
             _optional_mapping(optimization.get("optimizer"))
         )
         optimizer_cls = _optimizer_cls(_optional_mapping(optimization.get("optimizer")))
+        evidence_scorer_config = _evidence_scorer_config(
+            optimization,
+            target_config,
+            base_manifest=manifest,
+        )
 
         base_manifest = copy.deepcopy(dict(manifest))
         base_manifest.pop("optimization", None)
@@ -82,6 +89,7 @@ class SimulateManifestOptimizationProblem:
             target=target,
             evaluate_manifest=evaluate_manifest,
             score_manifest=score_manifest,
+            evidence_scorer_config=evidence_scorer_config,
             threshold=float(
                 threshold
                 if threshold is not None
@@ -109,6 +117,16 @@ class SimulateManifestOptimizationProblem:
         if self.score_manifest is not None:
             score_source = _run_sync(
                 self.score_manifest(candidate_manifest, report, candidate)
+            )
+        elif self.evidence_scorer_config is not None and (
+            not self.evidence_scorer_config.get("_auto")
+            or not _report_has_score(report)
+        ):
+            score_source = score_simulation_evidence(
+                report,
+                manifest=candidate_manifest,
+                candidate=candidate,
+                config=self.evidence_scorer_config,
             )
 
         metadata = {
@@ -855,6 +873,69 @@ def _optimizer_algorithm_name(optimizer_cls: Type[Any]) -> str:
     if optimizer_cls is AgentSocialMemoryOptimizer:
         return "social_memory"
     return "agent"
+
+
+def _evidence_scorer_config(
+    optimization: Mapping[str, Any],
+    target_config: Mapping[str, Any],
+    *,
+    base_manifest: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    raw = (
+        optimization.get("simulation_evidence")
+        or optimization.get("evidence_scorer")
+        or optimization.get("scoring")
+    )
+    if raw is False:
+        return None
+    if isinstance(raw, str):
+        normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in {"simulation_evidence", "evidence", "environment_evidence"}:
+            return {"enabled": True, "method": "simulation_evidence"}
+        return None
+    if isinstance(raw, Mapping):
+        method = str(
+            raw.get("method")
+            or raw.get("type")
+            or raw.get("name")
+            or raw.get("strategy")
+            or "simulation_evidence"
+        ).strip().lower().replace("-", "_").replace(" ", "_")
+        enabled = bool(raw.get("enabled", True))
+        if enabled and method in {
+            "simulation_evidence",
+            "evidence",
+            "environment_evidence",
+            "trace_evidence",
+        }:
+            config = copy.deepcopy(dict(raw))
+            config["method"] = "simulation_evidence"
+            return config
+        return None
+
+    if raw is True:
+        return {"enabled": True, "method": "simulation_evidence"}
+
+    layers = {str(layer).lower() for layer in target_config.get("layers", [])}
+    should_auto_score = bool(layers & {"framework", "world", "orchestration"}) and not (
+        _optional_mapping(
+            _optional_mapping(base_manifest.get("evaluation")) or {}
+        )
+        and _optional_mapping(
+            (_optional_mapping(base_manifest.get("evaluation")) or {}).get(
+                "agent_report"
+            )
+        )
+    )
+    if should_auto_score:
+        return {"enabled": True, "method": "simulation_evidence", "_auto": True}
+    return None
+
+
+def _report_has_score(report: Any) -> bool:
+    if _score_from_value(report) is not None:
+        return True
+    return bool(list(_iter_report_scores(report)))
 
 
 def _filter_optimizer_kwargs(

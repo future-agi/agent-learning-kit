@@ -40,6 +40,7 @@ _FI_OPT_EXPORT_NAMES = (
     "CandidateEvaluation",
     "ComponentDiagnosis",
     "DEFAULT_AGENT_MUTATION_LIBRARY",
+    "DEFAULT_SIMULATION_EVIDENCE_WEIGHTS",
     "FailureMode",
     "FAILURE_ROUTES",
     "EvalSuiteOptimizationProblem",
@@ -75,6 +76,7 @@ _FI_OPT_EXPORT_NAMES = (
     "publish_futureagi_regression_dataset",
     "research_note_for",
     "research_summary_markdown",
+    "score_simulation_evidence",
     "triage_futureagi_registry_replay_pack_regression",
     "OptimizationLayer",
     "OptimizationTarget",
@@ -401,6 +403,142 @@ def optimize_task(
     """Build and execute a generic task/world optimization manifest."""
 
     manifest = build_task_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
+def build_report_repair_optimization_manifest(
+    *,
+    name: str = "report-repair-optimization",
+    observed_report: Optional[Mapping[str, Any] | str] = None,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a failed-report/trace repair optimization manifest.
+
+    This cookbook is intentionally BYO-agent friendly: feed it a failed report
+    (or trace text), then optimize candidate evidence behavior and environment
+    bundles until framework trace, runtime semantics, world contract, and memory
+    lineage are all provable from local simulation evidence.
+    """
+
+    report_text = _report_repair_observed_text(observed_report)
+    diagnostics = _compact_report_repair_diagnostics(report_text)
+    env_candidates = (
+        [
+            [copy.deepcopy(dict(item)) for item in candidate]
+            for candidate in environment_candidates
+        ]
+        if environment_candidates is not None
+        else _default_report_repair_environment_candidates()
+    )
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else _default_report_repair_agent_candidates()
+    )
+    eval_config = copy.deepcopy(
+        dict(evaluation_config or _default_report_repair_evaluation_config())
+    )
+    search_space_probe = {
+        "agent": agents,
+        "simulation.environments": env_candidates,
+    }
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agents,
+        environment_candidates=env_candidates,
+        evaluation_config=eval_config,
+        required_env=required_env,
+        base_agent=agents[-1],
+        optimizer=copy.deepcopy(
+            dict(optimizer or _default_report_repair_optimizer(search_space_probe))
+        ),
+        threshold=threshold,
+        layers=(
+            "framework",
+            "world",
+            "memory",
+            "orchestration",
+            "tools",
+            "evaluator",
+        ),
+        min_turns=3,
+        max_turns=3,
+        scenario=_default_report_repair_scenario(name),
+        target_metadata={
+            "source": "agent_learning.optimize.build_report_repair_optimization_manifest",
+            "cookbook": "report-repair-optimization",
+            "observed_failure_report": report_text,
+            "diagnostics": diagnostics,
+            "research_sources": _unique_research_sources(
+                [
+                    *_default_report_repair_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Deterministic simulation-evidence scoring combines trace "
+                "provenance, counterfactual repair candidates, runtime semantic "
+                "match, memory lineage, and world-contract success into optimizer "
+                "feedback."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["framework", "world", "memory", "orchestration"],
+        "required_tools": eval_config.get("required_tools", []),
+        "required_framework_trace": eval_config.get("required_framework_trace", []),
+        "framework_runtime_contract": eval_config.get(
+            "framework_runtime_contract",
+            {},
+        ),
+        "world_contract_quality": eval_config.get("world_contract_quality", {}),
+        "required_agent_memory_lineage": eval_config.get(
+            "required_agent_memory_lineage",
+            [],
+        ),
+        "agent_memory_lineage_quality": eval_config.get(
+            "agent_memory_lineage_quality",
+            {},
+        ),
+        "weights": {
+            "world_contract": 4.0,
+            "framework_trace": 3.0,
+            "agent_memory_lineage": 3.0,
+            "runtime_semantics": 2.0,
+            "tool_coverage": 1.0,
+            "world_orchestration_replay": 1.0,
+        },
+    }
+    return manifest
+
+
+def optimize_report_repair(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute failed-report/trace repair optimization."""
+
+    manifest = build_report_repair_optimization_manifest(**manifest_kwargs)
     return optimize_manifest(
         manifest,
         manifest_path=manifest_path,
@@ -6067,6 +6205,557 @@ def _unique_strings(values: Any) -> list[str]:
     return result
 
 
+def _report_repair_observed_text(
+    observed_report: Optional[Mapping[str, Any] | str],
+) -> str:
+    if observed_report is None:
+        return (
+            "Failed agent report: framework trace gap, LangGraph checkpoint "
+            "missing, runtime mismatch, memory lineage missing source "
+            "attribution, world contract violation, required transition was not "
+            "completed, and tool call evidence was missing."
+        )
+    if isinstance(observed_report, str):
+        return observed_report
+    return " ".join(
+        [
+            str(observed_report.get("summary") or ""),
+            str(observed_report.get("findings") or ""),
+            str(observed_report.get("reason") or ""),
+            str(observed_report.get("text") or ""),
+        ]
+    ).strip() or str(observed_report)
+
+
+def _compact_report_repair_diagnostics(report_text: str) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in diagnose_text(report_text):
+        payload = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+        key = (str(payload.get("component")), str(payload.get("failure_mode")))
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            {
+                "component": payload.get("component"),
+                "failure_mode": payload.get("failure_mode"),
+                "confidence": payload.get("confidence"),
+                "evidence": payload.get("evidence"),
+                "patch_strategy": payload.get("patch_strategy"),
+                "suggested_paths": list(payload.get("suggested_paths") or [])[:8],
+                "suggested_metrics": list(payload.get("suggested_metrics") or [])[:8],
+            }
+        )
+        if len(diagnostics) >= 8:
+            break
+    return diagnostics
+
+
+def _default_report_repair_agent_candidates() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "scripted",
+            "name": "trace-gap-agent",
+            "method": "run",
+            "input_mode": "text",
+            "responses": [
+                {"content": "I inspected the failed report but collected no runtime evidence.", "tool_calls": []},
+                {"content": "I inferred a repair but skipped memory lineage and world checks.", "tool_calls": []},
+                {"content": "The repair is unverified because no trace evidence was produced.", "tool_calls": []},
+            ],
+        },
+        {
+            "type": "scripted",
+            "name": "partial-trace-repair-agent",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "responses": [
+                {
+                    "content": "I am checking framework runtime evidence for the failed trace.",
+                    "tool_calls": [
+                        {"id": "framework_status", "name": "framework_trace_status", "arguments": {}},
+                        {"id": "framework_spans", "name": "list_framework_spans", "arguments": {}},
+                        {"id": "complete_task", "name": "apply_world_transition", "arguments": {"id": "complete_task"}},
+                    ],
+                },
+                {
+                    "content": "I am checking memory provenance, but I have not repaired the world contract yet.",
+                    "tool_calls": [
+                        {"id": "memory_lineage", "name": "agent_memory_lineage_status", "arguments": {}},
+                        {"id": "memory_ops", "name": "list_memory_lineage_operations", "arguments": {}},
+                    ],
+                },
+                {
+                    "content": "The partial repair has trace and memory evidence but no completed world transition.",
+                    "tool_calls": [],
+                },
+            ],
+        },
+        {
+            "type": "scripted",
+            "name": "verified-report-repair-agent",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "responses": [
+                {
+                    "content": (
+                        "I am replaying the failed agent trace and checking "
+                        "framework runtime provenance before proposing the repair."
+                    ),
+                    "tool_calls": [
+                        {"id": "framework_status", "name": "framework_trace_status", "arguments": {}},
+                        {"id": "framework_spans", "name": "list_framework_spans", "arguments": {}},
+                        {"id": "complete_task", "name": "apply_world_transition", "arguments": {"id": "complete_task"}},
+                    ],
+                },
+                {
+                    "content": (
+                        "I am verifying memory lineage so the repair carries source "
+                        "attribution, audit, retention, deletion, and redaction evidence."
+                    ),
+                    "tool_calls": [
+                        {"id": "memory_lineage", "name": "agent_memory_lineage_status", "arguments": {}},
+                        {"id": "memory_ops", "name": "list_memory_lineage_operations", "arguments": {}},
+                    ],
+                },
+                {
+                    "content": (
+                        "The repair is verified: framework trace, runtime semantics, "
+                        "memory lineage, orchestration replay, and world contract success are present."
+                    ),
+                    "tool_calls": [
+                        {"id": "orchestration_status", "name": "world_orchestration_replay_status", "arguments": {}},
+                        {"id": "world_status", "name": "world_contract_status", "arguments": {}},
+                    ],
+                },
+            ],
+        },
+    ]
+
+
+def _default_report_repair_environment_candidates() -> list[list[dict[str, Any]]]:
+    return [
+        [_report_repair_framework_trace("weak")],
+        [
+            _report_repair_framework_trace("partial"),
+            _report_repair_memory_lineage("partial"),
+        ],
+        [
+            _report_repair_framework_trace("verified"),
+            _report_repair_memory_lineage("verified"),
+            _report_repair_world_orchestration_replay(),
+        ],
+    ]
+
+
+def _report_repair_framework_trace(level: str) -> dict[str, Any]:
+    signals = {
+        "weak": ["agent", "tool"],
+        "partial": ["framework_trace", "langgraph", "agent", "tool", "state"],
+        "verified": [
+            "framework_trace",
+            "langgraph",
+            "agent",
+            "tool",
+            "state",
+            "checkpoint",
+            "session",
+            "execute_task",
+            "dict",
+            "framework_trace_status",
+        ],
+    }[level]
+    return {
+        "type": "framework_trace",
+        "data": {
+            "framework": "langgraph",
+            "spans": [
+                {
+                    "id": "agent_repair",
+                    "name": "LangGraphRepairAgent.execute_task",
+                    "input": {"failed_report": "trace repair"},
+                    "output": "verified_repair" if level == "verified" else "partial_repair",
+                    "signals": signals,
+                    "tool_calls": [{"name": "framework_trace_status"}],
+                    "checkpoint": (
+                        {
+                            "thread_id": "trace-repair-thread",
+                            "checkpoint_id": "repair-cp-1",
+                            "state_keys": ["diagnosis", "repair", "world"],
+                        }
+                        if level == "verified"
+                        else {}
+                    ),
+                    "session": (
+                        {
+                            "id": "trace-repair-session",
+                            "runtime": "langgraph",
+                            "method": "execute_task",
+                            "input_mode": "dict",
+                        }
+                        if level == "verified"
+                        else {}
+                    ),
+                }
+            ],
+            "events": [
+                {
+                    "id": "repair_runtime",
+                    "name": "runtime_semantics_checked",
+                    "signals": ["method", "input_mode", "runtime", level],
+                }
+            ],
+            "adapter_required_signals": [
+                "framework_trace",
+                "langgraph",
+                "tool",
+                "state",
+                "checkpoint",
+            ],
+            "metadata": {"quality": level, "cookbook": "report-repair"},
+        },
+    }
+
+
+def _report_repair_memory_lineage(level: str) -> dict[str, Any]:
+    verified = level == "verified"
+    return {
+        "type": "agent_memory_lineage",
+        "data": {
+            "name": f"report-repair-memory-{level}",
+            "target": {"agent_id": "report-repair-agent", "tenant": "demo-tenant"},
+            "stores": [{"id": "repair-store", "tenant": "demo-tenant"}],
+            "memories": [
+                {
+                    "id": "diagnosis",
+                    "store": "repair-store",
+                    "source": "failed_report",
+                    "attribution": "observed_trace",
+                }
+            ],
+            "operations": [
+                {
+                    "id": "read_failed_report",
+                    "operation": "read",
+                    "status": "success",
+                    "audit_id": "audit-read-failed-report",
+                },
+                {
+                    "id": "write_repair",
+                    "operation": "write",
+                    "status": "success",
+                    "audit_id": "audit-write-repair",
+                },
+                *(
+                    [
+                        {
+                            "id": "recall_guardrail",
+                            "operation": "recall",
+                            "status": "success",
+                            "audit_id": "audit-recall-guardrail",
+                        }
+                    ]
+                    if verified
+                    else []
+                ),
+            ],
+            "lineage": [
+                {"from": "failed_report", "to": "diagnosis", "relation": "caused_repair_candidate"}
+            ],
+            "policies": {
+                "tenant_isolation": True,
+                "retention": "30d",
+                "deletion": "supported" if verified else "",
+                "redaction": "pii-safe" if verified else "",
+                "audit": "operation_trace" if verified else "",
+            },
+            "poison_tests": [{"id": "canary", "status": "passed"}] if verified else [],
+            "isolation_tests": [{"id": "tenant", "status": "passed"}] if verified else [],
+            "retention_tests": [{"id": "expiry", "status": "passed"}] if verified else [],
+            "observability": {"hooks": ["memory_write", "memory_recall"] if verified else ["memory_write"]},
+            "artifacts": [{"id": "lineage-artifact", "type": "audit"}] if verified else [],
+            "required_evidence": [
+                "agent_memory_lineage",
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
+                "retention_policy",
+                "deletion_policy",
+                "redaction",
+            ],
+            "required_signals": ["agent_memory_lineage", "lineage", "audit"],
+        },
+    }
+
+
+def _report_repair_world_contract() -> dict[str, Any]:
+    return {
+        "type": "world_contract",
+        "data": {
+            "name": "report-repair-world",
+            "actors": ["agent", "simulator", "evaluator"],
+            "resources": ["failed_report", "repair_candidate", "world_state"],
+            "initial_state": {
+                "task": {"status": "diagnosed"},
+                "repair": {"status": "candidate"},
+            },
+            "transitions": [
+                {
+                    "id": "complete_task",
+                    "name": "Complete verified repair",
+                    "actor": "agent",
+                    "resource": "repair_candidate",
+                    "action": "complete_task",
+                    "required": True,
+                    "preconditions": {"task": {"status": "diagnosed"}},
+                    "effects": {
+                        "task": {"status": "completed"},
+                        "repair": {"status": "verified"},
+                    },
+                    "postconditions": {
+                        "task": {"status": "completed"},
+                        "repair": {"status": "verified"},
+                    },
+                    "signals": ["transition", "repair", "success"],
+                }
+            ],
+            "invariants": [{"id": "no_unverified_repair", "condition": {"task": {"status": "diagnosed"}}}],
+            "success_conditions": [
+                {
+                    "id": "repair_verified",
+                    "condition": {
+                        "task": {"status": "completed"},
+                        "repair": {"status": "verified"},
+                    },
+                }
+            ],
+        },
+    }
+
+
+def _report_repair_world_orchestration_replay() -> dict[str, Any]:
+    return {
+        "type": "world_orchestration_replay",
+        "data": {
+            "orchestration_trace": {
+                "framework": "langgraph",
+                "nodes": [
+                    {"id": "diagnose", "role": "diagnoser"},
+                    {"id": "repair", "role": "repairer"},
+                    {"id": "verify", "role": "verifier"},
+                ],
+                "edges": [
+                    {"source": "diagnose", "target": "repair"},
+                    {"source": "repair", "target": "verify"},
+                ],
+                "steps": [
+                    {"id": "step_diagnose", "node": "diagnose", "status": "success"},
+                    {"id": "step_repair", "node": "repair", "status": "success"},
+                    {"id": "step_verify", "node": "verify", "status": "success"},
+                ],
+                "records": [
+                    {
+                        "id": "counterfactual_repair",
+                        "signals": ["orchestration", "diagnosis", "repair", "verification"],
+                    }
+                ],
+            },
+            "world_contract": _report_repair_world_contract()["data"],
+            "attack_pack": {
+                "name": "report-repair-negative-controls",
+                "attacks": [{"id": "skip_verification", "type": "shortcut", "blocked": True}],
+            },
+        },
+    }
+
+
+def _default_report_repair_evaluation_config() -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Repair a failed agent report by proving framework trace, runtime "
+            "semantics, memory lineage, orchestration replay, and world contract "
+            "success from local simulation evidence."
+        ),
+        "expected_result": (
+            "The optimized candidate completes the repair world transition and "
+            "emits trace, runtime, memory-lineage, and orchestration evidence."
+        ),
+        "required_tools": [
+            "framework_trace_status",
+            "list_framework_spans",
+            "agent_memory_lineage_status",
+            "list_memory_lineage_operations",
+            "world_orchestration_replay_status",
+            "world_contract_status",
+            "apply_world_transition",
+        ],
+        "available_tools": [
+            "framework_trace_status",
+            "list_framework_spans",
+            "agent_memory_lineage_status",
+            "list_memory_lineage_operations",
+            "world_orchestration_replay_status",
+            "world_contract_status",
+            "apply_world_transition",
+        ],
+        "success_criteria": [
+            "framework runtime trace has required signals",
+            "runtime method and input mode match deployment semantics",
+            "memory lineage has attribution and policy evidence",
+            "world contract reaches terminal success",
+            "orchestration replay records diagnose repair verify flow",
+        ],
+        "required_framework_trace": [
+            "framework_trace",
+            "langgraph",
+            "agent",
+            "tool",
+            "state",
+            "checkpoint",
+            "session",
+            "execute_task",
+            "dict",
+        ],
+        "framework_runtime_contract": {
+            "framework": "langgraph",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "required_tools": ["framework_trace_status"],
+            "required_signals": ["tool", "state", "checkpoint"],
+            "max_error_count": 0,
+            "min_invocation_count": 1,
+        },
+        "world_contract_quality": {
+            "required_transitions": [{"id": "complete_task"}],
+            "min_completed_transitions": 1,
+            "require_all_required_transitions": True,
+            "require_all_invariants_pass": True,
+            "required_success_conditions": ["repair_verified"],
+            "max_violation_count": 0,
+            "required_terminal_status": "success",
+            "expected_state": {
+                "task": {"status": "completed"},
+                "repair": {"status": "verified"},
+            },
+        },
+        "required_agent_memory_lineage": [
+            "agent_memory_lineage",
+            "source_attribution",
+            "tenant_isolation",
+            "audit",
+            "retention_policy",
+            "deletion_policy",
+            "redaction",
+        ],
+        "agent_memory_lineage_quality": {
+            "min_store_count": 1,
+            "min_memory_count": 1,
+            "min_operation_count": 3,
+            "min_read_operations": 1,
+            "min_write_operations": 1,
+            "min_recall_operations": 1,
+            "min_observability_hooks": 1,
+            "min_artifact_count": 1,
+            "max_unattributed_memories": 0,
+            "max_open_poisoning": 0,
+            "max_isolation_violations": 0,
+            "max_retention_violations": 0,
+            "max_policy_violations": 0,
+            "require_target": True,
+            "require_stores": True,
+            "require_memory_records": True,
+            "require_operations": True,
+            "require_lineage": True,
+            "require_source_attribution": True,
+            "require_tenant_isolation": True,
+            "require_audit": True,
+            "require_retention_policy": True,
+            "require_deletion_policy": True,
+            "require_redaction": True,
+            "require_canaries": True,
+            "require_observability": True,
+            "require_artifacts": True,
+            "required_operation_types": ["read", "write", "recall"],
+            "required_policies": ["retention", "deletion", "redaction", "tenant_isolation"],
+        },
+        "metric_weights": {
+            "framework_trace_coverage": 3.0,
+            "framework_runtime_contract": 3.0,
+            "world_contract_quality": 5.0,
+            "agent_memory_lineage_quality": 5.0,
+            "tool_selection_accuracy": 2.0,
+            "task_completion": 1.0,
+        },
+    }
+
+
+def _default_report_repair_optimizer(
+    search_space: Mapping[str, Sequence[Any]],
+) -> dict[str, Any]:
+    return {
+        "algorithm": "agent",
+        "max_candidates": max(4, _search_space_cardinality(search_space) + 1),
+        "include_seed": True,
+        "auto_diagnose": True,
+        "diagnostic_score_threshold": 0.9,
+    }
+
+
+def _default_report_repair_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Asha", "role": "agent-platform-owner"},
+                "situation": (
+                    "Asha has a failed multi-step agent report and needs the SDK "
+                    "to find the smallest verified repair candidate."
+                ),
+                "outcome": (
+                    "The selected repair proves runtime provenance, memory "
+                    "lineage, orchestration flow, and world-contract success."
+                ),
+            }
+        ],
+    }
+
+
+def _default_report_repair_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "CausalFlow: Causal Attribution and Counterfactual Repair for LLM Agent Failures",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.25338",
+            "used_for": "failed traces to minimal validated repair candidates",
+        },
+        {
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": "process-level provenance across tools, memory, environment, and recovery",
+        },
+        {
+            "title": "AgentTrace: Causal Graph Tracing for Root Cause Analysis in Deployed Multi-Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.14688",
+            "used_for": "causal trace localization without LLM inference at debug time",
+        },
+        {
+            "title": "Agents Learn Their Runtime: Interpreter Persistence as Training-Time Semantics",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "runtime semantics as first-class trace evidence",
+        },
+        {
+            "title": "VeRO: A Harness for Agents to Optimize Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.22480",
+            "used_for": "versioned candidate evaluation with structured execution traces",
+        },
+    ]
+
+
 def _default_task_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -10758,6 +11447,7 @@ __all__ = [
     "build_optimizer_governance_optimization_manifest",
     "build_orchestration_optimization_manifest",
     "build_realtime_optimization_manifest",
+    "build_report_repair_optimization_manifest",
     "build_redteam_autogen_optimization_manifest",
     "build_redteam_causal_attribution_optimization_manifest",
     "build_redteam_optimization_manifest",
@@ -10787,6 +11477,7 @@ __all__ = [
     "optimize_optimizer_governance",
     "optimize_orchestration_stack",
     "optimize_realtime_stack",
+    "optimize_report_repair",
     "optimize_redteam_autogen",
     "optimize_redteam_causal_attribution",
     "optimize_redteam_campaign",

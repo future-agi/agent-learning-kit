@@ -73,6 +73,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_REDTEAM_CAUSAL_ATTRIBUTION_OPT_EXAMPLE_KEY",
         ),
         (
+            "optimize",
+            "report_repair_optimization.json",
+            "agent-learning.optimization.v1",
+            "AGENT_LEARNING_REPORT_REPAIR_OPT_EXAMPLE_KEY",
+        ),
+        (
             "optimize-eval",
             "eval_suite_optimization.json",
             "agent-learning.eval-optimization.v1",
@@ -1709,6 +1715,83 @@ def test_redteam_causal_attribution_optimization_example_selects_graph(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "redteam-causal-attribution-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_report_repair_optimization_example_scores_simulation_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_REPORT_REPAIR_OPT_EXAMPLE_KEY",
+        "real-local-report-repair-opt-key",
+    )
+
+    output_path = tmp_path / "report-repair-optimization.json"
+    junit_path = tmp_path / "report-repair-optimization.junit.xml"
+    sarif_path = tmp_path / "report-repair-optimization.sarif.json"
+    markdown_path = tmp_path / "report-repair-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "report_repair_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert payload["summary"]["evaluation_passed"] is True
+    assert "simulation.environments" in payload["summary"]["search_paths"]
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    metrics = best_history["metrics"]
+    for metric in (
+        "tool_selection_accuracy",
+        "framework_trace_coverage",
+        "agent_memory_lineage_quality",
+        "orchestration_flow_quality",
+        "world_contract_quality",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {
+        "adversarial",
+        "agent_memory_lineage",
+        "framework_trace",
+        "orchestration_trace",
+        "world_attack_replay",
+        "world_contract",
+        "world_orchestration_replay",
+    }
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+    assert state["world_contract"]["summary"][
+        "completed_required_transition_count"
+    ] == 1
+    assert state["agent_memory_lineage"]["summary"]["has_audit"] is True
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "report-repair-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 

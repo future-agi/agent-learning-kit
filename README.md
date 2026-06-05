@@ -663,6 +663,17 @@ causal search is available from Python through
 `optimize.build_redteam_causal_attribution_optimization_manifest()` and
 `examples/sdk_redteam_causal_attribution_optimization.py`.
 
+The `report_repair_optimization.json` example turns a failed agent
+report/trace into a deterministic repair search. It scores normalized
+simulation evidence directly, then selects the candidate whose framework trace,
+runtime semantics, orchestration replay, memory lineage, tool evidence, and
+world contract all close. The design builds on 2026 trace-provenance, causal
+repair, runtime-semantics, and agent-harness optimization research, then adds
+our own optimizer-native simulation evidence scorer. The same repair search is
+available from Python through
+`optimize.build_report_repair_optimization_manifest()` and
+`examples/sdk_report_repair_optimization.py`.
+
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It
 optimizes the Future AGI UI/control-plane evidence loop: repository checkout,

@@ -10,6 +10,10 @@ from .components import (
     diagnose_text,
     relevant_search_paths,
 )
+from .evidence import (
+    DEFAULT_SIMULATION_EVIDENCE_WEIGHTS,
+    score_simulation_evidence,
+)
 from .targets import (
     AgentCandidate,
     CandidateEvaluation,
@@ -141,6 +145,7 @@ __all__ = [
     "CandidateEvaluation",
     "ComponentDiagnosis",
     "DEFAULT_AGENT_MUTATION_LIBRARY",
+    "DEFAULT_SIMULATION_EVIDENCE_WEIGHTS",
     "FailureMode",
     "FAILURE_ROUTES",
     "EvalSuiteOptimizationProblem",
@@ -176,6 +181,7 @@ __all__ = [
     "publish_futureagi_regression_dataset",
     "research_note_for",
     "research_summary_markdown",
+    "score_simulation_evidence",
     "triage_futureagi_registry_replay_pack_regression",
     "OptimizationLayer",
     "OptimizationTarget",

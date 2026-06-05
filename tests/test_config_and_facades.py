@@ -148,6 +148,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_redteam_society is not None
     assert optimize.build_redteam_causal_attribution_optimization_manifest is not None
     assert optimize.optimize_redteam_causal_attribution is not None
+    assert optimize.score_simulation_evidence is not None
+    assert optimize.build_report_repair_optimization_manifest is not None
+    assert optimize.optimize_report_repair is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
     assert optimize.optimize_social_memory_framework is not None
     assert simulate.build_social_memory_framework_run_manifest is not None
@@ -3994,6 +3997,111 @@ def test_sdk_redteam_causal_attribution_optimization_example_runs(
     assert campaign_summary["attack_count"] == 25
     assert campaign_summary["coverage_cell_count"] == 25
     assert campaign_summary["executed_cell_count"] == 25
+
+
+def test_sdk_report_repair_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REPORT_REPAIR_EXAMPLE_KEY",
+        "real-local-sdk-report-repair-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_report_repair_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_report_repair_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REPORT_REPAIR_EXAMPLE_KEY"
+    ]
+    assert manifest["optimization"]["scoring"]["method"] == "simulation_evidence"
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+    metadata = manifest["optimization"]["target"]["metadata"]
+    assert metadata["diagnostics"]
+    assert {item["year"] for item in metadata["research_sources"]} == {2026}
+    assert {
+        item["url"]
+        for item in metadata["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2605.25338",
+        "https://arxiv.org/abs/2606.04990",
+        "https://arxiv.org/abs/2603.14688",
+    }
+
+    output_path = tmp_path / "sdk-report-repair-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_passed"] is True
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    metrics = best_history["metrics"]
+    for metric in (
+        "tool_selection_accuracy",
+        "framework_trace_coverage",
+        "agent_memory_lineage_quality",
+        "orchestration_flow_quality",
+        "world_contract_quality",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {
+        "adversarial",
+        "agent_memory_lineage",
+        "framework_trace",
+        "orchestration_trace",
+        "world_attack_replay",
+        "world_contract",
+        "world_orchestration_replay",
+    }
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+    assert state["world_contract"]["summary"][
+        "completed_required_transition_count"
+    ] == 1
+    assert state["agent_memory_lineage"]["summary"]["has_audit"] is True
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "framework_trace": 1.0,
+        "runtime_semantics": 1.0,
+        "world_contract": 1.0,
+        "world_orchestration_replay": 1.0,
+        "agent_memory_lineage": 1.0,
+    }
 
 
 def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path):

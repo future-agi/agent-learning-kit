@@ -4,6 +4,7 @@ import asyncio
 import inspect
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
+from .evidence import score_simulation_evidence
 from .targets import AgentCandidate, CandidateEvaluation
 
 
@@ -37,6 +38,7 @@ class SimulationEvaluator:
         agent_report_threshold: float = 0.7,
         use_agent_report_evaluator: bool = False,
         report_scorer: Optional[Callable[[Any, AgentCandidate], float]] = None,
+        evidence_scorer_config: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.agent_factory = agent_factory
         self.scenario = scenario
@@ -52,6 +54,9 @@ class SimulationEvaluator:
         self.agent_report_threshold = agent_report_threshold
         self.use_agent_report_evaluator = use_agent_report_evaluator
         self.report_scorer = report_scorer
+        self.evidence_scorer_config = (
+            dict(evidence_scorer_config) if evidence_scorer_config is not None else None
+        )
 
     def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
         agent = self._build_agent(candidate)
@@ -79,11 +84,29 @@ class SimulationEvaluator:
         if self.use_agent_report_evaluator or self.agent_report_config is not None:
             agent_report_evaluation = self._evaluate_agent_report(report, candidate)
 
-        score_source = agent_report_evaluation if agent_report_evaluation is not None else report
+        evidence_evaluation = None
+        if self.evidence_scorer_config is not None and agent_report_evaluation is None:
+            evidence_evaluation = score_simulation_evidence(
+                report,
+                candidate=candidate,
+                config=self.evidence_scorer_config,
+            )
+
+        score_source = (
+            agent_report_evaluation
+            if agent_report_evaluation is not None
+            else evidence_evaluation
+            if evidence_evaluation is not None
+            else report
+        )
         score = self._score_report(score_source, candidate)
         metadata = {"source": "simulate-sdk"}
         if agent_report_evaluation is not None:
             metadata["agent_report_evaluation"] = _dump_model(agent_report_evaluation)
+        if evidence_evaluation is not None:
+            metadata["simulation_evidence_score"] = evidence_evaluation.metadata.get(
+                "simulation_evidence_score"
+            )
         return CandidateEvaluation(
             candidate=candidate,
             score=score,

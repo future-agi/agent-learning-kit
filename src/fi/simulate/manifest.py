@@ -718,15 +718,34 @@ def build_manifest_optimization_problem(
         candidate: Any,
     ) -> Dict[str, Any]:
         evaluation = evaluate_manifest_report(candidate_manifest, report)
-        score = float(getattr(evaluation, "score", 1.0 if evaluation is None else 0.0))
+        evidence_config = _simulation_evidence_scoring_config(optimization)
+        evidence_evaluation = None
+        if evidence_config is not None:
+            from fi.opt import score_simulation_evidence
+
+            evidence_evaluation = score_simulation_evidence(
+                report,
+                manifest=candidate_manifest,
+                candidate=candidate,
+                config=evidence_config,
+            )
+            score = float(evidence_evaluation.score)
+        else:
+            score = float(getattr(evaluation, "score", 1.0 if evaluation is None else 0.0))
+        metadata = {
+            "agent_report_evaluation": (
+                cli._to_plain(evaluation) if evaluation is not None else None
+            ),
+            "report_summary": cli._report_summary(report),
+        }
+        if evidence_evaluation is not None:
+            metadata["simulation_evidence_score"] = evidence_evaluation.metadata.get(
+                "simulation_evidence_score"
+            )
         return {
             "score": score,
-            "metadata": {
-                "agent_report_evaluation": (
-                    cli._to_plain(evaluation) if evaluation is not None else None
-                ),
-                "report_summary": cli._report_summary(report),
-            },
+            "reason": getattr(evidence_evaluation, "reason", "") if evidence_evaluation is not None else "",
+            "metadata": metadata,
         }
 
     return ManifestOptimizationProblem.from_manifest(
@@ -735,6 +754,44 @@ def build_manifest_optimization_problem(
         score_manifest=score_manifest,
         name=name or str(manifest.get("name") or manifest_path.stem),
     )
+
+
+def _simulation_evidence_scoring_config(
+    optimization: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    raw = (
+        optimization.get("simulation_evidence")
+        or optimization.get("evidence_scorer")
+        or optimization.get("scoring")
+    )
+    if raw is True:
+        return {"enabled": True, "method": "simulation_evidence"}
+    if isinstance(raw, str):
+        normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in {"simulation_evidence", "evidence", "environment_evidence"}:
+            return {"enabled": True, "method": "simulation_evidence"}
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    method = str(
+        raw.get("method")
+        or raw.get("type")
+        or raw.get("name")
+        or raw.get("strategy")
+        or "simulation_evidence"
+    ).strip().lower().replace("-", "_").replace(" ", "_")
+    if not bool(raw.get("enabled", True)):
+        return None
+    if method not in {
+        "simulation_evidence",
+        "evidence",
+        "environment_evidence",
+        "trace_evidence",
+    }:
+        return None
+    config = copy.deepcopy(dict(raw))
+    config["method"] = "simulation_evidence"
+    return config
 
 
 def _cli() -> Any:
