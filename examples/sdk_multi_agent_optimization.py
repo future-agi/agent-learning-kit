@@ -84,8 +84,12 @@ def strong_agent() -> dict[str, Any]:
             },
             {
                 "content": (
-                    "The refund answer is reconciled across planner, retriever, "
-                    "and critic evidence."
+                    "The optimized trace proves planner, retriever, and critic "
+                    "roles coordinate through a verifiable room contract: "
+                    "handoff was sent to retriever, critic review was "
+                    "requested, the final decision was reconciled, and room "
+                    "contract evidence was recorded for the approved refund "
+                    "answer."
                 ),
                 "tool_calls": [
                     {

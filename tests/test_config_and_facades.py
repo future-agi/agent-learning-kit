@@ -118,6 +118,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_memory_layer_run_manifest is not None
     assert optimize.build_multi_agent_optimization_manifest is not None
     assert optimize.optimize_multi_agent_coordination is not None
+    assert simulate.build_multi_agent_coordination_run_manifest is not None
     assert optimize.build_orchestration_optimization_manifest is not None
     assert optimize.optimize_orchestration_stack is not None
     assert simulate.build_orchestration_stack_run_manifest is not None
@@ -1445,6 +1446,133 @@ def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
     assert best_history["metrics"]["multi_agent_coordination_quality"] == (
         pytest.approx(1.0)
     )
+
+
+def test_sdk_multi_agent_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_AGENT_SIMULATION_KEY",
+        "real-local-sdk-multi-agent-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_multi_agent_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert "optimization" not in manifest
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTI_AGENT_SIMULATION_KEY"
+    ]
+    assert manifest["agent"]["type"] == "scripted"
+    assert len(manifest["agent"]["responses"]) == 3
+    assert manifest["simulation"]["engine"] == "local_text"
+    assert manifest["simulation"]["min_turns"] == 1
+    assert manifest["simulation"]["max_turns"] == 3
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [environment["type"] for environment in manifest["simulation"]["environments"]] == [
+        "multi_agent_room"
+    ]
+    room = manifest["simulation"]["environments"][0]["data"]
+    assert set(room["participants"]) == {"planner", "retriever", "critic"}
+    assert room["handoff_contracts"]["retriever"]["require_reason"] is True
+    assert room["expected_handoffs"][0]["to"] == "retriever"
+    assert room["expected_reviews"][0]["reviewer"] == "critic"
+    assert room["expected_reconciliation"]["accepted_source"] == "critic"
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["required_tools"] == [
+        "room_status",
+        "handoff",
+        "request_review",
+        "reconcile",
+    ]
+    assert eval_config["required_multi_agent_roles"] == [
+        "planner",
+        "retriever",
+        "critic",
+    ]
+    assert eval_config["expected_multi_agent_reconciliation"][
+        "accepted_source"
+    ] == "critic"
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_multi_agent_coordination_run_manifest(
+        name="custom-multi-agent-simulation",
+        participants={"planner": {"name": "planner"}, "critic": {"name": "critic"}},
+        agent=module._multi_agent_optimization_example().strong_agent(),
+        room={
+            "expected_reviews": [
+                {
+                    "reviewer": "critic",
+                    "target_contains": "refund policy answer",
+                }
+            ],
+            "allow_unknown_roles": True,
+        },
+        evaluation_config=module._multi_agent_optimization_example().evaluation_config(),
+        min_turns=1,
+    )
+    assert [environment["type"] for environment in custom_manifest["simulation"]["environments"]] == [
+        "multi_agent_room"
+    ]
+    assert set(
+        custom_manifest["simulation"]["environments"][0]["data"]["participants"]
+    ) == {"planner", "critic"}
+
+    output_path = tmp_path / "sdk-multi-agent-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-multi-agent-coordination-simulation"
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-multi-agent-coordination-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "multi_agent_coordination_quality",
+        "multi_agent_trace_coverage",
+        "tool_selection_accuracy",
+        "task_completion",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["trajectory_score"] >= 0.95
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"multi_agent"}
+    room_state = state["multi_agent"]
+    assert room_state["participants"] == ["critic", "planner", "retriever"]
+    assert room_state["handoffs"][0]["to"] == "retriever"
+    assert room_state["handoffs"][0]["contract_status"]["matched"] is True
+    assert room_state["reviews"][0]["reviewer"] == "critic"
+    assert room_state["reconciliations"][0]["accepted_source"] == "critic"
+    assert room_state["reconciliations"][0]["conflicts"] == []
+    assert all(check["match"] for check in room_state["coordination_checks"])
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "room_ready",
+        "room_status",
+        "handoff",
+        "handoff_state_update",
+        "review_requested",
+        "request_review_state_update",
+        "reconciled",
+        "reconcile_state_update",
+        "room_status_state_update",
+    } <= event_names
+    assert len(report_case["events"]) >= 12
 
 
 def test_sdk_multi_agent_framework_handoff_optimization_example_runs(

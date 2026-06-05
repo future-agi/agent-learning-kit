@@ -351,6 +351,10 @@ For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
 reconciliation, and shared room-state behavior together.
+For direct, non-optimizer simulation,
+`simulate.build_multi_agent_coordination_run_manifest()` and
+`examples/sdk_multi_agent_simulation.py` run one selected agent trace plus room
+contract as a normal `agent-learning.run.v1` artifact.
 
 For realtime voice and streaming stacks, pass paired candidates with `voice`
 and `streaming_trace` data. The SDK builds a runnable local optimization
@@ -414,6 +418,10 @@ PYTHONPATH=src agent-learn suite examples/task_evidence_suite.json \
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \
   artifacts/sdk-multi-agent-optimization.json
+
+AGENT_LEARNING_SDK_MULTI_AGENT_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_multi_agent_simulation.py \
+  artifacts/sdk-multi-agent-simulation.json
 
 AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_framework_handoff_optimization.py \
