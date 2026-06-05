@@ -2709,10 +2709,13 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         "eval",
         "eval",
         "eval_artifact",
+        "optimize_eval",
         "redteam",
         "optimize_eval",
         "optimize",
     ]
+    assert suite_manifest["jobs"][4]["id"] == "artifact-evidence-optimizer"
+    assert suite_manifest["jobs"][4]["path"] == "artifact_task_optimization_suite.json"
     assert suite_manifest["jobs"][-1]["path"] == (
         "world_framework_memory_optimization.json"
     )
@@ -2724,8 +2727,8 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
     assert result["kind"] == "agent-learning.suite.v1"
     assert result["summary"]["score"] == pytest.approx(1.0)
-    assert result["summary"]["job_count"] == 7
-    assert result["summary"]["passed_count"] == 7
+    assert result["summary"]["job_count"] == 8
+    assert result["summary"]["passed_count"] == 8
     assert result["summary"]["capability_gate_passed"] is True
     assert {
         child["kind"]
@@ -2744,6 +2747,14 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         if child["id"] == "agent-optimizer"
     )
     assert optimizer_child["summary"]["optimization_score"] >= 0.84
+    artifact_optimizer_child = next(
+        child
+        for child in result["children"]
+        if child["id"] == "artifact-evidence-optimizer"
+    )
+    assert artifact_optimizer_child["summary"]["optimization_score"] == pytest.approx(
+        1.0
+    )
 
 
 def test_sdk_regression_artifact_suite_example_runs(monkeypatch, tmp_path):

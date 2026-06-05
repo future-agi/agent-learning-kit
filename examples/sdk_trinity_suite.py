@@ -27,6 +27,7 @@ def build_suite() -> dict[str, Any]:
         artifact_eval_path="artifact_task_eval_suite.json",
         artifact_report_path="fixtures/task_artifacts/refund_task_run.json",
         artifact_eval_config_path="artifact_task_eval_config.json",
+        artifact_optimization_path="artifact_task_optimization_suite.json",
         redteam_path="redteam_manifest.json",
         eval_optimization_path="eval_suite_optimization.json",
         optimization_path="world_framework_memory_optimization.json",

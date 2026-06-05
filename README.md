@@ -44,6 +44,8 @@ agent-learn eval examples/artifact_task_eval_suite.json \
 agent-learn eval-artifact examples/fixtures/task_artifacts/refund_task_run.json \
   --config examples/artifact_task_eval_config.json \
   --output artifacts/direct-artifact-eval.json
+agent-learn optimize-eval examples/artifact_task_optimization_suite.json \
+  --output artifacts/artifact-task-optimization.json
 agent-learn optimize-eval examples/eval_suite_optimization.json \
   --output artifacts/eval-optimization.json
 agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
@@ -141,7 +143,8 @@ lineage, and multi-agent review evidence.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, the nested multi-framework adapter suite, eval,
-artifact-task eval, direct artifact-report eval, red-team, eval-suite
+artifact-task eval, direct artifact-report eval, artifact-evidence optimization,
+red-team, eval-suite
 optimization, world/framework/memory optimization, voice/streaming optimization, red-team optimization,
 workspace/observability optimization, agent-integration optimization,
 multi-agent framework handoff optimization, optimizer-governance optimization,
@@ -173,6 +176,7 @@ manifest = suite.build_trinity_suite_manifest(
     artifact_eval_path="artifact_task_eval_suite.json",
     artifact_report_path="fixtures/task_artifacts/refund_task_run.json",
     artifact_eval_config_path="artifact_task_eval_config.json",
+    artifact_optimization_path="artifact_task_optimization_suite.json",
     redteam_path="redteam_manifest.json",
     eval_optimization_path="eval_suite_optimization.json",
     optimization_path="world_framework_memory_optimization.json",

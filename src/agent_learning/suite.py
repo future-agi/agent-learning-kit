@@ -163,6 +163,7 @@ def build_trinity_suite_manifest(
     redteam_path: str | Path,
     eval_optimization_path: str | Path,
     optimization_path: str | Path,
+    artifact_optimization_path: str | Path | None = None,
     artifact_eval_config_path: str | Path | None = None,
     required_env: Sequence[str] = (),
     max_candidates: Optional[int] = None,
@@ -171,9 +172,9 @@ def build_trinity_suite_manifest(
     """Build a run/eval/artifact/red-team/optimization suite.
 
     The manifest mirrors the promptfoo-style trinity workflow: simulation,
-    text eval, saved-artifact eval, direct artifact-report eval, red-team,
-    eval-suite optimization, and full manifest optimization in one capability
-    gated suite.
+    text eval, saved-artifact eval, direct artifact-report eval, optional
+    artifact-evidence optimization, red-team, eval-suite optimization, and
+    full manifest optimization in one capability-gated suite.
     """
 
     suite_name = str(name)
@@ -202,30 +203,44 @@ def build_trinity_suite_manifest(
             "path": _suite_path_text(artifact_report_path),
             "name": f"{suite_name}-direct-artifact",
         },
-        {
-            "id": "agent-red-team",
-            "command": "redteam",
-            "path": _suite_path_text(redteam_path),
-            "name": f"{suite_name}-redteam",
-        },
-        {
-            "id": "eval-suite-optimizer",
-            "command": "optimize-eval",
-            "path": _suite_path_text(eval_optimization_path),
-            "name": f"{suite_name}-eval-optimizer",
-        },
-        {
-            "id": "agent-optimizer",
-            "command": "optimize",
-            "path": _suite_path_text(optimization_path),
-            "name": f"{suite_name}-optimizer",
-        },
     ]
+    if artifact_optimization_path is not None:
+        jobs.append(
+            {
+                "id": "artifact-evidence-optimizer",
+                "command": "optimize-eval",
+                "path": _suite_path_text(artifact_optimization_path),
+                "name": f"{suite_name}-artifact-optimizer",
+            }
+        )
+    jobs.extend(
+        [
+            {
+                "id": "agent-red-team",
+                "command": "redteam",
+                "path": _suite_path_text(redteam_path),
+                "name": f"{suite_name}-redteam",
+            },
+            {
+                "id": "eval-suite-optimizer",
+                "command": "optimize-eval",
+                "path": _suite_path_text(eval_optimization_path),
+                "name": f"{suite_name}-eval-optimizer",
+            },
+            {
+                "id": "agent-optimizer",
+                "command": "optimize",
+                "path": _suite_path_text(optimization_path),
+                "name": f"{suite_name}-optimizer",
+            },
+        ]
+    )
     if artifact_eval_config_path is not None:
         jobs[3]["config"] = _suite_path_text(artifact_eval_config_path)
     if max_candidates is not None:
-        jobs[5]["max_candidates"] = int(max_candidates)
-        jobs[6]["max_candidates"] = int(max_candidates)
+        for job in jobs:
+            if job["command"] in {"optimize", "optimize-eval"}:
+                job["max_candidates"] = int(max_candidates)
     return build_suite_manifest(
         name=suite_name,
         required_env=required_env,
