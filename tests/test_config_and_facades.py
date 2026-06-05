@@ -96,6 +96,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
     assert optimize.optimize_multi_agent_framework_handoff is not None
+    assert optimize.build_optimizer_governance_optimization_manifest is not None
+    assert optimize.optimize_optimizer_governance is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -1073,6 +1075,115 @@ def test_sdk_multi_agent_framework_handoff_optimization_example_runs(
         for checkpoint in observed["checkpoints"]
     }
     assert observed["errors"] == []
+
+
+def test_sdk_optimizer_governance_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY",
+        "real-local-sdk-optimizer-governance-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_optimizer_governance_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_optimizer_governance_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["layers"] == [
+        "multi_agent",
+        "orchestration",
+        "planner",
+        "security",
+        "evaluator",
+    ]
+    assert manifest["optimization"]["optimizer"] == {
+        "max_candidates": 3,
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    assert [environment["type"] for environment in candidates[1]] == [
+        "optimizer_trace"
+    ]
+    trace = candidates[1][0]["data"]
+    assert trace["optimizer"] == "SocietyAgentOptimizer"
+    assert trace["best_candidate_id"] == "c_steward"
+    assert len(trace["roles"]) == 5
+    quality = manifest["evaluation"]["agent_report"]["config"][
+        "optimizer_trace_quality"
+    ]
+    assert quality["required_best_role"] == "dharma_steward"
+    assert quality["min_governance_checks"] == 6
+
+    output_path = tmp_path / "sdk-optimizer-governance-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "optimizer_trace_coverage",
+        "optimizer_trace_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"optimizer_society_trace"}
+    trace_summary = state["optimizer_society_trace"]["summary"]
+    assert trace_summary["role_count"] == 5
+    assert trace_summary["proposal_count"] == 5
+    assert trace_summary["round_count"] == 3
+    assert trace_summary["diagnostic_count"] == 2
+    assert trace_summary["role_credit_count"] == 5
+    assert trace_summary["duplicate_candidate_count"] == 0
+    assert trace_summary["best_candidate_id"] == "c_steward"
+    assert trace_summary["final_score"] == pytest.approx(0.99)
+    for flag in (
+        "has_role_graph",
+        "has_critique",
+        "has_synthesis",
+        "has_steward",
+        "has_governance",
+        "has_role_diversity",
+        "has_mediator",
+        "has_contract_gate",
+        "has_rollback",
+        "has_locality",
+        "has_dependency_audit",
+    ):
+        assert trace_summary[flag] is True
+    assert trace_summary["governance_check_count"] == 6
+    assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
 
 
 def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):

@@ -1920,6 +1920,132 @@ def optimize_multi_agent_framework_handoff(
     )
 
 
+def build_optimizer_governance_optimization_manifest(
+    *,
+    name: str,
+    governance_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build an optimizer-governance optimization manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+
+    environment_candidates = (
+        [
+            [_optimizer_governance_environment(item) for item in candidate]
+            for candidate in governance_candidates
+        ]
+        if governance_candidates is not None
+        else [
+            _seed_optimizer_governance_candidate(),
+            _governed_optimizer_governance_candidate(),
+        ]
+    )
+    if not environment_candidates:
+        raise ValueError("governance_candidates must contain at least one candidate")
+    for index, candidate in enumerate(environment_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"governance_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": environment_candidates}
+    agent_config = copy.deepcopy(dict(agent or _default_optimizer_governance_agent()))
+    max_turns_value = int(
+        max_turns
+        if max_turns is not None
+        else _max_agent_response_count([agent_config], min_turns)
+    )
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+    config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _default_optimizer_governance_evaluation_config()
+    )
+
+    return {
+        "version": "agent-learning.optimization.v1",
+        "name": name,
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(
+            dict(scenario or _default_optimizer_governance_scenario(name))
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": simulation_engine,
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": [
+                    "multi_agent",
+                    "orchestration",
+                    "planner",
+                    "security",
+                    "evaluator",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_optimizer_governance_optimization_manifest"
+                    ),
+                    "task_kind": "optimizer_governance",
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_optimizer_governance_optimizer())
+            ),
+        },
+    }
+
+
+def optimize_optimizer_governance(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute an optimizer-governance optimization manifest."""
+
+    manifest = build_optimizer_governance_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_framework_optimization_manifest(
     *,
     name: str,
@@ -3807,6 +3933,459 @@ def _default_multi_agent_framework_handoff_evaluation_config() -> dict[str, Any]
             "multi_agent_coordination_quality": 7.0,
             "tool_selection_accuracy": 2.0,
             "task_completion": 2.0,
+        },
+    }
+
+
+_OPTIMIZER_GOVERNANCE_ROLES: tuple[tuple[str, str, str], ...] = (
+    ("sangha", "synthesis", "coverage_synthesis"),
+    ("vidura", "critique", "adversarial_critic"),
+    ("krishna", "mediation", "mediator"),
+    ("dharma_steward", "steward", "governance_steward"),
+    ("smriti", "memory", "memory_lineage"),
+)
+_OPTIMIZER_GOVERNANCE_SEARCH_PATHS = (
+    "multi_agent.handoff.contract",
+    "multi_agent.review.enabled",
+    "memory.shared_case_summary",
+    "policy.reconciliation.mode",
+    "tools.evidence_capture",
+    "security.adversarial_review",
+)
+_OPTIMIZER_GOVERNANCE_CHECKS = (
+    "role_diversity",
+    "mediator_review",
+    "contract_gate",
+    "rollback_check",
+    "search_locality",
+    "dependency_audit",
+)
+
+
+def _default_optimizer_governance_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {"name": "Dev", "role": "optimizer-platform-owner"},
+                "situation": (
+                    "Optimize an optimizer society trace before promoting "
+                    "architecture/config candidates for multi-agent systems."
+                ),
+                "outcome": (
+                    "The selected trace proves role diversity, critique, "
+                    "synthesis, mediation, steward selection, diagnostics, "
+                    "search locality, rollback, and dependency audit."
+                ),
+            }
+        ],
+    }
+
+
+def _default_optimizer_governance_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "Inspecting the optimizer society trace before trusting "
+                    "the selected agent architecture."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "trace_status",
+                        "name": "optimizer_trace_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "proposal_list",
+                        "name": "list_optimizer_proposals",
+                        "arguments": {"min_score": 0.7},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Checking critic, synthesis, and steward roles plus their "
+                    "proposal credit."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "critic_role",
+                        "name": "inspect_optimizer_role",
+                        "arguments": {"role": "vidura"},
+                    },
+                    {
+                        "id": "synthesis_role",
+                        "name": "inspect_optimizer_role",
+                        "arguments": {"role": "sangha"},
+                    },
+                    {
+                        "id": "steward_role",
+                        "name": "inspect_optimizer_role",
+                        "arguments": {"role": "dharma_steward"},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Checking candidate selection and governance gates before "
+                    "promotion."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "best_candidate",
+                        "name": "inspect_optimizer_candidate",
+                        "arguments": {"candidate_id": "c_steward"},
+                    },
+                    {
+                        "id": "governance",
+                        "name": "inspect_optimizer_governance",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "The optimized trace proves a governed optimizer society "
+                    "with role diversity, mediator review, contract gates, "
+                    "rollback, search locality, dependency audit, diagnostics, "
+                    "role credit, critique, synthesis, steward selection, and "
+                    "metric-bound search paths."
+                ),
+                "tool_calls": [],
+            },
+        ],
+    }
+
+
+def _optimizer_governance_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    if copied.get("type") in {"optimizer_trace", "optimizer_society_trace"}:
+        copied.setdefault("data", {})
+        return copied
+    if copied.get("optimizer_trace") is not None:
+        return {"type": "optimizer_trace", "data": copied["optimizer_trace"]}
+    if copied.get("optimizer_society_trace") is not None:
+        return {
+            "type": "optimizer_trace",
+            "data": copied["optimizer_society_trace"],
+        }
+    return {"type": "optimizer_trace", "data": copied}
+
+
+def _seed_optimizer_governance_candidate() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "optimizer_trace",
+            "data": {
+                "name": "seed-optimizer-trace",
+                "optimizer": "AgentOptimizer",
+                "roles": [
+                    {
+                        "name": "manifest_seed",
+                        "proposal_kind": "baseline",
+                        "archetype": "baseline",
+                    }
+                ],
+                "proposals": [
+                    {
+                        "candidate_id": "c_seed",
+                        "role": "manifest_seed",
+                        "role_kind": "baseline",
+                        "role_archetype": "baseline",
+                        "round": 1,
+                        "score": 0.42,
+                        "patch": {},
+                    }
+                ],
+                "rounds": [{"round": 1, "decision": "seed"}],
+                "diagnostics": [],
+                "search_paths": [],
+                "governance": {"checks": []},
+                "best_candidate_id": "c_seed",
+                "final_score": 0.42,
+            },
+        }
+    ]
+
+
+def _governed_optimizer_governance_candidate() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "optimizer_trace",
+            "data": {
+                "name": "governed-society-optimizer-trace",
+                "optimizer": "SocietyAgentOptimizer",
+                "roles": [
+                    {
+                        "name": name,
+                        "proposal_kind": proposal_kind,
+                        "archetype": archetype,
+                    }
+                    for name, proposal_kind, archetype in _OPTIMIZER_GOVERNANCE_ROLES
+                ],
+                "proposals": _optimizer_governance_proposals(),
+                "rounds": [
+                    {"round": 1, "decision": "critic probes risky baseline"},
+                    {
+                        "round": 2,
+                        "decision": "mediator merges memory, policy, and tools",
+                    },
+                    {"round": 3, "decision": "steward selects governed candidate"},
+                ],
+                "diagnostics": _optimizer_governance_diagnostics(),
+                "search_paths": list(_OPTIMIZER_GOVERNANCE_SEARCH_PATHS),
+                "governance": {"checks": _optimizer_governance_checks()},
+                "best_candidate_id": "c_steward",
+                "final_score": 0.99,
+                "metadata": {
+                    "source": "agent-learning-kit",
+                    "inspiration": (
+                        "human society, psychology, and dharma role metadata; "
+                        "candidate acceptance remains metric-based"
+                    ),
+                },
+            },
+        }
+    ]
+
+
+def _optimizer_governance_proposals() -> list[dict[str, Any]]:
+    return [
+        {
+            "candidate_id": "c_seed",
+            "role": "sangha",
+            "role_kind": "synthesizer",
+            "role_archetype": "coverage_synthesis",
+            "round": 1,
+            "score": 0.55,
+            "reason": "Baseline keeps loose handoff and missing evidence capture.",
+            "patch": {"multi_agent.handoff.contract": "loose"},
+        },
+        {
+            "candidate_id": "c_vidura",
+            "role": "vidura",
+            "role_kind": "critic",
+            "role_archetype": "adversarial_critic",
+            "round": 1,
+            "score": 0.72,
+            "reason": "Critic adds red-team review for adversarial resilience.",
+            "parent_ids": ["c_seed"],
+            "patch": {"security.adversarial_review": "red_team"},
+        },
+        {
+            "candidate_id": "c_smriti",
+            "role": "smriti",
+            "role_kind": "memory",
+            "role_archetype": "memory_lineage",
+            "round": 2,
+            "score": 0.81,
+            "reason": "Memory role adds shared case summary and provenance.",
+            "parent_ids": ["c_vidura"],
+            "patch": {"memory.shared_case_summary": True},
+        },
+        {
+            "candidate_id": "c_krishna",
+            "role": "krishna",
+            "role_kind": "mediator",
+            "role_archetype": "mediator",
+            "round": 2,
+            "score": 0.91,
+            "reason": "Mediator reconciles policy, tools, and handoff constraints.",
+            "parent_ids": ["c_smriti"],
+            "patch": {
+                "multi_agent.review.enabled": True,
+                "policy.reconciliation.mode": "evidence_weighted",
+                "tools.evidence_capture": True,
+            },
+        },
+        {
+            "candidate_id": "c_steward",
+            "role": "dharma_steward",
+            "role_kind": "steward",
+            "role_archetype": "governance_steward",
+            "round": 3,
+            "score": 0.99,
+            "reason": "Steward selects the locally bounded governed candidate.",
+            "parent_ids": ["c_krishna"],
+            "patch": {
+                "multi_agent.handoff.contract": "explicit_policy",
+                "multi_agent.review.enabled": True,
+                "memory.shared_case_summary": True,
+                "policy.reconciliation.mode": "evidence_weighted",
+                "tools.evidence_capture": True,
+                "security.adversarial_review": "red_team",
+            },
+        },
+    ]
+
+
+def _optimizer_governance_diagnostics() -> list[dict[str, Any]]:
+    return [
+        {
+            "component": "multi_agent",
+            "failure_mode": "coordination_failure",
+            "evidence": (
+                "Loose handoff contract and missing review reduced "
+                "multi-agent coordination quality."
+            ),
+            "suggested_paths": [
+                "multi_agent.handoff.contract",
+                "multi_agent.review.enabled",
+            ],
+            "suggested_metrics": [
+                "optimizer_trace_quality",
+                "multi_agent_coordination_quality",
+            ],
+        },
+        {
+            "component": "security",
+            "failure_mode": "adversarial_resilience",
+            "evidence": "Missing red-team review reduced promotion confidence.",
+            "suggested_paths": ["security.adversarial_review"],
+            "suggested_metrics": ["adversarial_resilience"],
+        },
+    ]
+
+
+def _optimizer_governance_checks() -> list[dict[str, Any]]:
+    reasons = {
+        "role_diversity": "Five distinct roles proposed or reviewed candidates.",
+        "mediator_review": "Mediator role reconciled competing changes.",
+        "contract_gate": "Final candidate uses explicit handoff policy.",
+        "rollback_check": "Best candidate id and parent lineage are retained.",
+        "search_locality": "All patches stay within diagnosed search paths.",
+        "dependency_audit": (
+            "Policy, tool, memory, and security dependencies are listed."
+        ),
+    }
+    return [
+        {"name": name, "passed": True, "reason": reasons[name]}
+        for name in _OPTIMIZER_GOVERNANCE_CHECKS
+    ]
+
+
+def _default_optimizer_governance_optimizer() -> dict[str, Any]:
+    return {
+        "max_candidates": 3,
+        "include_seed": True,
+        "auto_diagnose": False,
+    }
+
+
+def _default_optimizer_governance_evaluation_config() -> dict[str, Any]:
+    required_tools = [
+        "optimizer_trace_status",
+        "list_optimizer_proposals",
+        "inspect_optimizer_role",
+        "inspect_optimizer_candidate",
+        "inspect_optimizer_governance",
+    ]
+    return {
+        "task_description": (
+            "Optimize the optimizer trace from a weak one-role seed into a "
+            "governed multi-role society trace for architecture/config "
+            "optimization."
+        ),
+        "expected_result": (
+            "The optimized trace proves a governed optimizer society with "
+            "critique, synthesis, steward selection, mediator review, contract "
+            "gates, rollback, locality, dependency audit, diagnostics, role "
+            "credit, and metric-bound search paths."
+        ),
+        "required_tools": required_tools,
+        "available_tools": required_tools,
+        "required_artifact_types": ["trace"],
+        "required_optimizer_trace": [
+            "optimizer_trace",
+            "society_trace",
+            "optimizer",
+            "role",
+            "role_graph",
+            "proposal",
+            "candidate",
+            "evaluation",
+            "score",
+            "round",
+            "diagnostic",
+            "search_path",
+            "credit",
+            "best_candidate",
+            "critique",
+            "synthesis",
+            "steward",
+            "governance",
+            *_OPTIMIZER_GOVERNANCE_CHECKS,
+        ],
+        "optimizer_trace_quality": {
+            "min_role_count": 5,
+            "min_proposal_count": 5,
+            "min_round_count": 3,
+            "min_credit_entries": 5,
+            "required_roles": [
+                "sangha",
+                "vidura",
+                "krishna",
+                "dharma_steward",
+                "smriti",
+            ],
+            "required_signals": [
+                "optimizer",
+                "society_trace",
+                "proposal",
+                "candidate",
+                "evaluation",
+                "score",
+                "credit",
+                "diagnostic",
+                "search_path",
+                "best_candidate",
+            ],
+            "required_archetypes": [
+                "coverage_synthesis",
+                "adversarial_critic",
+                "mediator",
+                "governance_steward",
+                "memory_lineage",
+            ],
+            "required_search_paths": list(_OPTIMIZER_GOVERNANCE_SEARCH_PATHS),
+            "required_governance_signals": list(_OPTIMIZER_GOVERNANCE_CHECKS),
+            "min_governance_checks": 6,
+            "min_governance_pass_rate": 1.0,
+            "min_best_score": 0.98,
+            "required_best_role": "dharma_steward",
+            "require_role_graph": True,
+            "require_diagnostics": True,
+            "require_critique": True,
+            "require_synthesis": True,
+            "require_steward": True,
+            "require_governance": True,
+            "require_role_diversity": True,
+            "require_mediator": True,
+            "require_contract_gate": True,
+            "require_rollback": True,
+            "require_locality": True,
+            "require_dependency_audit": True,
+            "max_duplicate_candidate_count": 0,
+        },
+        "success_criteria": [
+            "role diversity",
+            "mediator review",
+            "contract gates",
+            "rollback",
+            "search locality",
+            "dependency audit",
+            "diagnostics",
+            "role credit",
+            "metric-bound search paths",
+        ],
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "optimizer_trace_coverage": 6.0,
+            "optimizer_trace_quality": 10.0,
+            "tool_selection_accuracy": 2.0,
+            "final_response_quality": 2.0,
         },
     }
 
@@ -7084,6 +7663,7 @@ __all__ = [
     "build_memory_optimization_manifest",
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
+    "build_optimizer_governance_optimization_manifest",
     "build_orchestration_optimization_manifest",
     "build_realtime_optimization_manifest",
     "build_redteam_optimization_manifest",
@@ -7103,6 +7683,7 @@ __all__ = [
     "optimize_memory_layer",
     "optimize_multi_agent_framework_handoff",
     "optimize_multi_agent_coordination",
+    "optimize_optimizer_governance",
     "optimize_orchestration_stack",
     "optimize_realtime_stack",
     "optimize_redteam_campaign",

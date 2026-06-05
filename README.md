@@ -385,6 +385,10 @@ AGENT_LEARNING_SDK_MULTI_AGENT_FRAMEWORK_HANDOFF_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_framework_handoff_optimization.py \
   artifacts/sdk-multi-agent-framework-handoff-optimization.json
 
+AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_optimizer_governance_optimization.py \
+  artifacts/sdk-optimizer-governance-optimization.json
+
 AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_realtime_voice_optimization.py \
   artifacts/sdk-realtime-voice-optimization.json
@@ -520,6 +524,11 @@ Optimization manifests can select the mutation-aware evolutionary optimizer with
 `agent-learn optimize` command, but searches coherent framework/world/memory/
 multi-agent patches from the Agent Mutation Library instead of only enumerating
 flat candidate values.
+The governed society-trace harness is available from Python through
+`optimize.build_optimizer_governance_optimization_manifest()` and
+`examples/sdk_optimizer_governance_optimization.py`, which search weak versus
+governed optimizer traces and verify role diversity, diagnostics, search-path
+locality, rollback lineage, and governance pass rate.
 They can also select the social-memory optimizer with
 `optimization.optimizer.algorithm: "social_memory"`, then tune `max_rounds`,
 `beam_width`, `max_proposals_per_round`, `target_score`, `include_seed`, and
