@@ -104,6 +104,171 @@ def validate_suite_env(
         )
 
 
+def build_suite_manifest(
+    *,
+    name: str,
+    jobs: Sequence[Mapping[str, Any]],
+    required_env: Sequence[str] = (),
+    required_capabilities: Optional[Mapping[str, Sequence[str]]] = None,
+    outputs: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    threshold: Optional[float] = None,
+    fail_fast: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Build an Agent Learning suite manifest from SDK data.
+
+    This is the SDK counterpart to writing ``agent-learning.suite.v1`` JSON by
+    hand: users can compose run/eval/red-team/optimization jobs in Python and
+    execute them through ``run_suite`` or ``run_suite_file``.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not jobs:
+        raise ValueError("jobs must contain at least one suite job")
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_SUITE_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "jobs": [
+            _normalize_suite_job(job, index)
+            for index, job in enumerate(jobs, start=1)
+        ],
+    }
+    if required_capabilities:
+        manifest["required_capabilities"] = {
+            str(key): _unique_strings(value)
+            for key, value in dict(required_capabilities).items()
+            if _unique_strings(value)
+        }
+    if outputs:
+        manifest["outputs"] = copy.deepcopy(dict(outputs))
+    if metadata:
+        manifest["metadata"] = copy.deepcopy(dict(metadata))
+    if threshold is not None:
+        manifest["threshold"] = float(threshold)
+    if fail_fast is not None:
+        manifest["fail_fast"] = bool(fail_fast)
+    return manifest
+
+
+def build_trinity_suite_manifest(
+    *,
+    name: str,
+    run_path: str | Path,
+    eval_path: str | Path,
+    artifact_eval_path: str | Path,
+    artifact_report_path: str | Path,
+    redteam_path: str | Path,
+    eval_optimization_path: str | Path,
+    optimization_path: str | Path,
+    artifact_eval_config_path: str | Path | None = None,
+    required_env: Sequence[str] = (),
+    max_candidates: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a run/eval/artifact/red-team/optimization suite.
+
+    The manifest mirrors the promptfoo-style trinity workflow: simulation,
+    text eval, saved-artifact eval, direct artifact-report eval, red-team,
+    eval-suite optimization, and full manifest optimization in one capability
+    gated suite.
+    """
+
+    suite_name = str(name)
+    jobs: list[dict[str, Any]] = [
+        {
+            "id": "local-simulation",
+            "command": "run",
+            "path": _suite_path_text(run_path),
+            "name": f"{suite_name}-run",
+        },
+        {
+            "id": "promptfoo-style-eval",
+            "command": "eval",
+            "path": _suite_path_text(eval_path),
+            "name": f"{suite_name}-eval",
+        },
+        {
+            "id": "artifact-task-eval",
+            "command": "eval",
+            "path": _suite_path_text(artifact_eval_path),
+            "name": f"{suite_name}-artifact-eval",
+        },
+        {
+            "id": "direct-artifact-report-eval",
+            "command": "eval-artifact",
+            "path": _suite_path_text(artifact_report_path),
+            "name": f"{suite_name}-direct-artifact",
+        },
+        {
+            "id": "agent-red-team",
+            "command": "redteam",
+            "path": _suite_path_text(redteam_path),
+            "name": f"{suite_name}-redteam",
+        },
+        {
+            "id": "eval-suite-optimizer",
+            "command": "optimize-eval",
+            "path": _suite_path_text(eval_optimization_path),
+            "name": f"{suite_name}-eval-optimizer",
+        },
+        {
+            "id": "agent-optimizer",
+            "command": "optimize",
+            "path": _suite_path_text(optimization_path),
+            "name": f"{suite_name}-optimizer",
+        },
+    ]
+    if artifact_eval_config_path is not None:
+        jobs[3]["config"] = _suite_path_text(artifact_eval_config_path)
+    if max_candidates is not None:
+        jobs[5]["max_candidates"] = int(max_candidates)
+        jobs[6]["max_candidates"] = int(max_candidates)
+    return build_suite_manifest(
+        name=suite_name,
+        required_env=required_env,
+        jobs=jobs,
+        required_capabilities={
+            "commands": [
+                "run",
+                "eval",
+                "eval_artifact",
+                "redteam",
+                "optimize_eval",
+                "optimize",
+            ],
+            "result_kinds": [
+                "agent-learning.run.v1",
+                "agent-learning.eval.v1",
+                "agent-learning.artifact-evaluation.v1",
+                "agent-learning.redteam.v1",
+                "agent-learning.eval-optimization.v1",
+                "agent-learning.optimization.v1",
+            ],
+            "metrics": [
+                "eval_assertions",
+            ],
+        },
+        metadata={
+            "source": "agent_learning.suite.build_trinity_suite_manifest",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+
+def write_suite_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
+    """Write a suite manifest as formatted JSON and return the resolved path."""
+
+    suite_path = Path(path).expanduser().resolve()
+    suite_path.parent.mkdir(parents=True, exist_ok=True)
+    suite_path.write_text(
+        json.dumps(dict(manifest), indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return suite_path
+
+
 def run_suite_file(
     path: str | Path,
     *,
@@ -1022,6 +1187,33 @@ def _normalize_command(value: Any) -> str:
     return command
 
 
+def _normalize_suite_job(job: Mapping[str, Any], index: int) -> dict[str, Any]:
+    item = copy.deepcopy(dict(job))
+    command = _normalize_command(item.get("command") or item.get("type"))
+    path = item.get("path") or item.get("manifest") or item.get("suite")
+    if path in (None, ""):
+        raise ValueError(f"suite job {index} requires a path")
+    item["command"] = command
+    item["path"] = _suite_path_text(path)
+    item["id"] = str(item.get("id") or item.get("name") or f"{command}-{index}")
+    return item
+
+
+def _suite_path_text(path: str | Path) -> str:
+    return str(path)
+
+
+def _unique_strings(values: Sequence[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in _as_list(values):
+        text = str(value)
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
 def _job_name(job: Mapping[str, Any]) -> Optional[str]:
     value = job.get("name")
     if value in (None, ""):
@@ -1198,6 +1390,8 @@ __all__ = [
     "AGENT_LEARNING_SUITE_KIND",
     "SuiteError",
     "SuiteRunOptions",
+    "build_suite_manifest",
+    "build_trinity_suite_manifest",
     "load_suite",
     "load_suite_file",
     "missing_suite_env",
@@ -1208,4 +1402,5 @@ __all__ = [
     "run_suite",
     "run_suite_file",
     "validate_suite_env",
+    "write_suite_file",
 ]

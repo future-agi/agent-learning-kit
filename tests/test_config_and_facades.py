@@ -87,6 +87,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.evaluate is not None
     assert evals.evaluate_artifact_file is not None
     assert suite.run_suite_file is not None
+    assert suite.build_suite_manifest is not None
+    assert suite.build_trinity_suite_manifest is not None
+    assert suite.write_suite_file is not None
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
     assert simulate.AdversarialEnvironmentPack is not None
     assert simulate.AutonomyLoopEnvironment is not None
@@ -1018,6 +1021,69 @@ def test_sdk_artifact_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_history["patch"].keys() == {"providers.0.fields"}
     assert best_history["score"] == pytest.approx(1.0)
+
+
+def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TRINITY_SUITE_KEY",
+        "real-local-sdk-trinity-suite-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_trinity_suite.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_trinity_suite",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    suite_manifest = module.build_suite()
+    assert suite_manifest["version"] == "agent-learning.suite.v1"
+    assert suite_manifest["required_env"] == ["AGENT_LEARNING_SDK_TRINITY_SUITE_KEY"]
+    assert [
+        job["command"]
+        for job in suite_manifest["jobs"]
+    ] == [
+        "run",
+        "eval",
+        "eval",
+        "eval_artifact",
+        "redteam",
+        "optimize_eval",
+        "optimize",
+    ]
+    assert suite_manifest["jobs"][-1]["path"] == (
+        "world_framework_memory_optimization.json"
+    )
+
+    output_path = tmp_path / "sdk-trinity-suite-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["kind"] == "agent-learning.suite.v1"
+    assert result["summary"]["score"] == pytest.approx(1.0)
+    assert result["summary"]["job_count"] == 7
+    assert result["summary"]["passed_count"] == 7
+    assert result["summary"]["capability_gate_passed"] is True
+    assert {
+        child["kind"]
+        for child in result["children"]
+    } == {
+        "agent-learning.run.v1",
+        "agent-learning.eval.v1",
+        "agent-learning.artifact-evaluation.v1",
+        "agent-learning.redteam.v1",
+        "agent-learning.eval-optimization.v1",
+        "agent-learning.optimization.v1",
+    }
+    optimizer_child = next(
+        child
+        for child in result["children"]
+        if child["id"] == "agent-optimizer"
+    )
+    assert optimizer_child["summary"]["optimization_score"] >= 0.84
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):

@@ -156,6 +156,26 @@ missing capability in JSON, JUnit, SARIF, and Markdown outputs.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 
+SDK users can also build the same composed CI entrypoint without hand-writing
+suite JSON:
+
+```python
+from agent_learning import suite
+
+manifest = suite.build_trinity_suite_manifest(
+    name="sdk-trinity-suite",
+    run_path="run_manifest.json",
+    eval_path="eval_suite.json",
+    artifact_eval_path="artifact_task_eval_suite.json",
+    artifact_report_path="fixtures/task_artifacts/refund_task_run.json",
+    artifact_eval_config_path="artifact_task_eval_config.json",
+    redteam_path="redteam_manifest.json",
+    eval_optimization_path="eval_suite_optimization.json",
+    optimization_path="world_framework_memory_optimization.json",
+)
+result = suite.run_suite(manifest, suite_path="examples/sdk_trinity_suite.json")
+```
+
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, Pipecat, LiveKit-style, and custom proprietary agents through the
 same manifest framework adapter path, proving text and voice framework shims can
@@ -272,6 +292,10 @@ AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_optimization.py \
   artifacts/sdk-redteam-optimization.json
+
+AGENT_LEARNING_SDK_TRINITY_SUITE_KEY=... \
+  PYTHONPATH=src python examples/sdk_trinity_suite.py \
+  artifacts/sdk-trinity-suite.json
 ```
 
 The `artifact_task_eval_suite.json` example evaluates a saved
