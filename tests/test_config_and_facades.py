@@ -140,6 +140,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_realtime_stack is not None
     assert optimize.build_redteam_autogen_optimization_manifest is not None
     assert optimize.optimize_redteam_autogen is not None
+    assert optimize.build_long_horizon_redteam_optimization_manifest is not None
+    assert optimize.optimize_long_horizon_redteam is not None
     assert optimize.build_redteam_optimization_manifest is not None
     assert optimize.optimize_redteam_campaign is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
@@ -3601,6 +3603,123 @@ def test_sdk_long_horizon_redteam_simulation_example_runs(monkeypatch, tmp_path)
     assert campaign_summary["coverage_cell_count"] == 25
     assert campaign_summary["executed_cell_count"] == 25
     assert campaign_summary["multi_turn_scenario_count"] == 25
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+
+
+def test_sdk_long_horizon_redteam_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_EXAMPLE_KEY",
+        "real-local-sdk-long-horizon-redteam-opt-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_long_horizon_redteam_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_long_horizon_redteam_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    attacks = [
+        "intent_hijacking",
+        "task_injection",
+        "objective_drift",
+        "tool_chaining",
+        "memory_poisoning",
+    ]
+    surfaces = ["instruction", "tool", "memory", "retrieval", "environment"]
+    expected_cells = [
+        f"{attack}|{surface}|chat|local_cli"
+        for attack in attacks
+        for surface in surfaces
+    ]
+
+    assert manifest["version"] == "agent-learning.optimization.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_EXAMPLE_KEY"
+    ]
+    assert manifest["redteam"]["attacks"] == ["intent_hijacking"]
+    assert manifest["redteam"]["surfaces"] == ["instruction"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {"redteam"}
+    candidates = manifest["optimization"]["target"]["search_space"]["redteam"]
+    assert len(candidates) == 3
+    assert candidates[0]["attack_system"]["strategy"] == (
+        "single_vector_objective_probe"
+    )
+    assert candidates[-1]["profile"] == "stateful_attack_system"
+    assert candidates[-1]["preset"] == "long_horizon_agent"
+    assert candidates[-1]["attacks"] == attacks
+    assert candidates[-1]["surfaces"] == surfaces
+    assert candidates[-1]["blocked_tools"] == [
+        "transfer_money",
+        "export_secrets",
+        "disable_audit_log",
+        "send_external_email",
+        "create_access_token",
+    ]
+    assert candidates[-1]["attack_system"]["strategy"] == (
+        "long_horizon_stateful_campaign"
+    )
+    assert candidates[-1]["attack_system"]["planner"] == "campaign_matrix"
+    assert {source["source"] for source in candidates[-1]["attack_system"]["research_basis"]} >= {
+        "arxiv:2601.13518",
+        "arxiv:2605.17380",
+        "arxiv:2605.01970",
+    }
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["adversarial_resilience"]["expected_attack_count"] == 25
+    assert config["long_horizon_attack_system"]["required_profile"] == (
+        "stateful_attack_system"
+    )
+    assert config["red_team_campaign_quality"][
+        "required_attack_matrix_cells"
+    ] == expected_cells
+    assert set(config["required_red_team_campaign"]) >= {
+        "pre_deployment_telemetry",
+        "persistent_memory",
+        "compositional_orchestration",
+    }
+
+    output_path = tmp_path / "sdk-long-horizon-redteam-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "redteam" in result["summary"]["search_paths"]
+
+    best_config = result["optimization"]["best_config"]
+    best_redteam = best_config["redteam"]
+    assert best_redteam["profile"] == "stateful_attack_system"
+    assert best_redteam["attacks"] == attacks
+    assert best_redteam["surfaces"] == surfaces
+    assert best_redteam["attack_system"]["strategy"] == (
+        "long_horizon_stateful_campaign"
+    )
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"redteam"}
+    metrics = best_history["metrics"]
+    assert metrics["adversarial_resilience"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_coverage"] == pytest.approx(1.0)
+    assert metrics["red_team_campaign_quality"] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
     assert campaign_summary["missing_coverage_cells"] == []
     assert campaign_summary["missing_executed_cells"] == []
 

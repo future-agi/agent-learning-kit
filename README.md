@@ -61,6 +61,8 @@ agent-learn optimize examples/redteam_campaign_optimization.json \
   --output artifacts/redteam-campaign-optimization.json
 agent-learn optimize examples/redteam_autogen_optimization.json \
   --output artifacts/redteam-autogen-optimization.json
+agent-learn optimize examples/long_horizon_redteam_optimization.json \
+  --output artifacts/long-horizon-redteam-optimization.json
 agent-learn optimize examples/workspace_observability_optimization.json \
   --output artifacts/workspace-observability-optimization.json
 agent-learn optimize examples/agent_integration_optimization.json \
@@ -474,6 +476,10 @@ AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_KEY=... \
   PYTHONPATH=src python examples/sdk_long_horizon_redteam_simulation.py \
   artifacts/sdk-long-horizon-redteam.json
 
+AGENT_LEARNING_SDK_LONG_HORIZON_REDTEAM_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_long_horizon_redteam_optimization.py \
+  artifacts/sdk-long-horizon-redteam-optimization.json
+
 AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_optimization.py \
   artifacts/sdk-agent-control-plane-optimization.json
@@ -615,6 +621,16 @@ The same generated-matrix workflow is available from Python through
 `examples/sdk_redteam_autogen_optimization.py`, which starts from a tool-only
 prompt-injection seed and searches the tool-plus-memory prompt-injection plus
 credential-exfiltration campaign.
+
+The `long_horizon_redteam_optimization.json` example builds on recent agentic
+red-team research by searching coherent attack-system candidates instead of
+independent labels. It starts from one objective-integrity probe, escalates into
+stateful tool and memory pressure, and selects the full long-horizon campaign
+across intent hijacking, task injection, objective drift, tool chaining, and
+memory poisoning over instruction, tool, memory, retrieval, and environment
+surfaces. The same attack-system search is available from Python through
+`optimize.build_long_horizon_redteam_optimization_manifest()` and
+`examples/sdk_long_horizon_redteam_optimization.py`.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It

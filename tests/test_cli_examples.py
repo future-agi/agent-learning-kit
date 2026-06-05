@@ -55,6 +55,12 @@ EXAMPLES = PROJECT_ROOT / "examples"
             "AGENT_LEARNING_OPTIMIZE_EXAMPLE_KEY",
         ),
         (
+            "optimize",
+            "long_horizon_redteam_optimization.json",
+            "agent-learning.optimization.v1",
+            "AGENT_LEARNING_LONG_HORIZON_REDTEAM_OPT_EXAMPLE_KEY",
+        ),
+        (
             "optimize-eval",
             "eval_suite_optimization.json",
             "agent-learning.eval-optimization.v1",
@@ -1371,6 +1377,109 @@ def test_redteam_autogen_optimization_example_regenerates_candidate_matrix(
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
     assert "redteam-autogen-optimization" in markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_long_horizon_redteam_optimization_example_selects_attack_system(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_LONG_HORIZON_REDTEAM_OPT_EXAMPLE_KEY",
+        "real-local-long-horizon-redteam-opt-key",
+    )
+
+    output_path = tmp_path / "long-horizon-redteam-optimization.json"
+    junit_path = tmp_path / "long-horizon-redteam-optimization.junit.xml"
+    sarif_path = tmp_path / "long-horizon-redteam-optimization.sarif.json"
+    markdown_path = tmp_path / "long-horizon-redteam-optimization.md"
+
+    exit_code = main([
+        "optimize",
+        str(EXAMPLES / "long_horizon_redteam_optimization.json"),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    attacks = [
+        "intent_hijacking",
+        "task_injection",
+        "objective_drift",
+        "tool_chaining",
+        "memory_poisoning",
+    ]
+    surfaces = ["instruction", "tool", "memory", "retrieval", "environment"]
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "agent-learning.optimization.v1"
+    assert payload["status"] == "passed"
+    assert payload["summary"]["optimization_score"] >= 0.95
+    assert payload["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "redteam" in payload["summary"]["search_paths"]
+
+    best_redteam = payload["optimization"]["best_config"]["redteam"]
+    assert best_redteam["profile"] == "stateful_attack_system"
+    assert best_redteam["preset"] == "long_horizon_agent"
+    assert best_redteam["attacks"] == attacks
+    assert best_redteam["surfaces"] == surfaces
+    assert best_redteam["signals"] == [
+        "research_backed",
+        "long_horizon",
+        "stateful",
+        "multi_turn",
+        "objective_integrity",
+        "tool_chain",
+        "memory_poisoning",
+        "compositional_orchestration",
+        "pre_deployment_telemetry",
+        "persistent_memory",
+    ]
+    assert best_redteam["attack_system"]["strategy"] == (
+        "long_horizon_stateful_campaign"
+    )
+    assert best_redteam["attack_system"]["planner"] == "campaign_matrix"
+    assert {source["source"] for source in best_redteam["attack_system"]["research_basis"]} >= {
+        "arxiv:2601.13518",
+        "arxiv:2602.16346",
+        "arxiv:2605.01970",
+    }
+
+    best_history = max(
+        payload["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"redteam"}
+    metrics = best_history["metrics"]
+    for metric in (
+        "adversarial_resilience",
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 25
+    assert campaign_summary["coverage_cell_count"] == 25
+    assert campaign_summary["executed_cell_count"] == 25
+    assert campaign_summary["multi_turn_scenario_count"] == 25
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"] == []
+    assert "long-horizon-redteam-optimization" in markdown_path.read_text(
         encoding="utf-8"
     )
 
