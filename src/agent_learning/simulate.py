@@ -426,6 +426,75 @@ def build_realtime_run_manifest(
     return manifest
 
 
+def build_memory_layer_run_manifest(
+    *,
+    name: str,
+    memory: Mapping[str, Any],
+    evaluation_config: Mapping[str, Any],
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct retrieval/memory-lineage simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not memory:
+        raise ValueError("memory is required")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns is not None and max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = _agent_optimize.build_memory_optimization_manifest(
+        name=name,
+        memory_candidates=[copy.deepcopy(dict(memory))],
+        evaluation_config=copy.deepcopy(dict(evaluation_config)),
+        agent_candidates=[copy.deepcopy(dict(agent))] if agent else None,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+        target_metadata=metadata,
+    )
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(optimization_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": bool(auto_execute_tools),
+            "environments": copy.deepcopy(
+                optimization_manifest["simulation"]["environments"]
+            ),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+    }
+    if metadata:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_memory_layer_run_manifest",
+            **copy.deepcopy(dict(metadata)),
+        }
+    return manifest
+
+
 def build_browser_cua_run_manifest(
     *,
     name: str,
@@ -2238,6 +2307,7 @@ __all__ = [
     "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",
+    "build_memory_layer_run_manifest",
     "build_multimodal_image_run_manifest",
     "build_multi_agent_framework_handoff_run_manifest",
     "build_multi_framework_suite_manifest",

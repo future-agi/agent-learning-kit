@@ -115,6 +115,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_task is not None
     assert optimize.build_memory_optimization_manifest is not None
     assert optimize.optimize_memory_layer is not None
+    assert simulate.build_memory_layer_run_manifest is not None
     assert optimize.build_multi_agent_optimization_manifest is not None
     assert optimize.optimize_multi_agent_coordination is not None
     assert optimize.build_orchestration_optimization_manifest is not None
@@ -1760,6 +1761,176 @@ def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
         "doc_refund_2026"
     ]
     assert state["agent_memory_lineage"]["summary"]["has_source_attribution"] is True
+
+
+def test_sdk_memory_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY",
+        "real-local-sdk-memory-simulation-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_memory_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_memory_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert "optimization" not in manifest
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY"]
+    assert manifest["agent"]["type"] == "scripted"
+    assert len(manifest["agent"]["responses"]) == 2
+    assert manifest["simulation"]["engine"] == "local_text"
+    assert manifest["simulation"]["min_turns"] == 1
+    assert manifest["simulation"]["max_turns"] == 2
+    assert manifest["simulation"]["auto_execute_tools"] is True
+    assert [environment["type"] for environment in manifest["simulation"]["environments"]] == [
+        "retrieval_memory",
+        "agent_memory_lineage",
+    ]
+    retrieval = manifest["simulation"]["environments"][0]["data"]
+    assert [document["id"] for document in retrieval["documents"]] == [
+        "doc_refund_2026"
+    ]
+    assert retrieval["documents"][0]["current"] is True
+    lineage = manifest["simulation"]["environments"][1]["data"]
+    assert [operation["operation"] for operation in lineage["operations"]] == [
+        "read",
+        "write",
+        "recall",
+    ]
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["required_tools"] == [
+        "retrieve_documents",
+        "read_document",
+        "cite_sources",
+        "write_memory",
+        "retrieval_memory_status",
+        "agent_memory_lineage_status",
+        "list_memory_lineage_operations",
+    ]
+    assert eval_config["expected_retrieval_doc_ids"] == ["doc_refund_2026"]
+    assert eval_config["forbidden_retrieval_doc_ids"] == ["doc_refund_2025"]
+    assert eval_config["agent_memory_lineage_quality"]["required_operation_types"] == [
+        "read",
+        "write",
+        "recall",
+    ]
+
+    from agent_learning import simulate
+
+    custom_manifest = simulate.build_memory_layer_run_manifest(
+        name="custom-memory-simulation",
+        memory={
+            "retrieval": {
+                "documents": [
+                    {
+                        "id": "doc_current",
+                        "content": "Current memory policy.",
+                        "current": True,
+                    }
+                ]
+            },
+            "lineage": {
+                "target": {"agent": "custom-agent"},
+                "stores": [{"id": "episodic"}],
+                "memories": [{"id": "m1", "source_ids": ["doc_current"]}],
+                "operations": [{"operation": "read", "status": "allowed"}],
+                "lineage": [
+                    {
+                        "from": "doc_current",
+                        "to": "m1",
+                        "type": "source_attribution",
+                    }
+                ],
+            },
+        },
+        evaluation_config=module._memory_optimization_example().evaluation_config(),
+        min_turns=1,
+    )
+    assert [environment["type"] for environment in custom_manifest["simulation"]["environments"]] == [
+        "retrieval_memory",
+        "agent_memory_lineage",
+    ]
+    assert custom_manifest["simulation"]["environments"][0]["data"]["documents"][0][
+        "id"
+    ] == "doc_current"
+
+    output_path = tmp_path / "sdk-memory-simulation.json"
+    result = module.run(output_path)
+    generated_manifest_path = output_path.with_suffix(".manifest.json")
+    generated_manifest = json.loads(generated_manifest_path.read_text(encoding="utf-8"))
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output_path.exists()
+    assert generated_manifest_path.exists()
+    assert generated_manifest["name"] == "sdk-memory-simulation"
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-simulate.cli.v1"
+    assert result["name"] == "sdk-memory-simulation"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.98
+    for metric in (
+        "retrieval_context_quality",
+        "retrieval_memory_attribution",
+        "agent_memory_lineage_coverage",
+        "agent_memory_lineage_quality",
+        "memory_integrity",
+        "tool_selection_accuracy",
+    ):
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["source_grounding"] >= 0.9
+    assert result["summary"]["metric_averages"]["task_completion"] >= 0.9
+
+    report_case = result["report"]["results"][0]
+    state = report_case["metadata"]["environment_state"]
+    assert set(state) == {"retrieval_memory", "agent_memory_lineage"}
+    assert [document["id"] for document in state["retrieval_memory"]["documents"]] == [
+        "doc_refund_2026"
+    ]
+    assert state["retrieval_memory"]["queries"][0]["documents"] == [
+        "doc_refund_2026"
+    ]
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert state["retrieval_memory"]["citations"][0]["freshness_checked"] is True
+    assert state["retrieval_memory"]["memory_writes"][0] == {
+        "key": "refund_decision",
+        "value": "approved_with_policy_grounding",
+    }
+    lineage_summary = state["agent_memory_lineage"]["summary"]
+    assert lineage_summary["has_source_attribution"] is True
+    assert lineage_summary["has_tenant_isolation"] is True
+    assert lineage_summary["has_retention_policy"] is True
+    assert lineage_summary["has_deletion_policy"] is True
+    assert lineage_summary["has_redaction"] is True
+    assert lineage_summary["has_canaries"] is True
+    assert lineage_summary["blocking_gap_count"] == 0
+    assert lineage_summary["policy_violation_count"] == 0
+    assert {
+        operation["operation"]
+        for operation in state["agent_memory_lineage"]["operations"]
+    } == {"read", "write", "recall"}
+    event_names = {event["name"] for event in report_case["events"]}
+    assert {
+        "retrieval_memory_ready",
+        "agent_memory_lineage_ready",
+        "query",
+        "document_read",
+        "attribution",
+        "agent_memory_lineage_status",
+        "agent_memory_lineage_operations_listed",
+        "retrieval_memory_status",
+        "memory_write",
+        "write_memory_state_update",
+    } <= event_names
+    assert len(report_case["events"]) >= 20
 
 
 def test_sdk_artifact_optimization_example_runs(monkeypatch, tmp_path):

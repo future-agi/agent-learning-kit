@@ -321,6 +321,10 @@ For retrieval and memory layers, pass candidates with `retrieval_memory` and
 searches current-document grounding, source attribution, memory writes, policy
 checks, canaries, observability, and memory-lineage artifacts as one coherent
 candidate bundle.
+For direct, non-optimizer simulation,
+`simulate.build_memory_layer_run_manifest()` and `examples/sdk_memory_simulation.py`
+run a selected retrieval/memory-lineage bundle as a normal
+`agent-learning.run.v1` artifact.
 
 For saved task/run artifacts, pass artifact field-extraction candidates and
 fixed structured assertions. The SDK builds a promptfoo-style optimization
@@ -362,6 +366,10 @@ AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_optimization.py \
   artifacts/sdk-memory-optimization.json
+
+AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_memory_simulation.py \
+  artifacts/sdk-memory-simulation.json
 
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
