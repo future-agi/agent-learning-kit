@@ -1055,6 +1055,16 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "passed"
     assert "optimization_replay" in report["summary"]["sections"]
+    replay_card = report["report"]["optimizer_replay"]
+    assert replay_card["kind"] == "promotion_manifest"
+    assert replay_card["promotion_kind"] == "optimized_manifest"
+    assert replay_card["source"]["status"] == "passed"
+    assert replay_card["best_candidate_id"] == payload["summary"]["best_candidate_id"]
+    assert "agent.method" in replay_card["search_paths"]
+    assert "optimizer_trace" in replay_card["environment_types"]
+    assert replay_card["has_optimizer_trace"] is True
+    assert replay_card["promoted_manifest"]["agent"]["method"] == "execute_task"
+    assert replay_card["promoted_manifest"]["agent"]["input_mode"] == "dict"
     report_markdown = report_markdown_path.read_text(encoding="utf-8")
     assert "## Optimization Replay" in report_markdown
     assert "Promotion kind" in report_markdown
@@ -1105,6 +1115,28 @@ def test_custom_framework_optimization_example_runs_adapter_search(
     assert "custom-framework-optimization-regression" in replay_markdown
     assert "### Replay Metrics" in replay_markdown
     assert "framework_runtime_contract" in replay_markdown
+
+    replay_report_path = tmp_path / "custom-framework-optimization-replay-report.json"
+    exit_code = main([
+        "report",
+        str(replay_path),
+        "--output",
+        str(replay_report_path),
+    ])
+    assert exit_code == 0
+
+    replay_report = json.loads(replay_report_path.read_text(encoding="utf-8"))
+    replay_report_card = replay_report["report"]["replay"]
+    assert replay_report_card["kind"] == "replay_metrics"
+    assert replay_report_card["manifest_count"] == 1
+    assert replay_report_card["replay_pass_rate"] == pytest.approx(1.0)
+    replay_manifest_card = replay_report_card["manifests"][0]
+    assert replay_manifest_card["status"] == "passed"
+    assert replay_manifest_card["error_finding_count"] == 0
+    assert replay_manifest_card["warning_finding_count"] == 4
+    assert replay_manifest_card["metrics"]["framework_runtime_contract"] == pytest.approx(
+        1.0
+    )
 
 
 def test_social_memory_framework_optimization_example_synthesizes_patches(

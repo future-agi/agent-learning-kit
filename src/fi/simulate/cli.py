@@ -2305,6 +2305,18 @@ def _report_result(
         score=score,
         findings=findings,
     )
+    report_payload: Dict[str, Any] = {
+        "format": "markdown",
+        "source_path": str(source_path),
+        "markdown": markdown,
+        "sections": sections,
+    }
+    optimizer_replay = _optimizer_replay_card(source)
+    if optimizer_replay is not None:
+        report_payload["optimizer_replay"] = optimizer_replay
+    replay_card = _replay_report_card(source)
+    if replay_card is not None:
+        report_payload["replay"] = replay_card
     return {
         "schema_version": CLI_SCHEMA_VERSION,
         "kind": "agent-simulate.report.v1",
@@ -2320,12 +2332,7 @@ def _report_result(
             "error_finding_count": len(error_findings),
             "sections": sections,
         },
-        "report": {
-            "format": "markdown",
-            "source_path": str(source_path),
-            "markdown": markdown,
-            "sections": sections,
-        },
+        "report": report_payload,
         "duration_seconds": duration_seconds,
     }
 
@@ -2335,6 +2342,205 @@ def _optional_primary_score(result: Mapping[str, Any]) -> Optional[float]:
         return _result_primary_score(result)
     except ManifestError:
         return None
+
+
+def _optimizer_replay_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    summary = dict(result.get("summary") or {})
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        return _optimization_result_replay_card(summary, optimization)
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        return _promotion_result_replay_card(summary, manifest)
+    return None
+
+
+def _optimization_result_replay_card(
+    summary: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> Dict[str, Any]:
+    best_config = optimization.get("best_config")
+    history = [
+        dict(item)
+        for item in _coerce_list(optimization.get("history"))
+        if isinstance(item, Mapping)
+    ]
+    return {
+        "kind": "optimization_result",
+        "source_manifest_path": optimization.get("source_manifest_path"),
+        "source_manifest_present": isinstance(
+            optimization.get("source_manifest"),
+            Mapping,
+        ),
+        "best_candidate_id": optimization.get(
+            "best_candidate_id",
+            summary.get("best_candidate_id"),
+        ),
+        "final_score": optimization.get("final_score", summary.get("optimization_score")),
+        "threshold": summary.get("threshold"),
+        "search_paths": _unique_strings(_coerce_list(summary.get("search_paths"))),
+        "winning_patch_paths": _patch_leaf_paths(best_config),
+        "winning_patch": _leaf_records(best_config, limit=50),
+        "candidate_history": _optimization_history_card(history),
+        "optimizer_trace": _optimizer_trace_card(optimization.get("optimizer_trace")),
+    }
+
+
+def _promotion_result_replay_card(
+    summary: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> Dict[str, Any]:
+    metadata = (
+        manifest.get("metadata") if isinstance(manifest.get("metadata"), Mapping) else {}
+    )
+    regression = (
+        metadata.get("regression")
+        if isinstance(metadata, Mapping) and isinstance(metadata.get("regression"), Mapping)
+        else {}
+    )
+    return {
+        "kind": "promotion_manifest",
+        "promotion_kind": summary.get(
+            "promotion_kind",
+            regression.get("promotion_kind"),
+        ),
+        "source": {
+            "name": summary.get("source_name", regression.get("source_name")),
+            "path": summary.get("source_path", regression.get("promoted_from")),
+            "status": summary.get("source_status", regression.get("source_status")),
+            "schema_version": summary.get(
+                "source_schema_version",
+                regression.get("source_schema_version"),
+            ),
+            "score": summary.get("source_score", regression.get("source_score")),
+        },
+        "best_candidate_id": summary.get(
+            "best_candidate_id",
+            regression.get("best_candidate_id"),
+        ),
+        "search_paths": _unique_strings(
+            _coerce_list(summary.get("search_paths", regression.get("search_paths")))
+        ),
+        "history_count": summary.get("history_count", regression.get("history_count")),
+        "promoted_manifest_count": summary.get("promoted_manifest_count"),
+        "required_env": _unique_strings(_coerce_list(manifest.get("required_env"))),
+        "environment_types": _redteam_environment_types(manifest),
+        "has_optimizer_trace": bool(
+            summary.get("has_optimizer_trace", regression.get("has_optimizer_trace"))
+        ),
+        "promoted_manifest": _promoted_manifest_card(manifest),
+    }
+
+
+def _optimization_history_card(
+    history: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    sorted_history = sorted(
+        history,
+        key=lambda item: float(item.get("score") or 0.0),
+        reverse=True,
+    )
+    records = []
+    for item in sorted_history[:10]:
+        records.append(
+            {
+                "candidate_id": item.get("candidate_id"),
+                "score": item.get("score"),
+                "patch_paths": _patch_leaf_paths(
+                    item.get("patch") or item.get("candidate_patch")
+                ),
+                "proposal_role": item.get("proposal_role"),
+                "proposal_round": item.get("proposal_round"),
+                "evaluation_score": item.get("evaluation_score"),
+                "evaluation_passed": item.get("evaluation_passed"),
+                "metrics": {
+                    str(key): value
+                    for key, value in dict(item.get("metrics") or {}).items()
+                },
+            }
+        )
+    return records
+
+
+def _optimizer_trace_card(trace: Any) -> Dict[str, Any]:
+    if not isinstance(trace, Mapping):
+        return {"present": False}
+    summary = trace.get("summary") if isinstance(trace.get("summary"), Mapping) else {}
+    return {
+        "present": True,
+        "kind": trace.get("kind"),
+        "roles": _unique_strings(_coerce_list(summary.get("roles") or trace.get("roles"))),
+        "proposal_count": summary.get("proposal_count")
+        or _count_trace_items(trace, "proposals"),
+        "candidate_count": summary.get("candidate_count")
+        or _count_trace_items(trace, "candidates"),
+        "final_score": summary.get("final_score") or trace.get("final_score"),
+        "passed": summary.get("passed") if "passed" in summary else trace.get("passed"),
+    }
+
+
+def _promoted_manifest_card(manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    agent = manifest.get("agent") if isinstance(manifest.get("agent"), Mapping) else {}
+    return {
+        "name": manifest.get("name"),
+        "version": manifest.get("version"),
+        "agent": {
+            "type": agent.get("type"),
+            "framework": agent.get("framework"),
+            "method": agent.get("method"),
+            "input_mode": agent.get("input_mode"),
+            "target": agent.get("target"),
+        },
+        "environment_types": _redteam_environment_types(manifest),
+    }
+
+
+def _leaf_records(value: Any, *, limit: int) -> List[Dict[str, Any]]:
+    return [
+        {"path": path, "value": _to_plain(value)}
+        for path, value in _flatten_leaf_rows(value)[:limit]
+    ]
+
+
+def _replay_report_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    replay = result.get("replay")
+    if not isinstance(replay, Mapping):
+        return None
+    manifests = [
+        dict(item)
+        for item in _coerce_list(replay.get("manifests"))
+        if isinstance(item, Mapping)
+    ]
+    summary = dict(result.get("summary") or {})
+    return {
+        "kind": "replay_metrics",
+        "manifest_count": len(manifests),
+        "replay_pass_rate": summary.get("replay_pass_rate", summary.get("score")),
+        "manifests": [_replay_manifest_report_card(item) for item in manifests],
+    }
+
+
+def _replay_manifest_report_card(item: Mapping[str, Any]) -> Dict[str, Any]:
+    summary = dict(item.get("summary") or {})
+    metrics = {
+        str(key): value
+        for key, value in dict(summary.get("metric_averages") or {}).items()
+        if _float_or_none(value) is not None
+    }
+    finding_count = int(item.get("finding_count") or 0)
+    error_finding_count = int(item.get("error_finding_count") or 0)
+    return {
+        "name": item.get("name"),
+        "path": item.get("path"),
+        "command": item.get("command"),
+        "status": item.get("status"),
+        "score": item.get("score"),
+        "exit_code": item.get("exit_code"),
+        "finding_count": finding_count,
+        "error_finding_count": error_finding_count,
+        "warning_finding_count": max(0, finding_count - error_finding_count),
+        "metrics": metrics,
+    }
 
 
 def _markdown_sections(result: Mapping[str, Any]) -> List[str]:
