@@ -184,6 +184,15 @@ multi-agent, and orchestration layers; summarizes graph nodes, edges, routes,
 and steps; and emits report, rerun, and optimization commands so users can move
 from a selected orchestration stack to the next verified simulation or optimizer
 run.
+Optimization reports also include
+`report.orchestration_strategy.orchestration_rollout_plan`, an
+`orchestration_candidate_rollout_plan` produced with
+`structure_guided_counterfactual_rollout`. The plan records the selected
+candidate, selected layers, weak layers/metrics, selected environment bundle,
+candidate lineage, rollout steps, and an exported selected orchestration
+manifest artifact. Markdown reports render `Orchestration Rollout Plan`,
+`Orchestration Candidate Lineage`, and `Orchestration Rollout Steps`, and the
+card exposes export/replay actions for the selected stack.
 Framework certification and import artifacts also expose a
 `framework_readiness` card plus `## Framework Readiness` Markdown. The card
 normalizes lifecycle, capability, probe, portability, import, and adapter

@@ -1265,6 +1265,8 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     ]
 
     output_path = tmp_path / "sdk-orchestration-result.json"
+    report_path = tmp_path / "sdk-orchestration-optimization-report.json"
+    report_markdown_path = tmp_path / "sdk-orchestration-optimization-report.md"
     result = module.run(output_path)
 
     assert output_path.exists()
@@ -1333,11 +1335,88 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     assert strategy["retrieval"]["document_count"] == 1
     assert strategy["memory"]["operation_types"] == ["read", "recall", "write"]
     assert set(strategy["multi_agent"]["roles"]) == {"planner", "retriever", "critic"}
+    rollout_plan = strategy["orchestration_rollout_plan"]
+    assert rollout_plan["kind"] == "orchestration_candidate_rollout_plan"
+    assert rollout_plan["method"] == "structure_guided_counterfactual_rollout"
+    assert rollout_plan["status"] == "ready"
+    assert rollout_plan["selected_candidate_id"] == result["summary"][
+        "best_candidate_id"
+    ]
+    assert rollout_plan["candidate_count"] == len(result["optimization"]["history"])
+    assert rollout_plan["weak_layers"] == []
+    assert set(rollout_plan["selected_layers"]) >= {
+        "world",
+        "framework",
+        "retrieval",
+        "memory",
+        "multi_agent",
+    }
+    assert rollout_plan["selected_environment_types"] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    assert rollout_plan["selected_stack_summary"]["framework"]["framework"] == (
+        "langgraph"
+    )
+    selected_lineage = next(
+        item
+        for item in rollout_plan["candidate_lineage"]
+        if item["selected"]
+    )
+    assert any(
+        path.startswith("simulation.environments")
+        for path in selected_lineage["patch_paths"]
+    )
+    assert "multi_agent" in selected_lineage["layers"]
+    assert {
+        "export_selected_orchestration_manifest",
+        "replay_selected_orchestration_manifest",
+        "repair_weak_orchestration_layers",
+        "rerun_source_orchestration_optimization",
+    } == {step["id"] for step in rollout_plan["rollout_steps"]}
+    assert strategy["artifacts"]["selected_orchestration_manifest"]["agent"] == (
+        best_config["agent"]
+    )
+    assert {
+        "https://arxiv.org/abs/2605.25746",
+        "https://arxiv.org/abs/2605.14483",
+    } <= set(rollout_plan["research_sources"])
     assert {
         "report_orchestration_strategy",
         "rerun_orchestration_optimization",
         "optimize_orchestration_strategy",
+        "export_selected_orchestration_manifest",
+        "replay_selected_orchestration_manifest",
     } <= {action["id"] for action in strategy["actions"]}
+    assert next(
+        action
+        for action in strategy["actions"]
+        if action["id"] == "export_selected_orchestration_manifest"
+    )["artifact_ref"] == (
+        "report.orchestration_strategy.artifacts.selected_orchestration_manifest"
+    )
+    report_exit_code = main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_markdown_path),
+    ])
+    assert report_exit_code == 0
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    report_strategy = report_payload["report"]["orchestration_strategy"]
+    assert report_strategy["orchestration_rollout_plan"]["candidate_count"] == len(
+        result["optimization"]["history"]
+    )
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "### Orchestration Rollout Plan" in report_markdown
+    assert "### Orchestration Candidate Lineage" in report_markdown
+    assert "### Orchestration Rollout Steps" in report_markdown
+    assert "structure_guided_counterfactual_rollout" in report_markdown
 
 
 def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):

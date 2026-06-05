@@ -4469,10 +4469,28 @@ def _orchestration_strategy_card(
             "https://arxiv.org/abs/2605.22566",
             "https://arxiv.org/abs/2602.16873",
             "https://arxiv.org/abs/2603.19896",
+            "https://arxiv.org/abs/2605.25746",
+            "https://arxiv.org/abs/2605.14483",
+            "https://arxiv.org/abs/2604.00901",
+            "https://arxiv.org/abs/2605.27073",
         ],
     }
     if source_manifest_path is not None:
         card["source_manifest_path"] = str(source_manifest_path)
+    rollout_plan = _orchestration_rollout_plan(
+        result,
+        normalized_state=normalized_state,
+        layer_records=layer_records,
+        metrics=metrics,
+        source_manifest_path=source_manifest_path,
+    )
+    if rollout_plan is not None:
+        card["orchestration_rollout_plan"] = rollout_plan
+        selected_manifest = rollout_plan.get("selected_orchestration_manifest")
+        if isinstance(selected_manifest, Mapping):
+            card["artifacts"] = {
+                "selected_orchestration_manifest": copy.deepcopy(dict(selected_manifest)),
+            }
     card["actions"] = _orchestration_strategy_actions(
         source_path=source_path,
         source_manifest_path=source_manifest_path,
@@ -4480,6 +4498,14 @@ def _orchestration_strategy_card(
         status=status,
         weak_layers=weak_layers,
     )
+    if rollout_plan is not None:
+        card["actions"].extend(
+            _orchestration_rollout_actions(
+                rollout_plan,
+                status=status,
+                weak_layers=weak_layers,
+            )
+        )
     return card
 
 
@@ -4857,6 +4883,362 @@ def _multi_agent_roles(multi_agent: Mapping[str, Any]) -> List[str]:
     return _unique_strings(values)
 
 
+_ORCHESTRATION_LAYER_KEYWORDS: Dict[str, List[str]] = {
+    "world": ["world", "world_contract", "transition", "invariant", "refund"],
+    "framework": ["framework", "framework_trace", "adapter", "runtime", "span"],
+    "retrieval": ["retrieval", "document", "source", "grounding", "citation"],
+    "memory": ["memory", "agent_memory_lineage", "lineage", "tenant", "retention"],
+    "multi_agent": ["multi_agent", "room", "handoff", "review", "reconcile", "role"],
+    "orchestration": ["orchestration", "route", "graph", "flow", "dependency"],
+    "tools": ["tool", "tool_calls", "tool_selection"],
+}
+
+
+def _orchestration_rollout_plan(
+    result: Mapping[str, Any],
+    *,
+    normalized_state: Mapping[str, Any],
+    layer_records: Sequence[Mapping[str, Any]],
+    metrics: Mapping[str, Any],
+    source_manifest_path: Optional[Path],
+) -> Optional[Dict[str, Any]]:
+    optimization = result.get("optimization")
+    if not isinstance(optimization, Mapping):
+        return None
+    history = [
+        dict(item)
+        for item in _coerce_list(optimization.get("history"))
+        if isinstance(item, Mapping)
+    ]
+    if not history:
+        return None
+
+    best_candidate_id = _string_or_none(
+        optimization.get("best_candidate_id")
+        or dict(result.get("summary") or {}).get("best_candidate_id")
+    )
+    selected = _orchestration_selected_history(history, best_candidate_id)
+    selected_candidate_id = _string_or_none(selected.get("candidate_id"))
+    best_config = optimization.get("best_config")
+    selected_manifest = (
+        copy.deepcopy(dict(best_config)) if isinstance(best_config, Mapping) else None
+    )
+    selected_environment_types = _orchestration_selected_environment_types(
+        selected_manifest,
+    )
+    weak_metrics = _unique_strings(
+        [
+            *[
+                name
+                for name, value in sorted(metrics.items())
+                if _float_or_none(value) is not None and float(value) < 1.0
+            ],
+            *_orchestration_weak_metrics(selected),
+        ]
+    )
+    candidate_weak_metrics = _unique_strings(
+        metric
+        for item in history
+        for metric in _orchestration_weak_metrics(item)
+    )
+    layer_status = {
+        str(record.get("layer")): str(record.get("status") or "")
+        for record in layer_records
+        if record.get("layer")
+    }
+    selected_layers = _unique_strings(
+        [
+            *[
+                str(record.get("layer"))
+                for record in layer_records
+                if record.get("present") and record.get("layer")
+            ],
+            *_orchestration_layers_for_signals(selected_environment_types),
+            *_orchestration_layers_for_signals(_patch_leaf_paths(selected.get("patch"))),
+        ]
+    )
+    weak_layers = _unique_strings(
+        [
+            *[
+                layer
+                for layer, status in layer_status.items()
+                if status == "needs_attention"
+            ],
+            *_orchestration_layers_for_signals(weak_metrics),
+        ]
+    )
+    candidate_lineage = _orchestration_candidate_lineage(
+        history,
+        best_candidate_id=best_candidate_id,
+    )
+    graph = _orchestration_graph(normalized_state)
+    rollout_steps = [
+        {
+            "id": "export_selected_orchestration_manifest",
+            "label": "Export the selected stack manifest before replay.",
+            "candidate_id": selected_candidate_id,
+            "target_layers": selected_layers,
+            "artifact_ref": (
+                "report.orchestration_strategy.artifacts."
+                "selected_orchestration_manifest"
+            ),
+        },
+        {
+            "id": "replay_selected_orchestration_manifest",
+            "label": "Replay the selected stack as a run artifact.",
+            "candidate_id": selected_candidate_id,
+            "target_layers": selected_layers,
+            "command_args": [
+                "agent-learn",
+                "run",
+                "{{selected_manifest_path}}",
+                "--output",
+                "artifacts/selected-orchestration-replay.json",
+                "--junit",
+                "artifacts/selected-orchestration-replay.junit.xml",
+                "--sarif",
+                "artifacts/selected-orchestration-replay.sarif.json",
+                "--markdown",
+                "artifacts/selected-orchestration-replay.md",
+            ],
+        },
+        {
+            "id": "repair_weak_orchestration_layers",
+            "label": "Search only the weak layers if replay regresses.",
+            "candidate_id": selected_candidate_id,
+            "target_layers": weak_layers or selected_layers,
+            "evidence": weak_metrics,
+        },
+    ]
+    if source_manifest_path is not None:
+        rollout_steps.append(
+            {
+                "id": "rerun_source_orchestration_optimization",
+                "label": "Rerun the source optimization manifest.",
+                "candidate_id": selected_candidate_id,
+                "target_layers": weak_layers or selected_layers,
+                "command_args": [
+                    "agent-learn",
+                    "optimize",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/orchestration-optimization-rerun.json",
+                    "--junit",
+                    "artifacts/orchestration-optimization-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/orchestration-optimization-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/orchestration-optimization-rerun.md",
+                ],
+            }
+        )
+
+    return {
+        "kind": "orchestration_candidate_rollout_plan",
+        "method": "structure_guided_counterfactual_rollout",
+        "status": "ready" if not weak_layers else "needs_attention",
+        "selected_candidate_id": selected_candidate_id,
+        "best_candidate_id": best_candidate_id,
+        "selected_score": selected.get("score"),
+        "candidate_count": len(candidate_lineage),
+        "selected_layers": selected_layers,
+        "weak_layers": weak_layers,
+        "weak_metrics": weak_metrics,
+        "candidate_weak_metrics": candidate_weak_metrics,
+        "selected_environment_types": selected_environment_types,
+        "graph_summary": {
+            "node_count": len(graph["nodes"]),
+            "edge_count": len(graph["edges"]),
+            "step_count": len(graph["steps"]),
+            "route_count": len(graph["routes"]),
+        },
+        "selected_stack_summary": {
+            "world": _orchestration_world_summary(normalized_state.get("world_contract")),
+            "framework": _orchestration_framework_summary(
+                normalized_state.get("framework_trace")
+            ),
+            "retrieval": _orchestration_retrieval_summary(
+                normalized_state.get("retrieval_memory")
+            ),
+            "memory": _orchestration_memory_summary(
+                normalized_state.get("agent_memory_lineage")
+            ),
+            "multi_agent": _orchestration_multi_agent_summary(
+                normalized_state.get("multi_agent")
+            ),
+        },
+        "candidate_lineage": candidate_lineage,
+        "rollout_steps": rollout_steps,
+        "selected_orchestration_manifest": selected_manifest,
+        "research_sources": [
+            "https://arxiv.org/abs/2605.25746",
+            "https://arxiv.org/abs/2605.14483",
+            "https://arxiv.org/abs/2604.00901",
+            "https://arxiv.org/abs/2605.27073",
+        ],
+    }
+
+
+def _orchestration_selected_history(
+    history: Sequence[Mapping[str, Any]],
+    best_candidate_id: Optional[str],
+) -> Dict[str, Any]:
+    if best_candidate_id:
+        for item in history:
+            if str(item.get("candidate_id") or "") == best_candidate_id:
+                return dict(item)
+    return dict(max(history, key=lambda item: float(item.get("score") or 0.0)))
+
+
+def _orchestration_candidate_lineage(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    best_candidate_id: Optional[str],
+) -> List[Dict[str, Any]]:
+    seed_score = _float_or_none(history[0].get("score")) if history else None
+    previous_score: Optional[float] = None
+    lineage: List[Dict[str, Any]] = []
+    for index, item in enumerate(history):
+        candidate_id = str(item.get("candidate_id") or f"candidate_{index}")
+        score = _float_or_none(item.get("score"))
+        patch_paths = _patch_leaf_paths(item.get("patch") or item.get("candidate_patch"))
+        metric_names = sorted(dict(item.get("metrics") or {}))
+        weak_metrics = _orchestration_weak_metrics(item)
+        signals = _unique_strings(
+            [
+                *patch_paths,
+                *metric_names,
+                *weak_metrics,
+                *_coerce_list(item.get("search_paths")),
+                item.get("proposal_role"),
+                item.get("proposal_reason"),
+            ]
+        )
+        score_delta_from_previous = (
+            round(score - previous_score, 6)
+            if score is not None and previous_score is not None
+            else None
+        )
+        score_delta_from_seed = (
+            round(score - seed_score, 6)
+            if score is not None and seed_score is not None
+            else None
+        )
+        if score is not None:
+            previous_score = score
+        lineage.append(
+            {
+                "candidate_id": candidate_id,
+                "round": item.get("proposal_round", index),
+                "selected": bool(best_candidate_id and candidate_id == best_candidate_id),
+                "score": score,
+                "score_delta_from_previous": score_delta_from_previous,
+                "score_delta_from_seed": score_delta_from_seed,
+                "patch_paths": patch_paths,
+                "metric_names": metric_names,
+                "weak_metrics": weak_metrics,
+                "layers": _orchestration_layers_for_signals(signals),
+                "proposal_role": item.get("proposal_role"),
+                "proposal_reason": item.get("proposal_reason"),
+            }
+        )
+    return lineage
+
+
+def _orchestration_weak_metrics(item: Mapping[str, Any]) -> List[str]:
+    return sorted(
+        str(name)
+        for name, value in dict(item.get("metrics") or {}).items()
+        if (
+            name in _ORCHESTRATION_METRICS
+            and _float_or_none(value) is not None
+            and float(value) < 1.0
+        )
+    )
+
+
+def _orchestration_layers_for_signals(signals: Sequence[Any]) -> List[str]:
+    layers = []
+    for layer, keywords in _ORCHESTRATION_LAYER_KEYWORDS.items():
+        if any(_orchestration_signal_matches(signal, keywords) for signal in signals):
+            layers.append(layer)
+    return _unique_strings(layers)
+
+
+def _orchestration_signal_matches(signal: Any, keywords: Sequence[str]) -> bool:
+    text = str(signal or "").lower().replace("-", "_")
+    return any(keyword in text for keyword in keywords)
+
+
+def _orchestration_selected_environment_types(
+    selected_manifest: Optional[Mapping[str, Any]],
+) -> List[str]:
+    if not isinstance(selected_manifest, Mapping):
+        return []
+    simulation = selected_manifest.get("simulation")
+    environments = (
+        dict(simulation).get("environments")
+        if isinstance(simulation, Mapping)
+        else []
+    )
+    return _unique_strings(
+        str(item.get("type") or item.get("kind") or "").lower().replace("-", "_")
+        for item in _coerce_list(environments)
+        if isinstance(item, Mapping)
+    )
+
+
+def _orchestration_rollout_actions(
+    rollout_plan: Mapping[str, Any],
+    *,
+    status: str,
+    weak_layers: Sequence[str],
+) -> List[Dict[str, Any]]:
+    default_layers = list(weak_layers) or _coerce_list(rollout_plan.get("selected_layers"))
+    actions: List[Dict[str, Any]] = [
+        {
+            "id": "export_selected_orchestration_manifest",
+            "label": "Export Selected Orchestration Manifest",
+            "kind": "download",
+            "artifact_ref": (
+                "report.orchestration_strategy.artifacts."
+                "selected_orchestration_manifest"
+            ),
+            "default_filename": "selected-orchestration-manifest.json",
+            "strategy_status": status,
+            "target_layers": default_layers,
+        },
+        _cli_action(
+            "replay_selected_orchestration_manifest",
+            "Replay Selected Orchestration Manifest",
+            [
+                "agent-learn",
+                "run",
+                "{{selected_manifest_path}}",
+                "--output",
+                "artifacts/selected-orchestration-replay.json",
+                "--junit",
+                "artifacts/selected-orchestration-replay.junit.xml",
+                "--sarif",
+                "artifacts/selected-orchestration-replay.sarif.json",
+                "--markdown",
+                "artifacts/selected-orchestration-replay.md",
+            ],
+            inputs=[
+                {
+                    "name": "selected_manifest_path",
+                    "label": "Selected orchestration manifest",
+                    "default": "artifacts/selected-orchestration-manifest.json",
+                }
+            ],
+        ),
+    ]
+    for action in actions:
+        action["strategy_status"] = status
+        action["target_layers"] = default_layers
+    return actions
+
+
 def _orchestration_strategy_actions(
     *,
     source_path: Path,
@@ -5003,6 +5385,39 @@ def _orchestration_strategy_markdown(
         if isinstance(item, Mapping)
     ]
     graph_summary = dict(card.get("graph_summary") or {})
+    rollout_plan = (
+        card.get("orchestration_rollout_plan")
+        if isinstance(card.get("orchestration_rollout_plan"), Mapping)
+        else None
+    )
+    rollout_lineage_rows: List[List[Any]] = []
+    rollout_step_rows: List[List[Any]] = []
+    if isinstance(rollout_plan, Mapping):
+        rollout_lineage_rows = [
+            [
+                item.get("candidate_id"),
+                item.get("selected"),
+                item.get("score"),
+                item.get("score_delta_from_seed"),
+                _join_values(item.get("layers")),
+                _join_values(item.get("weak_metrics")),
+                _join_values(item.get("patch_paths")),
+            ]
+            for item in _coerce_list(rollout_plan.get("candidate_lineage"))
+            if isinstance(item, Mapping)
+        ]
+        rollout_step_rows = [
+            [
+                item.get("id"),
+                item.get("label"),
+                item.get("candidate_id"),
+                _join_values(item.get("target_layers")),
+                _join_values(item.get("evidence")),
+                _join_values(item.get("command_args")),
+            ]
+            for item in _coerce_list(rollout_plan.get("rollout_steps"))
+            if isinstance(item, Mapping)
+        ]
     action_rows = [
         [
             item.get("id"),
@@ -5041,6 +5456,68 @@ def _orchestration_strategy_markdown(
                 *_markdown_table(
                     ["Layer", "Status", "Present", "Weak metrics", "Signals"],
                     layer_rows,
+                ),
+                "",
+            ]
+        )
+    if isinstance(rollout_plan, Mapping):
+        lines.extend(
+            [
+                "### Orchestration Rollout Plan",
+                "",
+                *_key_value_table(
+                    [
+                        ("Method", rollout_plan.get("method")),
+                        ("Status", rollout_plan.get("status")),
+                        ("Selected candidate", rollout_plan.get("selected_candidate_id")),
+                        ("Candidate count", rollout_plan.get("candidate_count")),
+                        ("Selected layers", _join_values(rollout_plan.get("selected_layers"))),
+                        ("Weak layers", _join_values(rollout_plan.get("weak_layers"))),
+                        ("Weak metrics", _join_values(rollout_plan.get("weak_metrics"))),
+                        (
+                            "Selected environments",
+                            _join_values(rollout_plan.get("selected_environment_types")),
+                        ),
+                    ]
+                ),
+                "",
+            ]
+        )
+    if rollout_lineage_rows:
+        lines.extend(
+            [
+                "### Orchestration Candidate Lineage",
+                "",
+                *_markdown_table(
+                    [
+                        "Candidate",
+                        "Selected",
+                        "Score",
+                        "Delta from seed",
+                        "Layers",
+                        "Weak metrics",
+                        "Patch paths",
+                    ],
+                    rollout_lineage_rows,
+                ),
+                "",
+            ]
+        )
+    if rollout_step_rows:
+        lines.extend(
+            [
+                "### Orchestration Rollout Steps",
+                "",
+                *_markdown_table(
+                    [
+                        "Step",
+                        "Label",
+                        "Candidate",
+                        "Target layers",
+                        "Evidence",
+                        "Command args",
+                    ],
+                    rollout_step_rows,
                 ),
                 "",
             ]
