@@ -197,6 +197,7 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     fi_hallucination = _assert_vendored_module("fi.evals.metrics.hallucination")
 
     assert set(fi_evals.__all__) <= set(agent_evals.__all__)
+    assert set(fi_metrics.__all__) <= set(agent_evals.__all__)
     for name in (
         "StreamingConfig",
         "StreamingEvalResult",
@@ -258,6 +259,10 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         "AgentStep",
         "ToolCall",
         "TaskDefinition",
+        "AgentReportEvalConfig",
+        "AgentReportMetricResult",
+        "AgentReportCaseResult",
+        "AgentReportEvaluation",
         "StepEfficiency",
         "TrajectoryScore",
         "GoalProgress",
@@ -270,6 +275,30 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
     ):
         assert getattr(agent_evals, name) is getattr(fi_agent_metrics, name)
     for name in (
+        "RAGInput",
+        "RAGRetrievalInput",
+        "RAGRankingInput",
+        "ContextRecall",
+        "ContextPrecision",
+        "NDCG",
+        "MRR",
+        "AnswerRelevancy",
+        "ContextUtilization",
+        "RAGFaithfulness",
+        "RAGScore",
+        "RAGScoreDetailed",
+        "ValidationMode",
+        "JSONInput",
+        "StructuredInput",
+        "JSONValidator",
+        "JSONValidation",
+        "SchemaCompliance",
+        "FieldCompleteness",
+        "StructuredOutputScore",
+        "QuickStructuredCheck",
+    ):
+        assert getattr(agent_evals, name) is getattr(fi_metrics, name)
+    for name in (
         "HallucinationDetector",
         "HallucinationScore",
         "check_entailment",
@@ -281,6 +310,16 @@ def test_agent_learning_facades_resolve_to_vendored_fi_engines():
         [{"response": "refund approved after policy check"}]
     )
     assert contains_result.eval_results[0].output == pytest.approx(1.0)
+    structured = agent_evals.QuickStructuredCheck()
+    structured_result = structured.evaluate(
+        [
+            {
+                "response": '{"status": "approved", "amount": 42}',
+                "schema": {"required": ["status", "amount"]},
+            }
+        ]
+    )
+    assert structured_result.eval_results[0].output == pytest.approx(1.0)
     assert set(fi_opt.__all__) <= set(agent_optimize.__all__)
     assert set(fi_optimizers.__all__) <= set(agent_optimize.__all__)
     for name in (

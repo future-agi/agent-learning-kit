@@ -198,6 +198,10 @@ _METRIC_EXPORT_NAMES = (
 )
 
 _AGENT_METRIC_EXPORT_NAMES = (
+    "AgentReportEvalConfig",
+    "AgentReportMetricResult",
+    "AgentReportCaseResult",
+    "AgentReportEvaluation",
     "AgentTrajectoryInput",
     "AgentStep",
     "ToolCall",
@@ -217,6 +221,49 @@ _AGENT_METRIC_EXPORT_NAMES = (
     "replay_domain_package_registry",
     "select_domain_package_registry_replay_pack",
     "validate_domain_package_registry",
+)
+
+_RAG_METRIC_EXPORT_NAMES = (
+    "RAGInput",
+    "RAGRetrievalInput",
+    "RAGRankingInput",
+    "ContextRecall",
+    "ContextPrecision",
+    "ContextEntityRecall",
+    "NoiseSensitivity",
+    "NDCG",
+    "MRR",
+    "AnswerRelevancy",
+    "ContextUtilization",
+    "RAGFaithfulness",
+    "MultiHopReasoning",
+    "SourceAttribution",
+    "RAGScore",
+    "RAGScoreDetailed",
+)
+
+_STRUCTURED_METRIC_EXPORT_NAMES = (
+    "ValidationMode",
+    "JSONInput",
+    "PydanticInput",
+    "YAMLInput",
+    "StructuredInput",
+    "ValidationError",
+    "ValidationResult",
+    "JSONValidator",
+    "PydanticValidator",
+    "YAMLValidator",
+    "JSONValidation",
+    "JSONSyntaxOnly",
+    "SchemaCompliance",
+    "TypeCompliance",
+    "FieldCompleteness",
+    "RequiredFieldsOnly",
+    "FieldCoverage",
+    "HierarchyScore",
+    "TreeEditDistance",
+    "StructuredOutputScore",
+    "QuickStructuredCheck",
 )
 
 _HALLUCINATION_EXPORT_NAMES = (
@@ -246,6 +293,10 @@ for _name in _METRIC_EXPORT_NAMES:
     _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics")
 for _name in _AGENT_METRIC_EXPORT_NAMES:
     _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics.agents")
+for _name in _RAG_METRIC_EXPORT_NAMES:
+    _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics")
+for _name in _STRUCTURED_METRIC_EXPORT_NAMES:
+    _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics")
 for _name in _HALLUCINATION_EXPORT_NAMES:
     _EVAL_EXPORTS.setdefault(_name, "fi.evals.metrics.hallucination")
 
