@@ -183,6 +183,25 @@ be simulated without adding framework-specific runtime dependencies. Unknown
 framework names are accepted as custom adapters when the manifest supplies the
 target method/input mode, as shown in `framework_custom_manifest.json`.
 
+SDK users can build the same framework simulations without hand-writing run
+manifests:
+
+```python
+from agent_learning import simulate
+
+manifest = simulate.build_framework_run_manifest(
+    name="my-langgraph-smoke",
+    framework="langgraph",
+    target="framework_shims.py:build_langgraph_agent",
+    required_env=["AGENT_LEARNING_API_KEY"],
+)
+simulate.write_manifest_file(manifest, "manifests/langgraph.json")
+```
+
+For batches, `simulate.build_multi_framework_suite_manifest()` composes those
+generated run manifests into an `agent-learning.suite.v1` capability-gated
+suite.
+
 The `custom_framework_optimization.json` example runs the same bring-your-own
 framework path through `agent-learn optimize`. It starts with a runnable but weak
 `run`/`text` adapter and deterministically selects the `execute_task`/`dict`
@@ -292,6 +311,10 @@ AGENT_LEARNING_SDK_REALTIME_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_optimization.py \
   artifacts/sdk-redteam-optimization.json
+
+AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY=... \
+  PYTHONPATH=src python examples/sdk_multi_framework_simulation.py \
+  artifacts/sdk-multi-framework-simulation.json
 
 AGENT_LEARNING_SDK_TRINITY_SUITE_KEY=... \
   PYTHONPATH=src python examples/sdk_trinity_suite.py \

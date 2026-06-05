@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -153,8 +155,10 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "EVAL_SUITE_SCHEMA_VERSION",
     "EvalSuiteOptions",
     "apply_manifest_env",
+    "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",
+    "build_multi_framework_suite_manifest",
     "build_manifest_optimization_problem",
     "compare_result_files",
     "compare_results",
@@ -201,6 +205,9 @@ _SIMULATE_EXPORTS.update(
         "LocalTextEngine": "fi.simulate.simulation.engines",
     }
 )
+
+AGENT_LEARNING_RUN_KIND = "agent-learning.run.v1"
+AGENT_LEARNING_SUITE_KIND = "agent-learning.suite.v1"
 
 
 def _manifest() -> Any:
@@ -260,6 +267,174 @@ def build_manifest_environments(
 
 def supported_manifest_environment_types() -> list[str]:
     return _manifest().supported_manifest_environment_types()
+
+
+def build_framework_run_manifest(
+    *,
+    name: str,
+    framework: str,
+    target: str,
+    required_env: Sequence[str] = (),
+    method: Optional[str] = None,
+    input_mode: Optional[str] = None,
+    modality: Optional[str] = None,
+    factory: bool = True,
+    trace_runtime: bool = True,
+    metadata: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    framework_trace: Optional[Mapping[str, Any]] = None,
+    max_turns: int = 1,
+    min_turns: int = 1,
+    evaluation_enabled: bool = False,
+    output_key: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build a local simulation manifest for any framework adapter.
+
+    The manifest uses the same ``agent.type=framework`` path as the CLI
+    cookbooks, so known presets such as LangChain, LangGraph, LiveKit, and
+    Pipecat use built-in adapter defaults while unknown frameworks can supply
+    method/input-mode overrides.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not target:
+        raise ValueError("target is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    framework_key = _framework_key(framework)
+    resolved_modality = str(modality or _framework_default_modality(framework_key))
+    agent: dict[str, Any] = {
+        "type": "framework",
+        "framework": framework_key,
+        "target": str(target),
+        "factory": bool(factory),
+        "trace_runtime": bool(trace_runtime),
+        "metadata": {
+            "sdk": "agent_learning.simulate.build_framework_run_manifest",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    if method:
+        agent["method"] = str(method)
+    if input_mode:
+        agent["input_mode"] = str(input_mode)
+    if output_key:
+        agent["output_key"] = str(output_key)
+    if system_prompt:
+        agent["system_prompt"] = str(system_prompt)
+
+    simulation: dict[str, Any] = {
+        "engine": "local_text",
+        "max_turns": int(max_turns),
+        "min_turns": int(min_turns),
+        "environments": [
+            {
+                "type": "framework_trace",
+                "data": copy.deepcopy(
+                    dict(framework_trace)
+                    if framework_trace is not None
+                    else _default_framework_trace(
+                        framework_key,
+                        method=method,
+                        modality=resolved_modality,
+                    )
+                ),
+            }
+        ],
+    }
+    if resolved_modality != "text":
+        simulation["modality"] = resolved_modality
+
+    return {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(scenario)
+            if scenario is not None
+            else _default_framework_scenario(str(name), framework_key, resolved_modality)
+        ),
+        "agent": agent,
+        "simulation": simulation,
+        "evaluation": {"enabled": bool(evaluation_enabled)},
+    }
+
+
+def build_multi_framework_suite_manifest(
+    *,
+    name: str,
+    framework_manifests: Sequence[Mapping[str, Any]],
+    required_env: Sequence[str] = (),
+    no_eval: bool = True,
+    required_frameworks: Optional[Sequence[str]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a suite manifest over multiple framework run manifests.
+
+    Each item needs ``framework`` and ``path``. Optional ``id``/``name`` values
+    control the child job IDs and display names.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework_manifests:
+        raise ValueError("framework_manifests must contain at least one item")
+    jobs: list[dict[str, Any]] = []
+    frameworks: list[str] = []
+    for index, raw in enumerate(framework_manifests, start=1):
+        item = copy.deepcopy(dict(raw))
+        framework = _framework_key(str(item.get("framework") or "custom"))
+        path = item.get("path")
+        if path in (None, ""):
+            raise ValueError(f"framework manifest {index} requires a path")
+        frameworks.append(framework)
+        job_id = str(item.get("id") or f"{framework}-framework")
+        jobs.append(
+            {
+                "id": job_id,
+                "command": "run",
+                "path": str(path),
+                "no_eval": bool(item.get("no_eval", no_eval)),
+                "name": str(item.get("name") or f"{name}-{job_id}"),
+            }
+        )
+    return {
+        "version": AGENT_LEARNING_SUITE_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "required_capabilities": {
+            "commands": ["run"],
+            "result_kinds": [AGENT_LEARNING_RUN_KIND],
+            "environment_types": ["framework_trace"],
+            "environment_state_keys": ["framework_runtime"],
+            "frameworks": _unique_strings(required_frameworks or frameworks),
+            "metrics": [],
+        },
+        "jobs": jobs,
+        "metadata": {
+            "source": "agent_learning.simulate.build_multi_framework_suite_manifest",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
+def write_manifest_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
+    """Write a simulation manifest as formatted JSON and return the path."""
+
+    manifest_path = Path(path).expanduser().resolve()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(dict(manifest), indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 async def run_local_text_manifest(
@@ -521,6 +696,121 @@ def wrap_framework(*args: Any, **kwargs: Any) -> Any:
     return _simulate().wrap_framework(*args, **kwargs)
 
 
+def _default_framework_scenario(
+    name: str,
+    framework: str,
+    modality: str,
+) -> dict[str, Any]:
+    role = "voice-agent-owner" if modality == "voice" else "framework-owner"
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {
+                    "name": "Maya",
+                    "role": role,
+                },
+                "situation": (
+                    f"Maya needs a {framework} agent simulated through the "
+                    "generic Agent Learning framework adapter."
+                ),
+                "outcome": (
+                    f"The {framework} adapter completes with framework runtime "
+                    "trace evidence."
+                ),
+            }
+        ],
+    }
+
+
+def _default_framework_trace(
+    framework: str,
+    *,
+    method: Optional[str],
+    modality: str,
+) -> dict[str, Any]:
+    resolved_method = method or _framework_default_method(framework)
+    signals = ["voice", "tool"] if modality == "voice" else ["model", "tool"]
+    if framework == "langgraph":
+        signals = ["graph", "tool", "state"]
+    elif framework == "pipecat":
+        signals = ["voice", "frame", "tool"]
+    elif framework == "livekit":
+        signals = ["voice", "room", "tool"]
+    elif framework not in _known_frameworks():
+        signals = ["planner", "tool", "policy"]
+    return {
+        "framework": framework,
+        "spans": [
+            {
+                "id": f"{framework}_adapter",
+                "name": f"{framework}.{resolved_method}",
+                "input": "agent learning framework simulation",
+                "output": "completed",
+                "tool_calls": [{"name": "framework_trace_status"}],
+                "signals": signals,
+            }
+        ],
+        "adapter_required_signals": signals,
+        "adapter_required_mappings": {"tool": ["tool_name"]},
+    }
+
+
+def _framework_default_method(framework: str) -> str:
+    defaults = {
+        "langchain": "ainvoke",
+        "langgraph": "ainvoke",
+        "llamaindex": "achat",
+        "crewai": "kickoff",
+        "autogen": "run",
+        "openai_agents": "run",
+        "livekit": "respond",
+        "pipecat": "process",
+    }
+    return defaults.get(framework, "run")
+
+
+def _framework_default_modality(framework: str) -> str:
+    if framework in {
+        "livekit",
+        "pipecat",
+        "vapi",
+        "retell",
+        "elevenlabs",
+        "deepgram",
+        "agora",
+        "twilio",
+    }:
+        return "voice"
+    if framework in {"computer_use", "browser_use", "playwright"}:
+        return "cua"
+    if framework == "vision_agent":
+        return "image"
+    return "text"
+
+
+def _known_frameworks() -> set[str]:
+    try:
+        return set(_simulate().supported_frameworks())
+    except Exception:
+        return set()
+
+
+def _framework_key(framework: str) -> str:
+    return str(framework or "custom").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _unique_strings(values: Sequence[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value)
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
 def __getattr__(name: str) -> Any:
     module_name = _SIMULATE_EXPORTS.get(name)
     if module_name is None:
@@ -565,4 +855,5 @@ __all__ = [
     "run_manifest_file",
     "supported_manifest_environment_types",
     "validate_manifest_env",
+    "write_manifest_file",
 ]

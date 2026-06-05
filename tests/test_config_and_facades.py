@@ -52,6 +52,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
     assert set(fi_code_security.__all__) <= set(redteam.__all__)
     assert simulate.run_eval_suite_file is not None
+    assert simulate.build_framework_run_manifest is not None
+    assert simulate.build_multi_framework_suite_manifest is not None
+    assert simulate.write_manifest_file is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
     assert redteam.RedTeamCampaignEnvironment is fi_simulate.RedTeamCampaignEnvironment
@@ -1084,6 +1087,69 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         if child["id"] == "agent-optimizer"
     )
     assert optimizer_child["summary"]["optimization_score"] >= 0.84
+
+
+def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY",
+        "real-local-sdk-multi-framework-example-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_multi_framework_simulation.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_framework_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifests = module.build_framework_manifests()
+    assert set(manifests) == {
+        "langchain-runnable",
+        "langgraph-state-graph",
+        "pipecat-voice-pipeline",
+        "livekit-realtime-agent",
+        "custom-refund-orchestrator",
+    }
+    assert manifests["custom-refund-orchestrator"]["agent"]["method"] == (
+        "execute_task"
+    )
+    assert manifests["custom-refund-orchestrator"]["agent"]["input_mode"] == "dict"
+    assert manifests["pipecat-voice-pipeline"]["simulation"]["modality"] == "voice"
+
+    output_path = tmp_path / "sdk-multi-framework-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["kind"] == "agent-learning.suite.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["commands"] == {"run": 5}
+    assert result["summary"]["score"] == pytest.approx(1.0)
+    expected = {
+        "langchain-runnable": ("langchain", "ainvoke", "dict", "text"),
+        "langgraph-state-graph": ("langgraph", "ainvoke", "dict", "text"),
+        "pipecat-voice-pipeline": ("pipecat", "process", "dict", "voice"),
+        "livekit-realtime-agent": ("livekit", "respond", "text", "voice"),
+        "custom-refund-orchestrator": (
+            "custom_refund_orchestrator",
+            "execute_task",
+            "dict",
+            "text",
+        ),
+    }
+    assert set(expected) == {child["id"] for child in result["children"]}
+    for child in result["children"]:
+        framework, method, input_mode, modality = expected[child["id"]]
+        runtime = child["result"]["report"]["results"][0]["metadata"][
+            "environment_state"
+        ]["framework_runtime"]
+        assert runtime["framework"] == framework
+        assert runtime["modality"] == modality
+        assert runtime["summary"]["methods"] == [method]
+        assert runtime["summary"]["input_modes"] == [input_mode]
+        assert runtime["summary"]["tool_call_count"] == 1
 
 
 def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
