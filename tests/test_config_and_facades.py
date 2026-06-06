@@ -3506,14 +3506,19 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         "redteam",
         "optimize_eval",
         "optimize",
+        "optimize",
     ]
     assert suite_manifest["jobs"][4]["id"] == "artifact-action-report"
     assert suite_manifest["jobs"][4]["action_id"] == "report_orchestration_strategy"
     assert suite_manifest["jobs"][5]["id"] == "artifact-evidence-optimizer"
     assert suite_manifest["jobs"][5]["path"] == "artifact_task_optimization_suite.json"
     assert suite_manifest["jobs"][-1]["path"] == (
+        "world_model_optimization.json"
+    )
+    assert suite_manifest["jobs"][-2]["path"] == (
         "world_framework_memory_optimization.json"
     )
+    assert suite_manifest["jobs"][-1]["id"] == "world-model-optimizer"
 
     output_path = tmp_path / "sdk-trinity-suite-result.json"
     result = module.run(output_path)
@@ -3522,8 +3527,8 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
     assert result["kind"] == "agent-learning.suite.v1"
     assert result["summary"]["score"] == pytest.approx(1.0)
-    assert result["summary"]["job_count"] == 9
-    assert result["summary"]["passed_count"] == 9
+    assert result["summary"]["job_count"] == 10
+    assert result["summary"]["passed_count"] == 10
     assert result["summary"]["capability_gate_passed"] is True
     assert {
         child["kind"]
@@ -3564,6 +3569,19 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert artifact_optimizer_child["summary"]["optimization_score"] == pytest.approx(
         1.0
     )
+    world_model_child = next(
+        child
+        for child in result["children"]
+        if child["id"] == "world-model-optimizer"
+    )
+    assert world_model_child["summary"]["optimization_score"] == pytest.approx(1.0)
+    best_env = world_model_child["result"]["optimization"]["best_config"][
+        "simulation"
+    ]["environments"][0]
+    assert best_env["data"]["metadata"]["candidate_profile"] == (
+        "l3_evolver_verifiable_world_model"
+    )
+    assert best_env["data"]["world_model"]["requires_external_service"] is False
 
 
 def test_sdk_regression_artifact_suite_example_runs(monkeypatch, tmp_path):

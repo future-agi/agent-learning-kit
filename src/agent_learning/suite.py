@@ -180,6 +180,7 @@ def build_trinity_suite_manifest(
     redteam_path: str | Path,
     eval_optimization_path: str | Path,
     optimization_path: str | Path,
+    world_model_optimization_path: str | Path | None = None,
     artifact_action_id: str | None = "report_orchestration_strategy",
     artifact_action_cwd: str | Path | None = "artifacts/action-loop/workspace",
     artifact_optimization_path: str | Path | None = None,
@@ -271,6 +272,23 @@ def build_trinity_suite_manifest(
             },
         ]
     )
+    required_metrics = ["eval_assertions"]
+    if world_model_optimization_path is not None:
+        jobs.append(
+            {
+                "id": "world-model-optimizer",
+                "command": "optimize",
+                "path": _suite_path_text(world_model_optimization_path),
+                "name": f"{suite_name}-world-model-optimizer",
+            }
+        )
+        required_metrics.extend(
+            [
+                "world_contract_quality",
+                "world_contract_coverage",
+                "tool_selection_accuracy",
+            ]
+        )
     if artifact_eval_config_path is not None:
         jobs[3]["config"] = _suite_path_text(artifact_eval_config_path)
     if max_candidates is not None:
@@ -300,9 +318,7 @@ def build_trinity_suite_manifest(
                 "agent-learning.eval-optimization.v1",
                 "agent-learning.optimization.v1",
             ],
-            "metrics": [
-                "eval_assertions",
-            ],
+            "metrics": required_metrics,
         },
         metadata={
             "source": "agent_learning.suite.build_trinity_suite_manifest",
@@ -2380,6 +2396,7 @@ _KNOWN_ENVIRONMENT_TYPES = {
     "red_team_campaign",
     "red_team_readiness",
     "retrieval_memory",
+    "stateful_tool_world",
     "streaming_trace",
     "voice",
     "workspace_run_manifest",

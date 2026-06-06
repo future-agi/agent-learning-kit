@@ -149,9 +149,12 @@ manifest is written under `regressions/` with the public
 CI, and Future AGI UI cards from the same evidence. The all preset generates a
 self-contained trinity workspace with local run, promptfoo-style eval,
 structured artifact eval, direct artifact-report eval, red-team, eval-suite
-optimization, task/world optimization, a fixture-backed artifact action-run,
-child action evidence under `artifacts/action-loop/`, a saved task artifact
-fixture, and `manifests/suite.json` as the single CI entrypoint.
+optimization, task/world optimization, internal world-model optimization, a
+fixture-backed artifact action-run, child action evidence under
+`artifacts/action-loop/`, a saved task artifact fixture, and
+`manifests/suite.json` as the single CI entrypoint. The world-model optimizer
+searches native L1 predictor, L2 executable simulator, and L3 verifiable
+evolver bundles; it does not require an external endpoint.
 `suite.build_optimization_lifecycle_plan()` and
 `suite.run_optimization_lifecycle_file()` expose the same lifecycle from the
 SDK; `examples/sdk_optimization_lifecycle.py` writes the task/world optimize
@@ -296,6 +299,7 @@ one manifest runs simulation, the nested multi-framework adapter suite,
 suite-level optimization over that nested suite, eval, artifact-task eval,
 direct artifact-report eval, artifact-evidence optimization, red-team, eval-suite
 optimization, world/framework/memory optimization, voice/streaming optimization, red-team optimization,
+internal world-model optimization,
 workspace/observability optimization, agent-integration optimization,
 multi-agent framework handoff optimization, optimizer-governance optimization,
 social-memory framework optimization,
@@ -335,6 +339,7 @@ manifest = suite.build_trinity_suite_manifest(
     redteam_path="redteam_manifest.json",
     eval_optimization_path="eval_suite_optimization.json",
     optimization_path="world_framework_memory_optimization.json",
+    world_model_optimization_path="world_model_optimization.json",
 )
 result = suite.run_suite(manifest, suite_path="examples/sdk_trinity_suite.json")
 ```

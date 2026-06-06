@@ -909,7 +909,7 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert exit_code == 0
     payload = json.loads(init_output.read_text(encoding="utf-8"))
     assert payload["kind"] == "agent-learning.init.v1"
-    assert payload["summary"]["files_written_count"] == 12
+    assert payload["summary"]["files_written_count"] == 13
     assert payload["init"]["next_commands"] == [
         (
             f"agent-learn suite {project_dir / 'manifests' / 'suite.json'} "
@@ -927,11 +927,23 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
         "artifact_task_eval_suite.json",
         "artifact_task_eval_config.json",
         "eval_suite_optimization.json",
+        "world_model_optimization.json",
         "suite.json",
     } <= {
         path.name
         for path in (project_dir / "manifests").iterdir()
     }
+    world_model_manifest = json.loads(
+        (project_dir / "manifests" / "world_model_optimization.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert world_model_manifest["optimization"]["target"]["metadata"][
+        "task_kind"
+    ] == "world_model"
+    assert world_model_manifest["optimization"]["target"]["metadata"][
+        "world_model"
+    ]["requires_external_service"] is False
     artifact_suite = json.loads(
         (project_dir / "manifests" / "artifact_task_eval_suite.json").read_text(
             encoding="utf-8",
@@ -960,8 +972,8 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert suite["kind"] == "agent-learning.suite.v1"
     assert suite["status"] == "passed"
     assert suite["summary"]["score"] == pytest.approx(1.0)
-    assert suite["summary"]["job_count"] == 8
-    assert suite["summary"]["passed_count"] == 8
+    assert suite["summary"]["job_count"] == 9
+    assert suite["summary"]["passed_count"] == 9
     assert suite["summary"]["failed_count"] == 0
     assert suite["summary"]["capability_gate_passed"] is True
     assert {
@@ -993,6 +1005,21 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
         path.endswith("artifacts/action-loop/action-run.json")
         for path in action_child["outputs_written"]
     )
+    world_model_child = next(
+        child
+        for child in suite["children"]
+        if child["id"] == "world-model-optimizer"
+    )
+    assert world_model_child["kind"] == "agent-learning.optimization.v1"
+    assert world_model_child["status"] == "passed"
+    assert world_model_child["summary"]["optimization_score"] == pytest.approx(1.0)
+    best_env = world_model_child["result"]["optimization"]["best_config"][
+        "simulation"
+    ]["environments"][0]
+    assert best_env["data"]["metadata"]["candidate_profile"] == (
+        "l3_evolver_verifiable_world_model"
+    )
+    assert best_env["data"]["world_model"]["requires_external_service"] is False
     assert 'failures="0"' in suite_junit.read_text(encoding="utf-8")
     assert json.loads(suite_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
     assert "refund-agent-trinity-suite" in suite_markdown.read_text(

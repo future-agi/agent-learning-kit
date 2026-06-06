@@ -1876,6 +1876,10 @@ def _rewrite_init_manifests_for_agent_learning(
             _agent_learning_eval_suite_optimization_manifest(name),
         )
         _write_json_file(
+            target_dir / "manifests" / "world_model_optimization.json",
+            _agent_learning_world_model_optimization_manifest(name, required_env),
+        )
+        _write_json_file(
             target_dir / "manifests" / "suite.json",
             _agent_learning_suite_manifest(name, required_env),
         )
@@ -1988,6 +1992,33 @@ def _agent_learning_eval_suite_optimization_manifest(name: str) -> Dict[str, Any
         },
     }
     return suite
+
+
+def _agent_learning_world_model_optimization_manifest(
+    name: str,
+    required_env: Sequence[str],
+) -> Dict[str, Any]:
+    from . import optimize as _agent_optimize
+
+    manifest = _agent_optimize.build_world_model_optimization_manifest(
+        name=f"{_slug(name, default='agent-learning')}-world-model-optimization",
+        required_env=required_env,
+        optimizer={
+            "algorithm": "agent",
+            "max_candidates": 4,
+            "include_seed": True,
+            "auto_diagnose": False,
+        },
+        target_metadata={
+            "cookbook": "agent-learn-init-world-model-suite",
+            "suite_role": "internal_world_model_optimization",
+        },
+    )
+    manifest["metadata"] = {
+        **dict(manifest.get("metadata") or {}),
+        "source": "agent_learning.cli.init",
+    }
+    return manifest
 
 
 def _agent_learning_artifact_eval_suite_manifest(name: str) -> Dict[str, Any]:
@@ -2238,6 +2269,8 @@ def _agent_learning_suite_manifest(
                 "eval_assertions",
                 "world_contract_quality",
                 "red_team_campaign_quality",
+                "world_contract_coverage",
+                "tool_selection_accuracy",
             ],
         },
         "jobs": [
@@ -2299,6 +2332,13 @@ def _agent_learning_suite_manifest(
                 "path": "optimize.json",
                 "name": f"{suite_name}-optimizer",
                 "max_candidates": 5,
+            },
+            {
+                "id": "world-model-optimizer",
+                "command": "optimize",
+                "path": "world_model_optimization.json",
+                "name": f"{suite_name}-world-model-optimizer",
+                "max_candidates": 4,
             },
         ],
     }

@@ -15,6 +15,7 @@ EXAMPLE_ENV_KEYS = [
     "AGENT_LEARNING_RUN_EXAMPLE_KEY",
     "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
     "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_SDK_WORLD_MODEL_KEY",
 ]
 
 
@@ -31,7 +32,8 @@ def build_suite() -> dict[str, Any]:
         redteam_path="redteam_manifest.json",
         eval_optimization_path="eval_suite_optimization.json",
         optimization_path="world_framework_memory_optimization.json",
-        max_candidates=2,
+        world_model_optimization_path="world_model_optimization.json",
+        max_candidates=4,
         metadata={"cookbook": "sdk-trinity-suite"},
     )
 
