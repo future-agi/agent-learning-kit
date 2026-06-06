@@ -228,6 +228,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND == (
         "agent-learning.optimization.framework-certification-proof.v1"
     )
+    assert optimize.AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND == (
+        "agent-learning.optimization.memory-lineage-proof.v1"
+    )
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -3057,9 +3060,10 @@ def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-memory-example-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY",
-        "real-local-sdk-memory-example-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / "sdk_memory_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -3082,8 +3086,25 @@ def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
     result = module.run(output_path)
 
     assert output_path.exists()
-    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
     assert result["summary"]["optimization_score"] >= 0.9
+    assert result["summary"]["memory_lineage_proof_status"] == "passed"
+    assert result["summary"]["memory_lineage_proof_passed"] is True
+    assert result["summary"]["memory_lineage_proof_assurance_level"] == (
+        "l3_native_memory_lineage_verified"
+    )
+    assert result["summary"]["memory_lineage_proof_failed_check_count"] == 0
     best_config = result["optimization"]["best_config"]
     env_types = [
         environment["type"]
@@ -3109,6 +3130,36 @@ def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
         "doc_refund_2026"
     ]
     assert state["agent_memory_lineage"]["summary"]["has_source_attribution"] is True
+    proof = result["memory_lineage_proof"]
+    assert saved["memory_lineage_proof"] == proof
+    assert result["optimization"]["memory_lineage_proof"] == proof
+    assert proof["kind"] == "agent-learning.optimization.memory-lineage-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_memory_lineage_verified"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["evidence"]["environment_types"] == [
+        "retrieval_memory",
+        "agent_memory_lineage",
+    ]
+    assert proof["evidence"]["retrieval_current_doc_ids"] == ["doc_refund_2026"]
+    assert proof["evidence"]["retrieval_cited_doc_ids"] == ["doc_refund_2026"]
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_memory_dependency",
+        "memory_environment_bundle_present",
+        "current_retrieval_grounding_closed",
+        "memory_lineage_chain_closed",
+        "memory_operations_audited",
+        "memory_governance_closed",
+        "memory_poisoning_and_isolation_closed",
+        "memory_observability_artifacts_closed",
+        "memory_metric_evidence_closed",
+    }
 
 
 def test_sdk_memory_simulation_example_runs(monkeypatch, tmp_path):

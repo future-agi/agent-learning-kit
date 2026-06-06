@@ -23,6 +23,9 @@ AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
 AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
     "agent-learning.optimization.framework-certification-proof.v1"
 )
+AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND = (
+    "agent-learning.optimization.memory-lineage-proof.v1"
+)
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -338,6 +341,7 @@ def optimize_manifest_file(
     payload = with_optimization_governance(payload)
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
+    payload = with_memory_lineage_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -364,6 +368,7 @@ def optimize_manifest(
     payload = with_optimization_governance(payload)
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
+    payload = with_memory_lineage_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -426,6 +431,34 @@ def with_framework_certification_proof(payload: Mapping[str, Any]) -> dict[str, 
         proof["failed_check_ids"]
     )
     summary["framework_certification_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_memory_lineage_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for retrieval/memory optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_memory_lineage_optimization(result, optimization):
+        return result
+
+    proof = _memory_lineage_proof(result, optimization)
+    result["memory_lineage_proof"] = proof
+    optimization["memory_lineage_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["memory_lineage_proof_status"] = proof["status"]
+    summary["memory_lineage_proof_passed"] = proof["passed"]
+    summary["memory_lineage_proof_assurance_level"] = proof["assurance_level"]
+    summary["memory_lineage_proof_check_count"] = proof["check_count"]
+    summary["memory_lineage_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["memory_lineage_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -3044,6 +3077,305 @@ def _framework_certification_proof(
             "framework_portability_summary": copy.deepcopy(portability_summary),
             "readiness_status": readiness.get("status"),
             "readiness_present_layers": readiness.get("present_layers"),
+            "selected_metrics": selected_metric_evidence,
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _memory_lineage_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    report_state = _selected_report_environment_state(selected_history)
+    retrieval = _plain_mapping(report_state.get("retrieval_memory"))
+    lineage = _plain_mapping(report_state.get("agent_memory_lineage"))
+    lineage_summary = _plain_mapping(lineage.get("summary"))
+
+    documents = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval.get("documents"))
+        if _plain_mapping(item)
+    ]
+    current_doc_ids = {
+        str(item.get("id") or "")
+        for item in documents
+        if item.get("current") is True and str(item.get("id") or "")
+    }
+    citations = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval.get("citations"))
+        if _plain_mapping(item)
+    ]
+    cited_doc_ids = {
+        str(doc_id)
+        for citation in citations
+        for doc_id in _plain_list(citation.get("doc_ids"))
+        if str(doc_id or "")
+    }
+    operations = [
+        _plain_mapping(item)
+        for item in _plain_list(lineage.get("operations"))
+        if _plain_mapping(item)
+    ]
+    operation_types = {
+        _scope_key(operation.get("operation") or operation.get("type"))
+        for operation in operations
+    }
+    required_environment_types = {"retrieval_memory", "agent_memory_lineage"}
+    required_metric_thresholds = {
+        "retrieval_context_quality": 1.0,
+        "retrieval_memory_attribution": 1.0,
+        "agent_memory_lineage_coverage": 1.0,
+        "agent_memory_lineage_quality": 1.0,
+        "memory_integrity": 1.0,
+        "source_grounding": 0.9,
+    }
+    selected_metric_evidence = {
+        key: selected_metrics.get(key)
+        for key in required_metric_thresholds
+        if key in selected_metrics
+    }
+
+    checks = [
+        _proof_check(
+            "native_no_external_memory_dependency",
+            passed=not _contains_nested_keys(
+                best_config,
+                {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+            ),
+            required=True,
+            reason=(
+                "selected memory candidate is local and has no endpoint/auth/key "
+                "dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(
+                        best_config,
+                        {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+                    )
+                ),
+            },
+        ),
+        _proof_check(
+            "memory_environment_bundle_present",
+            passed=required_environment_types.issubset(set(environment_types)),
+            required=True,
+            reason=(
+                "selected candidate carries retrieval memory and agent memory "
+                "lineage environments as one bundle"
+            ),
+            evidence={
+                "required_environment_types": sorted(required_environment_types),
+                "environment_types": environment_types,
+            },
+        ),
+        _proof_check(
+            "current_retrieval_grounding_closed",
+            passed=bool(current_doc_ids)
+            and bool(cited_doc_ids)
+            and cited_doc_ids.issubset(current_doc_ids)
+            and all(citation.get("freshness_checked") is True for citation in citations),
+            required=True,
+            reason=(
+                "retrieval evidence cites only current documents and records "
+                "freshness checks"
+            ),
+            evidence={
+                "current_doc_ids": sorted(current_doc_ids),
+                "cited_doc_ids": sorted(cited_doc_ids),
+                "freshness_checked_count": sum(
+                    1 for citation in citations if citation.get("freshness_checked") is True
+                ),
+                "citation_count": len(citations),
+            },
+        ),
+        _proof_check(
+            "memory_lineage_chain_closed",
+            passed=_as_int(lineage_summary.get("memory_count")) > 0
+            and bool(lineage_summary.get("has_lineage"))
+            and bool(lineage_summary.get("has_source_attribution"))
+            and _as_int(lineage_summary.get("attributed_memory_count"))
+            >= _as_int(lineage_summary.get("memory_count"))
+            and not _plain_list(lineage_summary.get("missing_required_evidence"))
+            and not _plain_list(lineage_summary.get("missing_required_signals")),
+            required=True,
+            reason=(
+                "memory records have source attribution, closed lineage, and no "
+                "missing required evidence or signals"
+            ),
+            evidence={
+                "memory_count": lineage_summary.get("memory_count"),
+                "attributed_memory_count": lineage_summary.get(
+                    "attributed_memory_count"
+                ),
+                "has_lineage": lineage_summary.get("has_lineage"),
+                "has_source_attribution": lineage_summary.get(
+                    "has_source_attribution"
+                ),
+                "missing_required_evidence": lineage_summary.get(
+                    "missing_required_evidence"
+                ),
+                "missing_required_signals": lineage_summary.get(
+                    "missing_required_signals"
+                ),
+            },
+        ),
+        _proof_check(
+            "memory_operations_audited",
+            passed=_as_int(lineage_summary.get("operation_count")) >= 3
+            and {"read", "write", "recall"}.issubset(operation_types)
+            and _as_int(lineage_summary.get("audited_operation_count"))
+            >= _as_int(lineage_summary.get("operation_count"))
+            and _as_int(lineage_summary.get("read_operation_count")) > 0
+            and _as_int(lineage_summary.get("write_operation_count")) > 0
+            and _as_int(lineage_summary.get("recall_operation_count")) > 0,
+            required=True,
+            reason=(
+                "read, write, and recall memory operations are present and audited"
+            ),
+            evidence={
+                "operation_count": lineage_summary.get("operation_count"),
+                "operation_types": sorted(operation_types),
+                "audited_operation_count": lineage_summary.get(
+                    "audited_operation_count"
+                ),
+                "read_operation_count": lineage_summary.get("read_operation_count"),
+                "write_operation_count": lineage_summary.get("write_operation_count"),
+                "recall_operation_count": lineage_summary.get("recall_operation_count"),
+            },
+        ),
+        _proof_check(
+            "memory_governance_closed",
+            passed=all(
+                bool(lineage_summary.get(key))
+                for key in (
+                    "has_tenant_isolation",
+                    "has_audit",
+                    "has_retention_policy",
+                    "has_deletion_policy",
+                    "has_redaction",
+                )
+            )
+            and _as_int(lineage_summary.get("policy_violation_count")) == 0,
+            required=True,
+            reason=(
+                "tenant isolation, audit, retention, deletion, and redaction "
+                "governance are enforced with no policy violations"
+            ),
+            evidence={
+                "has_tenant_isolation": lineage_summary.get("has_tenant_isolation"),
+                "has_audit": lineage_summary.get("has_audit"),
+                "has_retention_policy": lineage_summary.get("has_retention_policy"),
+                "has_deletion_policy": lineage_summary.get("has_deletion_policy"),
+                "has_redaction": lineage_summary.get("has_redaction"),
+                "policy_violation_count": lineage_summary.get(
+                    "policy_violation_count"
+                ),
+                "policy_keys": lineage_summary.get("policy_keys"),
+            },
+        ),
+        _proof_check(
+            "memory_poisoning_and_isolation_closed",
+            passed=bool(lineage_summary.get("has_canaries"))
+            and _as_int(lineage_summary.get("open_poisoning_count")) == 0
+            and _as_int(lineage_summary.get("poisoned_memory_count")) == 0
+            and _as_int(lineage_summary.get("isolation_violation_count")) == 0
+            and _as_int(lineage_summary.get("retention_violation_count")) == 0
+            and _as_int(lineage_summary.get("blocking_gap_count")) == 0,
+            required=True,
+            reason=(
+                "canary, poisoning, tenant-isolation, retention, and blocking-gap "
+                "checks are closed"
+            ),
+            evidence={
+                "has_canaries": lineage_summary.get("has_canaries"),
+                "open_poisoning_count": lineage_summary.get("open_poisoning_count"),
+                "poisoned_memory_count": lineage_summary.get(
+                    "poisoned_memory_count"
+                ),
+                "isolation_violation_count": lineage_summary.get(
+                    "isolation_violation_count"
+                ),
+                "retention_violation_count": lineage_summary.get(
+                    "retention_violation_count"
+                ),
+                "blocking_gap_count": lineage_summary.get("blocking_gap_count"),
+            },
+        ),
+        _proof_check(
+            "memory_observability_artifacts_closed",
+            passed=bool(lineage_summary.get("has_observability"))
+            and bool(lineage_summary.get("has_artifacts"))
+            and _as_int(lineage_summary.get("observability_hook_count")) > 0
+            and _as_int(lineage_summary.get("artifact_count")) > 0,
+            required=True,
+            reason=(
+                "memory observability hooks and audit artifacts are present for "
+                "post-run inspection"
+            ),
+            evidence={
+                "has_observability": lineage_summary.get("has_observability"),
+                "has_artifacts": lineage_summary.get("has_artifacts"),
+                "observability_hook_count": lineage_summary.get(
+                    "observability_hook_count"
+                ),
+                "artifact_count": lineage_summary.get("artifact_count"),
+            },
+        ),
+        _proof_check(
+            "memory_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(key)) >= threshold
+                for key, threshold in required_metric_thresholds.items()
+            ),
+            required=True,
+            reason=(
+                "selected report carries closed retrieval, provenance, integrity, "
+                "and source-grounding metrics"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_memory_lineage_verified"
+            if passed
+            else "memory_lineage_proof_failed"
+        ),
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "retrieval_current_doc_ids": sorted(current_doc_ids),
+            "retrieval_cited_doc_ids": sorted(cited_doc_ids),
+            "agent_memory_lineage_summary": copy.deepcopy(lineage_summary),
             "selected_metrics": selected_metric_evidence,
         },
         "check_count": len(checks),
@@ -17187,6 +17519,39 @@ def _is_framework_certification_optimization(
     }.issubset(state_keys)
 
 
+def _is_memory_lineage_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    task_kind = _scope_key(metadata.get("task_kind"))
+    if task_kind in {"memory_retrieval", "memory_layer"}:
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environment_types = [
+        _scope_key(_plain_mapping(item).get("type"))
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    # Keep this proof scoped to the dedicated memory bundle. Larger orchestration
+    # stacks may include the same environments, but those need their own proof.
+    if environment_types == ["retrieval_memory", "agent_memory_lineage"]:
+        return True
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    state_keys = set(_selected_report_environment_state(selected_history))
+    return state_keys == {"retrieval_memory", "agent_memory_lineage"}
+
+
 def _proof_check(
     check_id: str,
     *,
@@ -17471,6 +17836,7 @@ def __dir__() -> list[str]:
 __all__ = [
     *_OPTIMIZE_EXPORTS,
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
+    "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
     "diagnose_text",
@@ -17568,5 +17934,6 @@ __all__ = [
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
     "with_framework_certification_proof",
+    "with_memory_lineage_proof",
     "with_world_hook_proof",
 ]

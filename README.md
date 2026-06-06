@@ -562,6 +562,14 @@ For retrieval and memory layers, pass candidates with `retrieval_memory` and
 searches current-document grounding, source attribution, memory writes, policy
 checks, canaries, observability, and memory-lineage artifacts as one coherent
 candidate bundle.
+Memory optimization artifacts also emit
+`agent-learning.optimization.memory-lineage-proof.v1`, a native proof derived
+from the selected candidate and selected report. It checks that the selected
+memory bundle is local, current retrieval cites only current documents with
+freshness evidence, source lineage is closed, read/write/recall operations are
+audited, tenant isolation/audit/retention/deletion/redaction policies are
+enforced, poisoning/isolation/retention gaps are closed, observability and audit
+artifacts exist, and retrieval/provenance/integrity metrics pass.
 For direct, non-optimizer simulation,
 `simulate.build_memory_layer_run_manifest()` and `examples/sdk_memory_simulation.py`
 run a selected retrieval/memory-lineage bundle as a normal
