@@ -321,7 +321,11 @@ records admitted, non-admitted, and rejected row counts plus per-row provenance,
 so CI and Future AGI UI cards can separate claim-supporting evidence from
 fixture and diagnostic support artifacts. Add
 `"evidence_policy": {"min_admitted": 1}` when a suite must fail unless at least
-one child row is admitted.
+one child row is admitted. Each row also carries an
+`agent-learning.suite.evidence-freeze.v1` block with SHA-256 digests for the
+child manifest, child result payload, and declared child outputs; add
+`"require_freeze": true` to the same policy when admitted rows must be
+content-addressed.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 `agent-learn optimize-suite` and `suite.optimize_suite()` search over the suite

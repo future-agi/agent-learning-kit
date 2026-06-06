@@ -3533,6 +3533,9 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert result["summary"]["evidence_gate_passed"] is True
     assert result["summary"]["admitted_evidence_count"] == 8
     assert result["summary"]["non_admitted_evidence_count"] == 2
+    assert result["summary"]["frozen_evidence_count"] == 10
+    assert result["summary"]["unfrozen_evidence_count"] == 0
+    assert result["summary"]["admitted_frozen_evidence_count"] == 8
     assert result["evidence_admission"]["by_status"] == {
         "admitted": 8,
         "fixture": 2,
@@ -8964,7 +8967,7 @@ def test_agent_learn_suite_records_evidence_admission_contract(tmp_path):
             {
                 "version": "agent-learning.suite.v1",
                 "name": "agent-learning-kit-evidence-gate",
-                "evidence_policy": {"min_admitted": 1},
+                "evidence_policy": {"min_admitted": 1, "require_freeze": True},
                 "required_capabilities": {
                     "evidence_statuses": [
                         "admitted",
@@ -9013,6 +9016,9 @@ def test_agent_learn_suite_records_evidence_admission_contract(tmp_path):
     assert payload["summary"]["evidence_gate_passed"] is True
     assert payload["summary"]["admitted_evidence_count"] == 1
     assert payload["summary"]["non_admitted_evidence_count"] == 2
+    assert payload["summary"]["frozen_evidence_count"] == 3
+    assert payload["summary"]["unfrozen_evidence_count"] == 0
+    assert payload["summary"]["admitted_frozen_evidence_count"] == 1
     assert payload["summary"]["capabilities"]["evidence_statuses"] == [
         "admitted",
         "diagnostic",
@@ -9033,6 +9039,18 @@ def test_agent_learn_suite_records_evidence_admission_contract(tmp_path):
         "diagnostic",
         "fixture",
     ]
+    first_freeze = payload["children"][0]["evidence"]["freeze"]
+    assert first_freeze["kind"] == "agent-learning.suite.evidence-freeze.v1"
+    assert first_freeze["hash_algorithm"] == "sha256"
+    assert first_freeze["content_addressed"] is True
+    assert first_freeze["manifest"]["exists"] is True
+    assert len(first_freeze["manifest"]["sha256"]) == 64
+    assert len(first_freeze["result_sha256"]) == 64
+    assert len(first_freeze["outputs_sha256"]) == 64
+    assert payload["children"][0]["evidence"]["provenance"]["content_addressed"] is True
+    assert len(
+        payload["children"][0]["evidence"]["provenance"]["manifest_sha256"]
+    ) == 64
     assert "| paper-facing-eval | eval | passed | admitted | 0 |" in (
         markdown_path.read_text(encoding="utf-8")
     )
@@ -9098,6 +9116,8 @@ def test_agent_learn_suite_fails_evidence_gate_without_admitted_rows(tmp_path):
     assert payload["summary"]["evidence_gate_passed"] is False
     assert payload["summary"]["admitted_evidence_count"] == 0
     assert payload["summary"]["non_admitted_evidence_count"] == 1
+    assert payload["summary"]["frozen_evidence_count"] == 1
+    assert payload["summary"]["unfrozen_evidence_count"] == 0
     assert payload["findings"][0]["type"] == "suite_evidence_admission_missing"
     assert 'failures="1"' in junit_path.read_text(encoding="utf-8")
     sarif = json.loads(sarif_path.read_text(encoding="utf-8"))

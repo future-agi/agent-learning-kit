@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import os
 import shlex
@@ -949,6 +950,7 @@ def render_junit(result: Mapping[str, Any]) -> str:
         in {
             "suite_required_capability_missing",
             "suite_evidence_admission_missing",
+            "suite_evidence_freeze_missing",
         }
     ]
     failures = (
@@ -1048,7 +1050,8 @@ def render_markdown(
             "- Evidence: "
             f"{summary.get('admitted_evidence_count', 0)} admitted, "
             f"{summary.get('non_admitted_evidence_count', 0)} non-admitted, "
-            f"{summary.get('rejected_evidence_count', 0)} rejected"
+            f"{summary.get('rejected_evidence_count', 0)} rejected, "
+            f"{summary.get('frozen_evidence_count', 0)} frozen"
         ),
         "",
         "| Job | Command | Status | Evidence | Exit |",
@@ -1132,7 +1135,11 @@ def _execute_job(
             "duration_seconds": round(time.time() - started, 4),
             "result": payload,
         }
-        result["evidence"] = _suite_child_evidence(job, result)
+        result["evidence"] = _suite_child_evidence(
+            job,
+            result,
+            base_dir=base_dir,
+        )
         return result
     except Exception as exc:
         result = {
@@ -1158,7 +1165,11 @@ def _execute_job(
             "duration_seconds": round(time.time() - started, 4),
             "error": str(exc),
         }
-        result["evidence"] = _suite_child_evidence(job, result)
+        result["evidence"] = _suite_child_evidence(
+            job,
+            result,
+            base_dir=base_dir,
+        )
         return result
 
 
@@ -1438,9 +1449,35 @@ def _child_renderers(command: str) -> tuple[Any, Any, Any]:
 def _suite_child_evidence(
     job: Mapping[str, Any],
     child: Mapping[str, Any],
+    *,
+    base_dir: Path,
 ) -> dict[str, Any]:
     role = _suite_evidence_role(job, child)
     exit_code = int(child.get("exit_code", 1))
+    manifest_path = Path(str(child.get("path") or ""))
+    replay_class = str(
+        job.get("replay_class")
+        or job.get("replay")
+        or _as_mapping(job.get("metadata")).get("replay_class")
+        or "r0"
+    )
+    output_digests = _suite_output_digests(
+        child.get("outputs_written"),
+        base_dir=base_dir,
+    )
+    freeze = {
+        "kind": "agent-learning.suite.evidence-freeze.v1",
+        "hash_algorithm": "sha256",
+        "replay_class": replay_class,
+        "manifest": _suite_file_digest(manifest_path),
+        "result_sha256": _suite_json_digest(child.get("result")),
+        "outputs": output_digests,
+        "outputs_sha256": _suite_json_digest(output_digests),
+    }
+    freeze["content_addressed"] = bool(
+        _as_mapping(freeze.get("manifest")).get("sha256")
+        and freeze.get("result_sha256")
+    )
     reasons: list[str] = []
     if exit_code != 0:
         status = "rejected"
@@ -1484,14 +1521,15 @@ def _suite_child_evidence(
             "job_id": child.get("id") or job.get("id"),
             "job_name": child.get("name") or job.get("name"),
             "manifest_path": child.get("path"),
+            "manifest_sha256": _as_mapping(freeze["manifest"]).get("sha256"),
+            "result_sha256": freeze.get("result_sha256"),
             "outputs_written": list(child.get("outputs_written") or []),
-            "replay_class": str(
-                job.get("replay_class")
-                or job.get("replay")
-                or metadata.get("replay_class")
-                or "r0"
-            ),
+            "output_digests": output_digests,
+            "outputs_sha256": freeze.get("outputs_sha256"),
+            "replay_class": replay_class,
+            "content_addressed": freeze["content_addressed"],
         },
+        "freeze": freeze,
     }
 
 
@@ -1520,6 +1558,49 @@ def _suite_path_is_fixture(value: Any) -> bool:
     return "/fixtures/" in text or text.startswith("fixtures/")
 
 
+def _suite_file_digest(path: str | Path) -> dict[str, Any]:
+    file_path = Path(path).expanduser()
+    exists = file_path.exists()
+    if not exists or not file_path.is_file():
+        return {
+            "path": str(file_path),
+            "exists": exists,
+            "sha256": None,
+            "bytes": 0,
+        }
+    data = file_path.read_bytes()
+    return {
+        "path": str(file_path),
+        "exists": True,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": len(data),
+    }
+
+
+def _suite_json_digest(value: Any) -> str:
+    data = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _suite_output_digests(
+    values: Any,
+    *,
+    base_dir: Path,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for value in _as_list(values):
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            path = (base_dir / path).resolve()
+        records.append(_suite_file_digest(path))
+    return records
+
+
 def _suite_evidence_admission(
     children: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -1535,17 +1616,32 @@ def _suite_evidence_admission(
     admitted_rows = [row for row in rows if bool(row.get("admitted"))]
     rejected_rows = [row for row in rows if str(row.get("status") or "") == "rejected"]
     non_admitted_rows = [row for row in rows if not bool(row.get("admitted"))]
+    frozen_rows = [row for row in rows if _suite_row_content_addressed(row)]
+    admitted_unfrozen_rows = [
+        row for row in admitted_rows if not _suite_row_content_addressed(row)
+    ]
     return {
         "kind": "agent-learning.suite.evidence-admission.v1",
         "admitted_count": len(admitted_rows),
         "non_admitted_count": len(non_admitted_rows),
         "rejected_count": len(rejected_rows),
+        "frozen_count": len(frozen_rows),
+        "unfrozen_count": len(rows) - len(frozen_rows),
+        "admitted_frozen_count": len(admitted_rows) - len(admitted_unfrozen_rows),
         "by_status": dict(sorted(by_status.items())),
         "by_role": dict(sorted(by_role.items())),
         "admitted_row_ids": [str(row.get("row_id")) for row in admitted_rows],
         "non_admitted_row_ids": [str(row.get("row_id")) for row in non_admitted_rows],
+        "admitted_unfrozen_row_ids": [
+            str(row.get("row_id")) for row in admitted_unfrozen_rows
+        ],
         "rows": rows,
     }
+
+
+def _suite_row_content_addressed(row: Mapping[str, Any]) -> bool:
+    freeze = _as_mapping(row.get("freeze"))
+    return bool(freeze.get("content_addressed"))
 
 
 def _suite_evidence_policy(suite: Mapping[str, Any]) -> dict[str, Any]:
@@ -1563,6 +1659,9 @@ def _suite_evidence_policy(suite: Mapping[str, Any]) -> dict[str, Any]:
     if min_admitted is None and bool(policy.get("require_admitted")):
         min_admitted = 1
     policy["min_admitted"] = int(min_admitted or 0)
+    policy["require_freeze"] = bool(
+        policy.get("require_freeze") or policy.get("require_content_addressed")
+    )
     return policy
 
 
@@ -1572,10 +1671,9 @@ def _suite_evidence_findings(
 ) -> list[dict[str, Any]]:
     min_admitted = int(policy.get("min_admitted") or 0)
     admitted_count = int(admission.get("admitted_count") or 0)
-    if min_admitted <= admitted_count:
-        return []
-    return [
-        {
+    findings: list[dict[str, Any]] = []
+    if min_admitted > admitted_count:
+        findings.append({
             "type": "suite_evidence_admission_missing",
             "level": "error",
             "reason": (
@@ -1584,8 +1682,24 @@ def _suite_evidence_findings(
             ),
             "admitted_count": admitted_count,
             "min_admitted": min_admitted,
-        }
-    ]
+        })
+    if bool(policy.get("require_freeze")):
+        missing = [
+            str(row_id)
+            for row_id in _as_list(admission.get("admitted_unfrozen_row_ids"))
+        ]
+        if missing:
+            findings.append({
+                "type": "suite_evidence_freeze_missing",
+                "level": "error",
+                "reason": (
+                    "Suite evidence gate requires content-addressed admitted "
+                    f"rows, but {len(missing)} admitted row(s) are missing "
+                    "manifest/result digests."
+                ),
+                "missing": missing,
+            })
+    return findings
 
 
 def _suite_result(
@@ -1656,6 +1770,11 @@ def _suite_result(
                 "non_admitted_count"
             ],
             "rejected_evidence_count": evidence_admission["rejected_count"],
+            "frozen_evidence_count": evidence_admission["frozen_count"],
+            "unfrozen_evidence_count": evidence_admission["unfrozen_count"],
+            "admitted_frozen_evidence_count": evidence_admission[
+                "admitted_frozen_count"
+            ],
             "evidence_admission": {
                 key: value
                 for key, value in evidence_admission.items()

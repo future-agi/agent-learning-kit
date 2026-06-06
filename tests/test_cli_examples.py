@@ -979,6 +979,9 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert suite["summary"]["evidence_gate_passed"] is True
     assert suite["summary"]["admitted_evidence_count"] == 6
     assert suite["summary"]["non_admitted_evidence_count"] == 3
+    assert suite["summary"]["frozen_evidence_count"] == 9
+    assert suite["summary"]["unfrozen_evidence_count"] == 0
+    assert suite["summary"]["admitted_frozen_evidence_count"] == 6
     assert suite["evidence_admission"]["by_status"] == {
         "admitted": 6,
         "fixture": 3,
@@ -1009,6 +1012,8 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
         1.0,
     )
     assert action_child["evidence"]["status"] == "fixture"
+    assert action_child["evidence"]["freeze"]["content_addressed"] is True
+    assert action_child["evidence"]["freeze"]["outputs"]
     assert any(
         path.endswith("artifacts/action-loop/action-run.json")
         for path in action_child["outputs_written"]
