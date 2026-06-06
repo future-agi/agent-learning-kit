@@ -263,7 +263,7 @@ def action_catalog(
     action_id: Optional[str] = None,
     name: Optional[str] = None,
 ) -> dict[str, Any]:
-    artifacts = [artifact]
+    artifacts = [artifact, _generic_report_action_artifact(source_path)]
     synthesized = _synthesized_report_artifact(artifact, source_path=source_path)
     if synthesized is not None:
         artifacts.append(synthesized)
@@ -304,6 +304,27 @@ def action_catalog(
     if action_id is not None:
         payload["summary"]["filter_action_id"] = action_id
     return payload
+
+
+def _generic_report_action_artifact(source_path: str | Path) -> dict[str, Any]:
+    return {
+        "actions": [
+            {
+                "id": "report_artifact",
+                "kind": "cli",
+                "label": "Report artifact",
+                "command": "agent-learn report",
+                "command_args": [
+                    "agent-learn",
+                    "report",
+                    str(Path(source_path).expanduser().resolve()),
+                    "--output",
+                    "report-artifact.json",
+                ],
+                "target_layers": ["reporting", "diagnosis"],
+            }
+        ]
+    }
 
 
 def _synthesized_report_artifact(

@@ -74,6 +74,9 @@ agent-learn run examples/run_manifest.json --no-eval --output artifacts/run.json
 agent-learn redteam examples/redteam_manifest.json --output artifacts/redteam.json
 agent-learn redteam examples/long_horizon_redteam_manifest.json \
   --output artifacts/long-horizon-redteam.json
+agent-learn redteam-corpus \
+  --hook http://127.0.0.1:8080/redteam/corpus \
+  --output artifacts/redteam-corpus-hook.json
 agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json
 agent-learn optimize examples/world_framework_memory_optimization.json \
   --output artifacts/world-framework-memory-optimization.json
@@ -241,7 +244,7 @@ output completion, evidence depth, generated files, and the selection reason for
 Future AGI UI/API rendering.
 
 `agent-learn run`, `agent-learn eval`, `agent-learn redteam`,
-`agent-learn optimize`, `agent-learn optimize-eval`,
+`agent-learn redteam-corpus`, `agent-learn optimize`, `agent-learn optimize-eval`,
 `agent-learn optimize-suite`, `agent-learn suite`, `agent-learn actions`,
 `agent-learn action-run`, and `agent-learn action-optimize`
 write Agent Learning Kit artifact kinds
@@ -950,6 +953,17 @@ optimizer searches weak/partial/verified corpus candidates as
 `simulation_evidence`, so missing taxonomy/source/matrix evidence becomes an
 optimizer diagnosis rather than a silent prompt-list gap. See
 `examples/sdk_redteam_corpus_optimization.py`.
+
+`redteam.fetch_redteam_corpus_hook()` and
+`redteam.build_redteam_corpus_hook_campaign()` add an authenticated external
+red-team corpus hook. A live HTTP endpoint can return RedBench/DTap/
+MonitoringBench/SOAR-style rows under `rows`, `corpus_rows`, `attacks`, or
+`cases`; the SDK fetches them with bearer env auth, records a redacted
+`redteam_corpus_hook_trace`, and normalizes them into the same
+`red_team_campaign` evidence used by static corpus imports. The
+`agent-learn redteam-corpus --hook ...` command writes the campaign artifact
+directly, and `examples/sdk_redteam_corpus_hook.py` starts a real local
+authenticated hook for SDK/CLI verification.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It

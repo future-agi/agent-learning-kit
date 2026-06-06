@@ -145,6 +145,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.build_redteam_manifest is not None
     assert redteam.build_redteam_run_manifest is redteam.build_redteam_manifest
     assert redteam.build_redteam_corpus_campaign is not None
+    assert redteam.build_redteam_corpus_hook_campaign is not None
+    assert redteam.fetch_redteam_corpus_hook is not None
     assert redteam.RedTeamCampaignEnvironment is fi_simulate.RedTeamCampaignEnvironment
     assert redteam.RedTeamReadinessEnvironment is (
         fi_simulate.RedTeamReadinessEnvironment
@@ -8103,6 +8105,138 @@ def test_sdk_redteam_corpus_optimization_example_runs(monkeypatch, tmp_path):
         "tool_coverage": 1.0,
         "red_team_campaign": 1.0,
     }
+
+
+def test_sdk_redteam_corpus_hook_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY",
+        "real-local-sdk-redteam-corpus-hook-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_redteam_corpus_hook.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_corpus_hook",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-redteam-corpus-hook.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved == result
+    assert result["status"] == "passed"
+    assert result["summary"]["row_count"] == 4
+    assert result["summary"]["coverage_cell_count"] == 4
+    assert result["summary"]["covered_cell_count"] == 4
+    assert result["summary"]["executed_cell_count"] == 4
+    assert result["summary"]["blocking_gap_count"] == 0
+
+    campaign = result["redteam_campaign"]
+    assert campaign["summary"]["observed_taxonomies"] == [
+        "dtap_2026",
+        "monitoringbench_2026",
+        "redbench_2026",
+        "soar_2026",
+    ]
+    assert campaign["summary"]["missing_coverage_cells"] == []
+    assert campaign["summary"]["missing_executed_cells"] == []
+    assert campaign["summary"]["missing_run_artifact_cells"] == []
+    assert campaign["summary"]["missing_mitigation_cells"] == []
+    assert campaign["summary"]["unmapped_findings"] == []
+
+    trace = result["metadata"]["hook_trace"]
+    assert trace["kind"] == "redteam_corpus_hook_trace"
+    assert trace["status_code"] == 200
+    assert trace["success"] is True
+    assert trace["row_count"] == 4
+    assert trace["auth"] == {
+        "enabled": True,
+        "type": "bearer",
+        "token_env": "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY",
+        "header_names": ["Authorization"],
+        "redacted": True,
+    }
+    assert "real-local-sdk-redteam-corpus-hook-key" not in json.dumps(
+        result,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def test_cli_redteam_corpus_hook_fetches_authenticated_campaign(
+    monkeypatch,
+    tmp_path,
+):
+    key = "real-local-cli-redteam-corpus-hook-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / "sdk_redteam_corpus_hook.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_corpus_hook",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "cli-redteam-corpus-hook.json"
+    actions_path = tmp_path / "cli-redteam-corpus-hook-actions.json"
+    action_run_path = tmp_path / "cli-redteam-corpus-hook-action-run.json"
+    action_cwd = tmp_path / "cli-redteam-corpus-hook-action"
+    with module._local_redteam_corpus_hook(key) as endpoint:
+        exit_code = main(
+            [
+                "redteam-corpus",
+                "--hook",
+                endpoint,
+                "--hook-api-key-env",
+                "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY",
+                "--output",
+                str(output_path),
+            ]
+        )
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "passed"
+    assert payload["summary"]["row_count"] == 4
+    assert payload["summary"]["blocking_gap_count"] == 0
+    assert payload["redteam_campaign"]["summary"]["coverage_cell_count"] == 4
+    assert payload["redteam_campaign"]["summary"]["covered_cell_count"] == 4
+    trace = payload["summary"]["hook"]
+    assert trace["status_code"] == 200
+    assert trace["success"] is True
+    assert trace["auth"]["redacted"] is True
+    assert trace["auth"]["token_env"] == (
+        "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY"
+    )
+    assert key not in json.dumps(payload, sort_keys=True, default=str)
+
+    assert main(["actions", str(output_path), "--output", str(actions_path)]) == 0
+    actions_payload = json.loads(actions_path.read_text(encoding="utf-8"))
+    assert any(
+        action["id"] == "report_artifact"
+        for action in actions_payload["actions"]
+    )
+    assert (
+        main(
+            [
+                "action-run",
+                str(output_path),
+                "--id",
+                "report_artifact",
+                "--cwd",
+                str(action_cwd),
+                "--output",
+                str(action_run_path),
+            ]
+        )
+        == 0
+    )
+    action_payload = json.loads(action_run_path.read_text(encoding="utf-8"))
+    assert action_payload["status"] == "passed"
+    assert action_payload["summary"]["outputs_written_count"] == 1
 
 
 def test_sdk_workspace_observability_simulation_example_runs(

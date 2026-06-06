@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import urlparse
 
 from ._facade import optional_module
 from ._schema import public_payload
@@ -893,6 +899,234 @@ def build_redteam_corpus_campaign(
 build_redteam_corpus_run_campaign = build_redteam_corpus_campaign
 
 
+def fetch_redteam_corpus_hook(
+    endpoint: str,
+    *,
+    api_key_env: str = "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY",
+    method: str = "POST",
+    timeout: float = 30.0,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Fetch red-team corpus rows from an authenticated HTTP hook.
+
+    The hook may return a top-level list, or an object with ``rows``,
+    ``corpus_rows``, or ``attacks``. Auth is deliberately env-based so saved
+    artifacts can carry a redacted trace without serializing raw keys.
+    """
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    method_value = str(method or "POST").upper()
+    request_payload = {
+        "kind": "agent-learning.redteam-corpus-hook.request.v1",
+        "metadata": copy.deepcopy(dict(metadata or {})),
+    }
+    started = time.time()
+    status_code = 0
+    response_payload: Any = {}
+    error = ""
+    try:
+        status_code, response_payload = _post_redteam_corpus_hook(
+            endpoint=endpoint,
+            method=method_value,
+            timeout=timeout,
+            api_key_env=api_key_env,
+            payload=request_payload,
+        )
+    except Exception as exc:
+        error = str(exc)
+        response_payload = {"error": error}
+
+    if status_code >= 400 and not error:
+        error = _redteam_corpus_hook_error_text(response_payload) or (
+            f"Red-team corpus hook returned status {status_code}"
+        )
+    rows = _redteam_corpus_rows_from_hook_payload(response_payload) if not error else []
+    trace = _redteam_corpus_hook_trace(
+        endpoint=endpoint,
+        method=method_value,
+        api_key_env=api_key_env,
+        status_code=status_code,
+        latency_ms=round((time.time() - started) * 1000, 4),
+        success=not error and 200 <= status_code < 300,
+        row_count=len(rows),
+        error=error or None,
+    )
+    if error:
+        raise RuntimeError(f"Red-team corpus hook failed: {error}")
+    if not rows:
+        raise ValueError("red-team corpus hook returned no rows")
+    return {
+        "rows": rows,
+        "trace": trace,
+        "metadata": copy.deepcopy(dict(metadata or {})),
+    }
+
+
+def build_redteam_corpus_hook_campaign(
+    *,
+    name: str = "redteam-corpus-hook-campaign",
+    endpoint: str,
+    api_key_env: str = "AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY",
+    method: str = "POST",
+    timeout: float = 30.0,
+    target: Optional[Mapping[str, Any]] = None,
+    frameworks: Sequence[str] = ("agent_learning_kit",),
+    required_taxonomies: Sequence[str] = (),
+    required_attack_types: Sequence[str] = (),
+    required_surfaces: Sequence[str] = (),
+    required_channels: Sequence[str] = (),
+    required_providers: Sequence[str] = (),
+    observability: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Fetch live corpus rows and normalize them into campaign evidence."""
+
+    hook = fetch_redteam_corpus_hook(
+        endpoint,
+        api_key_env=api_key_env,
+        method=method,
+        timeout=timeout,
+        metadata=metadata,
+    )
+    return build_redteam_corpus_campaign(
+        name=name,
+        corpus_rows=hook["rows"],
+        target=target,
+        frameworks=frameworks,
+        required_taxonomies=required_taxonomies,
+        required_attack_types=required_attack_types,
+        required_surfaces=required_surfaces,
+        required_channels=required_channels,
+        required_providers=required_providers,
+        observability=observability,
+        metadata={
+            "source": "agent_learning.redteam.build_redteam_corpus_hook_campaign",
+            "cookbook": "redteam-corpus-hook",
+            "hook_trace": hook["trace"],
+            "original_synthesis": (
+                "External red-team corpora should enter the platform as "
+                "authenticated executable evidence, then reuse the same "
+                "campaign matrix, artifact, mitigation, and observability "
+                "contract as static benchmark imports."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+
+def _post_redteam_corpus_hook(
+    *,
+    endpoint: str,
+    method: str,
+    timeout: float,
+    api_key_env: str,
+    payload: Mapping[str, Any],
+) -> tuple[int, Any]:
+    data = None if method == "GET" else json.dumps(payload, default=str).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=data,
+        headers=_redteam_corpus_hook_headers(api_key_env),
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=float(timeout)) as response:
+            status = int(getattr(response, "status", 200))
+            text = response.read().decode(
+                response.headers.get_content_charset() or "utf-8"
+            )
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        text = exc.read().decode("utf-8")
+    if not text:
+        return status, {}
+    try:
+        return status, json.loads(text)
+    except json.JSONDecodeError:
+        return status, {"content": text}
+
+
+def _redteam_corpus_hook_headers(api_key_env: str) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key_env:
+        token = os.environ.get(str(api_key_env), "")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _redteam_corpus_rows_from_hook_payload(payload: Any) -> list[dict[str, Any]]:
+    data = copy.deepcopy(payload)
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, Mapping):
+        rows = (
+            data.get("rows")
+            or data.get("corpus_rows")
+            or data.get("attacks")
+            or data.get("cases")
+            or []
+        )
+    else:
+        rows = []
+    result = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            raise TypeError(f"hook row {index} must be a mapping")
+        result.append(copy.deepcopy(dict(row)))
+    return result
+
+
+def _redteam_corpus_hook_trace(
+    *,
+    endpoint: str,
+    method: str,
+    api_key_env: str,
+    status_code: int,
+    latency_ms: float,
+    success: bool,
+    row_count: int,
+    error: Optional[str],
+) -> dict[str, Any]:
+    headers = _redteam_corpus_hook_headers(api_key_env)
+    return {
+        "kind": "redteam_corpus_hook_trace",
+        "endpoint": _redacted_hook_endpoint(endpoint),
+        "endpoint_host": urlparse(endpoint).netloc,
+        "method": method,
+        "status_code": int(status_code),
+        "latency_ms": latency_ms,
+        "success": bool(success),
+        "row_count": int(row_count),
+        "error": error,
+        "request_header_names": sorted(headers),
+        "auth": {
+            "enabled": bool(api_key_env),
+            "type": "bearer" if api_key_env else "",
+            "token_env": str(api_key_env) if api_key_env else "",
+            "header_names": ["Authorization"] if "Authorization" in headers else [],
+            "redacted": bool(api_key_env),
+        },
+    }
+
+
+def _redacted_hook_endpoint(endpoint: str) -> str:
+    parsed = urlparse(str(endpoint))
+    if parsed.query:
+        parsed = parsed._replace(query="<redacted>")
+    return parsed.geturl()
+
+
+def _redteam_corpus_hook_error_text(payload: Any) -> str:
+    if isinstance(payload, Mapping):
+        for key in ("error", "message", "detail", "content"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return "" if payload in (None, "") else str(payload)
+
+
 def prepare_redteam_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return _manifest().prepare_redteam_manifest(manifest)
 
@@ -1653,9 +1887,11 @@ __all__ = [
     "build_persistent_state_redteam_manifest",
     "build_persistent_state_redteam_run_manifest",
     "build_redteam_corpus_campaign",
+    "build_redteam_corpus_hook_campaign",
     "build_redteam_corpus_run_campaign",
     "build_redteam_manifest",
     "build_redteam_run_manifest",
+    "fetch_redteam_corpus_hook",
     "load_manifest",
     "load_manifest_file",
     "missing_manifest_env",

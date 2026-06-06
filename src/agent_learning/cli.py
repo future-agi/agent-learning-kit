@@ -60,6 +60,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _eval_task(args[1:])
     if command == "redteam":
         return _redteam(args[1:])
+    if command in {"redteam-corpus", "redteam-corpus-hook", "redteam-hook"}:
+        return _redteam_corpus(args[1:])
     if command == "optimize":
         return _optimize(args[1:])
     if command == "optimize-eval":
@@ -939,6 +941,71 @@ def _redteam(args: Sequence[str]) -> int:
     return int(payload.get("exit_code", 0))
 
 
+def _redteam_corpus(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn redteam-corpus",
+        description="Fetch authenticated red-team corpus rows and write campaign evidence.",
+    )
+    _add_redteam_corpus_args(parser)
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import redteam
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn redteam-corpus", exc)
+
+    try:
+        campaign = redteam.build_redteam_corpus_hook_campaign(
+            name=parsed.name,
+            endpoint=parsed.hook,
+            api_key_env=parsed.hook_api_key_env,
+            method=parsed.hook_method,
+            timeout=parsed.timeout,
+        )
+    except Exception as exc:
+        print(f"agent-learn redteam-corpus: {exc}", file=sys.stderr)
+        return 1
+
+    summary = dict(campaign.get("summary") or {})
+    hook_trace = dict(campaign.get("metadata", {}).get("hook_trace") or {})
+    blocking_gaps = [
+        *list(summary.get("missing_coverage_cells") or []),
+        *list(summary.get("missing_executed_cells") or []),
+        *list(summary.get("missing_run_artifact_cells") or []),
+        *list(summary.get("missing_mitigation_cells") or []),
+        *list(summary.get("unmapped_findings") or []),
+    ]
+    status = "passed" if not blocking_gaps and hook_trace.get("success") else "failed"
+    payload: Dict[str, Any] = {
+        "schema_version": "agent-learning.cli.v1",
+        "kind": AGENT_LEARNING_REDTEAM_KIND,
+        "status": status,
+        "exit_code": 0 if status == "passed" else 1,
+        "redteam_campaign": campaign,
+        "summary": {
+            "name": campaign.get("name"),
+            "row_count": hook_trace.get("row_count", summary.get("run_count", 0)),
+            "coverage_cell_count": summary.get("coverage_cell_count", 0),
+            "covered_cell_count": summary.get("covered_cell_count", 0),
+            "executed_cell_count": summary.get("executed_cell_count", 0),
+            "artifact_count": summary.get("artifact_count", 0),
+            "finding_count": summary.get("finding_count", 0),
+            "mitigation_count": summary.get("mitigation_count", 0),
+            "blocking_gap_count": len(blocking_gaps),
+            "hook": hook_trace,
+        },
+        "metadata": dict(campaign.get("metadata") or {}),
+    }
+    payload["outputs_written"] = _write_json_outputs(
+        payload,
+        parsed.output,
+        base_dir=Path.cwd(),
+    )
+    if not payload["outputs_written"] and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload["exit_code"])
+
+
 def _optimize(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn optimize",
@@ -1292,6 +1359,48 @@ def _add_redteam_args(parser: argparse.ArgumentParser) -> None:
         "--dry-run",
         action="store_true",
         help="Validate red-team manifest/env without executing.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+
+
+def _add_redteam_corpus_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--hook",
+        required=True,
+        help="Authenticated HTTP endpoint returning red-team corpus rows.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help="Write JSON campaign evidence output to this path.",
+    )
+    parser.add_argument(
+        "--hook-api-key-env",
+        default="AGENT_LEARNING_SDK_REDTEAM_CORPUS_HOOK_KEY",
+        help="Environment variable containing the corpus hook bearer token.",
+    )
+    parser.add_argument(
+        "--hook-method",
+        default="POST",
+        choices=["GET", "POST"],
+        help="HTTP method for the corpus hook request.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Corpus hook timeout in seconds.",
+    )
+    parser.add_argument(
+        "--name",
+        default="redteam-corpus-hook-campaign",
+        help="Campaign name for generated evidence.",
     )
     parser.add_argument(
         "--quiet",
@@ -2785,7 +2894,7 @@ def _help(error: Optional[str] = None) -> int:
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
             "compare, baseline, promote-to-regression, optimize-eval, "
             "optimize-suite, suite, capabilities, actions, action-run, "
-            "action-optimize, eval-cli, init"
+            "action-optimize, redteam-corpus, eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)
