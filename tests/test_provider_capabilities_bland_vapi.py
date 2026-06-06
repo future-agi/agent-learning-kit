@@ -5,9 +5,9 @@ simulation layer didn't know their voice/phone capabilities when normalizing an
 agent-integration manifest.
 """
 
-from fi.simulate.environment import (
+from agent_learning.simulate import (
     AGENT_INTEGRATION_PROVIDER_CAPABILITIES,
-    _normalize_agent_integration_provider_name,
+    normalize_agent_integration_provider_name,
     normalize_agent_integration_manifest,
 )
 from agent_learning.evals.metrics.agents.report import (
@@ -28,15 +28,15 @@ def test_bland_and_vapi_present_with_voice_capabilities():
 
 def test_bland_aliases_resolve():
     # The user wrote "bland.ai"; the key-normalizer turns "." and spaces into "_".
-    assert _normalize_agent_integration_provider_name("bland") == "bland"
-    assert _normalize_agent_integration_provider_name("bland.ai") == "bland"
-    assert _normalize_agent_integration_provider_name("bland_ai") == "bland"
-    assert _normalize_agent_integration_provider_name("Bland AI") == "bland"
+    assert normalize_agent_integration_provider_name("bland") == "bland"
+    assert normalize_agent_integration_provider_name("bland.ai") == "bland"
+    assert normalize_agent_integration_provider_name("bland_ai") == "bland"
+    assert normalize_agent_integration_provider_name("Bland AI") == "bland"
 
 
 def test_vapi_alias_resolves():
-    assert _normalize_agent_integration_provider_name("vapi") == "vapi"
-    assert _normalize_agent_integration_provider_name("vapi_ai") == "vapi"
+    assert normalize_agent_integration_provider_name("vapi") == "vapi"
+    assert normalize_agent_integration_provider_name("vapi_ai") == "vapi"
 
 
 def test_agent_learning_builder_defaults_cover_vapi_and_bland_channels():

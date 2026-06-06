@@ -204,6 +204,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
 _SIMULATE_EXPORTS = {name: "fi.simulate" for name in _FI_SIMULATE_EXPORT_NAMES}
 _SIMULATE_EXPORTS.update(
     {
+        "AGENT_INTEGRATION_PROVIDER_CAPABILITIES": "fi.simulate.environment",
         "BaseEngine": "fi.simulate.simulation.engines",
         "CloudEngine": "fi.simulate.simulation.engines",
         "LiveKitEngine": "fi.simulate.simulation.engines",
@@ -2606,6 +2607,13 @@ def _unique_strings(values: Sequence[Any]) -> list[str]:
     return result
 
 
+def normalize_agent_integration_provider_name(value: Any) -> str:
+    """Return the canonical provider key used by agent integration manifests."""
+
+    environment = optional_module("fi.simulate.environment", _SIMULATE_EXTRA)
+    return str(environment._normalize_agent_integration_provider_name(value))
+
+
 def __getattr__(name: str) -> Any:
     module_name = _SIMULATE_EXPORTS.get(name)
     if module_name is None:
@@ -2652,6 +2660,7 @@ __all__ = [
     "load_manifest",
     "load_manifest_file",
     "missing_manifest_env",
+    "normalize_agent_integration_provider_name",
     "optimize_manifest_file",
     "promote_to_regression",
     "promote_to_regression_file",
