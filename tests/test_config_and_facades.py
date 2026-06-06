@@ -237,6 +237,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND == (
         "agent-learning.optimization.orchestration-stack-proof.v1"
     )
+    assert optimize.AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND == (
+        "agent-learning.optimization.redteam-campaign-proof.v1"
+    )
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -4588,9 +4591,10 @@ def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
 
 
 def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-redteam-example-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY",
-        "real-local-sdk-redteam-example-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / "sdk_redteam_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -4613,14 +4617,65 @@ def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
     result = module.run(output_path)
 
     assert output_path.exists()
-    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
     assert result["summary"]["optimization_score"] >= 0.9
+    assert result["summary"]["redteam_campaign_proof_status"] == "passed"
+    assert result["summary"]["redteam_campaign_proof_passed"] is True
+    assert result["summary"]["redteam_campaign_proof_assurance_level"] == (
+        "l3_native_redteam_campaign_verified"
+    )
+    assert result["summary"]["redteam_campaign_proof_failed_check_count"] == 0
     best_history = max(
         result["optimization"]["history"],
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["red_team_campaign_quality"] == pytest.approx(1.0)
     assert best_history["metrics"]["adversarial_resilience"] >= 0.9
+    proof = result["redteam_campaign_proof"]
+    assert saved["redteam_campaign_proof"] == proof
+    assert result["optimization"]["redteam_campaign_proof"] == proof
+    assert proof["kind"] == "agent-learning.optimization.redteam-campaign-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_redteam_campaign_verified"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["evidence"]["selected_attacks"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert proof["evidence"]["selected_surfaces"] == ["tool", "memory"]
+    assert proof["evidence"]["coverage_cell_count"] == 4
+    assert proof["evidence"]["executed_cell_count"] == 4
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_redteam_dependency",
+        "redteam_campaign_evidence_present",
+        "attack_surface_matrix_closed",
+        "attack_pack_payload_contract_closed",
+        "selected_attack_surface_scope_observed",
+        "risk_mitigation_observability_closed",
+        "long_horizon_attack_system_closed",
+        "multi_agent_redteam_council_closed",
+        "causal_redteam_attribution_graph_closed",
+        "redteam_coherent_search_surface_present",
+        "redteam_optimization_regression_gate_passed",
+        "redteam_metric_evidence_closed",
+    }
 
 
 def test_sdk_redteam_autogen_optimization_example_runs(monkeypatch, tmp_path):
@@ -5475,9 +5530,10 @@ def test_sdk_redteam_causal_attribution_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    key = "real-local-sdk-redteam-causal-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REDTEAM_CAUSAL_ATTRIBUTION_EXAMPLE_KEY",
-        "real-local-sdk-redteam-causal-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / (
         "sdk_redteam_causal_attribution_optimization.py"
@@ -5577,6 +5633,13 @@ def test_sdk_redteam_causal_attribution_optimization_example_runs(
     assert result["summary"]["optimization_score"] >= 0.96
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
     assert "simulation.environments" in result["summary"]["search_paths"]
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert result["summary"]["redteam_campaign_proof_status"] == "passed"
+    assert result["summary"]["redteam_campaign_proof_assurance_level"] == (
+        "l3_native_redteam_campaign_verified"
+    )
+    assert result["summary"]["redteam_campaign_proof_failed_check_count"] == 0
 
     best_history = max(
         result["optimization"]["history"],
@@ -5622,6 +5685,42 @@ def test_sdk_redteam_causal_attribution_optimization_example_runs(
     assert campaign_summary["attack_count"] == 25
     assert campaign_summary["coverage_cell_count"] == 25
     assert campaign_summary["executed_cell_count"] == 25
+    proof = result["redteam_campaign_proof"]
+    assert saved["redteam_campaign_proof"] == proof
+    assert result["optimization"]["redteam_campaign_proof"] == proof
+    assert proof["kind"] == "agent-learning.optimization.redteam-campaign-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["evidence"]["coverage_cell_count"] == 25
+    assert proof["evidence"]["executed_cell_count"] == 25
+    assert proof["evidence"]["attack_system_strategy"] == "causal_redteam_society"
+    assert proof["evidence"]["causal_attribution_counts"] == {
+        "edges": 7,
+        "evidence": 5,
+        "mitigations": 4,
+        "nodes": 7,
+        "root_causes": 3,
+    }
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_redteam_dependency",
+        "redteam_campaign_evidence_present",
+        "attack_surface_matrix_closed",
+        "attack_pack_payload_contract_closed",
+        "selected_attack_surface_scope_observed",
+        "risk_mitigation_observability_closed",
+        "long_horizon_attack_system_closed",
+        "multi_agent_redteam_council_closed",
+        "causal_redteam_attribution_graph_closed",
+        "redteam_coherent_search_surface_present",
+        "redteam_optimization_regression_gate_passed",
+        "redteam_metric_evidence_closed",
+    }
 
 
 def test_sdk_report_repair_optimization_example_runs(monkeypatch, tmp_path):

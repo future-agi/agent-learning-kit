@@ -925,6 +925,18 @@ prompt-injection seed and searches the tool-plus-memory prompt-injection plus
 credential-exfiltration campaign. Red-team reports expose `surface_matrix` and
 `adaptive_surface_risk` fields so CI and the Future AGI UI can show which
 attack surface is still blind even when aggregate campaign quality is high.
+Red-team optimization artifacts also emit
+`agent-learning.optimization.redteam-campaign-proof.v1`, a native proof derived
+from the selected candidate and selected report. It checks that the selected
+campaign is local and has no endpoint/auth/key dependency, attack-pack payloads
+are replayable with verifier terms, attack/surface/channel/provider matrix
+cells have scenario, run, artifact, executed evidence, mitigation, and
+passed-run closure, observability and high-risk findings are closed, selected
+attack-system candidates include planner/check/research/canary/blocked-tool
+evidence, red-team councils close handoff/review/reconciliation contracts when
+present, causal attribution graphs close root-cause/mitigation/evidence mapping
+when present, the selected patch changes a red-team harness surface, the
+optimizer does not regress from the seed, and red-team metrics pass.
 
 For evidence-driven adaptive red teaming, pass a prior red-team artifact/path or
 failure text to `optimize.build_adaptive_redteam_optimization_manifest()`. The
