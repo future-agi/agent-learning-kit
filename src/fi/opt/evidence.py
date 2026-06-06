@@ -16,6 +16,7 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "red_team_readiness": 3.0,
     "runtime_semantics": 1.0,
     "stateful_tool_world": 3.0,
+    "world_hooks": 3.0,
     "world_contract": 3.0,
     "world_orchestration_replay": 3.0,
     "agent_memory_lineage": 2.0,
@@ -126,6 +127,15 @@ def score_simulation_evidence(
             )
         )
 
+    if _should_score("world_hooks", layers, env_states, cfg):
+        components.append(
+            _score_world_hooks_contract(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
     if _should_score("world", layers, env_states, cfg):
         components.append(
             _score_world_contract(
@@ -228,6 +238,7 @@ def score_simulation_evidence(
                     "HarnessFix 2026: optimizer updates should be attributed to responsible trace and harness layers before repair.",
                     "SAGE/constitutional multi-agent governance 2026: optimizer societies need role-separated, validation-gated promotion evidence.",
                     "ECPO/RREDCoT 2026: long-horizon optimizer credit should be evidence-calibrated instead of final-score-only.",
+                    "ADWM/WLA 2026: world evaluation needs action-conditioned local replay contracts before online deployment.",
                 ],
             }
         },
@@ -942,6 +953,170 @@ def _score_stateful_tool_world(
     }
 
 
+def _score_world_hooks_contract(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    contract = _world_hooks_contract(env_states)
+    if not contract:
+        return _missing_component(
+            "world_hooks",
+            "No world_hooks_contract evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("world_hook_contract_quality"),
+        manifest_config.get("world_hook_contract_quality"),
+    )
+    observed = _world_hooks_contract_observed(contract)
+    required = _configured_norm_set(
+        "required_world_hooks",
+        cfg,
+        manifest_config,
+        nested_keys=("world_hook_contract_quality", "required_hooks"),
+    )
+    for key in (
+        "required_callable_hooks",
+        "required_hook_types",
+        "required_output_channels",
+        "required_state_scopes",
+        "required_surfaces",
+        "required_replay_semantics",
+        "required_evidence_requirements",
+    ):
+        required.update(_norm(item) for item in _as_list(quality.get(key)) if _norm(item))
+    if quality.get("kind"):
+        required.add(_norm(quality.get("kind")))
+    if quality.get("mode"):
+        required.add(_norm(quality.get("mode")))
+    if quality.get("runtime"):
+        required.add(_norm(quality.get("runtime")))
+    required.update({"world_hooks_contract", "native_world_state_hooks"})
+    matched = sorted(required & observed)
+    missing = sorted(required - observed)
+    coverage_score = _coverage_score(required, observed, default=bool(contract))
+
+    summary = _world_hooks_contract_summary(contract)
+    checks: list[dict[str, Any]] = [
+        {
+            "check": "contract_present",
+            "expected": {">=": 1},
+            "actual": summary["contract_count"],
+            "match": summary["contract_count"] >= 1,
+        }
+    ]
+    expected_kind = _norm(
+        quality.get("kind") or "agent-learning.world-hooks-contract.v1"
+    )
+    checks.append(
+        {
+            "check": "kind",
+            "expected": expected_kind,
+            "actual": summary["kinds"],
+            "match": expected_kind in summary["kinds"],
+        }
+    )
+    for requirement_key, summary_key in (
+        ("mode", "modes"),
+        ("runtime", "runtimes"),
+    ):
+        expected = _norm(
+            quality.get(requirement_key) or quality.get(f"required_{requirement_key}")
+        )
+        if not expected:
+            continue
+        checks.append(
+            {
+                "check": requirement_key,
+                "expected": expected,
+                "actual": summary[summary_key],
+                "match": expected in summary[summary_key],
+            }
+        )
+    if quality.get("require_no_external_service") is not None:
+        required_local = bool(quality.get("require_no_external_service"))
+        values = summary["requires_external_service_values"]
+        local_declared = False in values
+        external_present = True in values
+        checks.append(
+            {
+                "check": "require_no_external_service",
+                "expected": required_local,
+                "actual": values,
+                "match": (local_declared and not external_present) if required_local else True,
+            }
+        )
+    forbidden_keys = {
+        str(item)
+        for item in _as_list(
+            quality.get("forbidden_keys")
+            or (
+                ["endpoint", "auth", "api_key", "secret", "token"]
+                if quality.get("require_no_external_service")
+                else []
+            )
+        )
+        if str(item)
+    }
+    if forbidden_keys:
+        present = sorted(_present_nested_keys(contract, forbidden_keys))
+        checks.append(
+            {
+                "check": "forbidden_keys",
+                "expected": {"absent": sorted(forbidden_keys)},
+                "actual": present,
+                "match": not present,
+            }
+        )
+
+    for requirement, summary_key, check_name in (
+        ("required_hooks", "hook_names", "required_hook"),
+        ("required_callable_hooks", "callable_hook_names", "required_callable_hook"),
+        ("required_hook_types", "hook_types", "required_hook_type"),
+        ("required_output_channels", "output_channels", "required_output_channel"),
+        ("required_state_scopes", "state_scopes", "required_state_scope"),
+        ("required_surfaces", "surfaces", "required_surface"),
+        (
+            "required_replay_semantics",
+            "replay_semantics",
+            "required_replay_semantic",
+        ),
+        (
+            "required_evidence_requirements",
+            "evidence_requirements",
+            "required_evidence_requirement",
+        ),
+    ):
+        _append_required_value_checks(
+            checks,
+            quality,
+            requirement,
+            {_norm(item) for item in _as_list(summary.get(summary_key)) if _norm(item)},
+            check_name,
+        )
+
+    quality_score = _checks_score(checks)
+    score = round(0.35 * coverage_score + 0.65 * quality_score, 4)
+    return {
+        "name": "world_hooks",
+        "score": score,
+        "reason": (
+            "world-hook contract is native, local, and replayable"
+            if score >= 0.99
+            else "world-hook contract evidence incomplete"
+        ),
+        "details": {
+            "matched": matched,
+            "missing": missing,
+            "checks": checks,
+            "summary": copy.deepcopy(summary),
+            "contract": copy.deepcopy(contract),
+        },
+    }
+
+
 def _score_world_orchestration_replay(
     env_states: Sequence[Mapping[str, Any]],
     *,
@@ -1629,6 +1804,12 @@ def _should_score(
             "utility_under_attack",
             "temporal_takeover",
         },
+        "world_hooks": {
+            "world_hooks",
+            "world_hook",
+            "world_hooks_contract",
+            "native_world_state_hooks",
+        },
         "world": {"world", "environment"},
         "orchestration": {"orchestration", "multi_agent"},
         "memory": {"memory", "retrieval"},
@@ -1664,6 +1845,7 @@ def _should_score(
         "red_team_readiness",
         "orchestration",
         "harness_trajectory_replay",
+        "world_hooks",
         "optimizer_governance",
         "optimizer_portfolio",
     }
@@ -1701,6 +1883,12 @@ def _should_score(
             "stateful_tool_world" in keys
             or bool(cfg.get("stateful_tool_world_quality"))
             or bool(cfg.get("required_stateful_tool_world"))
+        )
+    if layer == "world_hooks":
+        return (
+            _has_world_hooks_contract(env_states)
+            or bool(cfg.get("world_hook_contract_quality"))
+            or bool(cfg.get("required_world_hooks"))
         )
     if layer == "world":
         return "world_contract" in keys
@@ -1947,6 +2135,114 @@ def _checks_score(checks: Sequence[Mapping[str, Any]]) -> float:
     if not checks:
         return 1.0
     return sum(1 for item in checks if bool(item.get("match"))) / len(checks)
+
+
+def _has_world_hooks_contract(env_states: Sequence[Mapping[str, Any]]) -> bool:
+    return bool(_world_hooks_contract(env_states))
+
+
+def _world_hooks_contract(env_states: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    for state in env_states:
+        stateful = _as_mapping(state.get("stateful_tool_world"))
+        candidates = [
+            state.get("world_hooks_contract"),
+            stateful.get("world_hooks_contract"),
+            _path(stateful, "metadata.world_hooks_contract"),
+        ]
+        for candidate in candidates:
+            contract = _as_mapping(candidate)
+            kind = _norm(contract.get("kind"))
+            if kind in {
+                "agent_learning.world_hooks_contract.v1",
+                "agent_learning_world_hooks_contract_v1",
+            }:
+                return copy.deepcopy(contract)
+    return {}
+
+
+def _world_hooks_contract_observed(contract: Mapping[str, Any]) -> set[str]:
+    observed = _token_set(contract)
+    observed.update(
+        {
+            "world_hooks",
+            "world_hook",
+            "world_hooks_contract",
+            "world_hook_contract",
+        }
+    )
+    return {item for item in observed if item}
+
+
+def _world_hooks_contract_summary(contract: Mapping[str, Any]) -> dict[str, Any]:
+    kinds: set[str] = set()
+    modes: set[str] = set()
+    runtimes: set[str] = set()
+    hook_names: set[str] = set()
+    hook_types: set[str] = set()
+    callable_hook_names: set[str] = set()
+    output_channels: set[str] = set()
+    state_scopes: set[str] = set()
+    surfaces: set[str] = set()
+    replay_semantics: set[str] = set()
+    evidence_requirements: set[str] = set()
+    requires_external_service_values: set[bool] = set()
+
+    for source, sink in (
+        (contract.get("kind"), kinds),
+        (contract.get("mode"), modes),
+        (contract.get("runtime"), runtimes),
+    ):
+        normalized = _norm(source)
+        if normalized:
+            sink.add(normalized)
+    if contract.get("requires_external_service") is not None:
+        requires_external_service_values.add(bool(contract.get("requires_external_service")))
+    for hook in _as_list(contract.get("hooks")):
+        item = _as_mapping(hook)
+        name = _norm(item.get("name"))
+        hook_type = _norm(item.get("type"))
+        if name:
+            hook_names.add(name)
+            if item.get("callable") is True:
+                callable_hook_names.add(name)
+        if hook_type:
+            hook_types.add(hook_type)
+        output_channels.update(
+            _norm(value)
+            for value in _as_list(item.get("output_channels"))
+            if _norm(value)
+        )
+        state_scopes.update(
+            _norm(value)
+            for value in _as_list(item.get("state_scopes"))
+            if _norm(value)
+        )
+    surfaces.update(_norm(value) for value in _as_list(contract.get("surfaces")) if _norm(value))
+    replay_semantics.update(
+        _norm(value)
+        for value in _as_list(contract.get("replay_semantics"))
+        if _norm(value)
+    )
+    evidence_requirements.update(
+        _norm(value)
+        for value in _as_list(contract.get("evidence_requirements"))
+        if _norm(value)
+    )
+    return {
+        "contract_count": 1 if contract else 0,
+        "kinds": sorted(kinds),
+        "modes": sorted(modes),
+        "runtimes": sorted(runtimes),
+        "hook_names": sorted(hook_names),
+        "hook_types": sorted(hook_types),
+        "callable_hook_names": sorted(callable_hook_names),
+        "output_channels": sorted(output_channels),
+        "state_scopes": sorted(state_scopes),
+        "surfaces": sorted(surfaces),
+        "replay_semantics": sorted(replay_semantics),
+        "evidence_requirements": sorted(evidence_requirements),
+        "requires_external_service_values": sorted(requires_external_service_values),
+    }
 
 
 def _stateful_required_ids(value: Any, *, fallback: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -3238,6 +3534,19 @@ def _contains_subset(value: Mapping[str, Any], expected: Mapping[str, Any]) -> b
         elif actual_value != expected_value:
             return False
     return True
+
+
+def _present_nested_keys(value: Any, keys: set[str]) -> set[str]:
+    present: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in keys:
+                present.add(str(key))
+            present.update(_present_nested_keys(item, keys))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            present.update(_present_nested_keys(item, keys))
+    return present
 
 
 def _token_set(value: Any) -> set[str]:

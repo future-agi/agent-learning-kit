@@ -1221,6 +1221,13 @@ fail-closed for world-hook results: if the frozen environments contain
 `endpoint`, `auth`, API-key/secret/token markers, or
 `requires_external_service=true`, the result is not admitted as a replayable
 world-hook regression.
+`optimize.score_simulation_evidence()` also treats world hooks as a first-class
+native component: it extracts `agent-learning.world-hooks-contract.v1` from the
+local `stateful_tool_world` evidence and scores the same contract fields as
+ai-evaluation (`mode`, `runtime`, callable hooks, output channels, state scopes,
+surfaces, replay semantics, evidence requirements, and no external dependency).
+That gives AgentOptimizer metric-based diagnosis for executable world hooks
+without turning `optimize_world_hooks()` into an HTTP-hook integration.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized

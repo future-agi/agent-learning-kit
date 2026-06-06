@@ -13345,7 +13345,7 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import simulate
+    from agent_learning import optimize, simulate
 
     key = "real-local-sdk-world-hooks-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_HOOKS_KEY", key)
@@ -13406,6 +13406,44 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_env["data"]["world_hooks_contract"]["runtime"] == "in_process"
     assert best_env["data"]["world_hooks_contract"]["requires_external_service"] is False
+
+    target = manifest["optimization"]["target"]
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        target_name=target["name"],
+        metadata=target["metadata"],
+        layers=target["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["evaluation"]["agent_report"]["config"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    components = {
+        component["name"]: component
+        for component in evidence.metadata["simulation_evidence_score"]["components"]
+    }
+    assert set(components) == {
+        "tool_coverage",
+        "stateful_tool_world",
+        "world_hooks",
+        "world_contract",
+    }
+    world_hooks_component = components["world_hooks"]
+    assert world_hooks_component["score"] == pytest.approx(1.0)
+    assert world_hooks_component["details"]["missing"] == []
+    assert world_hooks_component["details"]["summary"]["modes"] == [
+        "native_world_state_hooks"
+    ]
+    assert world_hooks_component["details"]["summary"]["runtimes"] == ["in_process"]
+    assert world_hooks_component["details"]["summary"][
+        "requires_external_service_values"
+    ] == [False]
+    assert [
+        check for check in world_hooks_component["details"]["checks"] if not check["match"]
+    ] == []
 
     report_path = tmp_path / "sdk-world-hooks-report.json"
     report_markdown_path = tmp_path / "sdk-world-hooks-report.md"
