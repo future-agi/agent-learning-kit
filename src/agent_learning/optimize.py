@@ -7,7 +7,11 @@ from urllib.parse import urlparse
 
 from ._facade import optional_module
 from ._module_alias import install_lazy_module_aliases
-from ._schema import public_payload, with_optimization_candidate_lineage
+from ._schema import (
+    public_payload,
+    with_optimization_candidate_lineage,
+    with_optimization_governance,
+)
 
 _OPTIMIZE_EXTRA = "optimize"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
@@ -325,6 +329,7 @@ def optimize_manifest_file(
         dry_run=dry_run,
     )
     payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -348,6 +353,7 @@ def optimize_manifest(
         dry_run=dry_run,
     )
     payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 

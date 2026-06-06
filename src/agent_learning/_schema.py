@@ -94,6 +94,214 @@ def with_optimization_candidate_lineage(payload: Mapping[str, Any]) -> dict[str,
     return result
 
 
+def with_optimization_governance(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a deterministic optimizer-governance verdict when lineage exists."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _as_mapping(result.get("optimization"))
+    lineage = _as_mapping(
+        result.get("optimization_candidate_lineage")
+        or optimization.get("candidate_lineage")
+    )
+    if not lineage:
+        return result
+
+    governance = _optimization_governance(lineage)
+    result["optimization_governance"] = governance
+    optimization["governance"] = copy.deepcopy(governance)
+    result["optimization"] = optimization
+
+    summary = _as_mapping(result.get("summary"))
+    summary["optimizer_governance_status"] = governance["status"]
+    summary["optimizer_governance_passed"] = governance["passed"]
+    summary["optimizer_governance_check_count"] = governance["check_count"]
+    summary["optimizer_governance_failed_check_count"] = len(
+        governance["failed_check_ids"]
+    )
+    summary["optimizer_governance_warning_check_count"] = len(
+        governance["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _optimization_governance(lineage: Mapping[str, Any]) -> dict[str, Any]:
+    rows = [_as_mapping(item) for item in _as_list(lineage.get("rows"))]
+    rows = [item for item in rows if item]
+    selected_candidate_id = str(lineage.get("selected_candidate_id") or "")
+    selected_rows = [
+        row
+        for row in rows
+        if row.get("selected") or str(row.get("candidate_id") or "") == selected_candidate_id
+    ]
+    selected_row = selected_rows[0] if selected_rows else {}
+    candidate_count = _int_or_zero(lineage.get("candidate_count"))
+    content_addressed_count = _int_or_zero(lineage.get("content_addressed_count"))
+    selected_delta = _numeric_or_none(lineage.get("selected_score_delta_from_seed"))
+    score_range = _as_mapping(lineage.get("score_range"))
+    metric_names = [str(item) for item in _as_list(lineage.get("metric_names"))]
+    patch_paths = [str(item) for item in _as_list(lineage.get("patch_paths"))]
+    search_paths = [str(item) for item in _as_list(lineage.get("search_paths"))]
+    report_rows = [
+        row
+        for row in rows
+        if row.get("report_status")
+        or row.get("report_score") is not None
+        or _int_or_zero(row.get("finding_count")) > 0
+    ]
+
+    checks = [
+        _governance_check(
+            "candidate_lineage_present",
+            passed=candidate_count > 0 and bool(rows),
+            required=True,
+            reason="candidate lineage has at least one candidate row",
+            evidence={"candidate_count": candidate_count, "row_count": len(rows)},
+        ),
+        _governance_check(
+            "selected_candidate_present",
+            passed=bool(selected_candidate_id and selected_row),
+            required=True,
+            reason="selected candidate resolves to a lineage row",
+            evidence={"selected_candidate_id": selected_candidate_id or None},
+        ),
+        _governance_check(
+            "candidate_lineage_content_addressed",
+            passed=candidate_count > 0
+            and content_addressed_count == candidate_count
+            and all(row.get("content_addressed") for row in rows),
+            required=True,
+            reason="every candidate has patch and metric freeze hashes",
+            evidence={
+                "candidate_count": candidate_count,
+                "content_addressed_count": content_addressed_count,
+            },
+        ),
+        _governance_check(
+            "selected_candidate_top_ranked",
+            passed=selected_row.get("rank") == 1,
+            required=True,
+            reason="selected candidate is the top-ranked candidate by score",
+            evidence={
+                "selected_candidate_id": selected_candidate_id or None,
+                "selected_rank": selected_row.get("rank"),
+            },
+        ),
+        _governance_check(
+            "score_credit_nonnegative",
+            passed=selected_delta is not None and selected_delta >= 0,
+            required=True,
+            reason="selected candidate score does not regress from the seed",
+            evidence={"selected_score_delta_from_seed": selected_delta},
+        ),
+        _governance_check(
+            "metric_evidence_present",
+            passed=bool(metric_names),
+            required=True,
+            reason="optimizer candidates expose metric names for diagnosis",
+            evidence={"metric_count": len(metric_names), "metric_names": metric_names},
+        ),
+        _governance_check(
+            "selected_evaluation_not_failed",
+            passed=selected_row.get("evaluation_passed") is not False,
+            required=False,
+            reason="selected candidate has no explicit failed evaluation gate",
+            evidence={
+                "evaluation_passed": selected_row.get("evaluation_passed"),
+                "evaluation_score": selected_row.get("evaluation_score"),
+            },
+        ),
+        _governance_check(
+            "patch_scope_present",
+            passed=bool(patch_paths),
+            required=False,
+            reason="candidate lineage exposes changed config paths",
+            evidence={"patch_path_count": len(patch_paths), "patch_paths": patch_paths},
+        ),
+        _governance_check(
+            "search_path_evidence_present",
+            passed=bool(search_paths),
+            required=False,
+            reason="optimizer reports searched paths when available",
+            evidence={
+                "search_path_count": len(search_paths),
+                "search_paths": search_paths,
+            },
+        ),
+        _governance_check(
+            "score_range_present",
+            passed=_numeric_or_none(score_range.get("min")) is not None
+            and _numeric_or_none(score_range.get("max")) is not None,
+            required=False,
+            reason="optimizer lineage exposes numeric score range",
+            evidence={"score_range": score_range},
+        ),
+        _governance_check(
+            "report_evidence_present",
+            passed=bool(report_rows),
+            required=False,
+            reason="candidate lineage carries report status, score, or findings",
+            evidence={"report_evidence_row_count": len(report_rows)},
+        ),
+    ]
+    failed_check_ids = [
+        check["id"] for check in checks if check["required"] and not check["passed"]
+    ]
+    warning_check_ids = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    return {
+        "kind": "agent-learning.optimization.governance.v1",
+        "status": "failed" if failed_check_ids else "passed",
+        "passed": not failed_check_ids,
+        "policy": {
+            "required": [
+                check["id"] for check in checks if check["required"]
+            ],
+            "advisory": [
+                check["id"] for check in checks if not check["required"]
+            ],
+        },
+        "selected_candidate_id": selected_candidate_id or None,
+        "selected_rank": selected_row.get("rank"),
+        "selected_score": selected_row.get("score"),
+        "selected_score_delta_from_seed": selected_delta,
+        "evidence": {
+            "candidate_count": candidate_count,
+            "history_count": _int_or_zero(lineage.get("history_count")),
+            "content_addressed_count": content_addressed_count,
+            "metric_count": len(metric_names),
+            "patch_path_count": len(patch_paths),
+            "search_path_count": len(search_paths),
+            "score_range": score_range,
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed_check_ids,
+        "warning_check_ids": warning_check_ids,
+        "checks": checks,
+    }
+
+
+def _governance_check(
+    check_id: str,
+    *,
+    passed: bool,
+    required: bool,
+    reason: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    status = "passed" if passed else "failed" if required else "warning"
+    return {
+        "id": check_id,
+        "status": status,
+        "passed": passed,
+        "required": required,
+        "reason": reason,
+        "evidence": dict(evidence),
+    }
+
+
 def _optimization_candidate_lineage(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -264,6 +472,20 @@ def _numeric_or_min(value: Any) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     return float("-inf")
+
+
+def _numeric_or_none(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _int_or_zero(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:

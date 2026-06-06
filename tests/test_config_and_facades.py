@@ -723,6 +723,23 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     )
     assert len(selected_lineage["freeze"]["patch_sha256"]) == 64
     assert len(selected_lineage["freeze"]["metrics_sha256"]) == 64
+    governance = result["optimization_governance"]
+    assert governance["kind"] == "agent-learning.optimization.governance.v1"
+    assert governance["status"] == "passed"
+    assert governance["passed"] is True
+    assert governance["selected_candidate_id"] == result["summary"]["best_candidate_id"]
+    assert governance["selected_rank"] == 1
+    assert governance["failed_check_ids"] == []
+    assert governance["evidence"]["content_addressed_count"] == len(
+        result["optimization"]["history"]
+    )
+    assert result["summary"]["optimizer_governance_status"] == "passed"
+    assert result["summary"]["optimizer_governance_passed"] is True
+    assert result["summary"]["optimizer_governance_failed_check_count"] == 0
+    required_checks = {check["id"]: check for check in governance["checks"]}
+    assert required_checks["candidate_lineage_content_addressed"]["passed"] is True
+    assert required_checks["selected_candidate_top_ranked"]["passed"] is True
+    assert required_checks["metric_evidence_present"]["passed"] is True
     assert "real-local-sdk-framework-opt-key" not in json.dumps(result)
     simulate_result = simulate.optimize_manifest(
         manifest,
@@ -734,6 +751,10 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert simulate_result["summary"]["candidate_lineage_content_addressed_count"] == (
         len(simulate_result["optimization"]["history"])
     )
+    assert simulate_result["optimization_governance"]["kind"] == (
+        "agent-learning.optimization.governance.v1"
+    )
+    assert simulate_result["summary"]["optimizer_governance_passed"] is True
     best_agent = result["optimization"]["best_config"]["agent"]
     assert best_agent["method"] == "execute_task"
     assert best_agent["input_mode"] == "dict"

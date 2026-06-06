@@ -185,6 +185,16 @@ SHA-256 freezes for patch, metrics, config, and report-summary evidence. This
 lets SDK, CLI, CI, and Future AGI UI compare optimizer behavior across prompt,
 world, framework, memory, and multi-agent runs without relying on a separate
 report action.
+Optimization artifacts also attach
+`agent-learning.optimization.governance.v1`, a deterministic admission verdict
+over that lineage. Required checks verify that the selected candidate resolves
+to a lineage row, all candidates are content-addressed, the selected candidate
+is top-ranked, the selected score does not regress from the seed, and metric
+evidence exists; advisory checks flag missing evaluation/report/search-path
+evidence without changing the top-level run status. This gives the SDK, CLI,
+CI, and Future AGI UI a native promotion gate before an optimized prompt,
+world, framework, memory layer, red-team harness, or multi-agent orchestration
+is trusted.
 Red-team run artifacts and reports also include a `redteam_strategy` card plus
 `## Red Team Strategy` Markdown. The card maps attack types, surfaces,
 channels, providers, frameworks, campaign coverage, and risk focus into a
