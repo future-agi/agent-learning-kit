@@ -186,6 +186,14 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_redteam_readiness_certification is not None
     assert optimize.build_redteam_corpus_optimization_manifest is not None
     assert optimize.optimize_redteam_corpus is not None
+    assert simulate.StatefulToolWorldEnvironment is (
+        fi_simulate.StatefulToolWorldEnvironment
+    )
+    assert simulate.normalize_stateful_tool_world_manifest is not None
+    assert simulate.build_stateful_tool_world_run_manifest is not None
+    assert simulate.build_stateful_tool_world_environments is not None
+    assert optimize.build_stateful_tool_world_optimization_manifest is not None
+    assert optimize.optimize_stateful_tool_world is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -9436,3 +9444,168 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     assert written["outputs_written"] == [str(output_path.resolve())]
     assert written["consolidation"] == trinity.consolidation_metadata()
     assert written["modules"]["engine.simulate"]["available"] is True
+
+
+def test_stateful_tool_world_manifest_builds_research_backed_candidates():
+    from agent_learning import optimize, simulate
+
+    manifest = optimize.build_stateful_tool_world_optimization_manifest(
+        name="sdk-stateful-tool-world-optimization",
+        required_env=["AGENT_LEARNING_SDK_STATEFUL_TOOL_WORLD_KEY"],
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_STATEFUL_TOOL_WORLD_KEY"]
+    assert manifest["optimization"]["scoring"]["layers"] == [
+        "stateful_tool_world",
+        "world",
+    ]
+    sources = manifest["optimization"]["target"]["metadata"]["research_sources"]
+    assert len(sources) >= 5
+    assert {source["year"] for source in sources} == {2026}
+    assert {
+        "https://arxiv.org/abs/2602.22724",
+        "https://arxiv.org/abs/2603.13594",
+        "https://arxiv.org/abs/2606.04425",
+    } <= {source["url"] for source in sources}
+
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    assert [env["type"] for env in candidates[-1]] == [
+        "stateful_tool_world",
+        "world_contract",
+    ]
+    assert candidates[0][0]["data"]["metadata"]["candidate_profile"] == (
+        "weak_state_delta_only"
+    )
+    assert candidates[-1][0]["data"]["metadata"]["candidate_profile"] == (
+        "verified_stateful_tool_world"
+    )
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "stateful_tool_world_quality"
+    ]["required_state_deltas"] == [
+        "authenticate_customer",
+        "quarantine_tool_output",
+        "block_injected_escalation",
+        "approve_refund",
+    ]
+
+    run_manifest = simulate.build_stateful_tool_world_run_manifest(
+        name="sdk-stateful-tool-world-run",
+        required_env=["AGENT_LEARNING_SDK_STATEFUL_TOOL_WORLD_KEY"],
+    )
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert [env["type"] for env in run_manifest["simulation"]["environments"]] == [
+        "stateful_tool_world",
+        "world_contract",
+    ]
+    assert "stateful_tool_world" in simulate.supported_manifest_environment_types()
+
+
+def test_sdk_stateful_tool_world_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_STATEFUL_TOOL_WORLD_KEY",
+        "real-local-sdk-stateful-tool-world-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_stateful_tool_world_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_stateful_tool_world_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_STATEFUL_TOOL_WORLD_KEY"]
+    output_path = tmp_path / "sdk-stateful-tool-world-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] == pytest.approx(1.0)
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert {"stateful_tool_world", "world_contract"} <= set(state)
+    summary = state["stateful_tool_world"]["summary"]
+    assert summary["terminal_status"] == "success"
+    assert summary["completed_state_delta_count"] == 4
+    assert summary["blocked_action_count"] == 1
+    assert summary["localized_takeover_point_count"] == 1
+    assert summary["purified_takeover_point_count"] == 1
+    assert summary["contained_persistent_channel_count"] == 1
+    assert summary["utility_under_attack_score"] == pytest.approx(0.94)
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+
+    from agent_learning import optimize
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        component["name"]: component["score"]
+        for component in evidence.metadata["simulation_evidence_score"][
+            "components"
+        ]
+    } == {
+        "tool_coverage": 1.0,
+        "stateful_tool_world": 1.0,
+        "world_contract": 1.0,
+    }
+
+    report_path = tmp_path / "stateful-tool-world-report.json"
+    assert main(["report", str(output_path), "--output", str(report_path)]) == 0
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report_payload["status"] == "passed"
+
+    actions_path = tmp_path / "stateful-tool-world-actions.json"
+    assert main(["actions", str(output_path), "--output", str(actions_path)]) == 0
+    actions_payload = json.loads(actions_path.read_text(encoding="utf-8"))
+    assert any(
+        action["id"] == "report_artifact"
+        for action in actions_payload["actions"]
+    )
+
+    action_run_path = tmp_path / "stateful-tool-world-action-run.json"
+    action_cwd = tmp_path / "stateful-tool-world-action"
+    assert (
+        main(
+            [
+                "action-run",
+                str(output_path),
+                "--id",
+                "report_artifact",
+                "--cwd",
+                str(action_cwd),
+                "--output",
+                str(action_run_path),
+            ]
+        )
+        == 0
+    )
+    action_payload = json.loads(action_run_path.read_text(encoding="utf-8"))
+    assert action_payload["status"] == "passed"
+    assert any(output["exists"] for output in action_payload["outputs"])

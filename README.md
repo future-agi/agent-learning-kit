@@ -846,6 +846,16 @@ causal search is available from Python through
 `optimize.build_redteam_causal_attribution_optimization_manifest()` and
 `examples/sdk_redteam_causal_attribution_optimization.py`.
 
+The `sdk_stateful_tool_world_optimization.py` example adds a benchmark-style
+stateful tool-world red-team cookbook. It searches weak, partial, and verified
+environment bundles until the selected candidate closes executable state deltas,
+unsafe-action blocking, temporal takeover localization, persistent-state
+containment, utility-under-attack, and world-contract success together. The
+SDK entry points are `simulate.build_stateful_tool_world_run_manifest()`,
+`simulate.build_stateful_tool_world_environments()`,
+`optimize.build_stateful_tool_world_optimization_manifest()`, and
+`optimize.optimize_stateful_tool_world()`.
+
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized
 simulation evidence directly, then selects the candidate whose framework trace,

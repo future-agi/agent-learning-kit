@@ -43,6 +43,7 @@ from fi.simulate import (
     RedTeamReadinessEnvironment,
     RetrievalMemoryEnvironment,
     Scenario,
+    StatefulToolWorldEnvironment,
     StreamingTraceEnvironment,
     StructuredArtifactEnvironment,
     TestRunner,
@@ -324,6 +325,8 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "redteam_readiness",
         "retrieval_memory",
         "stored_prompt_injection",
+        "stateful_tool_world",
+        "stateful_tool_world_benchmark",
         "memory_poisoning_lifecycle",
         "streaming_trace",
         "structured_artifact",
@@ -755,6 +758,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             "memory_poisoning_lifecycle",
         }:
             environments.append(PersistentStateRedTeamEnvironment(payload))
+        elif env_type in {"stateful_tool_world", "stateful_tool_world_benchmark"}:
+            environments.append(StatefulToolWorldEnvironment(payload))
         elif env_type == "agent_memory_lineage":
             environments.append(AgentMemoryLineageEnvironment(payload))
         elif env_type in {"tool_mock", "mock_tools"}:
