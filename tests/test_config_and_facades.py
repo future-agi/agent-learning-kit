@@ -10140,6 +10140,58 @@ def test_world_hooks_alias_uses_native_world_model_arena():
     assert {"endpoint", "auth"} & _nested_keys(manifest) == set()
 
 
+def test_world_hooks_optimization_emits_native_world_hook_proof(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import configure, optimize
+
+    key = "real-local-sdk-world-hooks-proof-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_HOOKS_KEY", key)
+    configure(api_key=key)
+
+    result = optimize.optimize_world_hooks(
+        name="sdk-world-hooks-proof-optimization",
+        required_env=["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"],
+        manifest_path=tmp_path / "sdk-world-hooks-proof.json",
+    )
+
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {"endpoint", "auth"} & _nested_keys(result) == set()
+    assert result["status"] == "passed"
+    assert result["summary"]["world_hook_proof_status"] == "passed"
+    assert result["summary"]["world_hook_proof_passed"] is True
+    assert result["summary"]["world_hook_proof_assurance_level"] == (
+        "l3_verified_native_world_hooks"
+    )
+    assert result["summary"]["world_hook_proof_failed_check_count"] == 0
+    proof = result["world_hook_proof"]
+    assert proof["kind"] == "agent-learning.optimization.world-hook-proof.v1"
+    assert proof["task_kind"] == "world_hooks"
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_verified_native_world_hooks"
+    assert proof["candidate_profile"] == "l3_evolver_verifiable_world_model"
+    assert proof["world_model_level"] == "l3_evolver"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_hook",
+        "world_model_verifier_present",
+        "state_transitions_closed",
+        "world_contract_invariants_closed",
+        "adversarial_pressure_closed",
+        "memory_provenance_contained",
+        "metric_evidence_closed",
+    }
+    assert result["optimization"]["world_hook_proof"] == proof
+
+
 def test_external_http_agent_manifest_builds_research_backed_adapter_candidates():
     from agent_learning import optimize, simulate
 
@@ -10818,6 +10870,13 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] == pytest.approx(1.0)
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["world_hook_proof_status"] == "passed"
+    assert result["summary"]["world_hook_proof_assurance_level"] == (
+        "l3_verified_native_world_hooks"
+    )
+    assert result["world_hook_proof"]["status"] == "passed"
+    assert result["world_hook_proof"]["failed_check_ids"] == []
+    assert result["world_hook_proof"]["warning_check_ids"] == []
 
     best_history = max(
         result["optimization"]["history"],

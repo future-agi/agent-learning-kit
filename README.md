@@ -962,6 +962,15 @@ world-contract evidence all close. SDK entry points are
 `optimize.optimize_world_hooks()` when the product surface should be named as
 world hooks: it still searches the same native executable world-state hooks and
 does not require an external endpoint.
+World-model and world-hook optimization artifacts also emit
+`agent-learning.optimization.world-hook-proof.v1`. The proof is derived from
+the selected candidate and selected report, then checks that the hook is native
+(`requires_external_service=false` and no `endpoint`/`auth` keys), executable
+state transitions closed, world-contract invariants and success conditions
+closed, adversarial pressure was contained, persistent memory/provenance
+channels were contained, and closed world/eval metrics are present. Passing L3
+candidates report `l3_verified_native_world_hooks` in both `world_hook_proof`
+and the artifact summary.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized
