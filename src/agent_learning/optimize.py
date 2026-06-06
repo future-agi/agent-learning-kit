@@ -20,6 +20,9 @@ AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
     "agent-learning.optimization.world-hook-proof.v1"
 )
+AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
+    "agent-learning.optimization.framework-certification-proof.v1"
+)
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -334,6 +337,7 @@ def optimize_manifest_file(
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
     payload = with_world_hook_proof(payload)
+    payload = with_framework_certification_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -359,6 +363,7 @@ def optimize_manifest(
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
     payload = with_world_hook_proof(payload)
+    payload = with_framework_certification_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -391,6 +396,36 @@ def with_world_hook_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
     summary["world_hook_proof_check_count"] = proof["check_count"]
     summary["world_hook_proof_failed_check_count"] = len(proof["failed_check_ids"])
     summary["world_hook_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_framework_certification_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for framework certification optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_framework_certification_optimization(result, optimization):
+        return result
+
+    proof = _framework_certification_proof(result, optimization)
+    result["framework_certification_proof"] = proof
+    optimization["framework_certification_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["framework_certification_proof_status"] = proof["status"]
+    summary["framework_certification_proof_passed"] = proof["passed"]
+    summary["framework_certification_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["framework_certification_proof_check_count"] = proof["check_count"]
+    summary["framework_certification_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["framework_certification_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -2679,6 +2714,337 @@ def _world_hook_proof(
                 )
                 if key in selected_metrics
             },
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _framework_certification_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    report_state = _selected_report_environment_state(selected_history)
+
+    lifecycle = _plain_mapping(report_state.get("framework_lifecycle_trace"))
+    capability = _plain_mapping(report_state.get("framework_capability_matrix"))
+    probe = _plain_mapping(report_state.get("framework_probe_suite"))
+    portability = _plain_mapping(report_state.get("framework_portability_matrix"))
+    lifecycle_summary = _plain_mapping(lifecycle.get("summary"))
+    capability_summary = _plain_mapping(capability.get("summary"))
+    probe_summary = _plain_mapping(probe.get("summary"))
+    portability_summary = _plain_mapping(portability.get("summary"))
+    readiness = _plain_mapping(payload.get("framework_readiness"))
+    readiness_layers = [
+        _plain_mapping(item)
+        for item in _plain_list(readiness.get("layers"))
+        if _plain_mapping(item)
+    ]
+    required_environment_types = {
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    }
+    required_metric_keys = (
+        "framework_lifecycle_coverage",
+        "framework_lifecycle_quality",
+        "framework_capability_coverage",
+        "framework_capability_quality",
+        "framework_probe_coverage",
+        "framework_probe_quality",
+        "framework_portability_coverage",
+        "framework_portability_quality",
+    )
+    selected_metric_evidence = {
+        key: selected_metrics.get(key)
+        for key in required_metric_keys
+        if key in selected_metrics
+    }
+
+    checks = [
+        _proof_check(
+            "native_no_external_framework_dependency",
+            passed=not _contains_nested_keys(
+                best_config,
+                {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+            ),
+            required=True,
+            reason=(
+                "selected framework certification candidate is local and has no "
+                "endpoint/auth/key dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(
+                        best_config,
+                        {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+                    )
+                ),
+            },
+        ),
+        _proof_check(
+            "certification_environment_bundle_present",
+            passed=required_environment_types.issubset(set(environment_types)),
+            required=True,
+            reason=(
+                "selected candidate carries lifecycle, capability, probe, and "
+                "portability certification environments"
+            ),
+            evidence={
+                "required_environment_types": sorted(required_environment_types),
+                "environment_types": environment_types,
+            },
+        ),
+        _proof_check(
+            "lifecycle_evidence_closed",
+            passed=_as_int(lifecycle_summary.get("phase_count")) >= 10
+            and str(lifecycle_summary.get("terminal_status") or "") == "completed"
+            and bool(lifecycle_summary.get("state_persistence"))
+            and _as_int(lifecycle_summary.get("tool_registration_count")) > 0
+            and _as_int(lifecycle_summary.get("checkpoint_count")) > 0
+            and _as_int(lifecycle_summary.get("retry_count")) > 0
+            and _as_int(lifecycle_summary.get("recovered_error_count"))
+            >= _as_int(lifecycle_summary.get("error_count")),
+            required=True,
+            reason=(
+                "framework lifecycle proves session startup, tool registration, "
+                "streaming, checkpoint/resume, retry recovery, and shutdown"
+            ),
+            evidence={
+                "phase_count": lifecycle_summary.get("phase_count"),
+                "terminal_status": lifecycle_summary.get("terminal_status"),
+                "state_persistence": lifecycle_summary.get("state_persistence"),
+                "tool_registration_count": lifecycle_summary.get(
+                    "tool_registration_count"
+                ),
+                "checkpoint_count": lifecycle_summary.get("checkpoint_count"),
+                "retry_count": lifecycle_summary.get("retry_count"),
+                "error_count": lifecycle_summary.get("error_count"),
+                "recovered_error_count": lifecycle_summary.get(
+                    "recovered_error_count"
+                ),
+            },
+        ),
+        _proof_check(
+            "capability_matrix_closed",
+            passed=_as_int(capability_summary.get("capability_count")) > 0
+            and _as_int(capability_summary.get("missing_count")) == 0
+            and _as_int(capability_summary.get("blocked_count")) == 0
+            and _as_int(capability_summary.get("partial_count")) == 0
+            and _as_float(capability_summary.get("support_rate")) >= 1.0
+            and all(
+                bool(capability_summary.get(key))
+                for key in (
+                    "has_tools",
+                    "has_memory",
+                    "has_streaming",
+                    "has_lifecycle",
+                    "has_orchestration",
+                    "has_observability",
+                    "has_security",
+                    "has_exports",
+                )
+            ),
+            required=True,
+            reason=(
+                "framework capability matrix covers required tool, memory, "
+                "streaming, lifecycle, orchestration, observability, security, "
+                "and export surfaces with no missing rows"
+            ),
+            evidence={
+                "capability_count": capability_summary.get("capability_count"),
+                "support_rate": capability_summary.get("support_rate"),
+                "missing_count": capability_summary.get("missing_count"),
+                "blocked_count": capability_summary.get("blocked_count"),
+                "partial_count": capability_summary.get("partial_count"),
+                "supported_categories": capability_summary.get(
+                    "supported_categories"
+                ),
+            },
+        ),
+        _proof_check(
+            "probe_suite_closed",
+            passed=_as_int(probe_summary.get("probe_count")) > 0
+            and _as_int(probe_summary.get("failed_count")) == 0
+            and _as_int(probe_summary.get("blocked_count")) == 0
+            and _as_int(probe_summary.get("skipped_count")) == 0
+            and _as_float(probe_summary.get("required_pass_rate")) >= 1.0
+            and _as_int(probe_summary.get("required_passed_count"))
+            >= _as_int(probe_summary.get("required_count")),
+            required=True,
+            reason=(
+                "adapter smoke probes passed for runtime, tools, memory, "
+                "streaming, lifecycle, orchestration, guardrails, traces, and export"
+            ),
+            evidence={
+                "probe_count": probe_summary.get("probe_count"),
+                "required_count": probe_summary.get("required_count"),
+                "required_passed_count": probe_summary.get("required_passed_count"),
+                "required_pass_rate": probe_summary.get("required_pass_rate"),
+                "failed_count": probe_summary.get("failed_count"),
+                "blocked_count": probe_summary.get("blocked_count"),
+                "skipped_count": probe_summary.get("skipped_count"),
+            },
+        ),
+        _proof_check(
+            "portability_matrix_closed",
+            passed=_as_int(portability_summary.get("mapping_count")) > 0
+            and _as_int(portability_summary.get("missing_count")) == 0
+            and _as_int(portability_summary.get("blocked_count")) == 0
+            and _as_int(portability_summary.get("partial_count")) == 0
+            and _as_float(portability_summary.get("required_mapping_rate")) >= 1.0
+            and _as_int(portability_summary.get("required_mapped_count"))
+            >= _as_int(portability_summary.get("required_count")),
+            required=True,
+            reason=(
+                "source-target portability mappings are complete for the required "
+                "framework migration surface"
+            ),
+            evidence={
+                "source_framework": portability.get("source_framework"),
+                "target_framework": portability.get("target_framework"),
+                "mapping_count": portability_summary.get("mapping_count"),
+                "required_count": portability_summary.get("required_count"),
+                "required_mapped_count": portability_summary.get(
+                    "required_mapped_count"
+                ),
+                "required_mapping_rate": portability_summary.get(
+                    "required_mapping_rate"
+                ),
+                "missing_count": portability_summary.get("missing_count"),
+                "blocked_count": portability_summary.get("blocked_count"),
+                "partial_count": portability_summary.get("partial_count"),
+            },
+        ),
+        _proof_check(
+            "protocol_surface_boundary_closed",
+            passed=all(
+                bool(capability_summary.get(key))
+                and bool(probe_summary.get(key))
+                and bool(portability_summary.get(key))
+                for key in (
+                    "has_tools",
+                    "has_memory",
+                    "has_streaming",
+                    "has_lifecycle",
+                    "has_orchestration",
+                    "has_observability",
+                    "has_security",
+                )
+            )
+            and _as_int(capability_summary.get("missing_count")) == 0
+            and _as_int(probe_summary.get("failed_count")) == 0
+            and _as_int(portability_summary.get("missing_count")) == 0,
+            required=True,
+            reason=(
+                "cross-protocol tool, memory, lifecycle, orchestration, security, "
+                "streaming, and observability boundaries are present in capability, "
+                "probe, and portability evidence"
+            ),
+            evidence={
+                "capability_categories": capability_summary.get(
+                    "supported_categories"
+                ),
+                "probe_categories": probe_summary.get("passed_categories"),
+                "portability_categories": portability_summary.get("mapped_categories"),
+            },
+        ),
+        _proof_check(
+            "framework_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(key)) >= 1.0
+                for key in required_metric_keys
+            ),
+            required=True,
+            reason=(
+                "selected candidate report carries closed lifecycle, capability, "
+                "probe, and portability metrics"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+        _proof_check(
+            "readiness_card_closed",
+            passed=str(readiness.get("status") or "") == "ready"
+            and {
+                _scope_key(item.get("layer"))
+                for item in readiness_layers
+                if _plain_mapping(item)
+            }
+            >= {"lifecycle", "capability", "probe", "portability"}
+            and all(str(item.get("status") or "") == "ready" for item in readiness_layers)
+            and not _plain_list(readiness.get("weak_layers"))
+            and not _plain_list(readiness.get("weak_metrics")),
+            required=True,
+            reason=(
+                "UI/CLI readiness card is ready for every certification layer and "
+                "has no weak layers or weak metrics"
+            ),
+            evidence={
+                "status": readiness.get("status"),
+                "present_layers": readiness.get("present_layers"),
+                "weak_layers": readiness.get("weak_layers"),
+                "weak_metrics": readiness.get("weak_metrics"),
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    readiness_frameworks = _plain_list(readiness.get("frameworks"))
+    readiness_target_frameworks = _plain_list(readiness.get("target_frameworks"))
+    framework = (
+        lifecycle.get("framework")
+        or capability.get("framework")
+        or probe.get("framework")
+        or (readiness_frameworks[0] if readiness_frameworks else None)
+    )
+    target_framework = (
+        portability.get("target_framework")
+        or _plain_mapping(readiness.get("portability")).get("target_framework")
+        or (readiness_target_frameworks[0] if readiness_target_frameworks else None)
+    )
+
+    return {
+        "kind": AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_framework_certified_portable"
+            if passed
+            else "framework_certification_proof_failed"
+        ),
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "framework": framework,
+        "target_framework": target_framework,
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "framework_lifecycle_summary": copy.deepcopy(lifecycle_summary),
+            "framework_capability_summary": copy.deepcopy(capability_summary),
+            "framework_probe_summary": copy.deepcopy(probe_summary),
+            "framework_portability_summary": copy.deepcopy(portability_summary),
+            "readiness_status": readiness.get("status"),
+            "readiness_present_layers": readiness.get("present_layers"),
+            "selected_metrics": selected_metric_evidence,
         },
         "check_count": len(checks),
         "passed_check_count": sum(1 for check in checks if check["passed"]),
@@ -16728,7 +17094,7 @@ def _world_hook_environment(
     return {}
 
 
-def _world_hook_selected_history(
+def _selected_optimization_history(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -16751,7 +17117,14 @@ def _world_hook_selected_history(
     return {}
 
 
-def _world_hook_report_environment_state(
+def _world_hook_selected_history(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _selected_optimization_history(payload, optimization)
+
+
+def _selected_report_environment_state(
     selected_history: Mapping[str, Any],
 ) -> dict[str, Any]:
     report = _plain_mapping(selected_history.get("report"))
@@ -16766,7 +17139,55 @@ def _world_hook_report_environment_state(
     return _plain_mapping(metadata.get("environment_state"))
 
 
-def _world_hook_check(
+def _world_hook_report_environment_state(
+    selected_history: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _selected_report_environment_state(selected_history)
+
+
+def _is_framework_certification_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    task_kind = _scope_key(metadata.get("task_kind"))
+    if task_kind == "framework_certification":
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environment_types = {
+        _scope_key(_plain_mapping(item).get("type"))
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    }
+    required_environment_types = {
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    }
+    if required_environment_types.issubset(environment_types):
+        return True
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    state_keys = set(_selected_report_environment_state(selected_history))
+    return {
+        "framework_lifecycle_trace",
+        "framework_capability_matrix",
+        "framework_probe_suite",
+        "framework_portability_matrix",
+    }.issubset(state_keys)
+
+
+def _proof_check(
     check_id: str,
     *,
     passed: bool,
@@ -16782,6 +17203,23 @@ def _world_hook_check(
         "reason": reason,
         "evidence": copy.deepcopy(dict(evidence)),
     }
+
+
+def _world_hook_check(
+    check_id: str,
+    *,
+    passed: bool,
+    required: bool,
+    reason: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _proof_check(
+        check_id,
+        passed=passed,
+        required=required,
+        reason=reason,
+        evidence=evidence,
+    )
 
 
 def _present_nested_keys(value: Any, keys: set[str]) -> set[str]:
@@ -17032,6 +17470,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     *_OPTIMIZE_EXPORTS,
+    "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
     "diagnose_text",
@@ -17128,5 +17567,6 @@ __all__ = [
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
+    "with_framework_certification_proof",
     "with_world_hook_proof",
 ]

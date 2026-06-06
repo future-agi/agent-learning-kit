@@ -1239,6 +1239,16 @@ lifecycle, capability, probe, and portability evidence as a normal
 `framework_readiness` report card; run artifacts rerun with `agent-learn run`,
 optimization artifacts rerun with `agent-learn optimize`, and both expose
 `optimize_framework_readiness` for the next certification/search pass.
+Framework-certification optimization artifacts also emit
+`agent-learning.optimization.framework-certification-proof.v1`, a native proof
+derived from the selected candidate and selected report. The proof builds on
+2026 findings that framework failures cluster around orchestration control,
+memory/failure handling, retry/cost behavior, protocol risk, and deterministic
+harness evidence, then turns that direction into our own local verifier: no
+endpoint/auth/key dependency, all four certification environments present,
+lifecycle evidence closed, capability/probe/portability layers closed,
+cross-protocol boundaries present, framework metrics closed, and the UI/CLI
+readiness card ready.
 `examples/sdk_artifact_action_optimization.py` takes the next step: it creates a
 real certification artifact, extracts the readiness action cards, and runs an
 `agent-learning.suite.v1` optimization where each candidate is an `action-run`

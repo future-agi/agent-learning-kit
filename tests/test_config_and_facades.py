@@ -225,6 +225,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_world_model is not None
     assert optimize.build_world_hooks_optimization_manifest is not None
     assert optimize.optimize_world_hooks is not None
+    assert optimize.AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND == (
+        "agent-learning.optimization.framework-certification-proof.v1"
+    )
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -6598,9 +6601,10 @@ def test_sdk_framework_certification_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    key = "real-local-sdk-framework-certification-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY",
-        "real-local-sdk-framework-certification-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / (
         "sdk_framework_certification_optimization.py"
@@ -6661,8 +6665,24 @@ def test_sdk_framework_certification_optimization_example_runs(
     assert saved["status"] == "passed"
     assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
     assert result["summary"]["optimization_score"] >= 0.98
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["framework_certification_proof_status"] == "passed"
+    assert result["summary"]["framework_certification_proof_passed"] is True
+    assert result["summary"]["framework_certification_proof_assurance_level"] == (
+        "l3_native_framework_certified_portable"
+    )
+    assert result["summary"]["framework_certification_proof_failed_check_count"] == 0
 
     best_history = max(
         result["optimization"]["history"],
@@ -6724,6 +6744,39 @@ def test_sdk_framework_certification_optimization_example_runs(
         "report_framework_readiness",
         "rerun_framework_optimization",
         "optimize_framework_readiness",
+    }
+    proof = result["framework_certification_proof"]
+    assert saved["framework_certification_proof"] == proof
+    assert result["optimization"]["framework_certification_proof"] == proof
+    assert proof["kind"] == (
+        "agent-learning.optimization.framework-certification-proof.v1"
+    )
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_framework_certified_portable"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["evidence"]["environment_types"] == [
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    ]
+    assert proof["evidence"]["readiness_status"] == "ready"
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_framework_dependency",
+        "certification_environment_bundle_present",
+        "lifecycle_evidence_closed",
+        "capability_matrix_closed",
+        "probe_suite_closed",
+        "portability_matrix_closed",
+        "protocol_surface_boundary_closed",
+        "framework_metric_evidence_closed",
+        "readiness_card_closed",
     }
 
 
