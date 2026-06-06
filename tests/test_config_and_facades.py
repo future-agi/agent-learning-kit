@@ -176,7 +176,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.collaborative_competence_report is not None
     assert simulate.collaborative_competence_artifact is not None
     assert evals.redteam_adaptive_loop_report is not None
+    assert evals.redteam_attack_evolution_report is not None
     assert simulate.redteam_adaptive_loop_artifact is not None
+    assert simulate.redteam_attack_evolution_artifact is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
@@ -202,6 +204,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert redteam.build_redteam_corpus_hook_campaign is not None
     assert redteam.fetch_redteam_corpus_hook is not None
     assert redteam.RedTeamCampaignEnvironment is fi_simulate.RedTeamCampaignEnvironment
+    assert redteam.RedTeamAttackEvolutionEnvironment is (
+        fi_simulate.RedTeamAttackEvolutionEnvironment
+    )
     assert redteam.RedTeamReadinessEnvironment is (
         fi_simulate.RedTeamReadinessEnvironment
     )
@@ -224,8 +229,10 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.build_adaptive_redteam_strategy_optimization_manifest is (
         optimize.build_adaptive_redteam_optimization_manifest
     )
+    assert optimize.build_redteam_attack_evolution_optimization_manifest is not None
     assert optimize.optimize_adaptive_redteam is not None
     assert optimize.optimize_adaptive_redteam_strategy is optimize.optimize_adaptive_redteam
+    assert optimize.optimize_redteam_attack_evolution is not None
     assert optimize.build_agent_control_plane_optimization_manifest is not None
     assert optimize.optimize_agent_control_plane is not None
     assert optimize.build_autonomous_redteam_task_world_optimization_manifest is not None
@@ -5636,6 +5643,100 @@ def test_sdk_redteam_adaptive_loop_optimization_example_runs(monkeypatch, tmp_pa
         "retrieval",
         "multi_agent",
     }
+    assert observed["requires_external_service"] is False
+
+
+def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import evals, simulate
+
+    key = "real-local-sdk-redteam-attack-evolution-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_redteam_attack_evolution_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_attack_evolution_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    weak_evolution = evals.redteam_attack_evolution_report(
+        module.weak_report(),
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    strong_evolution = simulate.redteam_attack_evolution_artifact(
+        module.verified_report(),
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    assert weak_evolution["kind"] == "agent-learning.eval.redteam-attack-evolution.v1"
+    assert weak_evolution["status"] == "failed"
+    assert weak_evolution["score"] < 0.9
+    assert strong_evolution["status"] == "passed"
+    assert strong_evolution["score"] == pytest.approx(1.0)
+    assert strong_evolution["metadata"]["requires_external_service"] is False
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY"
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["metric_weights"]["red_team_attack_evolution_quality"] == 24.0
+    assert config["red_team_attack_evolution_quality"][
+        "require_no_external_service"
+    ] is True
+    assert config["red_team_attack_evolution_quality"][
+        "require_counterexample_minimization"
+    ] is True
+    search_space = manifest["optimization"]["target"]["search_space"]
+    assert len(search_space["simulation.environments"]) == 3
+
+    output_path = tmp_path / "sdk-redteam-attack-evolution-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert output_path.with_suffix(".manifest.json").exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["redteam_attack_evolution_proof_passed"] is True
+    assert result["redteam_attack_evolution_proof"]["assurance_level"] == (
+        "l3_native_redteam_attack_evolution_verified"
+    )
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    best_config = result["optimization"]["best_config"]
+    selected_env = best_config["simulation"]["environments"][0]
+    assert selected_env["type"] == "red_team_attack_evolution"
+    assert selected_env["data"]["metadata"]["profile"] == "verified"
+    assert "endpoint" not in _nested_keys(best_config)
+    assert "auth" not in _nested_keys(best_config)
+    assert "api_key" not in _nested_keys(best_config)
+    assert "secret" not in _nested_keys(best_config)
+    assert "token" not in _nested_keys(best_config)
+    best_history = max(result["optimization"]["history"], key=lambda item: item["score"])
+    assert best_history["metrics"]["red_team_attack_evolution_coverage"] == pytest.approx(
+        1.0
+    )
+    assert best_history["metrics"]["red_team_attack_evolution_quality"] == pytest.approx(
+        1.0
+    )
+    observed = next(
+        metric
+        for metric in best_history["report"]["results"][0]["evaluation"][
+            "agent_report"
+        ]["metrics"]
+        if metric["name"] == "red_team_attack_evolution_quality"
+    )["details"]["observed"]
+    assert observed["has_cross_round_feedback"] is True
+    assert observed["has_counterexample_minimization"] is True
+    assert observed["has_replayable_regressions"] is True
+    assert observed["has_positive_learning_curve"] is True
     assert observed["requires_external_service"] is False
 
 

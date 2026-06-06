@@ -4367,6 +4367,175 @@ def load_red_team_campaign_manifest(
     return RedTeamCampaignEnvironment(normalize_red_team_campaign_manifest(data, **kwargs))
 
 
+def normalize_red_team_attack_evolution_manifest(
+    payload: Any = None,
+    *,
+    name: str = "red-team-attack-evolution",
+    target: Optional[Mapping[str, Any]] = None,
+    seed_attacks: Optional[Iterable[Any]] = None,
+    mutation_rounds: Optional[Iterable[Any]] = None,
+    mutations: Optional[Iterable[Any]] = None,
+    counterexamples: Optional[Iterable[Any]] = None,
+    minimized_replays: Optional[Iterable[Any]] = None,
+    replay_cases: Optional[Iterable[Any]] = None,
+    verifiers: Optional[Iterable[Any]] = None,
+    feedback: Optional[Iterable[Any]] = None,
+    mutation_operators: Optional[Iterable[str]] = None,
+    coverage_axes: Optional[Iterable[str]] = None,
+    required_attack_types: Optional[Iterable[str]] = None,
+    required_surfaces: Optional[Iterable[str]] = None,
+    required_operators: Optional[Iterable[str]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Normalize local red-team attack-evolution evidence.
+
+    The manifest captures an internal verifier process: seed attacks, mutation
+    rounds, feedback, counterexamples, minimized replays, and replay
+    regressions. It is intentionally evidence-shaped rather than exploit-code
+    shaped so SDK/CLI optimization can remain local and deterministic.
+    """
+
+    payload_dict = copy.deepcopy(dict(payload)) if isinstance(payload, Mapping) else {}
+    target_record = _red_team_mapping(
+        target if target is not None else payload_dict.get("target")
+    )
+    seed_records = _normalize_attack_evolution_records(
+        seed_attacks
+        if seed_attacks is not None
+        else payload_dict.get("seed_attacks", payload_dict.get("seeds")),
+        prefix="seed_attack",
+    )
+    round_records, round_mutations = _normalize_attack_evolution_rounds(
+        mutation_rounds
+        if mutation_rounds is not None
+        else payload_dict.get("mutation_rounds", payload_dict.get("rounds"))
+    )
+    mutation_records = [
+        *_normalize_attack_evolution_records(
+            mutations
+            if mutations is not None
+            else payload_dict.get("mutations", payload_dict.get("mutation_cases")),
+            prefix="mutation",
+        ),
+        *round_mutations,
+    ]
+    counterexample_records = _normalize_attack_evolution_records(
+        counterexamples
+        if counterexamples is not None
+        else payload_dict.get("counterexamples", payload_dict.get("failures")),
+        prefix="counterexample",
+    )
+    minimized_records = _normalize_attack_evolution_records(
+        minimized_replays
+        if minimized_replays is not None
+        else payload_dict.get("minimized_replays", payload_dict.get("minimized_cases")),
+        prefix="minimized_replay",
+    )
+    replay_records = _normalize_attack_evolution_records(
+        replay_cases
+        if replay_cases is not None
+        else payload_dict.get("replay_cases", payload_dict.get("regressions")),
+        prefix="replay_case",
+    )
+    verifier_records = _normalize_attack_evolution_records(
+        verifiers if verifiers is not None else payload_dict.get("verifiers"),
+        prefix="verifier",
+    )
+    feedback_records = _normalize_attack_evolution_records(
+        feedback
+        if feedback is not None
+        else payload_dict.get("feedback", payload_dict.get("feedback_signals")),
+        prefix="feedback",
+    )
+    operator_keys = _red_team_key_list(
+        mutation_operators
+        if mutation_operators is not None
+        else payload_dict.get("mutation_operators", payload_dict.get("operators"))
+    )
+    coverage_axis_keys = _red_team_key_list(
+        coverage_axes
+        if coverage_axes is not None
+        else payload_dict.get("coverage_axes", payload_dict.get("axes"))
+    )
+    required_attack_keys = _red_team_key_list(
+        required_attack_types
+        if required_attack_types is not None
+        else payload_dict.get("required_attack_types")
+    )
+    required_surface_keys = _red_team_key_list(
+        required_surfaces
+        if required_surfaces is not None
+        else payload_dict.get("required_surfaces")
+    )
+    required_operator_keys = _red_team_key_list(
+        required_operators
+        if required_operators is not None
+        else payload_dict.get("required_operators")
+    )
+    summary = _red_team_attack_evolution_summary(
+        target=target_record,
+        seed_attacks=seed_records,
+        mutation_rounds=round_records,
+        mutations=mutation_records,
+        counterexamples=counterexample_records,
+        minimized_replays=minimized_records,
+        replay_cases=replay_records,
+        verifiers=verifier_records,
+        feedback=feedback_records,
+        mutation_operators=operator_keys,
+        coverage_axes=coverage_axis_keys,
+        required_attack_types=required_attack_keys,
+        required_surfaces=required_surface_keys,
+        required_operators=required_operator_keys,
+    )
+    signals = _red_team_attack_evolution_signals(summary)
+    return {
+        "kind": "red_team_attack_evolution",
+        "name": str(payload_dict.get("name") or name),
+        "target": target_record,
+        "seed_attacks": seed_records,
+        "mutation_rounds": round_records,
+        "mutations": mutation_records,
+        "counterexamples": counterexample_records,
+        "minimized_replays": minimized_records,
+        "replay_cases": replay_records,
+        "verifiers": verifier_records,
+        "feedback": feedback_records,
+        "mutation_operators": sorted(set(operator_keys)),
+        "coverage_axes": sorted(set(coverage_axis_keys)),
+        "required_attack_types": sorted(set(required_attack_keys)),
+        "required_surfaces": sorted(set(required_surface_keys)),
+        "required_operators": sorted(set(required_operator_keys)),
+        "summary": summary,
+        "signals": signals,
+        "metadata": {
+            **copy.deepcopy(dict(payload_dict.get("metadata", {}))),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
+def load_red_team_attack_evolution_manifest(
+    source: str | os.PathLike[str] | Mapping[str, Any],
+    *,
+    headers: Optional[Mapping[str, str]] = None,
+    timeout: float = 30.0,
+    **kwargs: Any,
+) -> "RedTeamAttackEvolutionEnvironment":
+    """Load a local/HTTP attack-evolution manifest and return an environment."""
+
+    data = (
+        copy.deepcopy(dict(source))
+        if isinstance(source, Mapping)
+        else _load_framework_trace_export_source(source, headers=headers, timeout=timeout)
+    )
+    if not isinstance(data, Mapping):
+        raise TypeError("Red-team attack-evolution export must be a mapping")
+    return RedTeamAttackEvolutionEnvironment(
+        normalize_red_team_attack_evolution_manifest(data, **kwargs)
+    )
+
+
 def normalize_browser_mutation_pack(
     mutation_pack: Optional[Any] = None,
     *,
@@ -5760,6 +5929,643 @@ class RedTeamCampaignEnvironment(EnvironmentAdapter):
 
     def _trace_payload(self) -> Dict[str, Any]:
         return copy.deepcopy(self.campaign)
+
+
+class RedTeamAttackEvolutionEnvironment(EnvironmentAdapter):
+    """
+    Native attack-evolution evidence for red-team optimization loops.
+
+    This environment records benign, replayable evidence about how attack cases
+    evolve: seed cases, mutation rounds, feedback, verifiers, counterexamples,
+    minimization, and replay regressions. It deliberately avoids external
+    hooks, live exploit runners, or opaque platform dependencies.
+    """
+
+    name = "red_team_attack_evolution"
+
+    def __init__(
+        self,
+        manifest: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        self.initial_manifest = (
+            normalize_red_team_attack_evolution_manifest(manifest, **kwargs)
+            if not (
+                isinstance(manifest, Mapping)
+                and manifest.get("kind") == "red_team_attack_evolution"
+                and not kwargs
+            )
+            else copy.deepcopy(dict(manifest))
+        )
+        self.manifest: Dict[str, Any] = {}
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self.manifest = copy.deepcopy(self.initial_manifest)
+        return EnvironmentSnapshot(
+            tools=self._tool_specs(),
+            artifacts=[self._trace_artifact()],
+            events=[
+                SimulationEvent(
+                    type="red_team_attack_evolution",
+                    name="red_team_attack_evolution_ready",
+                    payload={
+                        "name": self.manifest.get("name"),
+                        "summary": copy.deepcopy(self.manifest.get("summary", {})),
+                        "signals": copy.deepcopy(self.manifest.get("signals", [])),
+                    },
+                )
+            ],
+            state={"red_team_attack_evolution": self._trace_payload()},
+            metadata={
+                "red_team_attack_evolution": copy.deepcopy(
+                    self.manifest.get("summary", {})
+                )
+            },
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        name = _tool_name(tool_call)
+        if name not in {
+            "red_team_attack_evolution_status",
+            "list_red_team_attack_mutations",
+            "list_red_team_counterexamples",
+            "list_red_team_minimized_replays",
+            "list_red_team_evolution_gaps",
+        }:
+            return None
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+
+        if name == "red_team_attack_evolution_status":
+            result = self._trace_payload()
+            event_name = "red_team_attack_evolution_status"
+            content = (
+                f"Red-team attack evolution {self.manifest.get('name')} "
+                "status recorded."
+            )
+        elif name == "list_red_team_attack_mutations":
+            records = self._filtered_records("mutations", arguments)
+            result = {"mutations": records, "count": len(records)}
+            event_name = "red_team_attack_mutations_listed"
+            content = f"Listed {len(records)} red-team attack mutation(s)."
+        elif name == "list_red_team_counterexamples":
+            records = self._filtered_records("counterexamples", arguments)
+            result = {"counterexamples": records, "count": len(records)}
+            event_name = "red_team_counterexamples_listed"
+            content = f"Listed {len(records)} red-team counterexample(s)."
+        elif name == "list_red_team_minimized_replays":
+            records = self._filtered_records("minimized_replays", arguments)
+            result = {"minimized_replays": records, "count": len(records)}
+            event_name = "red_team_minimized_replays_listed"
+            content = f"Listed {len(records)} minimized replay(s)."
+        else:
+            summary = copy.deepcopy(self.manifest.get("summary", {}))
+            result = {
+                "missing_required_attack_types": summary.get(
+                    "missing_required_attack_types", []
+                ),
+                "missing_required_surfaces": summary.get(
+                    "missing_required_surfaces", []
+                ),
+                "missing_required_operators": summary.get(
+                    "missing_required_operators", []
+                ),
+                "unminimized_counterexamples": summary.get(
+                    "unminimized_counterexamples", []
+                ),
+                "unreplayed_counterexamples": summary.get(
+                    "unreplayed_counterexamples", []
+                ),
+                "external_markers": summary.get("external_markers", []),
+                "mutation_round_count": summary.get("mutation_round_count", 0),
+                "mutation_count": summary.get("mutation_count", 0),
+                "counterexample_count": summary.get("counterexample_count", 0),
+                "minimized_replay_count": summary.get("minimized_replay_count", 0),
+                "replay_case_count": summary.get("replay_case_count", 0),
+                "has_cross_round_feedback": summary.get(
+                    "has_cross_round_feedback", False
+                ),
+                "has_positive_learning_curve": summary.get(
+                    "has_positive_learning_curve", False
+                ),
+            }
+            event_name = "red_team_attack_evolution_gaps_listed"
+            content = "Listed red-team attack-evolution gaps."
+
+        return ToolExecutionResult(
+            tool_call_id=call_id,
+            tool_name=name,
+            content=content,
+            result=result,
+            success=True,
+            state_updates={"red_team_attack_evolution": self._trace_payload()},
+            artifacts=[self._trace_artifact()],
+            events=[
+                SimulationEvent(
+                    type="red_team_attack_evolution",
+                    name=event_name,
+                    payload=result,
+                )
+            ],
+        )
+
+    def _tool_specs(self) -> List[Dict[str, Any]]:
+        filter_schema = {
+            "attack_type": {"type": "string"},
+            "surface": {"type": "string"},
+            "operator": {"type": "string"},
+            "round_id": {"type": "string"},
+        }
+        return [
+            {
+                "name": "red_team_attack_evolution_status",
+                "description": (
+                    "Return the attack-evolution manifest, summary, and signals."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "list_red_team_attack_mutations",
+                "description": (
+                    "List attack mutations filtered by attack type, surface, "
+                    "operator, or round."
+                ),
+                "parameters": {"type": "object", "properties": filter_schema},
+            },
+            {
+                "name": "list_red_team_counterexamples",
+                "description": (
+                    "List verifier counterexamples filtered by attack type, "
+                    "surface, operator, or round."
+                ),
+                "parameters": {"type": "object", "properties": filter_schema},
+            },
+            {
+                "name": "list_red_team_minimized_replays",
+                "description": (
+                    "List minimized replay cases filtered by attack type, "
+                    "surface, operator, or round."
+                ),
+                "parameters": {"type": "object", "properties": filter_schema},
+            },
+            {
+                "name": "list_red_team_evolution_gaps",
+                "description": (
+                    "List missing attack-evolution coverage, minimization, "
+                    "replay, feedback, and locality evidence."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ]
+
+    def _filtered_records(
+        self,
+        collection: str,
+        arguments: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        records = [copy.deepcopy(item) for item in _as_iterable(self.manifest.get(collection))]
+        attack_type = _red_team_key(arguments.get("attack_type") or arguments.get("type"))
+        surface = _red_team_key(arguments.get("surface") or arguments.get("channel"))
+        operator = _red_team_key(arguments.get("operator") or arguments.get("mutation_operator"))
+        round_id = str(arguments.get("round_id") or arguments.get("round") or "").strip()
+        if attack_type:
+            records = [
+                item
+                for item in records
+                if item.get("attack_type") == attack_type
+                or attack_type in set(item.get("signals", []))
+            ]
+        if surface:
+            records = [
+                item
+                for item in records
+                if item.get("surface") == surface
+                or surface in set(item.get("signals", []))
+            ]
+        if operator:
+            records = [
+                item
+                for item in records
+                if item.get("operator") == operator
+                or operator in set(item.get("signals", []))
+            ]
+        if round_id:
+            records = [
+                item
+                for item in records
+                if str(item.get("round_id") or item.get("round") or "") == round_id
+            ]
+        return records
+
+    def _trace_artifact(self) -> SimulationArtifact:
+        return SimulationArtifact(
+            type="trace",
+            role="environment",
+            data=self._trace_payload(),
+            metadata={"kind": "red_team_attack_evolution"},
+        )
+
+    def _trace_payload(self) -> Dict[str, Any]:
+        return copy.deepcopy(self.manifest)
+
+
+def _normalize_attack_evolution_records(
+    value: Any,
+    *,
+    prefix: str,
+    round_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for index, raw in enumerate(_as_iterable(value), start=1):
+        item = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {"name": str(raw)}
+        record_id = str(item.get("id") or item.get("name") or f"{prefix}_{index}")
+        attack_type = _red_team_key(
+            item.get("attack_type")
+            or item.get("category")
+            or item.get("type")
+            or item.get("vector")
+        )
+        surface = _red_team_key(
+            item.get("surface")
+            or item.get("channel")
+            or item.get("source")
+            or item.get("target_surface")
+        )
+        operator = _red_team_key(
+            item.get("operator")
+            or item.get("mutation_operator")
+            or item.get("mutation_type")
+            or item.get("strategy")
+        )
+        status = _red_team_key(item.get("status") or item.get("outcome") or item.get("result"))
+        signals = sorted(
+            {
+                *(
+                    _red_team_key(signal)
+                    for signal in _as_iterable(item.get("signals", []))
+                    if _red_team_key(signal)
+                ),
+                *(
+                    token
+                    for token in (attack_type, surface, operator, status)
+                    if token
+                ),
+            }
+        )
+        normalized = {
+            "id": record_id,
+            "name": str(item.get("name") or record_id),
+            "attack_type": attack_type,
+            "surface": surface,
+            "operator": operator,
+            "round_id": str(item.get("round_id") or item.get("round") or round_id or ""),
+            "parent_id": str(
+                item.get("parent_id")
+                or item.get("parent")
+                or item.get("counterexample_id")
+                or ""
+            ),
+            "status": status,
+            "success": _attack_evolution_success(item),
+            "score": _attack_evolution_float(
+                item.get("score")
+                or item.get("quality")
+                or item.get("fitness")
+                or item.get("attack_realization_rate")
+            ),
+            "verifier": str(item.get("verifier") or item.get("validator") or ""),
+            "replay_id": str(item.get("replay_id") or item.get("regression_id") or ""),
+            "minimized_from": str(item.get("minimized_from") or item.get("source_id") or ""),
+            "signals": signals,
+            "metadata": copy.deepcopy(_as_mapping(item.get("metadata"))),
+        }
+        for key in (
+            "payload",
+            "input",
+            "expected",
+            "actual",
+            "predicate",
+            "invariant",
+            "feedback",
+            "diff",
+            "notes",
+        ):
+            if item.get(key) not in (None, "", [], {}):
+                normalized[key] = copy.deepcopy(item.get(key))
+        records.append(normalized)
+    return records
+
+
+def _normalize_attack_evolution_rounds(
+    value: Any,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    rounds: List[Dict[str, Any]] = []
+    mutations: List[Dict[str, Any]] = []
+    for index, raw in enumerate(_as_iterable(value), start=1):
+        item = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {"name": str(raw)}
+        round_id = str(item.get("id") or item.get("round_id") or f"round_{index}")
+        nested_mutations = _normalize_attack_evolution_records(
+            item.get("mutations") or item.get("mutation_cases"),
+            prefix=f"{round_id}_mutation",
+            round_id=round_id,
+        )
+        mutations.extend(nested_mutations)
+        feedback = _normalize_attack_evolution_records(
+            item.get("feedback") or item.get("feedback_signals"),
+            prefix=f"{round_id}_feedback",
+            round_id=round_id,
+        )
+        scores = [
+            score
+            for score in (
+                _attack_evolution_float(item.get("score")),
+                _attack_evolution_float(item.get("quality")),
+                _attack_evolution_float(item.get("fitness")),
+            )
+            if score is not None
+        ]
+        if not scores:
+            scores = [
+                float(mutation.get("score"))
+                for mutation in nested_mutations
+                if mutation.get("score") is not None
+            ]
+        round_record = {
+            "id": round_id,
+            "name": str(item.get("name") or round_id),
+            "index": _workspace_int(item.get("index") or item.get("round")) or index,
+            "mutation_count": len(nested_mutations),
+            "successful_mutation_count": sum(
+                1 for mutation in nested_mutations if mutation.get("success")
+            ),
+            "feedback_count": len(feedback),
+            "score": round(sum(scores) / len(scores), 4) if scores else None,
+            "signals": sorted(
+                {
+                    *(
+                        _red_team_key(signal)
+                        for signal in _as_iterable(item.get("signals", []))
+                        if _red_team_key(signal)
+                    ),
+                    *(
+                        signal
+                        for record in [*nested_mutations, *feedback]
+                        for signal in _as_iterable(record.get("signals"))
+                        if signal
+                    ),
+                }
+            ),
+            "metadata": copy.deepcopy(_as_mapping(item.get("metadata"))),
+        }
+        rounds.append(round_record)
+    return rounds, mutations
+
+
+def _red_team_attack_evolution_summary(
+    *,
+    target: Mapping[str, Any],
+    seed_attacks: Sequence[Mapping[str, Any]],
+    mutation_rounds: Sequence[Mapping[str, Any]],
+    mutations: Sequence[Mapping[str, Any]],
+    counterexamples: Sequence[Mapping[str, Any]],
+    minimized_replays: Sequence[Mapping[str, Any]],
+    replay_cases: Sequence[Mapping[str, Any]],
+    verifiers: Sequence[Mapping[str, Any]],
+    feedback: Sequence[Mapping[str, Any]],
+    mutation_operators: Sequence[str],
+    coverage_axes: Sequence[str],
+    required_attack_types: Sequence[str],
+    required_surfaces: Sequence[str],
+    required_operators: Sequence[str],
+) -> Dict[str, Any]:
+    all_records = [
+        *seed_attacks,
+        *mutation_rounds,
+        *mutations,
+        *counterexamples,
+        *minimized_replays,
+        *replay_cases,
+        *verifiers,
+        *feedback,
+    ]
+    observed_attack_types = sorted(
+        {
+            _red_team_key(record.get("attack_type"))
+            for record in all_records
+            if _red_team_key(record.get("attack_type"))
+        }
+    )
+    observed_surfaces = sorted(
+        {
+            _red_team_key(record.get("surface"))
+            for record in all_records
+            if _red_team_key(record.get("surface"))
+        }
+    )
+    observed_operators = sorted(
+        {
+            *(_red_team_key(record.get("operator")) for record in all_records),
+            *(_red_team_key(item) for item in mutation_operators),
+        }
+        - {""}
+    )
+    minimized_ids = {
+        str(record.get("minimized_from") or record.get("source_id") or "")
+        for record in minimized_replays
+        if str(record.get("minimized_from") or record.get("source_id") or "")
+    }
+    replay_source_ids = {
+        str(record.get("counterexample_id") or record.get("parent_id") or record.get("id") or "")
+        for record in replay_cases
+        if str(record.get("counterexample_id") or record.get("parent_id") or record.get("id") or "")
+    }
+    counterexample_ids = {
+        str(record.get("id") or "")
+        for record in counterexamples
+        if str(record.get("id") or "")
+    }
+    unminimized = sorted(counterexample_ids - minimized_ids)
+    unreplayed = sorted(counterexample_ids - replay_source_ids)
+    external_markers = _red_team_attack_evolution_external_markers(all_records)
+    learning_scores = [
+        float(round_record.get("score"))
+        for round_record in mutation_rounds
+        if round_record.get("score") is not None
+    ]
+    successful_by_round = [
+        _workspace_int(round_record.get("successful_mutation_count")) or 0
+        for round_record in mutation_rounds
+    ]
+    has_positive_learning_curve = (
+        len(learning_scores) >= 2 and learning_scores[-1] >= learning_scores[0]
+    ) or (
+        len(successful_by_round) >= 2
+        and successful_by_round[-1] >= successful_by_round[0]
+        and successful_by_round[-1] > 0
+    )
+    has_path_expansion = (
+        len(observed_operators) >= 2
+        or len(observed_attack_types) >= max(2, len(set(required_attack_types)))
+    )
+    has_surface_expansion = (
+        len(observed_surfaces) >= max(2, len(set(required_surfaces)))
+    )
+    return {
+        "has_target": bool(target),
+        "seed_attack_count": len(seed_attacks),
+        "mutation_round_count": len(mutation_rounds),
+        "mutation_count": len(mutations),
+        "successful_mutation_count": sum(
+            1 for record in mutations if record.get("success")
+        ),
+        "counterexample_count": len(counterexamples),
+        "minimized_replay_count": len(minimized_replays),
+        "replay_case_count": len(replay_cases),
+        "verifier_count": len(verifiers),
+        "feedback_signal_count": len(feedback)
+        + sum(_workspace_int(record.get("feedback_count")) or 0 for record in mutation_rounds),
+        "operator_count": len(observed_operators),
+        "coverage_axis_count": len(set(coverage_axes)),
+        "observed_attack_types": observed_attack_types,
+        "observed_surfaces": observed_surfaces,
+        "observed_operators": observed_operators,
+        "coverage_axes": sorted(set(coverage_axes)),
+        "missing_required_attack_types": sorted(
+            set(required_attack_types) - set(observed_attack_types)
+        ),
+        "missing_required_surfaces": sorted(
+            set(required_surfaces) - set(observed_surfaces)
+        ),
+        "missing_required_operators": sorted(
+            set(required_operators) - set(observed_operators)
+        ),
+        "unminimized_counterexamples": unminimized,
+        "unreplayed_counterexamples": unreplayed,
+        "has_cross_round_feedback": len(mutation_rounds) >= 2
+        and (bool(feedback) or any(record.get("feedback_count") for record in mutation_rounds)),
+        "has_counterexample_minimization": bool(counterexamples)
+        and bool(minimized_replays)
+        and not unminimized,
+        "has_replayable_regressions": bool(replay_cases) and not unreplayed,
+        "has_positive_learning_curve": has_positive_learning_curve,
+        "has_path_expansion": has_path_expansion,
+        "has_surface_expansion": has_surface_expansion,
+        "requires_external_service": bool(external_markers),
+        "external_markers": external_markers,
+    }
+
+
+def _red_team_attack_evolution_signals(summary: Mapping[str, Any]) -> List[str]:
+    signals = {
+        "red_team_attack_evolution",
+        "attack_evolution",
+        "mutation",
+    }
+    if summary.get("counterexample_count"):
+        signals.add("counterexample")
+    if summary.get("minimized_replay_count"):
+        signals.add("minimized_replay")
+    if summary.get("replay_case_count"):
+        signals.add("replay_regression")
+    if summary.get("verifier_count"):
+        signals.add("verifier")
+    for key, signal in [
+        ("has_cross_round_feedback", "cross_round_feedback"),
+        ("has_counterexample_minimization", "counterexample_minimization"),
+        ("has_replayable_regressions", "replayable_regression"),
+        ("has_positive_learning_curve", "positive_learning_curve"),
+        ("has_path_expansion", "path_expansion"),
+        ("has_surface_expansion", "surface_expansion"),
+    ]:
+        if summary.get(key):
+            signals.add(signal)
+    for key in ("observed_attack_types", "observed_surfaces", "observed_operators", "coverage_axes"):
+        signals.update(str(item) for item in _as_iterable(summary.get(key)) if str(item))
+    return sorted(_red_team_key(signal) for signal in signals if _red_team_key(signal))
+
+
+def _attack_evolution_success(record: Mapping[str, Any]) -> bool:
+    if record.get("success") is not None:
+        return _attack_evolution_bool(record.get("success"))
+    status = _red_team_key(record.get("status") or record.get("outcome") or record.get("result"))
+    return status in {
+        "success",
+        "successful",
+        "passed",
+        "pass",
+        "found",
+        "counterexample",
+        "minimized",
+        "replayed",
+        "verified",
+    }
+
+
+def _attack_evolution_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+        "success",
+        "passed",
+        "verified",
+    }
+
+
+def _attack_evolution_float(value: Any) -> Optional[float]:
+    if value in (None, "", [], {}):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _red_team_attack_evolution_external_markers(values: Sequence[Any]) -> List[str]:
+    markers: set[str] = set()
+    sensitive_keys = {"endpoint", "auth", "api_key", "apikey", "secret", "token"}
+    runtime_url_keys = {
+        "endpoint",
+        "hook",
+        "webhook",
+        "base_url",
+        "callback_url",
+        "hook_url",
+        "service_url",
+        "target_url",
+    }
+    for value in values:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                normalized_key = _red_team_key(key)
+                if normalized_key in sensitive_keys:
+                    markers.add(normalized_key)
+                if normalized_key == "requires_external_service" and bool(item):
+                    markers.add("requires_external_service")
+                if (
+                    normalized_key in runtime_url_keys
+                    and isinstance(item, str)
+                    and item.startswith(("http://", "https://"))
+                    and "127.0.0.1" not in item
+                    and "localhost" not in item
+                ):
+                    markers.add(normalized_key or "external_url")
+                markers.update(
+                    _red_team_attack_evolution_external_markers(_as_iterable(item))
+                )
+        elif isinstance(value, list):
+            markers.update(_red_team_attack_evolution_external_markers(value))
+    return sorted(markers)
 
 
 def normalize_persistent_state_attack_manifest(

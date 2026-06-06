@@ -858,6 +858,10 @@ AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_adaptive_loop_optimization.py \
   artifacts/sdk-redteam-adaptive-loop-optimization.json
 
+AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_attack_evolution_optimization.py \
+  artifacts/sdk-redteam-attack-evolution-optimization.json
+
 AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
@@ -1075,6 +1079,19 @@ the metric to optimization weights. `examples/sdk_redteam_adaptive_loop_optimiza
 proves a static probe fails and the hardened adaptive loop passes without any
 external service; it also writes a `.manifest.json` that promptfoo-style CLI
 users can rerun with `agent-learn optimize`.
+
+`red_team_attack_evolution_coverage` and
+`red_team_attack_evolution_quality` add a native 2026-style evolutionary
+red-team proof loop: seed attacks, mutation rounds, cross-round feedback,
+verifier predicates, counterexamples, minimized replays, replay regressions,
+path/surface expansion, and local-only execution are scored separately from
+campaign breadth. Use `evals.redteam_attack_evolution_report()`,
+`simulate.redteam_attack_evolution_artifact()`, or
+`optimize.build_redteam_attack_evolution_optimization_manifest()`.
+`examples/sdk_redteam_attack_evolution_optimization.py` proves a weak seed-only
+loop fails and the verified attack-evolution loop passes, writes a
+`.manifest.json` for `agent-learn optimize`, and attaches
+`agent-learning.optimization.redteam-attack-evolution-proof.v1`.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of

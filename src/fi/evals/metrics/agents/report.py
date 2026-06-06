@@ -192,6 +192,8 @@ class AgentReportEvalConfig(BaseModel):
     required_red_team_campaign: List[str] = Field(default_factory=list)
     red_team_campaign_quality: Dict[str, Any] = Field(default_factory=dict)
     red_team_adaptive_loop_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_red_team_attack_evolution: List[str] = Field(default_factory=list)
+    red_team_attack_evolution_quality: Dict[str, Any] = Field(default_factory=dict)
     required_persistent_state_attack: List[str] = Field(default_factory=list)
     persistent_state_attack_quality: Dict[str, Any] = Field(default_factory=dict)
     required_red_team_readiness: List[str] = Field(default_factory=list)
@@ -426,6 +428,8 @@ class AgentReportEvaluator:
                 *_red_team_campaign_coverage_metrics(report_context, config),
                 *_red_team_campaign_quality_metrics(report_context, config),
                 *_red_team_adaptive_loop_quality_metrics(report_context, config),
+                *_red_team_attack_evolution_coverage_metrics(report_context, config),
+                *_red_team_attack_evolution_quality_metrics(report_context, config),
                 *_persistent_state_attack_coverage_metrics(report_context, config),
                 *_persistent_state_attack_quality_metrics(report_context, config),
                 *_red_team_readiness_coverage_metrics(report_context, config),
@@ -3254,6 +3258,604 @@ def _red_team_adaptive_external_markers(values: Sequence[Any]) -> List[str]:
         elif isinstance(value, list):
             markers.update(_red_team_adaptive_external_markers(value))
     return sorted(markers)
+
+
+def _red_team_attack_evolution_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.required_red_team_attack_evolution
+        and not _red_team_attack_evolution_payloads_from_context(context)
+    ):
+        return []
+    return [_red_team_attack_evolution_coverage_metric(context, config)]
+
+
+def _red_team_attack_evolution_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_red_team_campaign_key(key)
+        for key in config.required_red_team_attack_evolution
+        if _normalize_red_team_campaign_key(key)
+    ]
+    if not required:
+        return AgentReportMetricResult(
+            name="red_team_attack_evolution_coverage",
+            score=1.0,
+            reason="No required attack-evolution keys provided.",
+        )
+    observed = _red_team_attack_evolution_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="red_team_attack_evolution_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required attack-evolution evidence observed."
+            if not missing
+            else f"Missing attack-evolution evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {
+                    "type": "missing_red_team_attack_evolution_key",
+                    "metric": "red_team_attack_evolution_coverage",
+                    "key": key,
+                }
+                for key in missing
+            ],
+        },
+    )
+
+
+def _red_team_attack_evolution_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.red_team_attack_evolution_quality
+        and "red_team_attack_evolution_quality" not in config.metric_weights
+    ):
+        return []
+    return [_red_team_attack_evolution_quality_metric(context, config)]
+
+
+def _red_team_attack_evolution_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    requirements = _red_team_attack_evolution_requirements(
+        config.red_team_attack_evolution_quality
+    )
+    summary = _merge_red_team_attack_evolution_summaries(
+        _red_team_attack_evolution_payloads_from_context(context)
+    )
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    def append_check(
+        check: str,
+        *,
+        expected: Any,
+        actual: Any,
+        match: bool,
+        finding_type: str,
+    ) -> None:
+        item = {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": bool(match),
+        }
+        checks.append(item)
+        if not match:
+            findings.append(
+                {
+                    "type": finding_type,
+                    "metric": "red_team_attack_evolution_quality",
+                    **item,
+                }
+            )
+
+    for field, summary_key, finding_type in [
+        ("min_seed_attack_count", "seed_attack_count", "red_team_attack_evolution_seed_count_low"),
+        ("min_mutation_round_count", "mutation_round_count", "red_team_attack_evolution_round_count_low"),
+        ("min_mutation_count", "mutation_count", "red_team_attack_evolution_mutation_count_low"),
+        ("min_successful_mutation_count", "successful_mutation_count", "red_team_attack_evolution_successful_mutation_count_low"),
+        ("min_counterexample_count", "counterexample_count", "red_team_attack_evolution_counterexample_count_low"),
+        ("min_minimized_replay_count", "minimized_replay_count", "red_team_attack_evolution_minimized_replay_count_low"),
+        ("min_replay_case_count", "replay_case_count", "red_team_attack_evolution_replay_case_count_low"),
+        ("min_verifier_count", "verifier_count", "red_team_attack_evolution_verifier_count_low"),
+        ("min_feedback_signal_count", "feedback_signal_count", "red_team_attack_evolution_feedback_count_low"),
+        ("min_operator_count", "operator_count", "red_team_attack_evolution_operator_count_low"),
+        ("min_coverage_axis_count", "coverage_axis_count", "red_team_attack_evolution_axis_count_low"),
+    ]:
+        minimum = _as_int(requirements.get(field))
+        if minimum is not None:
+            append_check(
+                field,
+                expected=f">= {minimum}",
+                actual=summary.get(summary_key, 0),
+                match=(_as_int(summary.get(summary_key)) or 0) >= minimum,
+                finding_type=finding_type,
+            )
+
+    for field, summary_key, finding_type in [
+        ("max_unminimized_counterexamples", "unminimized_counterexamples", "red_team_attack_evolution_unminimized_counterexample_high"),
+        ("max_unreplayed_counterexamples", "unreplayed_counterexamples", "red_team_attack_evolution_unreplayed_counterexample_high"),
+    ]:
+        maximum = _as_int(requirements.get(field))
+        if maximum is not None:
+            actual = len(_as_list(summary.get(summary_key)))
+            append_check(
+                field,
+                expected=f"<= {maximum}",
+                actual=actual,
+                match=actual <= maximum,
+                finding_type=finding_type,
+            )
+
+    for field, summary_key, finding_type in [
+        ("require_cross_round_feedback", "has_cross_round_feedback", "red_team_attack_evolution_feedback_missing"),
+        ("require_counterexample_minimization", "has_counterexample_minimization", "red_team_attack_evolution_minimization_missing"),
+        ("require_replayable_regressions", "has_replayable_regressions", "red_team_attack_evolution_replay_missing"),
+        ("require_positive_learning_curve", "has_positive_learning_curve", "red_team_attack_evolution_learning_curve_missing"),
+        ("require_path_expansion", "has_path_expansion", "red_team_attack_evolution_path_expansion_missing"),
+        ("require_surface_expansion", "has_surface_expansion", "red_team_attack_evolution_surface_expansion_missing"),
+        ("require_no_external_service", "requires_external_service", "red_team_attack_evolution_external_service_present"),
+    ]:
+        if requirements.get(field) is not None:
+            expected = bool(requirements.get(field))
+            actual = bool(summary.get(summary_key))
+            if field == "require_no_external_service":
+                match = (not actual) is expected
+                actual_value: Any = {
+                    "requires_external_service": actual,
+                    "external_markers": summary.get("external_markers", []),
+                }
+            else:
+                match = actual is expected
+                actual_value = actual
+            append_check(
+                field,
+                expected=expected,
+                actual=actual_value,
+                match=match,
+                finding_type=finding_type,
+            )
+
+    for field, summary_key, check_name, finding_type in [
+        ("required_attack_types", "observed_attack_types", "required_attack_type", "red_team_attack_evolution_attack_type_missing"),
+        ("required_surfaces", "observed_surfaces", "required_surface", "red_team_attack_evolution_surface_missing"),
+        ("required_operators", "observed_operators", "required_operator", "red_team_attack_evolution_operator_missing"),
+        ("required_coverage_axes", "coverage_axes", "required_coverage_axis", "red_team_attack_evolution_axis_missing"),
+        ("required_signals", "signals", "required_signal", "red_team_attack_evolution_signal_missing"),
+    ]:
+        observed = set(summary.get(summary_key, []))
+        for item in _string_list(requirements.get(field)):
+            normalized = _normalize_red_team_campaign_key(item)
+            append_check(
+                check_name,
+                expected=normalized,
+                actual=sorted(observed),
+                match=normalized in observed,
+                finding_type=finding_type,
+            )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="red_team_attack_evolution_quality",
+            score=1.0,
+            reason="No attack-evolution quality checks provided.",
+            details={
+                "kind": "agent-learning.eval.redteam-attack-evolution.v1",
+                "observed": summary,
+            },
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="red_team_attack_evolution_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} attack-evolution quality check(s) matched.",
+        details={
+            "kind": "agent-learning.eval.redteam-attack-evolution.v1",
+            "checks": checks,
+            "findings": findings,
+            "observed": summary,
+        },
+    )
+
+
+def _red_team_attack_evolution_requirements(value: Mapping[str, Any]) -> Dict[str, Any]:
+    requirements = _as_dict(value)
+    if requirements:
+        return requirements
+    return {
+        "min_seed_attack_count": 2,
+        "min_mutation_round_count": 2,
+        "min_mutation_count": 3,
+        "min_successful_mutation_count": 2,
+        "min_counterexample_count": 1,
+        "min_minimized_replay_count": 1,
+        "min_replay_case_count": 1,
+        "min_verifier_count": 2,
+        "min_feedback_signal_count": 1,
+        "min_operator_count": 2,
+        "min_coverage_axis_count": 3,
+        "max_unminimized_counterexamples": 0,
+        "max_unreplayed_counterexamples": 0,
+        "require_cross_round_feedback": True,
+        "require_counterexample_minimization": True,
+        "require_replayable_regressions": True,
+        "require_positive_learning_curve": True,
+        "require_path_expansion": True,
+        "require_surface_expansion": True,
+        "require_no_external_service": True,
+    }
+
+
+def _red_team_attack_evolution_payloads_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("red_team_attack_evolution"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("red_team_attack_evolution"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        if str(_get(artifact, "type", "") or "").lower() != "trace":
+            continue
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_red_team_attack_evolution(data, metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_red_team_attack_evolution(payload, metadata):
+            payloads.append(payload)
+        elif "red_team_attack_evolution" in event_type:
+            payloads.append(
+                {
+                    "kind": "red_team_attack_evolution",
+                    "events": [_as_dict(event)],
+                }
+            )
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        key = json.dumps(payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload)
+    return deduped
+
+
+def _red_team_attack_evolution_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _red_team_attack_evolution_payloads_from_context(context):
+        observed.update({"red_team_attack_evolution", "attack_evolution", "mutation"})
+        for signal in _as_list(payload.get("signals", [])):
+            normalized = _normalize_red_team_campaign_key(signal)
+            if normalized:
+                observed.add(normalized)
+        summary = _as_dict(payload.get("summary"))
+        for key, signal in [
+            ("seed_attack_count", "seed_attack"),
+            ("mutation_round_count", "mutation_round"),
+            ("mutation_count", "mutation"),
+            ("successful_mutation_count", "successful_mutation"),
+            ("counterexample_count", "counterexample"),
+            ("minimized_replay_count", "minimized_replay"),
+            ("replay_case_count", "replay_regression"),
+            ("verifier_count", "verifier"),
+            ("feedback_signal_count", "feedback"),
+        ]:
+            if summary.get(key):
+                observed.add(signal)
+        for key in (
+            "observed_attack_types",
+            "observed_surfaces",
+            "observed_operators",
+            "coverage_axes",
+            "signals",
+        ):
+            observed.update(
+                _normalize_red_team_campaign_key(item)
+                for item in _as_list(summary.get(key))
+                if _normalize_red_team_campaign_key(item)
+            )
+        for key, signal in [
+            ("has_cross_round_feedback", "cross_round_feedback"),
+            ("has_counterexample_minimization", "counterexample_minimization"),
+            ("has_replayable_regressions", "replayable_regression"),
+            ("has_positive_learning_curve", "positive_learning_curve"),
+            ("has_path_expansion", "path_expansion"),
+            ("has_surface_expansion", "surface_expansion"),
+        ]:
+            if summary.get(key):
+                observed.add(signal)
+        for collection in (
+            "seed_attacks",
+            "mutation_rounds",
+            "mutations",
+            "counterexamples",
+            "minimized_replays",
+            "replay_cases",
+            "verifiers",
+            "feedback",
+        ):
+            for item in _as_list(payload.get(collection, [])):
+                item_dict = _as_dict(item)
+                observed.update(
+                    _normalize_red_team_campaign_key(signal)
+                    for signal in _as_list(item_dict.get("signals", []))
+                    if _normalize_red_team_campaign_key(signal)
+                )
+                for field in ("id", "type", "attack_type", "surface", "operator", "status"):
+                    normalized = _normalize_red_team_campaign_key(item_dict.get(field))
+                    if normalized:
+                        observed.add(normalized)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {
+            "red_team_attack_evolution_status",
+            "list_red_team_attack_mutations",
+            "list_red_team_counterexamples",
+            "list_red_team_minimized_replays",
+            "list_red_team_evolution_gaps",
+        }:
+            observed.add("red_team_attack_evolution")
+            if "mutations" in name:
+                observed.add("mutation")
+            if "counterexamples" in name:
+                observed.add("counterexample")
+            if "minimized_replays" in name:
+                observed.add("minimized_replay")
+    return {item for item in observed if item}
+
+
+def _looks_like_red_team_attack_evolution(
+    data: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    return kind == "red_team_attack_evolution" or (
+        ("mutations" in data or "mutation_rounds" in data or "counterexamples" in data)
+        and ("minimized_replays" in data or "replay_cases" in data or "summary" in data)
+    )
+
+
+def _merge_red_team_attack_evolution_summaries(
+    payloads: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {
+        "seed_attack_count": 0,
+        "mutation_round_count": 0,
+        "mutation_count": 0,
+        "successful_mutation_count": 0,
+        "counterexample_count": 0,
+        "minimized_replay_count": 0,
+        "replay_case_count": 0,
+        "verifier_count": 0,
+        "feedback_signal_count": 0,
+        "operator_count": 0,
+        "coverage_axis_count": 0,
+        "observed_attack_types": [],
+        "observed_surfaces": [],
+        "observed_operators": [],
+        "coverage_axes": [],
+        "signals": [],
+        "missing_required_attack_types": [],
+        "missing_required_surfaces": [],
+        "missing_required_operators": [],
+        "unminimized_counterexamples": [],
+        "unreplayed_counterexamples": [],
+        "has_cross_round_feedback": False,
+        "has_counterexample_minimization": False,
+        "has_replayable_regressions": False,
+        "has_positive_learning_curve": False,
+        "has_path_expansion": False,
+        "has_surface_expansion": False,
+        "requires_external_service": False,
+        "external_markers": [],
+    }
+    set_keys = {
+        "observed_attack_types",
+        "observed_surfaces",
+        "observed_operators",
+        "coverage_axes",
+        "signals",
+        "missing_required_attack_types",
+        "missing_required_surfaces",
+        "missing_required_operators",
+        "unminimized_counterexamples",
+        "unreplayed_counterexamples",
+        "external_markers",
+    }
+    sets: Dict[str, set[str]] = {key: set() for key in set_keys}
+    for payload in payloads:
+        summary = _as_dict(payload.get("summary"))
+        if not summary:
+            summary = _red_team_attack_evolution_summary_from_payload(payload)
+        sets["signals"].update(
+            _normalize_red_team_campaign_key(item)
+            for item in _as_list(payload.get("signals"))
+            if _normalize_red_team_campaign_key(item)
+        )
+        for key, signal in [
+            ("has_cross_round_feedback", "cross_round_feedback"),
+            ("has_counterexample_minimization", "counterexample_minimization"),
+            ("has_replayable_regressions", "replayable_regression"),
+            ("has_positive_learning_curve", "positive_learning_curve"),
+            ("has_path_expansion", "path_expansion"),
+            ("has_surface_expansion", "surface_expansion"),
+        ]:
+            if summary.get(key):
+                sets["signals"].add(signal)
+        for key in [
+            "seed_attack_count",
+            "mutation_round_count",
+            "mutation_count",
+            "successful_mutation_count",
+            "counterexample_count",
+            "minimized_replay_count",
+            "replay_case_count",
+            "verifier_count",
+            "feedback_signal_count",
+            "operator_count",
+            "coverage_axis_count",
+        ]:
+            merged[key] = max(
+                _as_int(merged.get(key)) or 0,
+                _as_int(summary.get(key)) or 0,
+            )
+        for key in [
+            "has_cross_round_feedback",
+            "has_counterexample_minimization",
+            "has_replayable_regressions",
+            "has_positive_learning_curve",
+            "has_path_expansion",
+            "has_surface_expansion",
+            "requires_external_service",
+        ]:
+            merged[key] = bool(merged[key] or summary.get(key))
+        for key in set_keys:
+            sets[key].update(
+                _normalize_red_team_campaign_key(item)
+                for item in _as_list(summary.get(key))
+                if _normalize_red_team_campaign_key(item)
+            )
+    for key, values in sets.items():
+        merged[key] = sorted(values)
+    merged["operator_count"] = max(
+        _as_int(merged.get("operator_count")) or 0,
+        len(sets["observed_operators"]),
+    )
+    merged["coverage_axis_count"] = max(
+        _as_int(merged.get("coverage_axis_count")) or 0,
+        len(sets["coverage_axes"]),
+    )
+    return merged
+
+
+def _red_team_attack_evolution_summary_from_payload(
+    payload: Mapping[str, Any],
+) -> Dict[str, Any]:
+    collections = {
+        key: [_as_dict(item) for item in _as_list(payload.get(key)) if _as_dict(item)]
+        for key in (
+            "seed_attacks",
+            "mutation_rounds",
+            "mutations",
+            "counterexamples",
+            "minimized_replays",
+            "replay_cases",
+            "verifiers",
+            "feedback",
+        )
+    }
+    records = [record for rows in collections.values() for record in rows]
+    attack_types = sorted(
+        {
+            _normalize_red_team_campaign_key(record.get("attack_type"))
+            for record in records
+            if _normalize_red_team_campaign_key(record.get("attack_type"))
+        }
+    )
+    surfaces = sorted(
+        {
+            _normalize_red_team_campaign_key(record.get("surface"))
+            for record in records
+            if _normalize_red_team_campaign_key(record.get("surface"))
+        }
+    )
+    operators = sorted(
+        {
+            _normalize_red_team_campaign_key(record.get("operator"))
+            for record in records
+            if _normalize_red_team_campaign_key(record.get("operator"))
+        }
+    )
+    signals = sorted(
+        {
+            _normalize_red_team_campaign_key(signal)
+            for record in records
+            for signal in _as_list(record.get("signals"))
+            if _normalize_red_team_campaign_key(signal)
+        }
+    )
+    minimized_from = {
+        str(record.get("minimized_from") or "")
+        for record in collections["minimized_replays"]
+        if str(record.get("minimized_from") or "")
+    }
+    replayed = {
+        str(record.get("counterexample_id") or record.get("parent_id") or "")
+        for record in collections["replay_cases"]
+        if str(record.get("counterexample_id") or record.get("parent_id") or "")
+    }
+    counterexample_ids = {
+        str(record.get("id") or "")
+        for record in collections["counterexamples"]
+        if str(record.get("id") or "")
+    }
+    external_markers = _red_team_adaptive_external_markers(records)
+    return {
+        "seed_attack_count": len(collections["seed_attacks"]),
+        "mutation_round_count": len(collections["mutation_rounds"]),
+        "mutation_count": len(collections["mutations"]),
+        "successful_mutation_count": sum(
+            1
+            for record in collections["mutations"]
+            if record.get("success") is True
+            or _normalize_red_team_campaign_key(record.get("status"))
+            in {"success", "passed", "verified", "counterexample"}
+        ),
+        "counterexample_count": len(collections["counterexamples"]),
+        "minimized_replay_count": len(collections["minimized_replays"]),
+        "replay_case_count": len(collections["replay_cases"]),
+        "verifier_count": len(collections["verifiers"]),
+        "feedback_signal_count": len(collections["feedback"]),
+        "operator_count": len(operators),
+        "coverage_axis_count": len(_as_list(payload.get("coverage_axes"))),
+        "observed_attack_types": attack_types,
+        "observed_surfaces": surfaces,
+        "observed_operators": operators,
+        "coverage_axes": [
+            _normalize_red_team_campaign_key(item)
+            for item in _as_list(payload.get("coverage_axes"))
+            if _normalize_red_team_campaign_key(item)
+        ],
+        "signals": signals,
+        "unminimized_counterexamples": sorted(counterexample_ids - minimized_from),
+        "unreplayed_counterexamples": sorted(counterexample_ids - replayed),
+        "has_cross_round_feedback": len(collections["mutation_rounds"]) >= 2
+        and bool(collections["feedback"]),
+        "has_counterexample_minimization": bool(collections["counterexamples"])
+        and bool(collections["minimized_replays"])
+        and not (counterexample_ids - minimized_from),
+        "has_replayable_regressions": bool(collections["replay_cases"])
+        and not (counterexample_ids - replayed),
+        "has_positive_learning_curve": "positive_learning_curve" in signals,
+        "has_path_expansion": len(operators) >= 2,
+        "has_surface_expansion": len(surfaces) >= 2,
+        "requires_external_service": bool(external_markers),
+        "external_markers": external_markers,
+    }
 
 
 def _red_team_campaign_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:

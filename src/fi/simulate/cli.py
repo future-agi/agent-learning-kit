@@ -41,6 +41,7 @@ from fi.simulate import (
     OptimizerTraceEnvironment,
     Persona,
     PersistentStateRedTeamEnvironment,
+    RedTeamAttackEvolutionEnvironment,
     RedTeamCampaignEnvironment,
     RedTeamReadinessEnvironment,
     RetrievalHookEnvironment,
@@ -84,6 +85,9 @@ REDTEAM_ENV_TYPES = frozenset(
         "adversarial_pack",
         "red_team_campaign",
         "redteam_campaign",
+        "red_team_attack_evolution",
+        "redteam_attack_evolution",
+        "attack_evolution",
         "red_team_readiness",
         "redteam_readiness",
     }
@@ -323,8 +327,11 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "optimizer_trace",
         "persistent_state_attack",
         "persistent_state_redteam",
+        "attack_evolution",
+        "red_team_attack_evolution",
         "red_team_campaign",
         "red_team_readiness",
+        "redteam_attack_evolution",
         "redteam_campaign",
         "redteam_readiness",
         "retrieval_hook",
@@ -840,6 +847,12 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             "memory_poisoning_lifecycle",
         }:
             environments.append(PersistentStateRedTeamEnvironment(payload))
+        elif env_type in {
+            "red_team_attack_evolution",
+            "redteam_attack_evolution",
+            "attack_evolution",
+        }:
+            environments.append(RedTeamAttackEvolutionEnvironment(payload))
         elif env_type in {"stateful_tool_world", "stateful_tool_world_benchmark"}:
             environments.append(StatefulToolWorldEnvironment(payload))
         elif env_type == "agent_memory_lineage":

@@ -70,6 +70,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "OptimizerTraceEnvironment",
     "OrchestrationTraceEnvironment",
     "PersistentStateRedTeamEnvironment",
+    "RedTeamAttackEvolutionEnvironment",
     "RetrievalHookEnvironment",
     "RetrievalMemoryEnvironment",
     "RedTeamCampaignEnvironment",
@@ -98,6 +99,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "load_pipecat_frame_log",
     "load_world_contract",
     "load_playwright_trace_export",
+    "load_red_team_attack_evolution_manifest",
     "load_red_team_campaign_manifest",
     "load_red_team_readiness_manifest",
     "load_framework_trace_export",
@@ -150,6 +152,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "normalize_world_contract",
     "normalize_stateful_tool_world_manifest",
     "normalize_playwright_trace_export",
+    "normalize_red_team_attack_evolution_manifest",
     "normalize_red_team_campaign_manifest",
     "normalize_red_team_readiness_manifest",
     "AttackDefinition",
@@ -4725,6 +4728,25 @@ def redteam_adaptive_loop_artifact(
     )
 
 
+def redteam_attack_evolution_artifact(
+    report: Any,
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    threshold: float = 0.7,
+    min_score: float = 0.9,
+) -> dict[str, Any]:
+    """Return a local attack-evolution artifact from a red-team report."""
+
+    from . import evals as _agent_evals
+
+    return _agent_evals.redteam_attack_evolution_report(
+        report,
+        config=config,
+        threshold=threshold,
+        min_score=min_score,
+    )
+
+
 def wrap_agent(*args: Any, **kwargs: Any) -> Any:
     return _simulate().wrap_agent(*args, **kwargs)
 
@@ -8333,6 +8355,7 @@ __all__ = [
     "behavior_entropy_artifact",
     "collaborative_competence_artifact",
     "redteam_adaptive_loop_artifact",
+    "redteam_attack_evolution_artifact",
     "build_agent_control_plane_run_manifest",
     "build_agent_integration_run_manifest",
     "build_autonomous_redteam_task_world_run_manifest",
