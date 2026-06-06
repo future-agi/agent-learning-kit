@@ -63,6 +63,9 @@ agent-learn eval examples/artifact_task_eval_suite.json \
 agent-learn eval-artifact examples/fixtures/task_artifacts/refund_task_run.json \
   --config examples/artifact_task_eval_config.json \
   --output artifacts/direct-artifact-eval.json
+agent-learn eval-task examples/task_evidence.json \
+  --eval-hook http://127.0.0.1:8080/eval/task \
+  --output artifacts/evaluation-hook-task.json
 agent-learn optimize-eval examples/artifact_task_optimization_suite.json \
   --output artifacts/artifact-task-optimization.json
 agent-learn optimize-eval examples/eval_suite_optimization.json \
@@ -509,6 +512,18 @@ AgentOptimizer. SDK entry points are
 `optimize.build_retrieval_hook_optimization_manifest()`, and
 `optimize.optimize_retrieval_hooks()`; generated artifacts work with
 `agent-learn report`, `agent-learn actions`, and `agent-learn action-run`.
+
+For task-specific external judges, evaluation hooks POST normalized task/run
+evidence to real HTTP evaluator endpoints with bearer/API-key env auth and
+record a redacted `evaluation_hook_trace` on every returned metric. Use
+`evals.build_evaluation_hook_config()` or
+`evals.evaluate_task_evidence_with_hook()` for direct scoring, or pass
+`--eval-hook` to `agent-learn eval-task` for promptfoo-style CLI usage. The
+`sdk_evaluation_hook_optimization.py` example lets AgentOptimizer search agent
+candidates against the live external metric; SDK entry points are
+`simulate.build_evaluation_hook_run_manifest()`,
+`optimize.build_evaluation_hook_optimization_manifest()`, and
+`optimize.optimize_evaluation_hooks()`.
 
 For saved task/run artifacts, pass artifact field-extraction candidates and
 fixed structured assertions. The SDK builds a promptfoo-style optimization
@@ -1010,6 +1025,14 @@ currentness/freshness flags, citations, status/latency traces, and redacted
 request metadata. The optimizer searches complete retrieval environment bundles
 so it can reject stale static context and missing auth before selecting the
 verified authenticated hook.
+
+The `sdk_evaluation_hook_optimization.py` example adds authenticated external
+evaluator hooks. Agent-report configs can declare `evaluation_hooks` that POST
+normalized case evidence to a real evaluator endpoint, accept returned
+`metrics` or a top-level `score`, and attach redacted endpoint/auth/status/
+latency metadata to each metric. The optimizer searches agent candidates while
+keeping the evaluator fixed as an executable metric source, and the same hook
+is available from `agent-learn eval-task --eval-hook`.
 
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,

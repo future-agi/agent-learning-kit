@@ -463,6 +463,90 @@ def build_task_evaluation_config(
     return config
 
 
+def build_evaluation_hook_config(
+    *,
+    task_description: str,
+    endpoint: str,
+    api_key_env: str = "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    metric_name: str = "external_task_quality",
+    expected_result: Optional[str] = None,
+    success_criteria: Sequence[str] = (),
+    required_tools: Sequence[str] = (),
+    available_tools: Sequence[str] = (),
+    threshold_metric_weight: float = 10.0,
+    metadata: Optional[Mapping[str, Any]] = None,
+    metric_weights: Optional[Mapping[str, float]] = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build task-evidence config that calls a redacted HTTP eval hook."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    weights = {
+        str(metric_name): float(threshold_metric_weight),
+        "task_completion": 1.0,
+        "secret_leakage": 1.0,
+        **{str(key): float(value) for key, value in dict(metric_weights or {}).items()},
+    }
+    return build_task_evaluation_config(
+        task_description=task_description,
+        expected_result=expected_result,
+        success_criteria=success_criteria,
+        required_tools=required_tools,
+        available_tools=available_tools,
+        metric_weights=weights,
+        evaluation_hooks=[
+            {
+                "name": str(metric_name),
+                "metric_name": str(metric_name),
+                "endpoint": str(endpoint),
+                "auth": {"type": "bearer", "token_env": str(api_key_env)}
+                if api_key_env
+                else {},
+                "metadata": {
+                    "source": "agent_learning.evals.build_evaluation_hook_config",
+                    **dict(metadata or {}),
+                },
+            }
+        ],
+        **extra,
+    )
+
+
+def evaluate_task_evidence_with_hook(
+    evidence: Mapping[str, Any],
+    *,
+    endpoint: str,
+    task_description: str,
+    api_key_env: str = "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    metric_name: str = "external_task_quality",
+    expected_result: Optional[str] = None,
+    success_criteria: Sequence[str] = (),
+    threshold: float = 0.7,
+    name: Optional[str] = None,
+    source_path: str | Path = ".",
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Evaluate arbitrary task evidence through a live HTTP eval hook."""
+
+    config = build_evaluation_hook_config(
+        task_description=task_description,
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        expected_result=expected_result,
+        success_criteria=success_criteria,
+        metadata=metadata,
+    )
+    return evaluate_task_evidence(
+        evidence,
+        config=config,
+        threshold=threshold,
+        name=name,
+        source_path=source_path,
+    )
+
+
 def build_task_evidence_artifact(
     evidence: Optional[Mapping[str, Any]] = None,
     *,
@@ -1029,6 +1113,7 @@ __all__ = [
     *_EVAL_EXPORTS,
     "AGENT_LEARNING_ARTIFACT_EVALUATION_KIND",
     "AGENT_LEARNING_TASK_EVIDENCE_KIND",
+    "build_evaluation_hook_config",
     "build_task_evaluation_config",
     "build_task_evidence_artifact",
     "build_eval_suite_manifest",
@@ -1038,6 +1123,7 @@ __all__ = [
     "evaluate_artifact_file",
     "evaluate_task_evidence",
     "evaluate_task_evidence_file",
+    "evaluate_task_evidence_with_hook",
     "load_artifact_file",
     "load_eval_suite_file",
     "optimize_eval_suite_file",

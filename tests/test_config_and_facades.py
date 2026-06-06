@@ -129,6 +129,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_task_run_manifest is not None
     assert simulate.build_external_agent_run_manifest is not None
     assert simulate.build_workflow_hook_run_manifest is not None
+    assert simulate.build_retrieval_hook_run_manifest is not None
+    assert simulate.build_evaluation_hook_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.build_realtime_run_manifest is not None
@@ -228,6 +230,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_workflow_hooks is not None
     assert optimize.build_retrieval_hook_optimization_manifest is not None
     assert optimize.optimize_retrieval_hooks is not None
+    assert optimize.build_evaluation_hook_optimization_manifest is not None
+    assert optimize.optimize_evaluation_hooks is not None
     assert optimize.build_component_optimization_manifest is not None
     assert optimize.optimize_component is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -9740,6 +9744,65 @@ def test_retrieval_hook_manifest_builds_research_backed_environment_candidates()
     assert environments[0].name == "retrieval_hook"
 
 
+def test_evaluation_hook_manifest_builds_research_backed_agent_candidates():
+    from agent_learning import evals, optimize, simulate
+
+    endpoint = "http://127.0.0.1:8768/eval/task"
+    manifest = optimize.build_evaluation_hook_optimization_manifest(
+        name="sdk-evaluation-hook-optimization",
+        endpoint=endpoint,
+        required_env=["AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"],
+        api_key_env="AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"]
+    assert manifest["optimization"]["target"]["layers"] == [
+        "evaluator",
+        "harness",
+        "security",
+        "integration",
+        "planner",
+    ]
+    sources = manifest["optimization"]["target"]["metadata"]["research_sources"]
+    assert len(sources) >= 4
+    assert {source["year"] for source in sources} == {2026}
+    assert {
+        "https://arxiv.org/abs/2605.11378",
+        "https://arxiv.org/abs/2604.12162",
+        "https://arxiv.org/abs/2603.27355",
+    } <= {source["url"] for source in sources}
+
+    candidates = manifest["optimization"]["target"]["search_space"]["agent"]
+    assert len(candidates) == 2
+    assert candidates[0]["metadata"]["candidate_profile"] == (
+        "generic_candidate_without_eval_alignment"
+    )
+    assert candidates[-1]["metadata"]["candidate_profile"] == (
+        "policy_grounded_external_eval_candidate"
+    )
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["evaluation_hooks"][0]["endpoint"] == endpoint
+    assert eval_config["evaluation_hooks"][0]["auth"] == {
+        "type": "bearer",
+        "token_env": "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    }
+    assert eval_config["metric_weights"]["external_task_quality"] == 10.0
+
+    run_manifest = simulate.build_evaluation_hook_run_manifest(endpoint=endpoint)
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert run_manifest["simulation"]["environments"] == []
+    assert run_manifest["evaluation"]["agent_report"]["config"][
+        "evaluation_hooks"
+    ][0]["endpoint"] == endpoint
+
+    hook_config = evals.build_evaluation_hook_config(
+        task_description="Evaluate a custom task.",
+        endpoint=endpoint,
+    )
+    assert hook_config["evaluation_hooks"][0]["endpoint"] == endpoint
+    assert hook_config["metric_weights"]["external_task_quality"] == 10.0
+
+
 def test_sdk_workflow_hook_optimization_example_runs(monkeypatch, tmp_path):
     key = "real-local-sdk-workflow-hook-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY", key)
@@ -9875,6 +9938,129 @@ def test_sdk_retrieval_hook_optimization_example_runs(monkeypatch, tmp_path):
         "cite_sources",
         "retrieval_memory_status",
     ]
+
+
+def test_sdk_evaluation_hook_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-evaluation-hook-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY", key)
+    monkeypatch.delenv("AGENT_LEARNING_SDK_EVALUATION_HOOK_ENDPOINT", raising=False)
+    example_path = PROJECT_ROOT / "examples" / "sdk_evaluation_hook_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_evaluation_hook_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"]
+    output_path = tmp_path / "sdk-evaluation-hook-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= result["summary"]["threshold"]
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"agent"}
+    assert best_history["metrics"]["external_task_quality"] == pytest.approx(1.0)
+    assert best_history["metrics"]["secret_leakage"] == pytest.approx(1.0)
+    best_agent = result["optimization"]["best_config"]["agent"]
+    assert best_agent["metadata"]["candidate_profile"] == (
+        "policy_grounded_external_eval_candidate"
+    )
+    case = best_history["report"]["results"][0]
+    agent_report = case["evaluation"]["agent_report"]
+    metric = next(
+        item
+        for item in agent_report["metrics"]
+        if item["name"] == "external_task_quality"
+    )
+    trace = metric["details"]["evaluation_hook_trace"]
+    assert trace["status_code"] == 200
+    assert trace["success"] is True
+    assert trace["auth"]["redacted"] is True
+    assert trace["auth"]["token_env"] == "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+    assert key not in json.dumps(trace, sort_keys=True, default=str)
+
+
+def test_cli_eval_task_supports_authenticated_evaluation_hook(
+    monkeypatch,
+    tmp_path,
+):
+    key = "real-local-cli-evaluation-hook-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / "sdk_evaluation_hook_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_evaluation_hook_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    evidence_path = tmp_path / "task-evidence.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "name": "cli-eval-hook-task",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "The refund is approved because the current policy "
+                            "allows approval when support limits are satisfied, "
+                            "the decision is source grounded, and no customer "
+                            "secret is disclosed."
+                        ),
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "cli-eval-hook-result.json"
+    with module._local_evaluation_hook(key) as endpoint:
+        assert (
+            main(
+                [
+                    "eval-task",
+                    str(evidence_path),
+                    "--eval-hook",
+                    endpoint,
+                    "--eval-hook-api-key-env",
+                    "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+                    "--output",
+                    str(output_path),
+                ]
+            )
+            == 0
+        )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "passed"
+    assert payload["summary"]["metric_averages"]["external_task_quality"] == (
+        pytest.approx(1.0)
+    )
+    case = payload["evaluation"]["cases"][0]
+    metric = next(
+        item for item in case["metrics"] if item["name"] == "external_task_quality"
+    )
+    trace = metric["details"]["evaluation_hook_trace"]
+    assert trace["auth"]["redacted"] is True
+    assert trace["auth"]["token_env"] == "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+    assert key not in json.dumps(payload, sort_keys=True, default=str)
 
 
 def test_sdk_stateful_tool_world_optimization_example_runs(monkeypatch, tmp_path):

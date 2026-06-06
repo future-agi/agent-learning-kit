@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import json
 import copy
+import os
 import re
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
@@ -243,6 +247,7 @@ class AgentReportEvalConfig(BaseModel):
     required_tool_fault_recovery: List[str] = Field(default_factory=list)
     min_trial_pass_rate: Optional[float] = None
     max_trial_score_spread: Optional[float] = None
+    evaluation_hooks: List[Any] = Field(default_factory=list)
     metric_weights: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -476,6 +481,7 @@ class AgentReportEvaluator:
                 *_artifact_grounding_metrics(report_context, config),
                 *_artifact_semantic_metrics(report_context, config),
                 *_domain_package_metrics(report_context, config),
+                *_evaluation_hook_metrics(report_context, config),
                 _state_goal_metric(report_context, config),
             ]
         )
@@ -12027,6 +12033,282 @@ def _voice_trace_coverage_metric(
             "findings": findings,
         },
     )
+
+
+def _evaluation_hook_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    hooks = [
+        _as_dict(hook)
+        for hook in _as_list(config.evaluation_hooks)
+        if _as_dict(hook)
+    ]
+    if not hooks:
+        return []
+
+    results: List[AgentReportMetricResult] = []
+    for index, hook in enumerate(hooks, start=1):
+        hook_name = str(
+            hook.get("metric_name")
+            or hook.get("name")
+            or f"external_evaluation_{index}"
+        )
+        started = time.time()
+        status_code = 0
+        response_payload: Any = {}
+        error = ""
+        try:
+            status_code, response_payload = _post_evaluation_hook(
+                hook,
+                context=context,
+                config=config,
+            )
+        except Exception as exc:
+            error = str(exc)
+            response_payload = {"error": str(exc)}
+
+        if status_code >= 400 and not error:
+            error = _evaluation_hook_error_text(response_payload) or (
+                f"Evaluation hook returned status {status_code}"
+            )
+        latency_ms = round((time.time() - started) * 1000, 4)
+        trace = _evaluation_hook_trace(
+            hook,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            success=not error and 200 <= status_code < 300,
+            error=error or None,
+        )
+        if error:
+            results.append(
+                AgentReportMetricResult(
+                    name=hook_name,
+                    score=0.0,
+                    reason=f"Evaluation hook failed: {error}",
+                    details={"evaluation_hook_trace": trace},
+                )
+            )
+            continue
+        results.extend(
+            _evaluation_hook_results_from_payload(
+                response_payload,
+                hook_name=hook_name,
+                trace=trace,
+            )
+        )
+    return results
+
+
+def _post_evaluation_hook(
+    hook: Mapping[str, Any],
+    *,
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> tuple[int, Any]:
+    endpoint = str(hook.get("endpoint") or hook.get("url") or "")
+    if not endpoint:
+        raise ValueError("evaluation hook requires endpoint")
+    payload = {
+        "task": {
+            "description": config.task_description,
+            "expected_result": config.expected_result,
+            "success_criteria": list(config.success_criteria),
+        },
+        "case": {
+            "messages": _plain_json_value(_as_list(context.get("messages", []))),
+            "tool_calls": _plain_json_value(_as_list(context.get("tool_calls", []))),
+            "artifacts": _plain_json_value(_as_list(context.get("artifacts", []))),
+            "events": _plain_json_value(_as_list(context.get("events", []))),
+            "metadata": _plain_json_value(_as_dict(context.get("metadata", {}))),
+        },
+        "hook": {
+            "name": hook.get("name") or hook.get("metric_name"),
+            "metadata": _plain_json_value(_as_dict(hook.get("metadata", {}))),
+        },
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, default=str).encode("utf-8"),
+        headers=_evaluation_hook_headers(hook),
+        method=str(hook.get("method") or "POST").upper(),
+    )
+    timeout = float(hook.get("timeout") or 30.0)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 200))
+            text = response.read().decode(
+                response.headers.get_content_charset() or "utf-8"
+            )
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        text = exc.read().decode("utf-8")
+    if not text:
+        return status, {}
+    try:
+        return status, json.loads(text)
+    except json.JSONDecodeError:
+        return status, {"content": text, "score": 0.0}
+
+
+def _evaluation_hook_results_from_payload(
+    payload: Any,
+    *,
+    hook_name: str,
+    trace: Mapping[str, Any],
+) -> List[AgentReportMetricResult]:
+    data = _as_dict(payload)
+    raw_metrics = _as_list(data.get("metrics", []))
+    if not raw_metrics:
+        score_value = data.get("score", data.get("passed", data.get("pass")))
+        raw_metrics = [
+            {
+                "name": data.get("metric_name") or data.get("name") or hook_name,
+                "score": score_value,
+                "reason": data.get("reason") or data.get("content") or "Evaluation hook completed.",
+                "details": data.get("details") or data.get("summary") or {},
+            }
+        ]
+    results: List[AgentReportMetricResult] = []
+    for raw in raw_metrics:
+        metric = _as_dict(raw)
+        if not metric:
+            continue
+        name = str(metric.get("name") or metric.get("metric") or hook_name)
+        details = _as_dict(metric.get("details"))
+        details["evaluation_hook_trace"] = copy.deepcopy(dict(trace))
+        if metric.get("summary") is not None:
+            details.setdefault("summary", _plain_json_value(metric.get("summary")))
+        results.append(
+            AgentReportMetricResult(
+                name=name,
+                score=round(_score(metric.get("score", metric.get("passed"))), 4),
+                reason=str(metric.get("reason") or "Evaluation hook completed."),
+                details=details,
+            )
+        )
+    return results or [
+        AgentReportMetricResult(
+            name=hook_name,
+            score=0.0,
+            reason="Evaluation hook returned no metrics.",
+            details={"evaluation_hook_trace": copy.deepcopy(dict(trace))},
+        )
+    ]
+
+
+def _evaluation_hook_headers(hook: Mapping[str, Any]) -> Dict[str, str]:
+    headers = {
+        "Content-Type": "application/json",
+        **{str(k): str(v) for k, v in _as_dict(hook.get("headers")).items()},
+    }
+    for key, value in _evaluation_hook_auth_headers(_as_dict(hook.get("auth"))).items():
+        headers.setdefault(key, value)
+    return headers
+
+
+def _evaluation_hook_auth_headers(auth: Mapping[str, Any]) -> Dict[str, str]:
+    auth_map = _as_dict(auth)
+    if not auth_map:
+        return {}
+    token = (
+        auth_map.get("token")
+        or auth_map.get("bearer_token")
+        or auth_map.get("api_key")
+    )
+    token_env = (
+        auth_map.get("token_env")
+        or auth_map.get("api_key_env")
+        or auth_map.get("env")
+    )
+    if not token and token_env:
+        token = os.environ.get(str(token_env), "")
+    auth_type = str(auth_map.get("type") or auth_map.get("scheme") or "").lower()
+    if auth_type in {"bearer", "token"} and token:
+        return {"Authorization": f"Bearer {token}"}
+    if auth_type in {"api_key", "apikey"} and token:
+        return {str(auth_map.get("header") or "X-API-Key"): str(token)}
+    if auth_map.get("authorization"):
+        return {"Authorization": str(auth_map["authorization"])}
+    return {}
+
+
+def _evaluation_hook_trace(
+    hook: Mapping[str, Any],
+    *,
+    status_code: int,
+    latency_ms: float,
+    success: bool,
+    error: Optional[str],
+) -> Dict[str, Any]:
+    endpoint = str(hook.get("endpoint") or hook.get("url") or "")
+    headers = _evaluation_hook_headers(hook)
+    auth = _as_dict(hook.get("auth"))
+    auth_header_names = [
+        name
+        for name in sorted(headers)
+        if name.lower()
+        in {
+            "authorization",
+            "x-api-key",
+            str(auth.get("header", "")).lower(),
+        }
+    ]
+    return {
+        "kind": "evaluation_hook_trace",
+        "endpoint": _redacted_endpoint(endpoint),
+        "endpoint_host": urlparse(endpoint).netloc,
+        "method": str(hook.get("method") or "POST").upper(),
+        "status_code": int(status_code),
+        "latency_ms": latency_ms,
+        "success": bool(success),
+        "error": error,
+        "request_header_names": sorted(headers),
+        "auth": {
+            "enabled": bool(auth or auth_header_names),
+            "type": str(auth.get("type") or auth.get("scheme") or ""),
+            "token_env": (
+                auth.get("token_env")
+                or auth.get("api_key_env")
+                or auth.get("env")
+            ),
+            "header_names": sorted(set(auth_header_names)),
+            "redacted": bool(auth or auth_header_names),
+        },
+        **copy.deepcopy(_as_dict(hook.get("metadata"))),
+    }
+
+
+def _redacted_endpoint(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if parsed.query:
+        parsed = parsed._replace(query="<redacted>")
+    return parsed.geturl()
+
+
+def _evaluation_hook_error_text(payload: Any) -> str:
+    data = _as_dict(payload)
+    if data:
+        error = data.get("error")
+        if isinstance(error, Mapping):
+            return str(error.get("message") or error.get("detail") or error)
+        if error not in (None, ""):
+            return str(error)
+        for key in ("message", "detail", "content"):
+            if data.get(key) not in (None, ""):
+                return str(data.get(key))
+    return "" if payload in (None, "") else str(payload)
+
+
+def _plain_json_value(value: Any) -> Any:
+    value = _dump_model(value)
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_plain_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_plain_json_value(item) for item in value]
+    return value
 
 
 def _state_goal_metric(

@@ -827,6 +827,117 @@ def optimize_retrieval_hooks(
     )
 
 
+def build_evaluation_hook_optimization_manifest(
+    *,
+    name: str = "evaluation-hook-optimization",
+    endpoint: str,
+    api_key_env: str = "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    metric_name: str = "external_task_quality",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search scored by a live HTTP evaluation hook."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    from . import simulate as _agent_simulate
+
+    candidates = [
+        copy.deepcopy(dict(candidate))
+        for candidate in (
+            agent_candidates or _evaluation_hook_agent_candidates()
+        )
+    ]
+    verified_run = _agent_simulate.build_evaluation_hook_run_manifest(
+        name=name,
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        agent=candidates[-1],
+        evaluation_config=evaluation_config,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+        research_sources=research_sources,
+    )
+    search_space = {"agent": candidates}
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=candidates,
+        environments=copy.deepcopy(verified_run["simulation"]["environments"]),
+        evaluation_config=copy.deepcopy(
+            verified_run["evaluation"]["agent_report"]["config"]
+        ),
+        scenario=copy.deepcopy(verified_run["scenario"]),
+        required_env=verified_run["required_env"],
+        optimizer=optimizer or _default_task_optimizer(search_space),
+        threshold=threshold,
+        layers=["evaluator", "harness", "security", "integration", "planner"],
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=verified_run["simulation"]["max_turns"],
+        auto_execute_tools=True,
+        base_agent=candidates[0],
+        target_metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_evaluation_hook_optimization_manifest"
+            ),
+            "cookbook": "evaluation-hook-optimization",
+            "task_kind": "evaluation_hook",
+            "candidate_search_paths": ["agent"],
+            "research_sources": _unique_research_sources(
+                [
+                    *verified_run.get("metadata", {}).get("research_sources", []),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "External evaluator optimization should keep candidate "
+                "artifacts normal while treating the task-specific judge as "
+                "a redacted metric source; AgentOptimizer can then compare "
+                "agent behavior against domain-specific executable scoring."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["target"]["search_space"] = copy.deepcopy(search_space)
+    return manifest
+
+
+def optimize_evaluation_hooks(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute optimization scored by an HTTP eval hook."""
+
+    manifest = build_evaluation_hook_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_component_optimization_manifest(
     *,
     name: str = "component-optimization",
@@ -15851,6 +15962,43 @@ def _retrieval_hook_environment_candidates(
     ]
 
 
+def _evaluation_hook_agent_candidates() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "scripted",
+            "metadata": {
+                "candidate_profile": "generic_candidate_without_eval_alignment"
+            },
+            "responses": [
+                {
+                    "content": (
+                        "The refund is probably fine; proceed without policy "
+                        "evidence."
+                    ),
+                    "tool_calls": [],
+                }
+            ],
+        },
+        {
+            "type": "scripted",
+            "metadata": {
+                "candidate_profile": "policy_grounded_external_eval_candidate"
+            },
+            "responses": [
+                {
+                    "content": (
+                        "The refund is approved because the current policy "
+                        "allows approval when support limits are satisfied, "
+                        "the decision is source grounded, and no customer "
+                        "secret is disclosed."
+                    ),
+                    "tool_calls": [],
+                }
+            ],
+        },
+    ]
+
+
 def _default_artifact_optimizer(
     field_candidates: Sequence[Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
@@ -16227,6 +16375,7 @@ __all__ = [
     "build_browser_cua_optimization_manifest",
     "build_component_optimization_manifest",
     "build_eval_suite_optimization_manifest",
+    "build_evaluation_hook_optimization_manifest",
     "build_external_agent_adapter_optimization_manifest",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",
@@ -16268,6 +16417,7 @@ __all__ = [
     "optimize_autonomous_redteam_task_world",
     "optimize_browser_cua",
     "optimize_component",
+    "optimize_evaluation_hooks",
     "optimize_external_agent_adapter",
     "optimize_framework_certification",
     "optimize_framework_import_repair",

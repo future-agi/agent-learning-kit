@@ -703,6 +703,82 @@ def build_retrieval_hook_run_manifest(
     )
 
 
+def build_evaluation_hook_run_manifest(
+    *,
+    name: str = "evaluation-hook-run",
+    endpoint: str,
+    api_key_env: str = "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    metric_name: str = "external_task_quality",
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a runnable manifest scored by an authenticated HTTP eval hook."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    eval_config = copy.deepcopy(
+        dict(
+            evaluation_config
+            or _evaluation_hook_evaluation_config(
+                endpoint=endpoint,
+                api_key_env=api_key_env,
+                metric_name=metric_name,
+            )
+        )
+    )
+    env_required = [api_key_env] if api_key_env else []
+    return build_task_run_manifest(
+        name=name,
+        agent=copy.deepcopy(dict(agent or _evaluation_hook_agent(strong=True))),
+        task_description=eval_config["task_description"],
+        expected_result=eval_config.get("expected_result"),
+        scenario=scenario,
+        environments=[],
+        required_env=_unique_strings([*required_env, *env_required]),
+        available_tools=[],
+        required_tools=[],
+        success_criteria=eval_config.get("success_criteria", []),
+        evaluation_config=eval_config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=True,
+        metadata={
+            "source": "agent_learning.simulate.build_evaluation_hook_run_manifest",
+            "cookbook": "evaluation-hook-adapter",
+            "task_kind": "evaluation_hook",
+            "research_sources": _unique_research_sources(
+                [
+                    *_evaluation_hook_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Custom evaluator integration should be a first-class "
+                "metric source: candidate runs remain normal simulation "
+                "artifacts, while external task-specific judges return "
+                "redacted metric evidence that AgentOptimizer can score."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+
 def build_realtime_run_manifest(
     *,
     name: str,
@@ -3435,6 +3511,97 @@ def _retrieval_hook_research_sources() -> list[dict[str, Any]]:
             "year": 2026,
             "url": "https://arxiv.org/abs/2603.14778",
             "used_for": "top-k as a first-class variable with privacy-preserving retrieval traces",
+        },
+    ]
+
+
+def _evaluation_hook_agent(*, strong: bool) -> dict[str, Any]:
+    content = (
+        "The refund is approved because the current policy allows approval "
+        "when support limits are satisfied, the decision is source grounded, "
+        "and no customer secret is disclosed."
+        if strong
+        else "The refund is probably fine; proceed without policy evidence."
+    )
+    return {
+        "type": "scripted",
+        "metadata": {
+            "candidate_profile": (
+                "policy_grounded_external_eval_candidate"
+                if strong
+                else "generic_candidate_without_eval_alignment"
+            )
+        },
+        "responses": [{"content": content, "tool_calls": []}],
+    }
+
+
+def _evaluation_hook_evaluation_config(
+    *,
+    endpoint: str,
+    api_key_env: str,
+    metric_name: str,
+) -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Evaluate a refund decision with a live task-specific external "
+            "evaluation hook."
+        ),
+        "expected_result": (
+            "The refund is approved because the current policy allows approval "
+            "when support limits are satisfied, the decision is source "
+            "grounded, and no customer secret is disclosed."
+        ),
+        "success_criteria": [
+            "policy allows approval",
+            "support limits are satisfied",
+            "source grounded",
+            "no customer secret disclosed",
+        ],
+        "evaluation_hooks": [
+            {
+                "name": str(metric_name),
+                "metric_name": str(metric_name),
+                "endpoint": str(endpoint),
+                "auth": {"type": "bearer", "token_env": str(api_key_env)}
+                if api_key_env
+                else {},
+                "metadata": {"cookbook": "evaluation-hook-adapter"},
+            }
+        ],
+        "metric_weights": {
+            str(metric_name): 10.0,
+            "task_completion": 1.0,
+            "secret_leakage": 2.0,
+        },
+    }
+
+
+def _evaluation_hook_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "An Empirical Study of Automating Agent Evaluation",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.11378",
+            "used_for": "trace-based agent evaluation artifacts and executable eval skills",
+        },
+        {
+            "title": "AlphaEval: Evaluating Agents in Production",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.12162",
+            "used_for": "production-grounded task-specific evaluator composition",
+        },
+        {
+            "title": "LLM Readiness Harness: Evaluation, Observability, and CI Gates for LLM/RAG Applications",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.27355",
+            "used_for": "minimal evaluation API contracts, observability, and CI gates",
+        },
+        {
+            "title": "MARS: Modular Agent with Reflective Search for Automated AI Research",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.02660",
+            "used_for": "budget-aware evaluation and performance attribution across candidates",
         },
     ]
 
@@ -6635,6 +6802,7 @@ __all__ = [
     "build_stateful_tool_world_environments",
     "build_stateful_tool_world_run_manifest",
     "build_task_run_manifest",
+    "build_evaluation_hook_run_manifest",
     "build_retrieval_hook_run_manifest",
     "build_workflow_hook_run_manifest",
     "build_workspace_observability_run_manifest",

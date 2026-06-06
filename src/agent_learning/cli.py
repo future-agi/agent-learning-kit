@@ -847,6 +847,28 @@ def _eval_task(args: Sequence[str]) -> int:
     evidence_path = Path(parsed.evidence).expanduser().resolve()
     try:
         config = evals.load_artifact_file(parsed.config) if parsed.config else None
+        if parsed.eval_hook:
+            config = dict(config or {})
+            config.setdefault("task_description", "Evaluate task evidence")
+            hooks = list(config.get("evaluation_hooks") or [])
+            hooks.append(
+                {
+                    "name": parsed.eval_hook_metric_name,
+                    "metric_name": parsed.eval_hook_metric_name,
+                    "endpoint": parsed.eval_hook,
+                    "auth": {
+                        "type": "bearer",
+                        "token_env": parsed.eval_hook_api_key_env,
+                    }
+                    if parsed.eval_hook_api_key_env
+                    else {},
+                    "metadata": {"source": "agent-learn eval-task"},
+                }
+            )
+            config["evaluation_hooks"] = hooks
+            weights = dict(config.get("metric_weights") or {})
+            weights.setdefault(parsed.eval_hook_metric_name, 10.0)
+            config["metric_weights"] = weights
         payload = evals.evaluate_task_evidence_file(
             evidence_path,
             config=config,
@@ -1456,6 +1478,21 @@ def _add_eval_task_args(parser: argparse.ArgumentParser) -> None:
         "--name",
         default=None,
         help="Override the task evidence evaluation run name.",
+    )
+    parser.add_argument(
+        "--eval-hook",
+        default=None,
+        help="POST task evidence to an authenticated external eval hook endpoint.",
+    )
+    parser.add_argument(
+        "--eval-hook-api-key-env",
+        default="AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+        help="Environment variable containing the eval hook bearer token.",
+    )
+    parser.add_argument(
+        "--eval-hook-metric-name",
+        default="external_task_quality",
+        help="Metric name to use when the hook returns a top-level score.",
     )
     parser.add_argument(
         "--quiet",
