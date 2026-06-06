@@ -10675,6 +10675,16 @@ def test_world_hooks_alias_uses_native_world_model_arena():
         "stateful_tool_world",
         "world_contract",
     ]
+    contract = candidates[-1][0]["data"]["world_hooks_contract"]
+    assert contract["kind"] == "agent-learning.world-hooks-contract.v1"
+    assert contract["mode"] == "native_world_state_hooks"
+    assert contract["runtime"] == "in_process"
+    assert contract["requires_external_service"] is False
+    assert {hook["name"] for hook in contract["hooks"]} == {
+        "stateful_tool_world_status",
+        "localize_temporal_takeover",
+        "apply_world_transition",
+    }
     assert {"endpoint", "auth"} & _nested_keys(manifest) == set()
 
 
@@ -10721,6 +10731,7 @@ def test_world_hooks_optimization_emits_native_world_hook_proof(
     } == {
         "native_no_external_hook",
         "world_model_verifier_present",
+        "world_hooks_contract_closed",
         "state_transitions_closed",
         "world_contract_invariants_closed",
         "adversarial_pressure_closed",
@@ -10728,6 +10739,9 @@ def test_world_hooks_optimization_emits_native_world_hook_proof(
         "metric_evidence_closed",
     }
     assert result["optimization"]["world_hook_proof"] == proof
+    assert proof["evidence"]["selected_metrics"]["world_hook_contract_quality"] == (
+        pytest.approx(1.0)
+    )
 
 
 def test_external_http_agent_manifest_builds_research_backed_adapter_candidates():
@@ -11422,6 +11436,7 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_history["score"] == pytest.approx(1.0)
     assert set(best_history["patch"]) == {"simulation.environments"}
+    assert best_history["metrics"]["world_hook_contract_quality"] == pytest.approx(1.0)
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
     best_env = result["optimization"]["best_config"]["simulation"]["environments"][0]
     assert best_env["data"]["metadata"]["candidate_profile"] == (
@@ -11429,6 +11444,7 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_env["data"]["world_model"]["requires_external_service"] is False
     assert best_env["data"]["world_model"]["level"] == "l3_evolver"
+    assert best_env["data"]["world_hooks_contract"]["requires_external_service"] is False
 
     state = best_history["report"]["results"][0]["metadata"]["environment_state"]
     assert {"stateful_tool_world", "world_contract"} <= set(state)

@@ -183,6 +183,7 @@ class AgentReportEvalConfig(BaseModel):
     streaming_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_world_contract: List[str] = Field(default_factory=list)
     world_contract_quality: Dict[str, Any] = Field(default_factory=dict)
+    world_hook_contract_quality: Dict[str, Any] = Field(default_factory=dict)
     required_adversarial_attacks: List[str] = Field(default_factory=list)
     adversarial_resilience: Dict[str, Any] = Field(default_factory=dict)
     required_red_team_campaign: List[str] = Field(default_factory=list)
@@ -470,6 +471,7 @@ class AgentReportEvaluator:
                 _streaming_interaction_quality_metric(report_context, config),
                 _world_contract_coverage_metric(report_context, config),
                 _world_contract_quality_metric(report_context, config),
+                *_world_hook_contract_quality_metrics(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_action_outcome_metric(report_context, config),
                 _browser_grounding_quality_metric(report_context, config),
@@ -7483,6 +7485,225 @@ def _world_contract_quality_metric(
                 "summary": summary,
                 "state": state,
             },
+        },
+    )
+
+
+def _world_hook_contract_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.world_hook_contract_quality:
+        return []
+    return [
+        _world_hook_contract_quality_metric(
+            context,
+            config.world_hook_contract_quality,
+        )
+    ]
+
+
+def _world_hook_contract_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    contracts = _world_hook_contracts_from_context(context)
+    observed = _world_hook_contract_summary(contracts)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    _append_world_hook_contract_check(
+        checks,
+        findings,
+        check="contract_present",
+        expected={">=": 1},
+        actual=observed["contract_count"],
+        match=observed["contract_count"] >= 1,
+        finding_type="world_hook_contract_missing",
+    )
+
+    expected_kind = requirements.get("kind") or "agent-learning.world-hooks-contract.v1"
+    normalized_kind = _normalize_world_hook_contract_key(expected_kind)
+    _append_world_hook_contract_check(
+        checks,
+        findings,
+        check="kind",
+        expected=normalized_kind,
+        actual=observed["kinds"],
+        match=normalized_kind in observed["kinds"],
+        finding_type="world_hook_contract_kind_missing",
+    )
+
+    for requirement_key, observed_key, finding_type in (
+        ("mode", "modes", "world_hook_contract_mode_mismatch"),
+        ("runtime", "runtimes", "world_hook_contract_runtime_mismatch"),
+    ):
+        expected = requirements.get(requirement_key) or requirements.get(
+            f"required_{requirement_key}"
+        )
+        if expected in (None, "", [], {}):
+            continue
+        normalized = _normalize_world_hook_contract_key(expected)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=normalized,
+            actual=observed[observed_key],
+            match=normalized in observed[observed_key],
+            finding_type=finding_type,
+        )
+
+    if requirements.get("require_no_external_service") is not None:
+        required = bool(requirements.get("require_no_external_service"))
+        values = observed["requires_external_service_values"]
+        local_declared = False in values
+        external_present = True in values
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="require_no_external_service",
+            expected=required,
+            actual=values,
+            match=(local_declared and not external_present) if required else True,
+            finding_type="world_hook_contract_external_service_required",
+        )
+
+    forbidden_keys = set(
+        _string_list(
+            requirements.get("forbidden_keys")
+            or (
+                ["endpoint", "auth", "api_key", "secret", "token"]
+                if requirements.get("require_no_external_service")
+                else []
+            )
+        )
+    )
+    if forbidden_keys:
+        present = sorted(_world_hook_contract_present_nested_keys(contracts, forbidden_keys))
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="forbidden_keys",
+            expected={"absent": sorted(forbidden_keys)},
+            actual=present,
+            match=not present,
+            finding_type="world_hook_contract_external_dependency_present",
+        )
+
+    for hook in _string_list(requirements.get("required_hooks")):
+        normalized = _normalize_world_hook_contract_key(hook)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_hook",
+            expected=normalized,
+            actual=observed["hook_names"],
+            match=normalized in observed["hook_names"],
+            finding_type="world_hook_contract_hook_missing",
+        )
+
+    for hook_type in _string_list(requirements.get("required_hook_types")):
+        normalized = _normalize_world_hook_contract_key(hook_type)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_hook_type",
+            expected=normalized,
+            actual=observed["hook_types"],
+            match=normalized in observed["hook_types"],
+            finding_type="world_hook_contract_hook_type_missing",
+        )
+
+    for hook in _string_list(requirements.get("required_callable_hooks")):
+        normalized = _normalize_world_hook_contract_key(hook)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_callable_hook",
+            expected=normalized,
+            actual=observed["callable_hook_names"],
+            match=normalized in observed["callable_hook_names"],
+            finding_type="world_hook_contract_callable_hook_missing",
+        )
+
+    for output in _string_list(requirements.get("required_output_channels")):
+        normalized = _normalize_world_hook_contract_key(output)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_output_channel",
+            expected=normalized,
+            actual=observed["output_channels"],
+            match=normalized in observed["output_channels"],
+            finding_type="world_hook_contract_output_channel_missing",
+        )
+
+    for scope in _string_list(requirements.get("required_state_scopes")):
+        normalized = _normalize_world_hook_contract_key(scope)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_state_scope",
+            expected=normalized,
+            actual=observed["state_scopes"],
+            match=normalized in observed["state_scopes"],
+            finding_type="world_hook_contract_state_scope_missing",
+        )
+
+    for surface in _string_list(requirements.get("required_surfaces")):
+        normalized = _normalize_world_hook_contract_key(surface)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_surface",
+            expected=normalized,
+            actual=observed["surfaces"],
+            match=normalized in observed["surfaces"],
+            finding_type="world_hook_contract_surface_missing",
+        )
+
+    for replay in _string_list(requirements.get("required_replay_semantics")):
+        normalized = _normalize_world_hook_contract_key(replay)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_replay_semantic",
+            expected=normalized,
+            actual=observed["replay_semantics"],
+            match=normalized in observed["replay_semantics"],
+            finding_type="world_hook_contract_replay_semantic_missing",
+        )
+
+    for evidence in _string_list(requirements.get("required_evidence_requirements")):
+        normalized = _normalize_world_hook_contract_key(evidence)
+        _append_world_hook_contract_check(
+            checks,
+            findings,
+            check="required_evidence_requirement",
+            expected=normalized,
+            actual=observed["evidence_requirements"],
+            match=normalized in observed["evidence_requirements"],
+            finding_type="world_hook_contract_evidence_requirement_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="world_hook_contract_quality",
+            score=1.0,
+            reason="No expected world hook contract checks provided.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="world_hook_contract_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} world hook contract check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
         },
     )
 
@@ -25740,6 +25961,186 @@ def _normalize_world_contract_key(value: Any) -> str:
         "state_update": "state",
     }
     return aliases.get(normalized, normalized)
+
+
+def _world_hook_contracts_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    contracts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_contract(value: Any) -> None:
+        contract = _as_dict(value)
+        if not contract:
+            return
+        kind = str(contract.get("kind") or "").lower()
+        if kind != "agent-learning.world-hooks-contract.v1":
+            return
+        signature = json.dumps(contract, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        contracts.append(contract)
+
+    def append_from_stateful_payload(payload: Any) -> None:
+        stateful = _as_dict(payload)
+        append_contract(stateful.get("world_hooks_contract"))
+        append_contract(_as_dict(stateful.get("metadata")).get("world_hooks_contract"))
+
+    final_state = _extract_final_state(context)
+    append_from_stateful_payload(final_state.get("stateful_tool_world"))
+
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    append_from_stateful_payload(metadata_state.get("stateful_tool_world"))
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        append_contract(data.get("world_hooks_contract"))
+        append_contract(metadata.get("world_hooks_contract"))
+        if str(data.get("kind") or metadata.get("kind") or "").lower() == "stateful_tool_world":
+            append_from_stateful_payload(data)
+
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        metadata = _as_dict(_get(event, "metadata", {}))
+        append_contract(payload.get("world_hooks_contract"))
+        append_contract(metadata.get("world_hooks_contract"))
+        if str(payload.get("kind") or metadata.get("kind") or "").lower() == "stateful_tool_world":
+            append_from_stateful_payload(payload)
+
+    return contracts
+
+
+def _world_hook_contract_summary(
+    contracts: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    kinds: set[str] = set()
+    modes: set[str] = set()
+    runtimes: set[str] = set()
+    hook_names: set[str] = set()
+    hook_types: set[str] = set()
+    callable_hook_names: set[str] = set()
+    output_channels: set[str] = set()
+    state_scopes: set[str] = set()
+    surfaces: set[str] = set()
+    replay_semantics: set[str] = set()
+    evidence_requirements: set[str] = set()
+    requires_external_service_values: set[bool] = set()
+
+    for raw_contract in contracts:
+        contract = _as_dict(raw_contract)
+        for source, sink in (
+            (contract.get("kind"), kinds),
+            (contract.get("mode"), modes),
+            (contract.get("runtime"), runtimes),
+        ):
+            normalized = _normalize_world_hook_contract_key(source)
+            if normalized:
+                sink.add(normalized)
+        if contract.get("requires_external_service") is not None:
+            requires_external_service_values.add(bool(contract.get("requires_external_service")))
+        for hook in _as_list(contract.get("hooks", [])):
+            hook_dict = _as_dict(hook)
+            name = _normalize_world_hook_contract_key(hook_dict.get("name"))
+            hook_type = _normalize_world_hook_contract_key(hook_dict.get("type"))
+            if name:
+                hook_names.add(name)
+                if hook_dict.get("callable") is True:
+                    callable_hook_names.add(name)
+            if hook_type:
+                hook_types.add(hook_type)
+            output_channels.update(
+                _normalize_world_hook_contract_key(value)
+                for value in _as_list(hook_dict.get("output_channels", []))
+                if _normalize_world_hook_contract_key(value)
+            )
+            state_scopes.update(
+                _normalize_world_hook_contract_key(value)
+                for value in _as_list(hook_dict.get("state_scopes", []))
+                if _normalize_world_hook_contract_key(value)
+            )
+        surfaces.update(
+            _normalize_world_hook_contract_key(value)
+            for value in _as_list(contract.get("surfaces", []))
+            if _normalize_world_hook_contract_key(value)
+        )
+        replay_semantics.update(
+            _normalize_world_hook_contract_key(value)
+            for value in _as_list(contract.get("replay_semantics", []))
+            if _normalize_world_hook_contract_key(value)
+        )
+        evidence_requirements.update(
+            _normalize_world_hook_contract_key(value)
+            for value in _as_list(contract.get("evidence_requirements", []))
+            if _normalize_world_hook_contract_key(value)
+        )
+
+    return {
+        "contract_count": len(contracts),
+        "kinds": sorted(kinds),
+        "modes": sorted(modes),
+        "runtimes": sorted(runtimes),
+        "hook_names": sorted(hook_names),
+        "hook_types": sorted(hook_types),
+        "callable_hook_names": sorted(callable_hook_names),
+        "output_channels": sorted(output_channels),
+        "state_scopes": sorted(state_scopes),
+        "surfaces": sorted(surfaces),
+        "replay_semantics": sorted(replay_semantics),
+        "evidence_requirements": sorted(evidence_requirements),
+        "requires_external_service_values": sorted(requires_external_service_values),
+    }
+
+
+def _append_world_hook_contract_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "world_hook_contract_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _world_hook_contract_present_nested_keys(
+    value: Any,
+    keys: set[str],
+) -> set[str]:
+    present: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in keys:
+                present.add(str(key))
+            present.update(_world_hook_contract_present_nested_keys(item, keys))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            present.update(_world_hook_contract_present_nested_keys(item, keys))
+    return present
+
+
+def _normalize_world_hook_contract_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
 
 
 def _world_contract_entities_from_payloads(payloads: Sequence[Mapping[str, Any]], key: str) -> List[Dict[str, Any]]:

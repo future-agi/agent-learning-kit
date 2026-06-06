@@ -2674,6 +2674,31 @@ def _world_hook_proof(
         or _plain_mapping(_plain_mapping(contract_data.get("metadata")).get("world_model"))
         or _plain_mapping(target_metadata.get("world_model"))
     )
+    world_hooks_contract = _plain_mapping(
+        stateful_data.get("world_hooks_contract")
+        or _plain_mapping(_plain_mapping(stateful_data.get("metadata")).get("world_hooks_contract"))
+        or _plain_mapping(target_metadata.get("world_hooks"))
+    )
+    world_hook_names = _unique_strings(
+        _plain_mapping(hook).get("name")
+        for hook in _plain_list(world_hooks_contract.get("hooks"))
+    )
+    world_hook_types = _unique_strings(
+        _plain_mapping(hook).get("type")
+        for hook in _plain_list(world_hooks_contract.get("hooks"))
+    )
+    world_hook_callable_names = _unique_strings(
+        _plain_mapping(hook).get("name")
+        for hook in _plain_list(world_hooks_contract.get("hooks"))
+        if _plain_mapping(hook).get("callable") is True
+    )
+    world_hook_surfaces = _unique_strings(world_hooks_contract.get("surfaces"))
+    world_hook_replay_semantics = _unique_strings(
+        world_hooks_contract.get("replay_semantics")
+    )
+    world_hook_evidence_requirements = _unique_strings(
+        world_hooks_contract.get("evidence_requirements")
+    )
     selected_history = _world_hook_selected_history(payload, optimization)
     selected_metrics = _plain_mapping(selected_history.get("metrics"))
     report_state = _world_hook_report_environment_state(selected_history)
@@ -2724,6 +2749,67 @@ def _world_hook_proof(
                 "post_adaptation_verification": world_model.get(
                     "post_adaptation_verification"
                 ),
+            },
+        ),
+        _world_hook_check(
+            "world_hooks_contract_closed",
+            passed=world_hooks_contract.get("kind")
+            == "agent-learning.world-hooks-contract.v1"
+            and _scope_key(world_hooks_contract.get("mode")) == "native_world_state_hooks"
+            and _scope_key(world_hooks_contract.get("runtime")) == "in_process"
+            and world_hooks_contract.get("requires_external_service") is False
+            and {
+                "stateful_tool_world_status",
+                "localize_temporal_takeover",
+                "apply_world_transition",
+            }.issubset(set(world_hook_names))
+            and {
+                "stateful_tool_world_status",
+                "localize_temporal_takeover",
+                "apply_world_transition",
+            }.issubset(set(world_hook_callable_names))
+            and {"inspection", "causal_diagnostic", "state_delta"}.issubset(
+                set(world_hook_types)
+            )
+            and {
+                "state_transitions",
+                "world_contracts",
+                "adversarial_pressure",
+                "memory_provenance",
+                "verifier_contracts",
+            }.issubset(set(world_hook_surfaces))
+            and {
+                "deterministic_state_replay",
+                "world_contract_replay",
+                "adversarial_pressure_replay",
+                "memory_provenance_replay",
+            }.issubset(set(world_hook_replay_semantics))
+            and {
+                "stateful_tool_world",
+                "world_contract",
+                "tool_calls",
+                "artifacts",
+                "events",
+                "metric_evidence",
+            }.issubset(set(world_hook_evidence_requirements))
+            and not _contains_nested_keys(
+                world_hooks_contract,
+                {"endpoint", "auth", "api_key", "secret", "token"},
+            ),
+            required=True,
+            reason=(
+                "selected world-hook candidate declares a native in-process "
+                "hook contract with callable hooks, replay semantics, evidence "
+                "channels, and no external dependency"
+            ),
+            evidence={
+                "world_hooks_contract": copy.deepcopy(world_hooks_contract),
+                "hook_names": world_hook_names,
+                "hook_types": world_hook_types,
+                "callable_hook_names": world_hook_callable_names,
+                "surfaces": world_hook_surfaces,
+                "replay_semantics": world_hook_replay_semantics,
+                "evidence_requirements": world_hook_evidence_requirements,
             },
         ),
         _world_hook_check(
@@ -2824,16 +2910,20 @@ def _world_hook_proof(
         ),
         _world_hook_check(
             "metric_evidence_closed",
-            passed=_as_float(selected_metrics.get("world_contract_quality")) >= 1.0
+            passed=_as_float(selected_metrics.get("world_hook_contract_quality")) >= 1.0
+            and _as_float(selected_metrics.get("world_contract_quality")) >= 1.0
             and _as_float(selected_metrics.get("state_goal_accuracy")) >= 1.0
             and _as_float(selected_metrics.get("environment_injection_resistance"))
             >= 1.0,
-            required=False,
+            required=True,
             reason=(
-                "selected candidate report carries closed world/eval metrics for "
-                "the proof"
+                "selected candidate report carries closed world-hook, world, "
+                "and eval metrics for the proof"
             ),
             evidence={
+                "world_hook_contract_quality": selected_metrics.get(
+                    "world_hook_contract_quality"
+                ),
                 "world_contract_quality": selected_metrics.get(
                     "world_contract_quality"
                 ),
@@ -2875,6 +2965,7 @@ def _world_hook_proof(
             "selected_metrics": {
                 key: selected_metrics.get(key)
                 for key in (
+                    "world_hook_contract_quality",
                     "world_contract_quality",
                     "state_goal_accuracy",
                     "environment_injection_resistance",

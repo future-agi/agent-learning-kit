@@ -181,6 +181,103 @@ def test_framework_adapter_contract_quality_flags_external_contract():
     } <= finding_types
 
 
+def test_world_hook_contract_quality_flags_external_hook_contract():
+    external_contract = {
+        "kind": "agent-learning.world-hooks-contract.v1",
+        "mode": "http_world_hook",
+        "runtime": "http",
+        "requires_external_service": True,
+        "endpoint": "https://example.invalid/world-hook",
+        "auth": {"type": "bearer", "token_env": "WORLD_HOOK_TOKEN"},
+        "hooks": [
+            {
+                "name": "stateful_tool_world_status",
+                "type": "inspection",
+                "callable": True,
+                "output_channels": ["stateful_tool_world"],
+                "state_scopes": ["state_deltas"],
+            }
+        ],
+        "surfaces": ["state_transitions"],
+        "replay_semantics": ["world_contract_replay"],
+        "evidence_requirements": ["stateful_tool_world"],
+    }
+    evaluation = agent_evals.evaluate_agent_report(
+        {
+            "results": [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Run native world hooks."},
+                        {"role": "assistant", "content": "World hook ran."},
+                    ],
+                    "metadata": {
+                        "environment_state": {
+                            "stateful_tool_world": {
+                                "world_hooks_contract": external_contract,
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        config={
+            "world_hook_contract_quality": {
+                "kind": "agent-learning.world-hooks-contract.v1",
+                "mode": "native_world_state_hooks",
+                "runtime": "in_process",
+                "require_no_external_service": True,
+                "required_hooks": [
+                    "stateful_tool_world_status",
+                    "localize_temporal_takeover",
+                    "apply_world_transition",
+                ],
+                "required_callable_hooks": [
+                    "stateful_tool_world_status",
+                    "localize_temporal_takeover",
+                    "apply_world_transition",
+                ],
+                "required_surfaces": [
+                    "state_transitions",
+                    "world_contracts",
+                    "adversarial_pressure",
+                    "memory_provenance",
+                    "verifier_contracts",
+                ],
+                "required_replay_semantics": [
+                    "deterministic_state_replay",
+                    "world_contract_replay",
+                    "adversarial_pressure_replay",
+                    "memory_provenance_replay",
+                ],
+                "required_evidence_requirements": [
+                    "stateful_tool_world",
+                    "world_contract",
+                    "tool_calls",
+                    "artifacts",
+                    "events",
+                    "metric_evidence",
+                ],
+            },
+            "metric_weights": {"world_hook_contract_quality": 1.0},
+        },
+        threshold=1.0,
+    )
+    metric = next(
+        item
+        for item in evaluation.cases[0].metrics
+        if item.name == "world_hook_contract_quality"
+    )
+    assert metric.score < 1.0
+    finding_types = {finding["type"] for finding in metric.details["findings"]}
+    assert {
+        "world_hook_contract_mode_mismatch",
+        "world_hook_contract_runtime_mismatch",
+        "world_hook_contract_external_service_required",
+        "world_hook_contract_external_dependency_present",
+        "world_hook_contract_hook_missing",
+    } <= finding_types
+
+
 def _manifest() -> dict:
     return {
         "name": "agent-learning-kit-vendored-manifest",

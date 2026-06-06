@@ -1874,6 +1874,7 @@ def normalize_stateful_tool_world_manifest(source: Mapping[str, Any]) -> Dict[st
     """Normalize stateful tool-world benchmark evidence into a portable payload."""
 
     data = _coerce_plain_dict(source.get("stateful_tool_world") or source)
+    metadata = _coerce_plain_dict(data.get("metadata"))
     return {
         "kind": "stateful_tool_world",
         "name": str(data.get("name") or data.get("id") or "stateful-tool-world"),
@@ -1921,7 +1922,11 @@ def normalize_stateful_tool_world_manifest(source: Mapping[str, Any]) -> Dict[st
             )
         ],
         "utility_under_attack": _coerce_plain_dict(data.get("utility_under_attack")),
-        "metadata": _coerce_plain_dict(data.get("metadata")),
+        "world_hooks_contract": _coerce_plain_dict(
+            data.get("world_hooks_contract")
+            or metadata.get("world_hooks_contract")
+        ),
+        "metadata": metadata,
     }
 
 
