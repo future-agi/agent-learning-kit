@@ -4,7 +4,7 @@ Comprehensive RAG Score Metric.
 Combines multiple RAG metrics into a single comprehensive score.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ..base_metric import BaseMetric
 from .types import RAGInput, RAGRetrievalInput

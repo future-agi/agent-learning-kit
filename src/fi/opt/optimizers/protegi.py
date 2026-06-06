@@ -4,10 +4,8 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Set
 
-import numpy as np
 from pydantic import BaseModel, Field, ValidationError
 
-from ..base.base_generator import BaseGenerator
 from ..base.base_optimizer import BaseOptimizer
 from ..datamappers.basic_mapper import BasicDataMapper
 from ..base.evaluator import Evaluator
@@ -186,7 +184,7 @@ class ProTeGi(BaseOptimizer):
             logging.debug(f"--> Expanding prompt {i + 1}/{len(prompts)}...")
             errors = self._get_errors(prompt, evaluator, data_mapper, dataset)
             if not errors:
-                logging.debug(f"Prompt produced no errors. No expansion.")
+                logging.debug("Prompt produced no errors. No expansion.")
                 continue
 
             critiques = self._get_gradients(prompt, errors)

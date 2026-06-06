@@ -6,7 +6,7 @@ about backends, model types, and requirements.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type
 
 from fi.evals.guardrails.config import GuardrailModel
 

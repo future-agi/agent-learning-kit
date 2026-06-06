@@ -16,7 +16,7 @@ Usage:
 """
 
 import hashlib
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 _CACHE: Dict[str, str] = {}
 

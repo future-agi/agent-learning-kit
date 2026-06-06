@@ -16,7 +16,7 @@ from fi.evals.framework.backends.base import (
 )
 from .circuit_breaker import CircuitBreaker
 from .degradation import FallbackChain
-from .health import HealthChecker, HealthRegistry
+from .health import HealthChecker
 from .rate_limiter import TokenBucketRateLimiter
 from .retry import RetryHandler
 from .types import (

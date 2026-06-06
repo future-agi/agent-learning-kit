@@ -57,7 +57,7 @@ class _InternalGEPAAdapter(GEPAAdapter[DataInst, Dict[str, Any], Dict[str, Any]]
         our framework's components to perform the evaluation.
         """
         eval_start_time = time.time()
-        logger.info(f"Starting evaluation for a candidate prompt.")
+        logger.info("Starting evaluation for a candidate prompt.")
 
         # GEPA provides the prompt as the first (and only) value in the candidate dict.
         prompt_text = next(iter(candidate.values()))
@@ -68,7 +68,7 @@ class _InternalGEPAAdapter(GEPAAdapter[DataInst, Dict[str, Any], Dict[str, Any]]
             model=self.generator_model, prompt_template=prompt_text
         )
 
-        logger.info(f"Generating outputs...")
+        logger.info("Generating outputs...")
         gen_start_time = time.time()
         generated_outputs = [temp_generator.generate(example) for example in batch]
         gen_end_time = time.time()
@@ -76,13 +76,13 @@ class _InternalGEPAAdapter(GEPAAdapter[DataInst, Dict[str, Any], Dict[str, Any]]
             f"Output generation finished in {gen_end_time - gen_start_time:.2f}s."
         )
 
-        logger.info(f"Mapping evaluation inputs...")
+        logger.info("Mapping evaluation inputs...")
         eval_inputs = [
             self.data_mapper.map(gen_out, ex)
             for gen_out, ex in zip(generated_outputs, batch)
         ]
 
-        logger.info(f"Evaluating generated outputs...")
+        logger.info("Evaluating generated outputs...")
         evaluator_start_time = time.time()
         results = self.evaluator.evaluate(eval_inputs)
         evaluator_end_time = time.time()
@@ -116,7 +116,7 @@ class _InternalGEPAAdapter(GEPAAdapter[DataInst, Dict[str, Any], Dict[str, Any]]
 
         trajectories = []
         if capture_traces:
-            logger.info(f"Capturing traces.")
+            logger.info("Capturing traces.")
             for i in range(len(batch)):
                 trajectories.append(
                     {
@@ -141,7 +141,7 @@ class _InternalGEPAAdapter(GEPAAdapter[DataInst, Dict[str, Any], Dict[str, Any]]
         """
         Creates the dataset for GEPA's reflective LLM to analyze.
         """
-        logger.info(f"Creating reflective dataset.")
+        logger.info("Creating reflective dataset.")
         reflective_data = {comp: [] for comp in components_to_update}
 
         if not eval_batch.trajectories:

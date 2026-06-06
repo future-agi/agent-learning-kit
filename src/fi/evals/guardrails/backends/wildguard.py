@@ -11,10 +11,10 @@ Output format:
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fi.evals.guardrails.backends.local_base import LocalModelBackend
-from fi.evals.guardrails.config import GuardrailModel, RailType
+from fi.evals.guardrails.config import RailType
 from fi.evals.guardrails.types import GuardrailResult
 
 
@@ -112,7 +112,6 @@ Answer: [/INST]"""
         # Parse each field
         harmful_request = self._extract_field(response_lower, "harmful_request")
         response_harmful = self._extract_field(response_lower, "response_harmful")
-        response_refusal = self._extract_field(response_lower, "response_refusal")
 
         # Determine if content is harmful based on rail type
         if rail_type == RailType.INPUT:

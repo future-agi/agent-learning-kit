@@ -5,19 +5,18 @@ Provides async/background evaluation with zero latency impact on the main thread
 Uses thread pools for local execution with context propagation.
 """
 
-from typing import Dict, Any, List, Optional, Callable, Union
+from typing import Dict, Any, List, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import threading
-import uuid
 import time
 
 from ..types import FrameworkEvalResult as EvalResult, EvalStatus, BatchEvalResult
 from ..context import EvalContext
 from ..protocols import BaseEvaluation
-from ..registry import register_span, get_span, register_current_span
-from ..propagation import ContextCarrier, enrich_span_by_context
+from ..registry import register_current_span
+from ..propagation import ContextCarrier
 
 
 @dataclass

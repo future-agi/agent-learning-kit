@@ -49,7 +49,6 @@ Usage:
 
 from typing import List, Optional, Dict, Any, Callable, Union
 from pydantic import BaseModel, Field, ConfigDict
-from dataclasses import dataclass
 
 from .types import (
     Severity,

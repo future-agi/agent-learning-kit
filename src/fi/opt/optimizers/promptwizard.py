@@ -4,17 +4,16 @@ import random
 import re
 from typing import Any, Dict, List, Set, Optional
 
-logger = logging.getLogger(__name__)
+from pydantic import BaseModel, ValidationError
 
-from pydantic import BaseModel, Field, ValidationError
-
-from ..base.base_generator import BaseGenerator
 from ..base.base_optimizer import BaseOptimizer
 from ..datamappers.basic_mapper import BasicDataMapper
 from ..base.evaluator import Evaluator
 from ..generators.litellm import LiteLLMGenerator
 from ..types import IterationHistory, OptimizationResult
 from ..utils.early_stopping import EarlyStoppingConfig, EarlyStoppingChecker
+
+logger = logging.getLogger(__name__)
 
 MUTATE_PROMPT = """
 You are an expert in prompt engineering. You will be given a task description and different styles known as meta prompts. Your task is to generate {num_variations} diverse variations of the following instruction by adaptively mixing meta prompt while keeping similar semantic meaning.
@@ -172,7 +171,7 @@ class PromptWizardOptimizer(BaseOptimizer):
                     )
                     refined = self._critique_and_refine(prompt_to_refine, errors)
                     if refined:
-                        logger.debug(f"Successfully refined prompt.")
+                        logger.debug("Successfully refined prompt.")
                         refined_prompts.add(refined)
                 else:
                     logger.debug(

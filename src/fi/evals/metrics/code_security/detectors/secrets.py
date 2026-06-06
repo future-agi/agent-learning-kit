@@ -9,7 +9,7 @@ Detects hardcoded secrets and credentials:
 """
 
 import re
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 from .base import BaseDetector, register_detector
 from ..types import (
@@ -138,7 +138,7 @@ class HardcodedSecretsDetector(BaseDetector):
                         if value_match and len(value_match.group(1)) >= 4:
                             findings.append(self.create_finding(
                                 vulnerability_type="Hardcoded Credentials",
-                                description=f"Potential hardcoded secret in variable assignment",
+                                description="Potential hardcoded secret in variable assignment",
                                 line=i,
                                 snippet=self._redact_secret(line.strip()[:100]),
                                 confidence=0.85,

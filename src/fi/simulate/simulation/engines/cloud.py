@@ -3,7 +3,7 @@ import os
 import contextvars
 import logging
 import contextlib
-from typing import Optional, Callable, Dict, Any, List
+from typing import Optional, Callable
 
 from fi.simulate.agent.generic import wrap_agent
 from fi.simulate.agent.wrapper import AgentWrapper, AgentInput, AgentResponse

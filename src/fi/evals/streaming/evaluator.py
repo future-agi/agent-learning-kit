@@ -6,16 +6,14 @@ early stopping based on configurable policies.
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import (
-    Any,
     AsyncIterator,
     Callable,
     Dict,
     Iterator,
     List,
     Optional,
-    Union,
 )
 
 from .types import (
@@ -243,7 +241,7 @@ class StreamingEvaluator:
                     flags[eval_spec.name] = score >= eval_spec.threshold
                 else:
                     flags[eval_spec.name] = score <= eval_spec.threshold
-            except Exception as e:
+            except Exception:
                 # Handle eval errors gracefully
                 scores[eval_spec.name] = 0.0
                 flags[eval_spec.name] = False

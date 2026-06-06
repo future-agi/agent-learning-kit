@@ -5,7 +5,7 @@ Factory functions and utilities for setting up OpenTelemetry
 tracing with LLM-specific processors and exporters.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional
 from contextlib import contextmanager
 import logging
 import os
@@ -13,7 +13,6 @@ import os
 from .config import (
     TraceConfig,
     ExporterConfig,
-    ProcessorConfig,
     SamplingStrategy,
 )
 from .types import ExporterType, ProcessorType

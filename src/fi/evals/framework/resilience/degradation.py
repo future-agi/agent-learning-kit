@@ -5,7 +5,7 @@ Provides fallback mechanisms when primary operations fail.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Generic, List, Optional, TypeVar
 
 from .types import (

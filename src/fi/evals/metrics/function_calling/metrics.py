@@ -7,10 +7,10 @@ Provides sub-10ms evaluation latency without LLM-as-judge dependency.
 
 import ast
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from ..base_metric import BaseMetric
-from .types import FunctionCallInput, FunctionCall, FunctionDefinition, ParameterSpec
+from .types import FunctionCallInput, FunctionCall
 
 
 def _parse_function_call(call: Union[FunctionCall, Dict, str, None]) -> Optional[FunctionCall]:
@@ -116,7 +116,7 @@ def _parse_function_calls(
 def _types_compatible(actual: Any, expected: Any, strict: bool = False) -> bool:
     """Check if types are compatible."""
     if strict:
-        return type(actual) == type(expected)
+        return type(actual) is type(expected)
 
     # Flexible type checking
     if actual is None or expected is None:
@@ -142,7 +142,7 @@ def _types_compatible(actual: Any, expected: Any, strict: bool = False) -> bool:
     if isinstance(actual, dict) and isinstance(expected, dict):
         return True
 
-    return type(actual) == type(expected)
+    return type(actual) is type(expected)
 
 
 def _values_equal(actual: Any, expected: Any, strict_type: bool = False) -> bool:

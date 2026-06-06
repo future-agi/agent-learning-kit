@@ -5,7 +5,7 @@ Provides the foundation for mode-specific evaluation of AI-generated code.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field, ConfigDict
 
 from ..types import (

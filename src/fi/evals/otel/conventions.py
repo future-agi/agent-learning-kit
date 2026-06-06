@@ -10,7 +10,6 @@ spans on the FutureAGI dashboard.
 """
 
 from typing import Dict, Any, Optional
-import warnings
 
 
 class GenAIAttributes:

@@ -5,7 +5,7 @@ These scorers are designed to be fast and work with incremental text.
 """
 
 import re
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, List, Set
 
 
 # Toxicity word lists (simplified for demonstration)

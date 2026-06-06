@@ -5,7 +5,7 @@ Measures entity-level retrieval coverage - what fraction of
 entities from the reference appear in retrieved contexts.
 """
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 from ...base_metric import BaseMetric
 from ..types import RAGRetrievalInput

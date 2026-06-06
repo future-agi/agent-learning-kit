@@ -11,8 +11,6 @@ from fi.evals.evaluator import EvalResponseHandler, Evaluator
 from fi.evals.templates import (
     DataPrivacyCompliance,
     PromptInjection,
-    Sexist,
-    Tone,
     Toxicity,
     BiasDetection,
 )
@@ -122,7 +120,7 @@ class Protect:
                 ),
                 response_handler=EvalResponseHandler,
             )
-        except Exception as e:
+        except Exception:
             err_msg = (
                 "We couldn't process this request. Check your input or your credit balance."
                 "If it keeps failing, contact support." 
@@ -212,7 +210,7 @@ class Protect:
                                 if not f_key.done():
                                     f_key.cancel()
 
-                    except Exception as e:
+                    except Exception:
                         if rule_name in uncompleted_rules:
                             # uncompleted_rules.remove(rule_name) # Errored rule should remain uncompleted
                             pass 
@@ -474,7 +472,7 @@ class Protect:
                     "uncompleted_rules": [],
                     "failed_rule": "ProtectFlash" if is_harmful else None,  # Use ProtectFlash instead of rule metric
                     "messages": protect_rules_copy[0]["action"] if is_harmful else inputs[0],
-                    "reasons": [f"Content detected as harmful." if is_harmful else "All checks passed"],
+                    "reasons": ["Content detected as harmful." if is_harmful else "All checks passed"],
                     "time_taken": elapsed_time,
                 }
                 return ans
@@ -663,4 +661,11 @@ class Protect:
 
         return ans
 
-protect = lambda inputs, protect_rules, action="Response cannot be generated as the input fails the checks", reason=False, timeout=30000: Protect().protect(inputs, protect_rules, action, reason, timeout)
+def protect(
+    inputs,
+    protect_rules,
+    action="Response cannot be generated as the input fails the checks",
+    reason=False,
+    timeout=30000,
+):
+    return Protect().protect(inputs, protect_rules, action, reason, timeout)

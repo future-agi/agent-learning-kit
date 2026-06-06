@@ -9,9 +9,9 @@ import asyncio
 import logging
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 from .base import Backend, BackendConfig, TaskHandle, TaskStatus
 from ._utils import TEMPORAL

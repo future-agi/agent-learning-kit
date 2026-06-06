@@ -1,5 +1,4 @@
 from typing import List
-from pydantic import BaseModel, Field
 from fi.simulate.agent.definition import AgentDefinition
 from fi.simulate.simulation.models import Persona
 

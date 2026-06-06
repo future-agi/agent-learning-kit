@@ -5,10 +5,9 @@ Detects Unicode manipulation, zero-width characters, homoglyphs,
 and other invisible character attacks.
 """
 
-import re
 import time
 import unicodedata
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 from fi.evals.guardrails.scanners.base import (
     BaseScanner,

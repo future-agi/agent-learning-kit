@@ -3,7 +3,7 @@ Base validator interface for structured output validation.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Dict, List
+from typing import Any, Dict, List
 from ..types import ValidationResult, ValidationError, ValidationMode
 
 
@@ -110,11 +110,11 @@ class BaseValidator(ABC):
             return errors
 
         # Type comparison
-        if type(actual) != type(expected):
+        if type(actual) is not type(expected):
             if mode == ValidationMode.STRICT:
                 errors.append(ValidationError(
                     path=path,
-                    message=f"Type mismatch",
+                    message="Type mismatch",
                     error_type="type",
                     expected=type(expected).__name__,
                     actual=type(actual).__name__,
@@ -141,7 +141,7 @@ class BaseValidator(ABC):
                 if key not in actual:
                     errors.append(ValidationError(
                         path=f"{path}.{key}",
-                        message=f"Missing required field",
+                        message="Missing required field",
                         error_type="missing",
                         expected=key,
                     ))
@@ -156,7 +156,7 @@ class BaseValidator(ABC):
                     if key not in expected:
                         errors.append(ValidationError(
                             path=f"{path}.{key}",
-                            message=f"Unexpected field",
+                            message="Unexpected field",
                             error_type="extra",
                             actual=key,
                         ))
@@ -166,7 +166,7 @@ class BaseValidator(ABC):
             if len(actual) != len(expected):
                 errors.append(ValidationError(
                     path=path,
-                    message=f"Array length mismatch",
+                    message="Array length mismatch",
                     error_type="length",
                     expected=len(expected),
                     actual=len(actual),
@@ -180,7 +180,7 @@ class BaseValidator(ABC):
             if actual != expected:
                 errors.append(ValidationError(
                     path=path,
-                    message=f"Value mismatch",
+                    message="Value mismatch",
                     error_type="value",
                     expected=expected,
                     actual=actual,

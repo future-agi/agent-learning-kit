@@ -1,8 +1,7 @@
 import json
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, Dict, List, Optional
 
 from ..base_metric import BaseMetric, BaseMetricInputType
-from ...types import BaseMetricInput
 
 
 class AggregatedMetric(BaseMetric[BaseMetricInputType]):
@@ -65,7 +64,7 @@ class AggregatedMetric(BaseMetric[BaseMetricInputType]):
             try:
                 result_dict = metric.compute_one(inputs)
                 score = self._normalize_score(result_dict.get("output", 0.0))
-            except Exception as e:
+            except Exception:
                 # If a sub-metric fails, record a score of 0.0 for it
                 score = 0.0
 

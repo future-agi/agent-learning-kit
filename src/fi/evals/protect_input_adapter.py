@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Optional, ClassVar, Set
+from typing import ClassVar, Set
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, field_validator

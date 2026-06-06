@@ -23,7 +23,7 @@ Example:
     uninstrument_all()
 """
 
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 from .base import BaseInstrumentor, InstrumentorManager
 from .openai import OpenAIInstrumentor

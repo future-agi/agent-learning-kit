@@ -11,7 +11,7 @@ themselves.
 import logging
 import threading
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from requests import Response
 

@@ -1,4 +1,4 @@
-from typing import Any, Union, Dict, List
+from typing import Any, Union
 from fi.simulate.agent.wrapper import AgentWrapper, AgentInput, AgentResponse
 
 try:

@@ -1,6 +1,5 @@
 """Config command for managing CLI configuration."""
 
-import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -8,7 +7,7 @@ from typing import Optional
 import typer
 
 from fi.cli.config.defaults import BASIC_TEMPLATE
-from fi.cli.utils.console import console, print_error, print_success, print_warning
+from fi.cli.utils.console import console, print_success, print_warning
 
 
 config_app = typer.Typer(

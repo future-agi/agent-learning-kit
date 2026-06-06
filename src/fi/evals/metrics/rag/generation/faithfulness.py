@@ -120,7 +120,6 @@ class RAGFaithfulness(BaseMetric[RAGInput]):
             })
 
         total = len(claims)
-        unsupported = total - supported - contradicted - neutral_count
         # Supported = 1.0, neutral = partial credit, contradicted/unsupported = 0.0
         faithfulness = (supported + neutral_count * _NEUTRAL_SCORE) / total
 

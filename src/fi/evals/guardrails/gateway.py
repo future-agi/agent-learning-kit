@@ -6,12 +6,12 @@ with automatic backend management and context managers.
 """
 
 from contextlib import asynccontextmanager, contextmanager
-from typing import AsyncIterator, Iterator, List, Optional, Union
+from typing import AsyncIterator, Iterator, List, Optional
 
 from fi.evals.guardrails.base import Guardrails
 from fi.evals.guardrails.config import GuardrailModel, GuardrailsConfig, AggregationStrategy
 from fi.evals.guardrails.types import GuardrailsResponse
-from fi.evals.guardrails.discovery import BackendDiscovery, discover_backends, get_backend_details
+from fi.evals.guardrails.discovery import discover_backends, get_backend_details
 
 
 class ScreeningSession:

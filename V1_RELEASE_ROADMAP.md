@@ -178,6 +178,11 @@ Next implementation focus:
 
 Status: in progress.
 
+Current checkpoint:
+
+- Full-repo `PYTHONPATH=src python -m ruff check .` now passes across the
+  public SDK plus vendored `fi.{simulate,evals,opt}` engine tree.
+
 Acceptance gates:
 
 - `python -m build` succeeds.

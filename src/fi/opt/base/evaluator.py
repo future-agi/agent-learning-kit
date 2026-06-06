@@ -5,7 +5,7 @@ import logging
 from ..types import EvaluationResult
 
 from fi.evals import Evaluator as FAGIEvaluator
-from fi.evals.metrics.base_metric import BaseMetric, BatchRunResult
+from fi.evals.metrics.base_metric import BaseMetric
 from fi.evals.metrics.base_llm_metric import BaseLLMJudgeMetric
 from fi.evals.llm.providers.litellm import LiteLLMProvider
 

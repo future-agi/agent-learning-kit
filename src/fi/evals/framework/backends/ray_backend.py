@@ -8,7 +8,7 @@ Requires: pip install 'ray[default]'
 import logging
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from .base import Backend, BackendConfig, TaskHandle, TaskStatus

@@ -14,8 +14,6 @@ from ..utils import (
     extract_entities,
     extract_key_phrases,
     extract_keywords,
-    compute_semantic_similarity,
-    compute_word_overlap,
     split_into_sentences,
 )
 

@@ -1,6 +1,6 @@
 import json
 from typing import Any, Dict, List, Type
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel
 from jinja2 import Environment, BaseLoader
 
 from ...base_llm_metric import BaseLLMJudgeMetric

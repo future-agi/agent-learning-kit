@@ -27,25 +27,24 @@ Example:
 
 import logging
 import time
-from typing import Dict, Any, List, Optional, Union, Callable
+from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from .types import ExecutionMode, FrameworkEvalResult, BatchEvalResult, EvalStatus
-
-# Internal alias for brevity — this is the framework-level EvalResult
-EvalResult = FrameworkEvalResult
 from .context import EvalContext
 from .protocols import BaseEvaluation, EvalRegistry
 from .evaluators.blocking import BlockingEvaluator
 from .evaluators.non_blocking import (
     NonBlockingEvaluator,
     BatchEvalFuture,
-    EvalFuture,
 )
-from .backends import Backend, ThreadPoolBackend, ThreadPoolConfig
+from .backends import Backend, ThreadPoolBackend
 
 logger = logging.getLogger(__name__)
+
+# Internal alias for brevity — this is the framework-level EvalResult
+EvalResult = FrameworkEvalResult
 
 
 @dataclass

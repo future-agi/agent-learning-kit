@@ -1215,9 +1215,9 @@ def _merge_ranked_patches(
 
 
 def _append_proposal(
-    proposals: List[_Proposal],
+    proposals: List[AgentSearchProposal],
     seen: set[str],
-    proposal: _Proposal,
+    proposal: AgentSearchProposal,
     max_proposals: int,
 ) -> None:
     if len(proposals) >= max_proposals or not proposal.patch:

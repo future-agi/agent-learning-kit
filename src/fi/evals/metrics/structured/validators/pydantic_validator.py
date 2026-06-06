@@ -3,7 +3,7 @@ Pydantic model validation for LLM outputs.
 """
 
 import json
-from typing import Any, Dict, Optional, Type, List
+from typing import Any, Dict, Optional, Type
 from ..types import ValidationResult, ValidationError, ValidationMode
 from .base import BaseValidator
 

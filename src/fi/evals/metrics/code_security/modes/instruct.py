@@ -16,8 +16,8 @@ Example:
     print(f"sec@k: {result.sec_at_k}")
 """
 
-from typing import List, Optional, Callable
-from ..types import EvaluationMode, SecurityFinding, Severity
+from typing import List, Callable
+from ..types import EvaluationMode, SecurityFinding
 from .base import BaseModeEvaluator, InstructModeResult
 
 

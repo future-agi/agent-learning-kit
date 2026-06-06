@@ -8,16 +8,11 @@ Provides deterministic, fast evaluation for multi-step agent tasks.
 import json
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
-from difflib import SequenceMatcher
 
 from ..base_metric import BaseMetric
 from .types import (
     AgentTrajectoryInput,
     AgentStep,
-    ToolCall,
-    TaskDefinition,
-    ExpectedStep,
-    TrajectoryAnalysis,
 )
 
 
@@ -92,7 +87,6 @@ def _check_criteria_match(
     ]).lower()
 
     for criterion in criteria:
-        criterion_lower = criterion.lower()
         keywords = _extract_keywords(criterion)
 
         # Check if criterion keywords appear in result or observations

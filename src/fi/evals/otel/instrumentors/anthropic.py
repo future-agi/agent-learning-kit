@@ -5,7 +5,7 @@ Automatic instrumentation for the Anthropic Python client library.
 Supports both sync and async APIs.
 """
 
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Dict, Callable
 import functools
 import logging
 
@@ -15,12 +15,9 @@ from ..conventions import (
     GenAIAttributes,
     SYSTEM_ANTHROPIC,
     OPERATION_CHAT,
-    FINISH_STOP,
-    FINISH_LENGTH,
 )
 
 if OTEL_AVAILABLE:
-    from opentelemetry import trace
     from opentelemetry.trace import Status, StatusCode
 
 logger = logging.getLogger(__name__)
@@ -81,7 +78,6 @@ class AnthropicInstrumentor(BaseInstrumentor):
             return
 
         try:
-            import anthropic
             from anthropic.resources import messages
 
             # Store original methods
@@ -159,8 +155,6 @@ class AnthropicInstrumentor(BaseInstrumentor):
         is_async: bool,
     ):
         """Trace a messages.create call."""
-        tracer = self.get_tracer()
-
         # Extract parameters
         model = kwargs.get("model", "unknown")
         messages = kwargs.get("messages", [])

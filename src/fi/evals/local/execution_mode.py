@@ -7,7 +7,7 @@ This module defines execution modes that determine how evaluations run:
 """
 
 from enum import Enum
-from typing import Optional, Set
+from typing import Set
 
 
 class RoutingMode(Enum):

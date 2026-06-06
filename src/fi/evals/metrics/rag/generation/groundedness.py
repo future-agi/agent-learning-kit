@@ -6,7 +6,7 @@ with detailed claim-level analysis. Uses the shared NLI pipeline
 for single-call claim verification (support + contradiction).
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ...base_metric import BaseMetric
 from ...hallucination.nli import NLILabel, nli_score_for_claim

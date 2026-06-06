@@ -4,8 +4,8 @@ RAG Evaluation Input/Output Types.
 Defines strongly-typed inputs for all RAG metrics.
 """
 
-from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field
+from typing import List, Optional
+from pydantic import Field
 
 from ...types import BaseMetricInput
 

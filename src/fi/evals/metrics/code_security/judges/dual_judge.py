@@ -6,7 +6,7 @@ consensus modes for optimal precision/recall tradeoffs.
 """
 
 import time
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from .base import BaseJudge, JudgeResult, JudgeFinding, ConsensusMode
@@ -267,14 +267,6 @@ class DualJudge(BaseJudge):
         # Find matching findings
         agreed_findings = self._find_agreed_findings(
             pattern_result.findings, llm_result.findings
-        )
-
-        # Insecure only if both say insecure
-        is_secure = pattern_result.is_secure or llm_result.is_secure
-
-        # Score is maximum of both (more conservative)
-        security_score = max(
-            pattern_result.security_score, llm_result.security_score
         )
 
         return JudgeResult(

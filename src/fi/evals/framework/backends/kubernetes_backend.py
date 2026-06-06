@@ -13,16 +13,14 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from .base import Backend, BackendConfig, TaskHandle, TaskStatus
 from ._utils import KUBERNETES
 from ._container import (
-    DEFAULT_IMAGE,
     EVAL_PAYLOAD_ENV,
     RUNNER_COMMAND,
-    RUNNER_SCRIPT,
     parse_result_from_logs,
     serialize_task,
 )

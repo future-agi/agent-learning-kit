@@ -29,7 +29,6 @@ Example using builder:
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
-from functools import wraps
 
 from ..protocols import BaseEvaluation, register_evaluation
 
@@ -115,9 +114,9 @@ class CustomEvaluation(BaseEvaluation):
     def validate_inputs(self, inputs: Dict[str, Any]) -> List[str]:
         """Validate required inputs."""
         errors = []
-        for field in self._required_fields:
-            if field not in inputs:
-                errors.append(f"Missing required field: {field}")
+        for field_name in self._required_fields:
+            if field_name not in inputs:
+                errors.append(f"Missing required field: {field_name}")
         return errors
 
     def evaluate(self, inputs: Dict[str, Any]) -> CustomEvalResult:

@@ -11,7 +11,7 @@ and process boundaries, enabling:
 from typing import Dict, Any, Optional, Generator
 from contextlib import contextmanager
 from .context import EvalContext
-from .registry import get_span, register_span
+from .registry import get_span
 
 
 class SpanContextPropagator:

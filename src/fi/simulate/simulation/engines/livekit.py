@@ -1,12 +1,12 @@
 
-from typing import AsyncIterable, Optional, List
+from typing import AsyncIterable, Optional
 import asyncio
 import os
 import contextlib
 import wave
 import numpy as np
 try:
-    from livekit.agents import stt, tts, llm, vad, Agent, AgentSession, function_tool
+    from livekit.agents import Agent, AgentSession, function_tool
     from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
     from livekit.plugins import openai, silero
     from livekit import rtc
@@ -233,9 +233,7 @@ class LiveKitEngine(BaseEngine):
                     await recorder.start()
 
             # Start the agent in a background task
-            session_task = asyncio.create_task(
-                customer_agent.run(room=customer_room)
-            )
+            asyncio.create_task(customer_agent.run(room=customer_room))
 
             # Wait for the session to be created
             customer_session = await customer_agent.get_session()
@@ -316,7 +314,7 @@ class LiveKitEngine(BaseEngine):
                         await customer_room.disconnect()
             except Exception:
                 pass
-                print(f"✓ Customer disconnected")
+                print("✓ Customer disconnected")
             # Stop recorder if running
             if recorder is not None:
                 with contextlib.suppress(Exception):
@@ -325,7 +323,6 @@ class LiveKitEngine(BaseEngine):
         # Resolve per-persona input/output recordings and build combined WAV
         def _find_paths_for_identity(room_name: str, identity: str) -> list[str]:
             try:
-                base = os.path.join("recordings", f"{room_name}-{identity}-track-")
                 # listdir and filter to avoid glob deps
                 files = [os.path.join("recordings", f) for f in os.listdir("recordings") if f.startswith(f"{room_name}-{identity}-track-") and f.endswith(".wav")]
                 return sorted(files, key=lambda p: os.path.getmtime(p), reverse=True)
@@ -476,4 +473,3 @@ class LiveKitEngine(BaseEngine):
             "When you are satisfied and done, call the `end_call` tool to hang up. "
             "Use short, spoken-style sentences."
         )
-

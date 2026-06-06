@@ -9,7 +9,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .store import FeedbackStore
-from .types import FeedbackEntry
 
 logger = logging.getLogger(__name__)
 

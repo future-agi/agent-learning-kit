@@ -17,7 +17,7 @@ Example:
 """
 
 from typing import List, Optional
-from ..types import EvaluationMode, SecurityFinding, Severity
+from ..types import EvaluationMode
 from .base import BaseModeEvaluator, RepairModeResult
 
 

@@ -8,7 +8,6 @@ Novel metric addressing "context neglect" problem identified
 in 2025 research from Google DeepMind.
 """
 
-import re
 from typing import Any, Dict, List, Optional, Set
 
 from ...base_metric import BaseMetric
@@ -17,7 +16,6 @@ from ..utils import (
     extract_entities,
     extract_key_phrases,
     compute_ngram_overlap,
-    normalize_text,
 )
 
 

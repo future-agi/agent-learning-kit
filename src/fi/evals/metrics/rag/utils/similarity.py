@@ -7,7 +7,7 @@ and semantic similarity computation.
 
 import re
 from difflib import SequenceMatcher
-from typing import Optional, Set, List
+from typing import Set, List
 
 # Optional sentence-transformers import
 _EMBEDDINGS_AVAILABLE = False
@@ -15,7 +15,7 @@ _embedding_model = None
 
 try:
     from sentence_transformers import SentenceTransformer
-    import numpy as np
+    import numpy as np  # noqa: F401
 
     _EMBEDDINGS_AVAILABLE = True
 except ImportError:

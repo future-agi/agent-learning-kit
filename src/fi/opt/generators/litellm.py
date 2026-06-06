@@ -1,9 +1,8 @@
 import litellm
-from typing import Dict, List
+from typing import Dict
 
 from ..types import LLMMessage
 from ..base.base_generator import BaseGenerator
-import logging
 
 # logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 

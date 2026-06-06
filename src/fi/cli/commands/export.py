@@ -7,7 +7,7 @@ from typing import Optional
 import typer
 
 from fi.cli.storage import RunHistory
-from fi.cli.utils.console import console, print_error, print_success, print_warning
+from fi.cli.utils.console import print_error, print_success, print_warning
 
 
 def export(

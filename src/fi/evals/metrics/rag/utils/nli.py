@@ -7,10 +7,7 @@ loading the model twice. Falls back to word-overlap heuristic when
 transformers is not installed.
 """
 
-import re
-import warnings
 from typing import Tuple, List, Optional
-from enum import Enum
 
 from ...hallucination.nli import (
     NLILabel,

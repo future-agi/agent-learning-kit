@@ -4,10 +4,9 @@ OpenTelemetry Types and Data Structures.
 Core type definitions for the OTEL integration module.
 """
 
-from typing import Dict, List, Optional, Any, Union, Callable
+from typing import Dict, List, Optional, Any, Callable
 from enum import Enum
 from dataclasses import dataclass, field
-from datetime import datetime
 
 
 class ExporterType(str, Enum):

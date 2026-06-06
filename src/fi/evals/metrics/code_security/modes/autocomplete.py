@@ -16,7 +16,7 @@ Example:
 """
 
 from typing import Optional
-from ..types import EvaluationMode, SecurityFinding
+from ..types import EvaluationMode
 from .base import BaseModeEvaluator, AutocompleteModeResult
 
 

@@ -5,7 +5,7 @@ Measures retrieval completeness - how much of the ground truth
 information is covered by retrieved contexts.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ...base_metric import BaseMetric
 from ..types import RAGRetrievalInput

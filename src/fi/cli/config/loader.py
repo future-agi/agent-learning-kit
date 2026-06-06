@@ -1,6 +1,5 @@
 """Configuration file loading and discovery."""
 
-import os
 from pathlib import Path
 from typing import Optional, Union
 

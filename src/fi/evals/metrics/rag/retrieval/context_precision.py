@@ -5,14 +5,13 @@ Measures retrieval ranking quality - whether relevant contexts
 appear before irrelevant ones.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ...base_metric import BaseMetric
 from ..types import RAGRetrievalInput
 from ..utils import (
     compute_semantic_similarity,
     compute_word_overlap,
-    split_into_sentences,
     check_entailment,
     NLILabel,
 )

@@ -15,7 +15,6 @@ import hashlib
 from .base import BaseSpanProcessor, OTEL_AVAILABLE
 from ..conventions import (
     GenAIAttributes,
-    EvaluationAttributes,
     create_evaluation_attributes,
 )
 from ..types import EvaluationResult

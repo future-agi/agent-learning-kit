@@ -29,7 +29,7 @@ Example:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 from abc import ABC, abstractmethod
 import re
 
@@ -322,7 +322,6 @@ class ReasoningQualityEval(BaseAgenticEval):
 
     def evaluate(self, inputs: Dict[str, Any]) -> AgenticEvalResult:
         trajectory = inputs["trajectory"]
-        context = inputs.get("context", "")
 
         actions = self._parse_trajectory(trajectory)
         thoughts = [a for a in actions if a.action_type == 'thought']

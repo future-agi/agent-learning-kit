@@ -10,7 +10,7 @@ Defines configuration classes for the guardrails system including:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Literal, Set
+from typing import Dict, List, Optional, Literal, Set
 from enum import Enum
 
 

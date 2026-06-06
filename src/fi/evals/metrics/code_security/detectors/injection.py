@@ -11,9 +11,9 @@ Detects various injection vulnerabilities:
 """
 
 import re
-from typing import List, Optional, Dict, Set
+from typing import List, Optional
 
-from .base import BaseDetector, PatternBasedDetector, register_detector
+from .base import BaseDetector, register_detector
 from ..types import (
     SecurityFinding,
     Severity,

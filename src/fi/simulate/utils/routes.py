@@ -1,5 +1,4 @@
 import httpx
-import os
 from typing import Dict, Any, List, Optional
 
 class APIRoutes:

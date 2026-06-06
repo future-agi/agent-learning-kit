@@ -5,7 +5,7 @@ These types support trajectory-based evaluation of AI agent performance,
 including multi-step analysis and tool usage tracking.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from ...types import BaseMetricInput

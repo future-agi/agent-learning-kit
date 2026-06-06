@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 from ...base_metric import BaseMetric
 from ..types import NoiseSensitivityInput
 from ..utils import (
-    split_into_sentences,
     extract_claims,
     check_claim_supported,
     compute_semantic_similarity,

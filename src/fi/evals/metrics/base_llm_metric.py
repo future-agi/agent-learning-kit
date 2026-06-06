@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type, Generic, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 import re
 import json
@@ -61,7 +61,7 @@ class BaseLLMJudgeMetric(BaseMetric[LLMJudgeInputType], ABC):
         """
         try:
             return self.output_pydantic_model.model_validate_json(response_text)
-        except (ValidationError, json.JSONDecodeError) as e:
+        except (ValidationError, json.JSONDecodeError):
             # Fallback attempt: extract JSON from messy text and retry
             # use our metric to check if it contains json
             if (
@@ -78,10 +78,10 @@ class BaseLLMJudgeMetric(BaseMetric[LLMJudgeInputType], ABC):
                     )
                 except (ValidationError, json.JSONDecodeError) as final_e:
                     raise ValueError(
-                        f"Failed to validate the extracted JSON."
+                        "Failed to validate the extracted JSON."
                     ) from final_e
             else:
-                raise ValueError(f"Failed to find JSON in the response.")
+                raise ValueError("Failed to find JSON in the response.")
 
     def compute_one(self, inputs: LLMJudgeInputType) -> Dict[str, Any]:
         messages = self._create_prompt_messages(inputs)

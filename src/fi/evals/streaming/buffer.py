@@ -5,8 +5,8 @@ Accumulates tokens/chunks and manages when to trigger evaluations.
 
 import re
 import time
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple
 from .types import StreamingConfig
 
 

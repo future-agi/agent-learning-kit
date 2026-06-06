@@ -5,7 +5,7 @@ These types support the evaluation of LLM function/tool calling
 capabilities with AST-based comparison.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 from ...types import BaseMetricInput

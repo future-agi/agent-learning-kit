@@ -1,6 +1,6 @@
 """Reporter for displaying assertion results."""
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from .evaluator import AssertionReport, AssertionResult, AssertionOutcome
+from .evaluator import AssertionReport, AssertionResult
 
 
 class AssertionReporter:

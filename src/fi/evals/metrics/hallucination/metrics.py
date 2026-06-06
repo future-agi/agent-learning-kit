@@ -13,10 +13,10 @@ Metrics:
 - HallucinationScore — composite (sentinel + NLI)
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ..base_metric import BaseMetric
-from .types import HallucinationInput, FactualConsistencyInput, Claim
+from .types import HallucinationInput, FactualConsistencyInput
 from .nli import NLILabel, check_entailment, check_contradiction, nli_score_for_claim
 from .detector import extract_claims
 from .sentinel import HallucinationSentinel

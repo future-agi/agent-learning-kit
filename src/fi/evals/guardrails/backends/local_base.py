@@ -8,7 +8,7 @@ either via VLLM server or direct transformers loading.
 import os
 import time
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fi.evals.guardrails.backends.base import BaseBackend
 from fi.evals.guardrails.backends.vllm_client import VLLMClient, get_vllm_url

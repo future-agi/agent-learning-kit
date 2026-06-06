@@ -1,9 +1,8 @@
 """Run history storage for tracking evaluation runs."""
 
 import json
-import os
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional

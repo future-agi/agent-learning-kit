@@ -1,6 +1,6 @@
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Callable
+from typing import Optional
 from fi.simulate.agent.definition import AgentDefinition, SimulatorAgentDefinition
 from fi.simulate.simulation.models import Scenario, TestReport
 

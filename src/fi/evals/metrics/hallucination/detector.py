@@ -6,10 +6,10 @@ to provide comprehensive hallucination analysis.
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from .types import Claim, HallucinationResult
-from .nli import NLILabel, check_entailment, nli_score_for_claim
+from .nli import NLILabel, nli_score_for_claim
 from .sentinel import HallucinationSentinel
 
 

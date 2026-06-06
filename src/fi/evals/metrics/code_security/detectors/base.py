@@ -6,17 +6,14 @@ Each detector focuses on a specific CWE or category of vulnerabilities.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any, Set
-from dataclasses import dataclass
+from typing import List, Optional, Dict, Set
 
 from ..types import (
     SecurityFinding,
     Severity,
     VulnerabilityCategory,
     CodeLocation,
-    CWE_METADATA,
     get_cwe_severity,
-    get_cwe_category,
 )
 from ..analyzer import AnalysisResult
 

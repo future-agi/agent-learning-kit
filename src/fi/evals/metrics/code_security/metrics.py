@@ -29,8 +29,7 @@ Usage:
     print(f"Passed: {result.passed}")
 """
 
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Dict, Any
 
 from .types import (
     Severity,
@@ -38,15 +37,12 @@ from .types import (
     SecurityFinding,
     CodeSecurityInput,
     CodeSecurityOutput,
-    EvaluationMode,
     SEVERITY_WEIGHTS,
 )
 from .detectors import (
     scan_code,
-    get_all_detectors,
     get_detectors_by_category,
 )
-from .joint_metrics import JointSecurityMetrics, JointMetricsResult
 
 
 class CodeSecurityScore:

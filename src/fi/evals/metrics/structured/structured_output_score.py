@@ -289,7 +289,7 @@ class QuickStructuredCheck(BaseMetric[JSONInput]):
                 else:
                     score = 1.0
             else:
-                score = 1.0 if type(expected) == type(parsed) else 0.5
+                score = 1.0 if type(expected) is type(parsed) else 0.5
 
         return {
             "output": round(score, 4),

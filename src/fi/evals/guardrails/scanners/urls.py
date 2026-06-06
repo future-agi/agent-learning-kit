@@ -84,7 +84,7 @@ def _check_homoglyph(domain: str) -> Optional[str]:
     """Check for homoglyph attacks (lookalike characters)."""
     # Common homoglyphs
     homoglyphs = {
-        '0': 'o', '1': 'l', '1': 'i', '@': 'a',
+        '0': 'o', '1': 'i', '@': 'a',
         '$': 's', '3': 'e', '4': 'a', '5': 's',
         '6': 'b', '7': 't', '8': 'b', '9': 'g',
     }

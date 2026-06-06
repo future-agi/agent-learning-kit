@@ -12,7 +12,7 @@ Provides language-aware code analysis including:
 import ast
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 

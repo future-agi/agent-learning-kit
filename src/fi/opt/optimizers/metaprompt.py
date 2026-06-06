@@ -1,10 +1,9 @@
 import json
 import random
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
-from ..base.base_generator import BaseGenerator
 from ..base.base_optimizer import BaseOptimizer
 from ..datamappers.basic_mapper import BasicDataMapper
 from ..base.evaluator import Evaluator

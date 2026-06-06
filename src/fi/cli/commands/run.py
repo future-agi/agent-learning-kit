@@ -1,6 +1,5 @@
 """Run command for executing evaluations."""
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -129,7 +128,7 @@ def run(
         fi run --offline                    # No cloud API calls (implies local mode)
     """
     from fi.evals.evaluator import Evaluator
-    from fi.evals.local import ExecutionMode, HybridEvaluator, LocalEvaluator
+    from fi.evals.local import HybridEvaluator
 
     # Handle offline mode implications
     effective_mode = mode
@@ -191,7 +190,7 @@ def run(
         for eval_def in eval_config.evaluations:
             try:
                 test_data = load_test_data(eval_def.data)
-            except FileNotFoundError as e:
+            except FileNotFoundError:
                 print_error(f"Data file not found: {eval_def.data}")
                 raise typer.Exit(1)
 

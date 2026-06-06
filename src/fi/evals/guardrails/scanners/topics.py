@@ -7,7 +7,7 @@ Supports both keyword-based and semantic embedding-based detection.
 
 import re
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from fi.evals.guardrails.scanners.base import (
     BaseScanner,
@@ -358,7 +358,7 @@ class TopicRestrictionScanner(BaseScanner):
 
             return results
 
-        except Exception as e:
+        except Exception:
             # Return empty on error
             return {}
 

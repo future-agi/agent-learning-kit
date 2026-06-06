@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import statistics
 
-from .conditions import Condition, MetricType
+from .conditions import MetricType
 from .parser import ConditionParser, ConditionParseError
 
 
@@ -115,7 +115,6 @@ class AssertionEvaluator:
             metrics[MetricType.MAX_SCORE] = max(numeric_outputs)
 
             sorted_outputs = sorted(numeric_outputs)
-            n = len(sorted_outputs)
 
             # Percentiles
             metrics[MetricType.P50_SCORE] = self._percentile(sorted_outputs, 50)

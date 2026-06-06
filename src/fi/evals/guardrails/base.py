@@ -15,7 +15,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 
 from fi.evals.guardrails.config import (
     GuardrailsConfig,
@@ -25,7 +25,7 @@ from fi.evals.guardrails.config import (
 )
 from fi.evals.guardrails.types import GuardrailResult, GuardrailsResponse
 from fi.evals.guardrails.backends.base import BaseBackend
-from fi.evals.guardrails.scanners import ScannerPipeline, create_default_pipeline
+from fi.evals.guardrails.scanners import ScannerPipeline
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,7 @@ Used by local model backends to communicate with VLLM instances.
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-import asyncio
+from typing import Dict, List, Optional
 import httpx
 
 

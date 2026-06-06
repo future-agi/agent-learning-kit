@@ -2,27 +2,12 @@ import inspect
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from typing import Any, Dict, List, Optional, Union
+
 from requests import Response
 
 from fi.api.auth import APIKeyAuth, ResponseHandler
-
-
-def _coerce_to_api_input(value: Any) -> Any:
-    """The api accepts strings, list[str], or list[list[str]]. Serialize
-    anything richer (dict, list[dict], list[mixed]) to JSON so users can
-    pass native Python objects for conversation/messages/structured inputs.
-    """
-    if isinstance(value, dict):
-        return json.dumps(value)
-    if isinstance(value, list):
-        if all(isinstance(v, str) for v in value):
-            return value
-        if all(isinstance(v, list) and all(isinstance(x, str) for x in v) for v in value):
-            return value
-        return json.dumps(value)
-    return value
 from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.execution import Execution, _normalize_status
 from fi.evals.templates import EvalTemplate
@@ -30,11 +15,20 @@ from fi.evals.types import BatchRunResult, EvalResult
 from fi.utils.errors import InvalidAuthError
 from fi.utils.routes import Routes
 
-try:
-    from opentelemetry import trace
-    from opentelemetry import trace as otel_trace_api
-except ImportError:
-    pass
+def _coerce_to_api_input(value: Any) -> Any:
+    """Serialize rich native Python objects into API-supported input values."""
+    if isinstance(value, dict):
+        return json.dumps(value)
+    if isinstance(value, list):
+        if all(isinstance(v, str) for v in value):
+            return value
+        if all(
+            isinstance(v, list) and all(isinstance(x, str) for x in v)
+            for v in value
+        ):
+            return value
+        return json.dumps(value)
+    return value
 
 
 class EvalResponseHandler(ResponseHandler[BatchRunResult, None]):
@@ -721,7 +715,7 @@ class Evaluator(APIKeyAuth):
 
 # Top-level convenience for the common "list everything" case.
 # The main ``evaluate()`` entrypoint is imported from ``fi.evals.core``.
-list_evaluations = lambda: Evaluator().list_evaluations()
-
+def list_evaluations():
+    return Evaluator().list_evaluations()
 
 

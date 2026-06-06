@@ -7,7 +7,7 @@ production deployments.
 """
 
 from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError as FuturesTimeout
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Any, Optional, Callable, TypeVar, List
 from datetime import datetime, timezone
 import threading

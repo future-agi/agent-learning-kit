@@ -64,7 +64,7 @@ class SchemaCompliance(BaseMetric[StructuredInput]):
 
     def _yaml_available(self) -> bool:
         try:
-            import yaml
+            import yaml  # noqa: F401
             return True
         except ImportError:
             return False

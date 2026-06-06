@@ -9,7 +9,7 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 from fi.evals.guardrails.config import GuardrailModel
-from fi.evals.guardrails.registry import MODEL_REGISTRY, ModelInfo, get_model_info
+from fi.evals.guardrails.registry import MODEL_REGISTRY
 
 
 class BackendDiscovery:

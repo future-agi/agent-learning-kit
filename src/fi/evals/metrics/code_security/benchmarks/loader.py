@@ -194,8 +194,6 @@ class SecurityBenchmark:
         Returns:
             BenchmarkResult with comprehensive metrics
         """
-        start_time = time.time()
-
         if mode == EvaluationMode.INSTRUCT:
             return self._evaluate_instruct(model_fn, language, max_tests, k)
         elif mode == EvaluationMode.AUTOCOMPLETE:

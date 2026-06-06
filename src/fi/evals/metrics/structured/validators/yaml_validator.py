@@ -2,8 +2,7 @@
 YAML validation with JSON Schema support.
 """
 
-import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 from ..types import ValidationResult, ValidationError, ValidationMode
 from .base import BaseValidator
 
@@ -16,7 +15,7 @@ except ImportError:
 
 # Optional jsonschema import
 try:
-    import jsonschema
+    import jsonschema  # noqa: F401
     from jsonschema import Draft7Validator
     _JSONSCHEMA_AVAILABLE = True
 except ImportError:

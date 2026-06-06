@@ -5,11 +5,10 @@ Prompts the model with a system message asking for safe/unsafe classification.
 Works with any LLM that follows instructions (llama3.2, qwen3, mistral, etc.).
 """
 
-import re
 from typing import Any, Dict, List, Optional
 
 from fi.evals.guardrails.backends.local_base import LocalModelBackend
-from fi.evals.guardrails.config import GuardrailModel, RailType
+from fi.evals.guardrails.config import RailType
 from fi.evals.guardrails.types import GuardrailResult
 
 
@@ -144,7 +143,7 @@ class GenericLLMGuardBackend(LocalModelBackend):
                     category=cat,
                     score=1.0,
                     model=self.model_name,
-                    reason=f"LLM classified as unsafe",
+                    reason="LLM classified as unsafe",
                     action="block",
                     latency_ms=0.0,
                 )

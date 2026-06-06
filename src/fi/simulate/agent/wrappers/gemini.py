@@ -1,4 +1,4 @@
-from typing import Any, Union, List, Dict
+from typing import Any, Union
 from fi.simulate.agent.wrapper import AgentWrapper, AgentInput, AgentResponse
 
 class GeminiAgentWrapper(AgentWrapper):
@@ -32,8 +32,6 @@ class GeminiAgentWrapper(AgentWrapper):
             # Add a dummy model acknowledgement to keep turns valid (User -> Model -> User)
             history.append({"role": "model", "parts": ["Understood."]})
             
-        last_message = None
-        
         for msg in input.messages:
             role = "user" if msg["role"] == "user" else "model"
             content = msg["content"]
@@ -65,4 +63,3 @@ class GeminiAgentWrapper(AgentWrapper):
             response = chat.send_message(prompt)
             
         return response.text
-

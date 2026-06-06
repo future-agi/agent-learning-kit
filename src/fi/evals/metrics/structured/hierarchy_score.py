@@ -5,10 +5,10 @@ Tree-based structural comparison using edit distance concepts.
 Inspired by STED (Structural Tree Edit Distance) for comparing hierarchical structures.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ..base_metric import BaseMetric
-from .types import JSONInput, StructuredInput
+from .types import JSONInput
 from .validators import JSONValidator
 
 
@@ -284,7 +284,7 @@ class TreeEditDistance(BaseMetric[JSONInput]):
         operations = []
 
         # Handle type mismatches
-        if type(expected) != type(actual):
+        if type(expected) is not type(actual):
             operations.append({
                 "type": "replace",
                 "path": path,

@@ -7,7 +7,7 @@ when evaluations are run through fi.evals.
 This enables the "evals data automatically goes into spans" workflow.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 import logging
 import time
 
@@ -16,7 +16,7 @@ from .conventions import EvaluationAttributes, GenAIAttributes
 
 if OTEL_AVAILABLE:
     from opentelemetry import trace
-    from opentelemetry.trace import Span, Status, StatusCode
+    from opentelemetry.trace import Status, StatusCode
 
 logger = logging.getLogger(__name__)
 

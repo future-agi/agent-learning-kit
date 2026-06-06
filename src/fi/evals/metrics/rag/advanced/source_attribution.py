@@ -6,7 +6,7 @@ properly cites its sources and whether citations are accurate.
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ...base_metric import BaseMetric
 from ..types import SourceAttributionInput

@@ -276,23 +276,6 @@ class RegexScanner(BaseScanner):
                 latency_ms=latency,
             )
 
-        # Determine action based on matched patterns
-        # Use the most restrictive action among matches
-        actions = [
-            COMMON_PATTERNS.get(m.pattern_name, RegexPattern(name="", pattern="")).action
-            if m.pattern_name in COMMON_PATTERNS
-            else self.action
-            for m in significant_matches
-        ]
-
-        final_action = self.action
-        if ScannerAction.BLOCK in actions:
-            final_action = ScannerAction.BLOCK
-        elif ScannerAction.REDACT in actions:
-            final_action = ScannerAction.REDACT
-        elif ScannerAction.FLAG in actions:
-            final_action = ScannerAction.FLAG
-
         return self._create_result(
             passed=False,
             matches=significant_matches,

@@ -18,7 +18,7 @@ Example:
 """
 
 from typing import Optional, Callable, List
-from ..types import EvaluationMode, SecurityFinding
+from ..types import EvaluationMode
 from .base import BaseModeEvaluator, AdversarialModeResult
 
 

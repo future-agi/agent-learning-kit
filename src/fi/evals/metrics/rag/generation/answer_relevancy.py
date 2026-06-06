@@ -4,14 +4,13 @@ Answer Relevancy Metric.
 Measures how well the generated response addresses the original query.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ...base_metric import BaseMetric
 from ..types import AnswerRelevancyInput
 from ..utils import (
     extract_keywords,
     compute_semantic_similarity,
-    compute_word_overlap,
 )
 
 

@@ -8,12 +8,12 @@ warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an 
 # ---------------------------------------------------------------------------
 # Unified evaluate() API (new)
 # ---------------------------------------------------------------------------
-from .core import evaluate, EvalResult, BatchResult, Turing  # noqa: F401
+from .core import evaluate, EvalResult, BatchResult, Turing  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Execution handles (async eval / composite polling)
 # ---------------------------------------------------------------------------
-from .execution import Execution, ExecutionError  # noqa: F401
+from .execution import Execution, ExecutionError  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Cloud Evaluator + Protect (existing)
@@ -36,7 +36,7 @@ except (ImportError, ModuleNotFoundError):
 # Framework (evaluation orchestration + distributed backends)
 # ---------------------------------------------------------------------------
 try:
-    from .framework import (
+    from .framework import (  # noqa: E402, F401
         FrameworkEvaluator,
         ExecutionMode,
         blocking_evaluator,
@@ -57,7 +57,7 @@ except (ImportError, ModuleNotFoundError):
 # ---------------------------------------------------------------------------
 # Streaming
 # ---------------------------------------------------------------------------
-from .streaming import (  # noqa: F401
+from .streaming import (  # noqa: E402, F401
     StreamingEvaluator,
     StreamingConfig,
     StreamingEvalResult,

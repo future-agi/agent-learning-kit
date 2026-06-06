@@ -1,6 +1,5 @@
 """Init command for creating new evaluation projects."""
 
-import os
 from pathlib import Path
 from typing import Optional
 

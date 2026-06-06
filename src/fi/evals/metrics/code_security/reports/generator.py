@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import json
 
 from ..benchmarks.types import BenchmarkResult, CWEBreakdown
-from ..types import SecurityFinding, Severity
+from ..types import SecurityFinding
 
 
 @dataclass

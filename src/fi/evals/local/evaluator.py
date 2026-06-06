@@ -8,12 +8,12 @@ evaluations between local execution, local LLM, and cloud APIs.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import time
 import logging
 
 from ..types import BatchRunResult, EvalResult
-from .execution_mode import RoutingMode, can_run_locally, select_routing_mode
+from .execution_mode import RoutingMode, can_run_locally
 from .registry import get_registry, LocalMetricRegistry
 
 if TYPE_CHECKING:

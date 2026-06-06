@@ -8,7 +8,7 @@ and allowing them to recover.
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Deque, Optional, TypeVar
 
 from .types import (

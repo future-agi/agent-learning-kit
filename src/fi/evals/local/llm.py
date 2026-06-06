@@ -22,8 +22,8 @@ Example:
     0.9
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 import json
 import logging
 import re

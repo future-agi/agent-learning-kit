@@ -15,7 +15,7 @@ allowing you to use battle-tested LLM-based evaluations as safety scanners.
 
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from fi.evals.guardrails.scanners.base import (
@@ -388,7 +388,7 @@ class EvalDelegateScanner(BaseScanner):
                             "latency_ms": latency,
                             "source": "local",
                         }
-                except Exception as e:
+                except Exception:
                     # Fall through to cloud evaluation
                     pass
 
@@ -550,9 +550,25 @@ class EvalDelegateScanner(BaseScanner):
 
 
 # Convenience aliases
-PIIScanner = lambda **kwargs: EvalDelegateScanner.for_pii(**kwargs)
-ToxicityScanner = lambda **kwargs: EvalDelegateScanner.for_toxicity(**kwargs)
-PromptInjectionScanner = lambda **kwargs: EvalDelegateScanner.for_prompt_injection(**kwargs)
-BiasScanner = lambda **kwargs: EvalDelegateScanner.for_bias(**kwargs)
-SafetyScanner = lambda **kwargs: EvalDelegateScanner.for_safety(**kwargs)
-ContentModerationScanner = lambda **kwargs: EvalDelegateScanner.for_content_moderation(**kwargs)
+def PIIScanner(**kwargs):
+    return EvalDelegateScanner.for_pii(**kwargs)
+
+
+def ToxicityScanner(**kwargs):
+    return EvalDelegateScanner.for_toxicity(**kwargs)
+
+
+def PromptInjectionScanner(**kwargs):
+    return EvalDelegateScanner.for_prompt_injection(**kwargs)
+
+
+def BiasScanner(**kwargs):
+    return EvalDelegateScanner.for_bias(**kwargs)
+
+
+def SafetyScanner(**kwargs):
+    return EvalDelegateScanner.for_safety(**kwargs)
+
+
+def ContentModerationScanner(**kwargs):
+    return EvalDelegateScanner.for_content_moderation(**kwargs)

@@ -4,7 +4,7 @@ Field Completeness Metric.
 Measures the presence of required and optional fields in structured output.
 """
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 from ..base_metric import BaseMetric
 from .types import StructuredInput, JSONInput

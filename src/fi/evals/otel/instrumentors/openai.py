@@ -5,10 +5,9 @@ Automatic instrumentation for the OpenAI Python client library.
 Supports both sync and async APIs.
 """
 
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Dict, Callable
 import functools
 import logging
-import json
 
 from .base import BaseInstrumentor
 from ..processors import OTEL_AVAILABLE
@@ -18,13 +17,9 @@ from ..conventions import (
     OPERATION_CHAT,
     OPERATION_COMPLETION,
     OPERATION_EMBEDDING,
-    FINISH_STOP,
-    FINISH_LENGTH,
-    FINISH_TOOL_CALLS,
 )
 
 if OTEL_AVAILABLE:
-    from opentelemetry import trace
     from opentelemetry.trace import Status, StatusCode
 
 logger = logging.getLogger(__name__)
@@ -87,7 +82,6 @@ class OpenAIInstrumentor(BaseInstrumentor):
             return
 
         try:
-            import openai
             from openai.resources.chat import completions as chat_completions
             from openai.resources import embeddings
 
@@ -217,8 +211,6 @@ class OpenAIInstrumentor(BaseInstrumentor):
         is_async: bool,
     ):
         """Trace a chat completion call."""
-        tracer = self.get_tracer()
-
         # Extract parameters
         model = kwargs.get("model", "unknown")
         messages = kwargs.get("messages", [])
@@ -243,7 +235,7 @@ class OpenAIInstrumentor(BaseInstrumentor):
             prompt_text = self._format_messages(messages)
             attributes[GenAIAttributes.prompt_content(0)] = prompt_text[:10000]
 
-        span_name = f"openai.chat.completions.create"
+        span_name = "openai.chat.completions.create"
 
         if is_async:
             return self._trace_async(

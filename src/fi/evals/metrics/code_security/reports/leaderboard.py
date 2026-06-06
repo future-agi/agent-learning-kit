@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import json
 
-from ..benchmarks.types import BenchmarkResult, CWEBreakdown
+from ..benchmarks.types import BenchmarkResult
 
 
 @dataclass
@@ -308,15 +308,15 @@ class SecurityLeaderboard:
             List of model names, best to worst
         """
         if metric == "func_at_k":
-            key_fn = lambda m: m.avg_func_at_k
+            key_attr = "avg_func_at_k"
         elif metric == "sec_at_k":
-            key_fn = lambda m: m.avg_sec_at_k
+            key_attr = "avg_sec_at_k"
         else:
-            key_fn = lambda m: m.avg_func_sec_at_k
+            key_attr = "avg_func_sec_at_k"
 
         sorted_models = sorted(
             self.models.values(),
-            key=key_fn,
+            key=lambda model: getattr(model, key_attr),
             reverse=True,
         )
         return [m.name for m in sorted_models]

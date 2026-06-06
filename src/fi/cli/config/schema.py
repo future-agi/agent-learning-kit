@@ -1,6 +1,6 @@
 """Configuration schema definitions for fi-evaluation.yaml."""
 
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 

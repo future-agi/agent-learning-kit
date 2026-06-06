@@ -1,9 +1,7 @@
 """View command for displaying evaluation results."""
 
-import json
 import tempfile
 import webbrowser
-from pathlib import Path
 from typing import Optional
 
 import typer
