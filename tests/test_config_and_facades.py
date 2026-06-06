@@ -175,6 +175,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.behavior_entropy_artifact is not None
     assert evals.collaborative_competence_report is not None
     assert simulate.collaborative_competence_artifact is not None
+    assert evals.redteam_adaptive_loop_report is not None
+    assert simulate.redteam_adaptive_loop_artifact is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
@@ -5545,6 +5547,96 @@ def test_sdk_adaptive_redteam_optimization_example_runs(monkeypatch, tmp_path):
     assert campaign_summary["coverage_cell_count"] == 16
     assert campaign_summary["missing_coverage_cells"] == []
     assert campaign_summary["missing_executed_cells"] == []
+
+
+def test_sdk_redteam_adaptive_loop_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import evals, simulate
+
+    key = "real-local-sdk-redteam-adaptive-loop-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_redteam_adaptive_loop_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_adaptive_loop_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    weak_loop = evals.redteam_adaptive_loop_report(
+        module.weak_report(),
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    strong_loop = simulate.redteam_adaptive_loop_artifact(
+        module.verified_report(),
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    assert weak_loop["kind"] == "agent-learning.eval.redteam-adaptive-loop.v1"
+    assert weak_loop["status"] == "failed"
+    assert weak_loop["score"] < 0.9
+    assert strong_loop["status"] == "passed"
+    assert strong_loop["score"] == pytest.approx(1.0)
+    assert strong_loop["metadata"]["requires_external_service"] is False
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY"
+    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["metric_weights"]["red_team_adaptive_loop_quality"] == 12.0
+    assert config["red_team_adaptive_loop_quality"]["require_no_external_service"] is True
+    assert config["red_team_adaptive_loop_quality"]["required_loop_signals"] == [
+        "strategy_generation",
+        "execution",
+        "trajectory_refinement",
+        "outcome_feedback",
+        "verifier",
+    ]
+
+    output_path = tmp_path / "sdk-redteam-adaptive-loop-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert output_path.with_suffix(".manifest.json").exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    best_config = result["optimization"]["best_config"]
+    assert best_config["redteam"]["profile"] == "hardened_adaptive_campaign"
+    assert "endpoint" not in _nested_keys(best_config)
+    assert "auth" not in _nested_keys(best_config)
+    assert "api_key" not in _nested_keys(best_config)
+    assert "secret" not in _nested_keys(best_config)
+    assert "token" not in _nested_keys(best_config)
+    best_history = max(result["optimization"]["history"], key=lambda item: item["score"])
+    assert best_history["metrics"]["red_team_adaptive_loop_quality"] == pytest.approx(
+        1.0
+    )
+    observed = next(
+        metric
+        for metric in best_history["report"]["results"][0]["evaluation"][
+            "agent_report"
+        ]["metrics"]
+        if metric["name"] == "red_team_adaptive_loop_quality"
+    )["details"]["observed"]
+    assert set(observed["vectors"]) >= {
+        "prompt",
+        "indirect_prompt",
+        "tool",
+        "memory",
+        "retrieval",
+        "multi_agent",
+    }
+    assert observed["requires_external_service"] is False
 
 
 def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):

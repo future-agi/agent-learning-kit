@@ -4706,6 +4706,25 @@ def collaborative_competence_artifact(
     )
 
 
+def redteam_adaptive_loop_artifact(
+    report: Any,
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    threshold: float = 0.7,
+    min_score: float = 0.9,
+) -> dict[str, Any]:
+    """Return a local adaptive-loop artifact from a red-team simulation report."""
+
+    from . import evals as _agent_evals
+
+    return _agent_evals.redteam_adaptive_loop_report(
+        report,
+        config=config,
+        threshold=threshold,
+        min_score=min_score,
+    )
+
+
 def wrap_agent(*args: Any, **kwargs: Any) -> Any:
     return _simulate().wrap_agent(*args, **kwargs)
 
@@ -8313,6 +8332,7 @@ __all__ = [
     "apply_manifest_env",
     "behavior_entropy_artifact",
     "collaborative_competence_artifact",
+    "redteam_adaptive_loop_artifact",
     "build_agent_control_plane_run_manifest",
     "build_agent_integration_run_manifest",
     "build_autonomous_redteam_task_world_run_manifest",

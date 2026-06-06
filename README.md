@@ -854,6 +854,10 @@ AGENT_LEARNING_SDK_ADAPTIVE_REDTEAM_OPT_KEY=... \
   PYTHONPATH=src python examples/sdk_adaptive_redteam_optimization.py \
   artifacts/sdk-adaptive-redteam-optimization.json
 
+AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_adaptive_loop_optimization.py \
+  artifacts/sdk-redteam-adaptive-loop-optimization.json
+
 AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
@@ -1060,6 +1064,17 @@ same helper is exposed as `optimize_adaptive_redteam_strategy()` for report
 action-card workflows, and `examples/sdk_adaptive_redteam_optimization.py`
 selects the hardened adaptive campaign from a blind memory-surface source
 artifact.
+
+`red_team_adaptive_loop_quality` makes the adaptive loop itself measurable:
+strategy generation, execution evidence, trajectory refinement, outcome
+feedback, verifier checks, monitor calibration, and memory/tool/retrieval/
+multi-agent vectors are scored separately from broad campaign matrix quality.
+Use `evals.redteam_adaptive_loop_report()` or
+`simulate.redteam_adaptive_loop_artifact()` for direct local artifacts, or add
+the metric to optimization weights. `examples/sdk_redteam_adaptive_loop_optimization.py`
+proves a static probe fails and the hardened adaptive loop passes without any
+external service; it also writes a `.manifest.json` that promptfoo-style CLI
+users can rerun with `agent-learn optimize`.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of

@@ -2018,6 +2018,8 @@ def _redteam_matrix_campaign(
             "source": "redteam.auto_generate",
             "presets": _redteam_preset_names(redteam),
             "preset_sources": _redteam_preset_sources(redteam),
+            "attack_system": dict(redteam.get("attack_system") or {}),
+            "personas": list(_coerce_list(redteam.get("personas"))),
         },
     }
 
