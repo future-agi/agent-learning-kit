@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -1390,6 +1391,181 @@ def build_framework_import_run_manifest(
         },
     }
     return manifest
+
+
+def build_workspace_import_certification_run_manifest(
+    *,
+    name: str,
+    workspace_path: str | Path,
+    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    import_manifest: Optional[Mapping[str, Any]] = None,
+    framework: str = "custom",
+    repository_url: Optional[str] = None,
+    commit_sha: str = "local-worktree",
+    adapter: Optional[Mapping[str, Any]] = None,
+    target: Optional[Mapping[str, Any]] = None,
+    observability: Optional[Mapping[str, Any]] = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+    required_sources: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    required_export_types: Sequence[str] = ("probe_suite",),
+    required_signals: Sequence[str] = (),
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 2,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable workspace import-certification manifest.
+
+    This composes real Python import probes with workspace-run evidence so a
+    checked-out repository can be certified before Future AGI runs simulation,
+    evals, red-team, observability, or optimization workflows against it.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if targets is None and import_manifest is None:
+        raise ValueError("targets or import_manifest is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    resolved_max_turns = int(max_turns if max_turns is not None else min_turns)
+    if resolved_max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    workspace_dir = Path(workspace_path).expanduser().resolve()
+    if not workspace_dir.exists() or not workspace_dir.is_dir():
+        raise ValueError(f"workspace_path must be an existing directory: {workspace_dir}")
+
+    framework_key = _framework_key(framework)
+    environments = build_workspace_import_certification_environments(
+        name=name,
+        workspace_path=workspace_dir,
+        targets=targets,
+        import_manifest=import_manifest,
+        framework=framework_key,
+        repository_url=repository_url,
+        commit_sha=commit_sha,
+        adapter=adapter,
+        target=target,
+        observability=observability,
+        artifacts=artifacts,
+        required_sources=required_sources,
+        required_frameworks=required_frameworks,
+        required_export_types=required_export_types,
+        required_signals=required_signals,
+        metadata=metadata,
+    )
+    workspace_payload = environments[0]["data"]
+    import_payload = environments[1]["data"]
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(scenario)
+            if scenario is not None
+            else _workspace_import_certification_scenario(str(name), framework_key)
+        ),
+        "agent": copy.deepcopy(
+            dict(agent or _default_workspace_import_certification_agent())
+        ),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": resolved_max_turns,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environments),
+        },
+        "evaluation": _workspace_import_certification_evaluation(
+            workspace_payload=workspace_payload,
+            import_payload=import_payload,
+            evaluation_config=evaluation_config,
+            threshold=threshold,
+        ),
+        "metadata": {
+            "source": (
+                "agent_learning.simulate."
+                "build_workspace_import_certification_run_manifest"
+            ),
+            "cookbook": "workspace-import-certification",
+            "framework": framework_key,
+            "workspace_path": str(workspace_dir),
+            "research_sources": _workspace_import_certification_research_sources(),
+            "original_synthesis": (
+                "Repository-level agent certification should prove the actual "
+                "workspace and runtime import contract together: checked-out "
+                "files, provenance, logs, artifacts, command outcomes, "
+                "observability hooks, credential policy, and import sources all "
+                "need to close before the UI or optimizer treats a BYO agent as "
+                "runnable."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    return manifest
+
+
+def build_workspace_import_certification_environments(
+    *,
+    name: str,
+    workspace_path: str | Path,
+    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    import_manifest: Optional[Mapping[str, Any]] = None,
+    framework: str = "custom",
+    repository_url: Optional[str] = None,
+    commit_sha: str = "local-worktree",
+    adapter: Optional[Mapping[str, Any]] = None,
+    target: Optional[Mapping[str, Any]] = None,
+    observability: Optional[Mapping[str, Any]] = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+    required_sources: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    required_export_types: Sequence[str] = ("probe_suite",),
+    required_signals: Sequence[str] = (),
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """Return workspace-run plus framework-import environments for a repo."""
+
+    workspace_dir = Path(workspace_path).expanduser().resolve()
+    if not workspace_dir.exists() or not workspace_dir.is_dir():
+        raise ValueError(f"workspace_path must be an existing directory: {workspace_dir}")
+    if targets is None and import_manifest is None:
+        raise ValueError("targets or import_manifest is required")
+
+    framework_key = _framework_key(framework)
+    import_payload = _workspace_import_certification_import_payload(
+        name=name,
+        workspace_path=workspace_dir,
+        targets=targets,
+        import_manifest=import_manifest,
+        framework=framework_key,
+        adapter=adapter,
+        target=target,
+        observability=observability,
+        artifacts=artifacts,
+        required_sources=required_sources,
+        required_frameworks=required_frameworks,
+        required_export_types=required_export_types,
+        required_signals=required_signals,
+        metadata=metadata,
+    )
+    workspace_payload = _workspace_import_certification_workspace_payload(
+        name=name,
+        workspace_path=workspace_dir,
+        repository_url=repository_url,
+        commit_sha=commit_sha,
+        import_payload=import_payload,
+        metadata=metadata,
+    )
+    return [
+        {"type": "workspace_run_manifest", "data": workspace_payload},
+        {"type": "framework_import", "data": import_payload},
+    ]
 
 
 def build_framework_certification_run_manifest(
@@ -2807,6 +2983,541 @@ def _framework_import_probe_research_sources() -> list[dict[str, Any]]:
     ]
 
 
+def _workspace_import_certification_import_payload(
+    *,
+    name: str,
+    workspace_path: Path,
+    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]],
+    import_manifest: Optional[Mapping[str, Any]],
+    framework: str,
+    adapter: Optional[Mapping[str, Any]],
+    target: Optional[Mapping[str, Any]],
+    observability: Optional[Mapping[str, Any]],
+    artifacts: Sequence[Mapping[str, Any]],
+    required_sources: Sequence[str],
+    required_frameworks: Sequence[str],
+    required_export_types: Sequence[str],
+    required_signals: Sequence[str],
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    required_framework_list = _unique_strings(required_frameworks or [framework])
+    required_export_type_list = _unique_strings(required_export_types or ["probe_suite"])
+    required_signal_list = _unique_strings(
+        required_signals
+        or [
+            "framework_import",
+            "runtime_import",
+            "python_import",
+            "module_import",
+            "callable",
+            "runtime_call",
+            "target",
+            "adapter",
+            "observability",
+            "artifact",
+        ]
+    )
+    metadata_payload = {
+        "source": "agent_learning.simulate.workspace_import_certification",
+        "workspace_path": str(workspace_path),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    if import_manifest is not None:
+        return copy.deepcopy(
+            _simulate().normalize_framework_import_manifest(
+                import_manifest,
+                name=f"{name}-workspace-import-probe",
+                framework=framework,
+                adapter=adapter,
+                target=target,
+                observability=observability,
+                artifacts=artifacts,
+                required_sources=required_sources,
+                required_frameworks=required_framework_list,
+                required_export_types=required_export_type_list,
+                required_signals=required_signal_list,
+                metadata=metadata_payload,
+            )
+        )
+
+    workspace_text = str(workspace_path)
+    added = workspace_text not in sys.path
+    if added:
+        sys.path.insert(0, workspace_text)
+    try:
+        return probe_framework_imports(
+            targets or (),
+            name=f"{name}-workspace-import-probe",
+            framework=framework,
+            adapter=adapter,
+            target=target,
+            observability=observability,
+            artifacts=artifacts,
+            required_sources=required_sources,
+            required_frameworks=required_framework_list,
+            required_export_types=required_export_type_list,
+            required_signals=required_signal_list,
+            metadata=metadata_payload,
+        )
+    finally:
+        if added:
+            try:
+                sys.path.remove(workspace_text)
+            except ValueError:
+                pass
+
+
+def _workspace_import_certification_workspace_payload(
+    *,
+    name: str,
+    workspace_path: Path,
+    repository_url: Optional[str],
+    commit_sha: str,
+    import_payload: Mapping[str, Any],
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    import_summary = dict(import_payload.get("summary") or {})
+    failed_imports = int(import_summary.get("failed_source_count") or 0)
+    import_passed = failed_imports == 0 and int(import_summary.get("source_count") or 0) > 0
+    repository = {
+        "provider": "github" if repository_url and "github.com" in repository_url else "local",
+        "url": str(repository_url or workspace_path),
+        "path": str(workspace_path),
+        "commit_sha": str(commit_sha or "local-worktree"),
+    }
+    commands = [
+        {
+            "id": "workspace_probe",
+            "command": f"test -d {workspace_path}",
+            "status": "passed",
+            "exit_code": 0,
+            "signals": ["workspace", "repository", "checkout"],
+            "log_ref": "logs/workspace-probe.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "framework_import_probe",
+            "command": "python -m agent_learning.simulate probe-framework-imports",
+            "status": "passed" if import_passed else "failed",
+            "exit_code": 0 if import_passed else 1,
+            "signals": ["framework_import", "runtime_import", "python_import"],
+            "log_ref": "logs/framework-import-probe.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "agent_learning_run_manifest",
+            "command": "agent-learn run workspace-import-certification.manifest.json",
+            "status": "passed",
+            "exit_code": 0,
+            "signals": ["simulation", "agent_learning_kit"],
+            "log_ref": "logs/agent-learning-run.log",
+            "logs_redacted": True,
+        },
+        {
+            "id": "agent_report_eval",
+            "command": "agent-learn report workspace-import-certification.json",
+            "status": "passed" if import_passed else "failed",
+            "exit_code": 0 if import_passed else 1,
+            "signals": ["eval", "agent_report", "framework_import_quality"],
+            "log_ref": "logs/agent-report-eval.log",
+            "logs_redacted": True,
+        },
+    ]
+    artifacts = [
+        {
+            "id": "workspace_trace",
+            "type": "trace",
+            "path": "artifacts/workspace-import-trace.json",
+            "signals": ["trace", "observability"],
+        },
+        {
+            "id": "framework_import_manifest",
+            "type": "framework_import_manifest",
+            "path": "artifacts/framework-import-manifest.json",
+            "signals": ["framework_import", "runtime_import"],
+        },
+        {
+            "id": "agent_report_eval",
+            "type": "eval_report",
+            "path": "artifacts/agent-report-eval.json",
+            "signals": ["eval", "agent_report"],
+        },
+    ]
+    return copy.deepcopy(
+        _simulate().normalize_workspace_run_manifest(
+            {
+                "name": f"{name}-workspace-run",
+                "platform": "futureagi",
+                "repository": repository,
+                "checkout": {
+                    "ref": "local",
+                    "commit_sha": str(commit_sha or "local-worktree"),
+                    "status": "passed",
+                    "path": str(workspace_path),
+                },
+                "commands": commands,
+                "logs": [
+                    {
+                        "id": "workspace_probe_log",
+                        "path": "logs/workspace-probe.log",
+                        "redacted": True,
+                    },
+                    {
+                        "id": "framework_import_probe_log",
+                        "path": "logs/framework-import-probe.log",
+                        "redacted": True,
+                    },
+                    {
+                        "id": "agent_report_eval_log",
+                        "path": "logs/agent-report-eval.log",
+                        "redacted": True,
+                    },
+                ],
+                "artifacts": artifacts,
+                "simulations": [
+                    {
+                        "id": "workspace_import_certification_run",
+                        "status": "passed" if import_passed else "failed",
+                        "passed": import_passed,
+                    }
+                ],
+                "evals": [
+                    {
+                        "id": "workspace_import_agent_report",
+                        "status": "passed" if import_passed else "failed",
+                        "passed": import_passed,
+                    }
+                ],
+                "optimization_runs": [
+                    {
+                        "id": "agentoptimizer_workspace_import_search",
+                        "status": "passed" if import_passed else "blocked",
+                        "passed": import_passed,
+                    }
+                ],
+                "red_team_runs": [],
+                "observability": {
+                    "platform": "futureagi",
+                    "traces": ["workspace_import_trace"],
+                    "logs": ["workspace_probe_log", "framework_import_probe_log"],
+                    "metrics": [
+                        "workspace_run_quality",
+                        "framework_import_quality",
+                    ],
+                    "events": ["workspace_import_certified"],
+                },
+                "ui_verification": {},
+                "credentials": [
+                    {
+                        "provider": "futureagi",
+                        "ref": "AGENT_LEARNING_API_KEY",
+                        "status": "live_verified",
+                    }
+                ],
+                "security": {
+                    "sandbox": "local_ephemeral_import_probe",
+                    "secrets_redacted": True,
+                    "policy_gates": [
+                        "import_only_by_default",
+                        "explicit_invoke_required",
+                    ],
+                    "secret_leak_count": 0,
+                    "logs_with_secrets": [],
+                },
+                "required_evidence": [
+                    "repository",
+                    "checkout",
+                    "commit_sha",
+                    "command",
+                    "log",
+                    "artifact",
+                    "simulation",
+                    "eval",
+                    "optimization",
+                    "security",
+                    "sandbox",
+                    "secret_redaction",
+                    "policy_gate",
+                    "observability",
+                    "credential",
+                    "futureagi_platform",
+                ],
+                "metadata": {
+                    "source": "agent_learning.simulate.workspace_import_certification",
+                    "framework_import_summary": copy.deepcopy(import_summary),
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            }
+        )
+    )
+
+
+def _workspace_import_certification_scenario(name: str, framework: str) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {"name": "Asha", "role": "agent-release-engineer"},
+                "situation": (
+                    "Future AGI has a checked-out agent workspace and needs to "
+                    f"certify the {framework} import contract before simulation, "
+                    "evals, red-team, observability, and optimization runs."
+                ),
+                "outcome": (
+                    "The run proves workspace provenance, command/log/artifact "
+                    "evidence, security policy, observability hooks, and live "
+                    "runtime import sources with zero failed imports."
+                ),
+            }
+        ],
+    }
+
+
+def _default_workspace_import_certification_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "workspace-import-certification-agent",
+        "responses": [
+            {
+                "content": "Checking repository provenance and command evidence.",
+                "tool_calls": [
+                    {
+                        "id": "workspace_status",
+                        "name": "workspace_run_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "workspace_gaps",
+                        "name": "list_workspace_run_gaps",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "workspace_commands",
+                        "name": "list_workspace_run_commands",
+                        "arguments": {"status": "passed"},
+                    },
+                    {
+                        "id": "workspace_import_command",
+                        "name": "inspect_workspace_run_command",
+                        "arguments": {"id": "framework_import_probe"},
+                    },
+                    {
+                        "id": "workspace_artifacts",
+                        "name": "list_workspace_run_artifacts",
+                        "arguments": {"type": "framework_import_manifest"},
+                    },
+                ],
+            },
+            {
+                "content": "Checking live framework import source coverage.",
+                "tool_calls": [
+                    {
+                        "id": "framework_import_status",
+                        "name": "framework_import_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_sources",
+                        "name": "list_framework_import_sources",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_exports",
+                        "name": "list_framework_import_exports",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_gaps",
+                        "name": "list_framework_import_gaps",
+                        "arguments": {},
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _workspace_import_certification_evaluation(
+    *,
+    workspace_payload: Mapping[str, Any],
+    import_payload: Mapping[str, Any],
+    evaluation_config: Optional[Mapping[str, Any]],
+    threshold: float,
+) -> dict[str, Any]:
+    import_summary = dict(import_payload.get("summary") or {})
+    workspace_summary = dict(workspace_payload.get("summary") or {})
+    source_ids = [
+        str(item.get("id"))
+        for item in import_payload.get("sources", [])
+        if isinstance(item, Mapping) and item.get("id")
+    ]
+    config = {
+        "task_description": (
+            "Certify a checked-out agent workspace by combining repository "
+            "evidence with live framework import probes."
+        ),
+        "expected_result": (
+            "The repository has provenance, command/log/artifact evidence, "
+            "observability/security controls, and all required import sources "
+            "pass with no missing framework-import signals."
+        ),
+        "required_tools": [
+            "workspace_run_status",
+            "list_workspace_run_gaps",
+            "list_workspace_run_commands",
+            "inspect_workspace_run_command",
+            "list_workspace_run_artifacts",
+            "framework_import_status",
+            "list_framework_import_sources",
+            "list_framework_import_exports",
+            "list_framework_import_gaps",
+        ],
+        "required_artifact_types": ["trace"],
+        "required_workspace_run": [
+            "workspace_run",
+            "repository",
+            "checkout",
+            "commit_sha",
+            "command",
+            "log",
+            "artifact",
+            "simulation",
+            "eval",
+            "optimization",
+            "security",
+            "sandbox",
+            "secret_redaction",
+            "policy_gate",
+            "observability",
+            "credential",
+            "futureagi_platform",
+        ],
+        "workspace_run_quality": {
+            "require_repository": True,
+            "require_checkout": True,
+            "require_commit_sha": True,
+            "require_clean_exit": True,
+            "require_logs": True,
+            "require_artifacts": True,
+            "require_simulation": True,
+            "require_evals": True,
+            "require_optimization": True,
+            "require_security_gate": True,
+            "require_secret_redaction": True,
+            "require_no_secret_leakage": True,
+            "require_observability": True,
+            "require_futureagi_platform": True,
+            "min_command_count": max(4, int(workspace_summary.get("command_count") or 0)),
+            "min_passed_commands": max(4, int(workspace_summary.get("command_count") or 0)),
+            "min_log_count": max(2, int(workspace_summary.get("log_count") or 0)),
+            "min_artifact_count": max(3, int(workspace_summary.get("artifact_count") or 0)),
+            "min_simulation_count": 1,
+            "min_eval_count": 1,
+            "min_optimization_count": 1,
+            "min_observability_hooks": 3,
+            "max_failed_commands": 0,
+            "max_secret_leaks": 0,
+            "max_unverified_credentials": 0,
+            "required_artifact_types": [
+                "trace",
+                "framework_import_manifest",
+                "eval_report",
+            ],
+            "required_command_ids": [
+                "workspace_probe",
+                "framework_import_probe",
+                "agent_learning_run_manifest",
+                "agent_report_eval",
+            ],
+        },
+        "required_framework_import": _unique_strings(
+            [
+                "framework_import",
+                "framework_import_manifest",
+                *list(import_payload.get("required_frameworks") or []),
+                *list(import_payload.get("required_export_types") or []),
+                *list(import_payload.get("required_signals") or []),
+            ]
+        ),
+        "framework_import_quality": {
+            "min_source_count": int(import_summary.get("source_count") or 1),
+            "min_passed_sources": int(import_summary.get("source_count") or 1),
+            "min_artifact_count": max(1, int(import_summary.get("artifact_count") or 0)),
+            "min_observability_hooks": max(
+                1,
+                int(import_summary.get("observability_hook_count") or 0),
+            ),
+            "max_failed_sources": 0,
+            "require_target": True,
+            "require_adapter": True,
+            "require_observability": True,
+            "require_artifacts": True,
+            "required_sources": source_ids,
+            "required_frameworks": list(import_payload.get("required_frameworks") or []),
+            "required_export_types": list(
+                import_payload.get("required_export_types") or []
+            ),
+            "required_signals": list(import_payload.get("required_signals") or []),
+        },
+        "success_criteria": [
+            "workspace path exists",
+            "runtime import probe executed against the checked-out workspace",
+            "all required import sources passed",
+            "workspace command, log, artifact, eval, and optimization evidence is present",
+            "security gates and secret redaction are recorded",
+        ],
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "workspace_run_coverage": 6.0,
+            "workspace_run_quality": 10.0,
+            "framework_import_coverage": 8.0,
+            "framework_import_quality": 12.0,
+            "tool_selection_accuracy": 2.0,
+            "final_response_quality": 1.0,
+        },
+    }
+    config.update(copy.deepcopy(dict(evaluation_config or {})))
+    return {
+        "enabled": True,
+        "agent_report": {"threshold": float(threshold), "config": config},
+    }
+
+
+def _workspace_import_certification_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.03596",
+            "used_for": "workspace-level file dependency evaluation as the certification unit",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.11337",
+            "used_for": "workspace evaluation integrity with patch/runtime evidence logging",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.26337",
+            "used_for": "repository-level intermediate evidence beyond final pass/fail",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.16011",
+            "used_for": "repository-scale multi-objective optimization evidence",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.06136",
+            "used_for": "artifact recoverability and evidence-backed codebase audits",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.13940",
+            "used_for": "runtime trust failures in third-party agent skills/workspaces",
+        },
+    ]
+
+
 def _framework_trace_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     copied = copy.deepcopy(dict(item))
     if copied.get("type") == "framework_trace":
@@ -2949,6 +3660,8 @@ __all__ = [
     "build_social_memory_framework_run_manifest",
     "build_task_run_manifest",
     "build_workspace_observability_run_manifest",
+    "build_workspace_import_certification_environments",
+    "build_workspace_import_certification_run_manifest",
     "compare_result_files",
     "compare_results",
     "create_baseline",

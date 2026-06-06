@@ -170,6 +170,10 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_agent_integration is not None
     assert optimize.build_workspace_observability_optimization_manifest is not None
     assert optimize.optimize_workspace_observability is not None
+    assert simulate.build_workspace_import_certification_run_manifest is not None
+    assert simulate.build_workspace_import_certification_environments is not None
+    assert optimize.build_workspace_import_certification_optimization_manifest is not None
+    assert optimize.optimize_workspace_import_certification is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -7680,6 +7684,136 @@ def test_sdk_workspace_observability_optimization_example_runs(
     assert replay_summary["case_count"] == 2
     assert replay_summary["failed_case_count"] == 1
     assert replay_summary["missing_trace_signals"] == []
+
+
+def test_sdk_workspace_import_certification_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY",
+        "real-local-sdk-workspace-import-certification-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_workspace_import_certification_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_workspace_import_certification_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY"
+    ]
+    metadata = manifest["optimization"]["target"]["metadata"]
+    assert metadata["task_kind"] == "workspace_import_certification"
+    assert {item["year"] for item in metadata["research_sources"]} == {2026}
+    assert {
+        item["url"] for item in metadata["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2605.03596",
+        "https://arxiv.org/abs/2603.11337",
+        "https://arxiv.org/abs/2603.26337",
+        "https://arxiv.org/abs/2603.16011",
+        "https://arxiv.org/abs/2605.06136",
+        "https://arxiv.org/abs/2605.13940",
+    }
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    assert [env["type"] for env in candidates[0]] == [
+        "workspace_run_manifest",
+        "framework_import",
+    ]
+    assert [env["type"] for env in candidates[1]] == [
+        "workspace_run_manifest",
+        "framework_import",
+    ]
+    weak_import_summary = candidates[0][1]["data"]["summary"]
+    assert weak_import_summary["failed_source_count"] == 1
+    verified_workspace = candidates[1][0]["data"]
+    verified_import = candidates[1][1]["data"]
+    assert verified_workspace["summary"]["failed_command_count"] == 0
+    assert verified_workspace["summary"]["command_count"] == 4
+    assert verified_workspace["summary"]["optimization_count"] == 1
+    assert verified_workspace["summary"]["missing_required_evidence"] == []
+    assert verified_import["summary"]["source_count"] == 3
+    assert verified_import["summary"]["passed_source_count"] == 3
+    assert verified_import["summary"]["failed_source_count"] == 0
+    assert verified_import["summary"]["observed_frameworks"] == [
+        "langchain",
+        "langgraph",
+        "pipecat",
+    ]
+    quality = manifest["evaluation"]["agent_report"]["config"][
+        "framework_import_quality"
+    ]
+    assert quality["required_sources"] == [
+        "langgraph_factory",
+        "langchain_factory",
+        "pipecat_factory",
+    ]
+    assert manifest["optimization"]["scoring"]["layers"] == ["framework_import"]
+
+    output_path = tmp_path / "sdk-workspace-import-certification-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    for metric in (
+        "workspace_run_coverage",
+        "workspace_run_quality",
+        "framework_import_coverage",
+        "framework_import_quality",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"workspace_run_manifest", "framework_import_manifest"}
+    workspace_summary = state["workspace_run_manifest"]["summary"]
+    assert workspace_summary["failed_command_count"] == 0
+    assert workspace_summary["secret_leak_count"] == 0
+    import_summary = state["framework_import_manifest"]["summary"]
+    assert import_summary["failed_source_count"] == 0
+    readiness = result["framework_readiness"]
+    assert readiness["kind"] == "framework_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["present_layers"] == ["import"]
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
 
 
 def test_sdk_workspace_observability_simulation_example_runs(

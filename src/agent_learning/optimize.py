@@ -941,6 +941,206 @@ def optimize_framework_import_repair(
     )
 
 
+def build_workspace_import_certification_optimization_manifest(
+    *,
+    name: str = "workspace-import-certification-optimization",
+    workspace_path: str | Path = ".",
+    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    import_manifest: Optional[Mapping[str, Any]] = None,
+    framework: str = "custom",
+    repository_url: Optional[str] = None,
+    commit_sha: str = "local-worktree",
+    adapter: Optional[Mapping[str, Any]] = None,
+    target: Optional[Mapping[str, Any]] = None,
+    observability: Optional[Mapping[str, Any]] = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+    required_sources: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    required_export_types: Sequence[str] = ("probe_suite",),
+    required_signals: Sequence[str] = (),
+    certification_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 2,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build an AgentOptimizer search over workspace import certification.
+
+    The candidates are whole evidence bundles, not prompt fragments: a
+    workspace-run manifest plus a live framework-import manifest. That mirrors
+    the UI/control-plane problem of deciding whether a checked-out agent repo is
+    safe and complete enough for simulation, evals, red-team, observability, and
+    further optimization.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+
+    from . import simulate as _agent_simulate
+
+    run_manifest = _agent_simulate.build_workspace_import_certification_run_manifest(
+        name=name,
+        workspace_path=workspace_path,
+        targets=targets,
+        import_manifest=import_manifest,
+        framework=framework,
+        repository_url=repository_url,
+        commit_sha=commit_sha,
+        adapter=adapter,
+        target=target,
+        observability=observability,
+        artifacts=artifacts,
+        required_sources=required_sources,
+        required_frameworks=required_frameworks,
+        required_export_types=required_export_types,
+        required_signals=required_signals,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+    )
+    verified_candidate = copy.deepcopy(run_manifest["simulation"]["environments"])
+    environment_candidates = (
+        [
+            _workspace_import_certification_environment_bundle(candidate)
+            for candidate in certification_candidates
+        ]
+        if certification_candidates is not None
+        else [
+            _weak_workspace_import_certification_candidate(verified_candidate),
+            verified_candidate,
+        ]
+    )
+    if not environment_candidates:
+        raise ValueError("certification_candidates must contain at least one candidate")
+    for index, candidate in enumerate(environment_candidates, start=1):
+        if not candidate:
+            raise ValueError(f"certification_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": environment_candidates}
+    eval_config = copy.deepcopy(
+        run_manifest["evaluation"]["agent_report"]["config"]
+    )
+    manifest = {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": str(name),
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(run_manifest["scenario"]),
+        "agent": copy.deepcopy(run_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(run_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": str(name),
+                "layers": [
+                    "integration",
+                    "environment",
+                    "framework",
+                    "security",
+                    "evaluator",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_workspace_import_certification_optimization_manifest"
+                    ),
+                    "cookbook": "workspace-import-certification-optimization",
+                    "task_kind": "workspace_import_certification",
+                    "framework": str(framework),
+                    "workspace_path": str(Path(workspace_path).expanduser()),
+                    "research_sources": _unique_research_sources(
+                        [
+                            *run_manifest.get("metadata", {}).get(
+                                "research_sources",
+                                [],
+                            ),
+                            *[dict(item) for item in research_sources],
+                        ]
+                    ),
+                    "original_synthesis": (
+                        "A checked-out agent repository is optimizable only "
+                        "after workspace provenance, command evidence, security "
+                        "policy, observability, and live framework import "
+                        "sources are optimized as one candidate contract."
+                    ),
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["framework_import"],
+        "required_tools": eval_config.get("required_tools", []),
+        "required_framework_import": eval_config.get(
+            "required_framework_import",
+            [],
+        ),
+        "framework_import_quality": eval_config.get(
+            "framework_import_quality",
+            {},
+        ),
+        "weights": {"framework_import": 8.0, "tool_coverage": 2.0},
+    }
+    return manifest
+
+
+def optimize_workspace_import_certification(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute workspace import-certification optimization."""
+
+    manifest = build_workspace_import_certification_optimization_manifest(
+        **manifest_kwargs
+    )
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_orchestration_optimization_manifest(
     *,
     name: str,
@@ -7998,6 +8198,162 @@ def _default_report_repair_research_sources() -> list[dict[str, Any]]:
     ]
 
 
+def _workspace_import_certification_environment_bundle(
+    candidate: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    bundle: list[dict[str, Any]] = []
+    for item in candidate:
+        copied = copy.deepcopy(dict(item))
+        if copied.get("type") in {"workspace_run_manifest", "workspace_run"}:
+            copied["type"] = "workspace_run_manifest"
+            copied.setdefault("data", {})
+            bundle.append(copied)
+        elif copied.get("type") in {"framework_import", "framework_import_manifest"}:
+            copied["type"] = "framework_import"
+            copied.setdefault("data", {})
+            bundle.append(copied)
+        elif copied.get("workspace_run") is not None:
+            bundle.append(
+                {
+                    "type": "workspace_run_manifest",
+                    "data": copied["workspace_run"],
+                }
+            )
+        elif copied.get("framework_import_manifest") is not None:
+            bundle.append(
+                {
+                    "type": "framework_import",
+                    "data": copied["framework_import_manifest"],
+                }
+            )
+        elif copied.get("sources") is not None:
+            bundle.append({"type": "framework_import", "data": copied})
+        else:
+            bundle.append({"type": "workspace_run_manifest", "data": copied})
+    return bundle
+
+
+def _weak_workspace_import_certification_candidate(
+    verified_candidate: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    from . import simulate as _agent_simulate
+
+    workspace_payload = {}
+    import_payload = {}
+    for item in verified_candidate:
+        item_dict = dict(item)
+        if item_dict.get("type") == "workspace_run_manifest":
+            workspace_payload = copy.deepcopy(dict(item_dict.get("data") or {}))
+        elif item_dict.get("type") == "framework_import":
+            import_payload = copy.deepcopy(dict(item_dict.get("data") or {}))
+
+    weak_sources = [
+        {
+            **copy.deepcopy(dict(source)),
+            "status": "failed",
+            "passed": False,
+            "error": "weak candidate has not run the live workspace import probe",
+            "signals": sorted(
+                {
+                    *list(source.get("signals") or []),
+                    "import_error",
+                    "missing_live_probe",
+                }
+            ),
+        }
+        for source in list(import_payload.get("sources") or [])[:1]
+        if isinstance(source, Mapping)
+    ] or [
+        {
+            "id": "missing_workspace_import_probe",
+            "name": "missing_workspace_import_probe",
+            "framework": import_payload.get("framework") or "custom",
+            "export_type": "probe_suite",
+            "status": "failed",
+            "passed": False,
+            "error": "workspace import target was not probed",
+            "signals": ["framework_import", "import_error"],
+        }
+    ]
+    weak_import = _agent_simulate.normalize_framework_import_manifest(
+        {
+            **copy.deepcopy(import_payload),
+            "name": "weak-workspace-import-probe",
+            "adapter": {},
+            "observability": {},
+            "artifacts": [],
+            "sources": weak_sources,
+        }
+    )
+    weak_workspace = _agent_simulate.normalize_workspace_run_manifest(
+        {
+            **copy.deepcopy(workspace_payload),
+            "name": "weak-workspace-import-run",
+            "commands": [
+                {
+                    "id": "workspace_probe",
+                    "command": "test -d workspace",
+                    "status": "passed",
+                    "exit_code": 0,
+                    "signals": ["workspace", "repository"],
+                    "log_ref": "logs/workspace-probe.log",
+                    "logs_redacted": True,
+                },
+                {
+                    "id": "framework_import_probe",
+                    "command": "python -m agent_learning.simulate probe-framework-imports",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "signals": ["framework_import", "import_error"],
+                    "log_ref": "logs/framework-import-probe.log",
+                    "logs_redacted": True,
+                },
+            ],
+            "logs": [
+                {
+                    "id": "workspace_probe_log",
+                    "path": "logs/workspace-probe.log",
+                    "redacted": True,
+                }
+            ],
+            "artifacts": [
+                {
+                    "id": "workspace_trace",
+                    "type": "trace",
+                    "path": "artifacts/workspace-import-trace.json",
+                    "signals": ["trace"],
+                }
+            ],
+            "simulations": [
+                {
+                    "id": "workspace_import_certification_run",
+                    "status": "failed",
+                    "passed": False,
+                }
+            ],
+            "evals": [
+                {
+                    "id": "workspace_import_agent_report",
+                    "status": "failed",
+                    "passed": False,
+                }
+            ],
+            "optimization_runs": [],
+            "observability": {},
+            "credentials": [],
+            "security": {
+                "sandbox": False,
+                "secrets_redacted": False,
+                "secret_leak_count": 1,
+            },
+        }
+    )
+    return [
+        {"type": "workspace_run_manifest", "data": weak_workspace},
+        {"type": "framework_import", "data": weak_import},
+    ]
+
+
 def _framework_import_repair_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     copied = copy.deepcopy(dict(item))
     if copied.get("type") in {"framework_import", "framework_import_manifest"}:
@@ -14337,6 +14693,7 @@ __all__ = [
     "build_social_memory_framework_optimization_manifest",
     "build_task_optimization_manifest",
     "build_workspace_observability_optimization_manifest",
+    "build_workspace_import_certification_optimization_manifest",
     "optimize_eval_suite",
     "optimize_eval_suite_file",
     "optimize_eval_suite_response",
@@ -14375,6 +14732,7 @@ __all__ = [
     "optimize_suite",
     "optimize_suite_file",
     "optimize_workspace_observability",
+    "optimize_workspace_import_certification",
     "problem_from_agent_learning_suite",
     "problem_from_agent_learning_suite_file",
     "problem_from_eval_suite_file",

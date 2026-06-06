@@ -674,6 +674,10 @@ AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_observability_optimization.py \
   artifacts/sdk-workspace-observability-optimization.json
 
+AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_workspace_import_certification_optimization.py \
+  artifacts/sdk-workspace-import-certification-optimization.json
+
 AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_observability_simulation.py \
   artifacts/sdk-workspace-observability-simulation.json
@@ -869,6 +873,17 @@ returns normalized `framework_import_manifest` evidence. Use
 `agent-learning.run.v1` artifact, execute it with `agent-learn run`, report it
 with `agent-learn report`, and feed the same evidence into framework-readiness
 optimization.
+
+`optimize.build_workspace_import_certification_optimization_manifest()` and
+`examples/sdk_workspace_import_certification_optimization.py` combine those live
+import probes with repository/workspace evidence: checked-out path, provenance,
+commands, logs, artifacts, eval/optimizer readiness, security gates,
+observability hooks, credentials, and framework import sources are optimized as
+one `simulation.environments` bundle. This builds on 2026 workspace/repository
+agent benchmarks and eval-integrity work, then adds our own Future AGI
+certification contract so a UI/API workflow can checkout a user repo, certify
+that it is runnable, and then expose `agent-learn report`, `agent-learn
+actions`, and `agent-learn action-run` follow-ups from the saved artifact.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It
