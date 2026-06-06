@@ -987,6 +987,70 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert "execute_task" in markdown
 
 
+def test_sdk_framework_adapter_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-framework-opt-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY"]
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == (
+        "framework_adapter"
+    )
+    assert manifest["optimization"]["target"]["metadata"]["framework"] == (
+        "custom_refund_orchestrator"
+    )
+    candidates = manifest["optimization"]["target"]["search_space"]["agent"]
+    assert [(item["method"], item["input_mode"]) for item in candidates] == [
+        ("run", "text"),
+        ("execute_task", "dict"),
+    ]
+
+    output_path = tmp_path / "sdk-framework-adapter-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["framework_runtime_proof_status"] == "passed"
+    assert result["summary"]["framework_runtime_proof_assurance_level"] == (
+        "l3_native_framework_runtime_verified"
+    )
+    assert result["framework_runtime_proof"]["requires_external_service"] is False
+    assert result["framework_runtime_proof"]["failed_check_ids"] == []
+    assert result["framework_runtime_proof"]["warning_check_ids"] == []
+    assert result["optimization_governance"]["status"] == "passed"
+
+    best_agent = result["optimization"]["best_config"]["agent"]
+    assert best_agent["framework"] == "custom_refund_orchestrator"
+    assert best_agent["method"] == "execute_task"
+    assert best_agent["input_mode"] == "dict"
+    assert {"endpoint", "auth", "api_key", "secret", "token"} & _nested_keys(
+        result["optimization"]["best_config"]
+    ) == set()
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["framework_adapter_contract_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
+
+
 def test_sdk_social_memory_framework_optimization_example_runs(
     monkeypatch,
     tmp_path,

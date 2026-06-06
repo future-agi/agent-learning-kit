@@ -556,6 +556,11 @@ manifest = optimize.build_framework_optimization_manifest(
 result = optimize.optimize_manifest(manifest, manifest_path="examples/sdk.json")
 ```
 
+The dedicated cookbook for that SDK path is
+`examples/sdk_framework_adapter_optimization.py`; it optimizes a proprietary
+`custom_refund_orchestrator` adapter from a weak `run/text` candidate to the
+verified `execute_task/dict` runtime with local framework trace evidence.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. Extra search paths can target any manifest
 path, so the same helper covers memory, policy, provider, red-team, and custom
@@ -912,6 +917,10 @@ AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_SIMULATION_KEY=... \
 AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_optimization.py \
   artifacts/sdk-framework-certification-optimization.json
+
+AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY=... \
+  PYTHONPATH=src python examples/sdk_framework_adapter_optimization.py \
+  artifacts/sdk-framework-adapter-optimization.json
 
 AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_simulation.py \
