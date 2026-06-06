@@ -8125,6 +8125,8 @@ def test_sdk_framework_certification_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    from agent_learning import simulate
+
     key = "real-local-sdk-framework-certification-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY",
@@ -8266,6 +8268,7 @@ def test_sdk_framework_certification_optimization_example_runs(
         for action in readiness["actions"]
     } >= {
         "report_framework_readiness",
+        "promote_framework_certification_regression",
         "rerun_framework_optimization",
         "optimize_framework_readiness",
     }
@@ -8302,6 +8305,146 @@ def test_sdk_framework_certification_optimization_example_runs(
         "framework_metric_evidence_closed",
         "readiness_card_closed",
     }
+
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=output_path,
+        name="sdk-framework-certification-regression",
+        min_level="note",
+        max_findings=1,
+        required_env=["AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == (
+        "framework_certification_optimization"
+    )
+    assert promotion["summary"]["framework_certification_proof_status"] == "passed"
+    assert promotion["summary"][
+        "framework_certification_proof_assurance_level"
+    ] == "l3_native_framework_certified_portable"
+    assert promotion["summary"]["requires_external_service"] is False
+    assert promotion["summary"]["metric_averages"][
+        "framework_lifecycle_quality"
+    ] == pytest.approx(1.0)
+    assert promotion["framework_certification_proof"]["failed_check_ids"] == []
+    promoted_manifest = promotion["manifest"]
+    assert promoted_manifest["version"] == "agent-learning.run.v1"
+    assert promoted_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY"
+    ]
+    assert promoted_manifest["metadata"]["regression"]["promotion_kind"] == (
+        "framework_certification_optimization"
+    )
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "local_only"
+    ] is True
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "requires_external_service"
+    ] is False
+    promoted_env_types = {
+        item["type"] for item in promoted_manifest["simulation"]["environments"]
+    }
+    assert {
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    } <= promoted_env_types
+    promoted_config = promoted_manifest["evaluation"]["agent_report"]["config"]
+    assert promoted_config["metadata"]["promotion_kind"] == (
+        "framework_certification_optimization"
+    )
+    assert key not in json.dumps(promotion, sort_keys=True, default=str)
+
+    promotion_report = simulate.render_report(
+        promotion,
+        source_path=tmp_path / "sdk-framework-certification-promotion.json",
+    )
+    assert "framework_readiness" in promotion_report["summary"]["sections"]
+    promotion_readiness = promotion_report["report"]["framework_readiness"]
+    assert promotion_readiness["status"] == "ready"
+    assert {
+        "export_framework_certification_regression_manifest",
+        "replay_framework_certification_regression",
+        "rerun_framework_certification",
+        "optimize_framework_readiness",
+    } <= {action["id"] for action in promotion_readiness["actions"]}
+
+    regression_manifest_path = tmp_path / "sdk-framework-certification-regression.json"
+    regression_manifest_path.write_text(
+        json.dumps(promoted_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    replay = simulate.replay_manifests(
+        [regression_manifest_path],
+        name="sdk-framework-certification-regression-replay",
+    )
+    assert replay["status"] == "passed"
+    assert replay["summary"]["passed_count"] == 1
+    assert replay["summary"]["failed_count"] == 0
+    replay_row = replay["replay"]["manifests"][0]
+    assert replay_row["summary"]["metric_averages"][
+        "framework_lifecycle_quality"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "framework_capability_quality"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "framework_probe_quality"
+    ] == pytest.approx(1.0)
+    assert key not in json.dumps(replay, sort_keys=True, default=str)
+
+    cli_promotion_path = tmp_path / "sdk-framework-certification-cli-promotion.json"
+    cli_regression_manifest_path = tmp_path / (
+        "sdk-framework-certification-cli-regression.json"
+    )
+    assert (
+        main(
+            [
+                "promote-to-regression",
+                str(output_path),
+                "--output",
+                str(cli_promotion_path),
+                "--manifest",
+                str(cli_regression_manifest_path),
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+                "--required-env",
+                "AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_EXAMPLE_KEY",
+            ]
+        )
+        == 0
+    )
+    cli_promotion = json.loads(cli_promotion_path.read_text(encoding="utf-8"))
+    assert cli_promotion["summary"]["promotion_kind"] == (
+        "framework_certification_optimization"
+    )
+    cli_regression = json.loads(
+        cli_regression_manifest_path.read_text(encoding="utf-8")
+    )
+    assert cli_regression["metadata"]["regression"]["promotion_kind"] == (
+        "framework_certification_optimization"
+    )
+    assert key not in cli_promotion_path.read_text(encoding="utf-8")
+    assert key not in cli_regression_manifest_path.read_text(encoding="utf-8")
+
+    externalized = copy.deepcopy(result)
+    externalized["optimization"]["best_config"]["simulation"]["environments"][0][
+        "data"
+    ]["endpoint"] = "https://framework.example.com/lifecycle"
+    with pytest.raises(
+        ManifestError,
+        match="framework certification regression promotion",
+    ):
+        simulate.promote_to_regression(
+            externalized,
+            source_path=output_path,
+            name="sdk-framework-certification-externalized-regression",
+            min_level="note",
+            max_findings=1,
+        )
 
 
 def test_sdk_framework_adapter_matrix_optimization_example_runs(

@@ -1505,6 +1505,16 @@ endpoint/auth/key dependency, all four certification environments present,
 lifecycle evidence closed, capability/probe/portability layers closed,
 cross-protocol boundaries present, framework metrics closed, and the UI/CLI
 readiness card ready.
+The same optimization result can be promoted with
+`simulate.promote_to_regression()` or `agent-learn promote-to-regression` into a
+`framework_certification_optimization` regression manifest. The promoted manifest
+freezes the selected lifecycle/capability/probe/portability evidence bundle,
+preserves the framework-certification proof and replay lock under
+`metadata.regression`, and replays through `agent-learn replay` without importing
+the target framework or calling external observability/eval services. Promotion
+is fail-closed: endpoint/auth/API-key/secret/token markers or
+`requires_external_service=true` refuse admission instead of falling through to a
+generic optimized-manifest regression.
 `examples/sdk_artifact_action_optimization.py` takes the next step: it creates a
 real certification artifact, extracts the readiness action cards, and runs an
 `agent-learning.suite.v1` optimization where each candidate is an `action-run`

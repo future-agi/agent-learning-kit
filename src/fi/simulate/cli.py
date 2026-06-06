@@ -8206,6 +8206,9 @@ def _framework_readiness_card(
         source_manifest_path = Path(str(existing_manifest_path))
     if source_manifest_path is None:
         source_manifest_path = _framework_source_manifest_path(result)
+    regression_manifest = (
+        result.get("manifest") if isinstance(result.get("manifest"), Mapping) else None
+    )
 
     state = _framework_readiness_state(result)
     metrics = {
@@ -8279,6 +8282,12 @@ def _framework_readiness_card(
     }
     if source_manifest_path is not None:
         card["source_manifest_path"] = str(source_manifest_path)
+    if isinstance(regression_manifest, Mapping) and _framework_selected_environment_types(regression_manifest):
+        card["artifacts"] = {
+            "selected_framework_certification_manifest": copy.deepcopy(
+                dict(regression_manifest)
+            ),
+        }
     card["actions"] = _framework_readiness_actions(
         source_path=source_path,
         source_manifest_path=source_manifest_path,
@@ -8286,6 +8295,48 @@ def _framework_readiness_card(
         status=status,
         weak_layers=weak_layers,
     )
+    if isinstance(regression_manifest, Mapping) and _framework_selected_environment_types(regression_manifest):
+        manifest_filename = f"{_slug(regression_manifest.get('name'), default='framework-certification-regression')}.json"
+        card["actions"].append(
+            {
+                "id": "export_framework_certification_regression_manifest",
+                "label": "Export Framework Certification Regression Manifest",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.framework_readiness.artifacts."
+                    "selected_framework_certification_manifest"
+                ),
+                "default_filename": f"artifacts/{manifest_filename}",
+                "readiness_status": status,
+                "target_layers": list(weak_layers),
+            }
+        )
+        card["actions"].append(
+            _cli_action(
+                "replay_framework_certification_regression",
+                "Replay Framework Certification Regression",
+                [
+                    "agent-learn",
+                    "replay",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/framework-certification-replay.json",
+                    "--junit",
+                    "artifacts/framework-certification-replay.junit.xml",
+                    "--sarif",
+                    "artifacts/framework-certification-replay.sarif.json",
+                    "--markdown",
+                    "artifacts/framework-certification-replay.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "Framework certification regression manifest",
+                        "default": f"artifacts/{manifest_filename}",
+                    }
+                ],
+            )
+        )
     return card
 
 
@@ -8324,6 +8375,13 @@ def _framework_readiness_state(result: Mapping[str, Any]) -> Dict[str, Any]:
             )
             if _has_framework_readiness_state(config_state):
                 return config_state
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        manifest_state = _framework_state_from_environments(
+            dict(manifest.get("simulation") or {}).get("environments")
+        )
+        if _has_framework_readiness_state(manifest_state):
+            return manifest_state
     return {}
 
 
@@ -8631,6 +8689,26 @@ def _framework_readiness_actions(
         or "optimize" in source_kind
         or source_path.name.endswith("optimization.json")
     )
+    if is_optimization:
+        actions.append(
+            _cli_action(
+                "promote_framework_certification_regression",
+                "Promote Framework Certification Regression",
+                [
+                    "agent-learn",
+                    "promote-to-regression",
+                    str(source_path),
+                    "--output",
+                    "artifacts/framework-certification-promotion.json",
+                    "--manifest",
+                    "artifacts/framework-certification-regression.json",
+                    "--min-level",
+                    "note",
+                    "--max-findings",
+                    "1",
+                ],
+            )
+        )
     if source_manifest_path is not None and is_optimization:
         actions.append(
             _cli_action(
@@ -8724,6 +8802,258 @@ def _framework_readiness_actions(
         action["readiness_status"] = status
         action["target_layers"] = list(weak_layers)
     return actions
+
+
+_FRAMEWORK_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES = {
+    "framework_lifecycle",
+    "framework_capability",
+    "framework_probe",
+    "framework_portability",
+}
+
+
+def _framework_certification_proof(result: Mapping[str, Any]) -> Dict[str, Any]:
+    proof = result.get("framework_certification_proof")
+    if isinstance(proof, Mapping):
+        return copy.deepcopy(dict(proof))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        nested = optimization.get("framework_certification_proof")
+        if isinstance(nested, Mapping):
+            return copy.deepcopy(dict(nested))
+    return {}
+
+
+def _framework_certification_optimization_regression_manifest(
+    *,
+    source: Mapping[str, Any],
+    source_path: Path,
+    source_name: str,
+    manifest_name: str,
+    required_env: Sequence[Any],
+) -> Optional[Dict[str, Any]]:
+    proof = _framework_certification_proof(source)
+    if not proof:
+        return None
+    if str(proof.get("status") or "") != "passed":
+        return None
+    if proof.get("requires_external_service") is not False:
+        return None
+    if _coerce_list(proof.get("failed_check_ids")):
+        return None
+    manifest = _optimized_manifest_regression_manifest(
+        source=source,
+        source_path=source_path,
+        source_name=source_name,
+        manifest_name=manifest_name,
+        required_env=required_env,
+    )
+    if manifest is None:
+        return None
+    environment_types = set(_framework_selected_environment_types(manifest))
+    if not _FRAMEWORK_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES.issubset(
+        environment_types
+    ):
+        return None
+    if _framework_external_markers(manifest):
+        return None
+
+    optimization = (
+        source.get("optimization")
+        if isinstance(source.get("optimization"), Mapping)
+        else {}
+    )
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    metric_thresholds = _framework_certification_metric_thresholds()
+    selected_metrics = {
+        str(key): value
+        for key, value in dict(evidence.get("selected_metrics") or {}).items()
+        if key in metric_thresholds and _float_or_none(value) is not None
+    }
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    metadata["regression"] = {
+        "promotion_kind": "framework_certification_optimization",
+        "promoted_from": str(source_path),
+        "source_name": source_name,
+        "source_status": source.get("status"),
+        "source_schema_version": source.get("schema_version"),
+        "source_kind": source.get("kind"),
+        "source_score": _persistent_state_source_score(source),
+        "assurance_level": proof.get("assurance_level"),
+        "selected_candidate_id": proof.get("selected_candidate_id")
+        or optimization.get("best_candidate_id"),
+        "framework": proof.get("framework"),
+        "target_framework": proof.get("target_framework"),
+        "environment_types": _framework_selected_environment_types(manifest),
+        "readiness_status": evidence.get("readiness_status"),
+        "research_sources": _framework_certification_research_sources(source),
+        "replay_lock": {
+            "local_only": True,
+            "requires_external_service": False,
+            "assurance_level": proof.get("assurance_level"),
+            "selected_candidate_id": proof.get("selected_candidate_id")
+            or optimization.get("best_candidate_id"),
+            "metric_thresholds": metric_thresholds,
+        },
+        "original_synthesis": (
+            "Promote an optimized framework certification harness into an "
+            "admitted local replay gate: freeze lifecycle, capability, probe, "
+            "and portability evidence; preserve framework readiness proof; and "
+            "fail closed if endpoint/auth/key dependencies appear."
+        ),
+    }
+
+    evaluation = manifest.setdefault("evaluation", {})
+    if not isinstance(evaluation, dict):
+        evaluation = {}
+        manifest["evaluation"] = evaluation
+    agent_report = evaluation.setdefault("agent_report", {})
+    if not isinstance(agent_report, dict):
+        agent_report = {}
+        evaluation["agent_report"] = agent_report
+    config = agent_report.setdefault("config", {})
+    if not isinstance(config, dict):
+        config = {}
+        agent_report["config"] = config
+    config_metadata = config.setdefault("metadata", {})
+    if isinstance(config_metadata, dict):
+        config_metadata["promotion_kind"] = "framework_certification_optimization"
+        config_metadata["assurance_level"] = proof.get("assurance_level")
+        config_metadata["selected_candidate_id"] = (
+            proof.get("selected_candidate_id") or optimization.get("best_candidate_id")
+        )
+    if selected_metrics:
+        summary = manifest.setdefault("summary", {})
+        if isinstance(summary, dict):
+            summary["metric_averages"] = selected_metrics
+    return manifest
+
+
+def _framework_certification_metric_thresholds() -> Dict[str, float]:
+    return {
+        "framework_lifecycle_coverage": 1.0,
+        "framework_lifecycle_quality": 1.0,
+        "framework_capability_coverage": 1.0,
+        "framework_capability_quality": 1.0,
+        "framework_probe_coverage": 1.0,
+        "framework_probe_quality": 1.0,
+        "framework_portability_coverage": 1.0,
+        "framework_portability_quality": 1.0,
+        "tool_selection_accuracy": 1.0,
+    }
+
+
+def _framework_selected_environment_types(manifest: Mapping[str, Any]) -> List[str]:
+    simulation = manifest.get("simulation")
+    environments = (
+        dict(simulation).get("environments")
+        if isinstance(simulation, Mapping)
+        else []
+    )
+    return _unique_strings(
+        str(item.get("type") or item.get("kind") or "").lower().replace("-", "_")
+        for item in _coerce_list(environments)
+        if isinstance(item, Mapping)
+    )
+
+
+def _framework_external_markers(value: Any) -> List[str]:
+    markers: set[str] = set()
+    sensitive_keys = {"endpoint", "auth", "api_key", "apikey", "secret", "token"}
+    runtime_url_keys = {
+        "endpoint",
+        "hook",
+        "webhook",
+        "base_url",
+        "callback_url",
+        "hook_url",
+        "service_url",
+        "target_url",
+    }
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized_key = str(key or "").lower().replace("-", "_")
+            if normalized_key in sensitive_keys:
+                markers.add(normalized_key)
+            if normalized_key == "requires_external_service" and bool(item):
+                markers.add("requires_external_service")
+            if (
+                normalized_key in runtime_url_keys
+                and isinstance(item, str)
+                and item.startswith(("http://", "https://"))
+                and "127.0.0.1" not in item
+                and "localhost" not in item
+            ):
+                markers.add(normalized_key or "external_url")
+            markers.update(_framework_external_markers(item))
+    elif isinstance(value, list):
+        for item in value:
+            markers.update(_framework_external_markers(item))
+    return sorted(markers)
+
+
+def _framework_certification_research_sources(source: Mapping[str, Any]) -> List[str]:
+    values: List[Any] = []
+    proof = _framework_certification_proof(source)
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    values.extend(_coerce_list(evidence.get("research_sources")))
+    optimization = source.get("optimization")
+    if isinstance(optimization, Mapping):
+        source_manifest = optimization.get("source_manifest")
+        if isinstance(source_manifest, Mapping):
+            metadata = source_manifest.get("metadata")
+            if isinstance(metadata, Mapping):
+                values.extend(_coerce_list(metadata.get("research_sources")))
+                values.extend(_coerce_list(metadata.get("research_basis")))
+            target = dict(
+                dict(source_manifest.get("optimization") or {}).get("target") or {}
+            )
+            target_metadata = target.get("metadata")
+            if isinstance(target_metadata, Mapping):
+                values.extend(_coerce_list(target_metadata.get("research_sources")))
+                values.extend(_coerce_list(target_metadata.get("research_basis")))
+    values.extend(
+        [
+            "https://arxiv.org/abs/2606.06324",
+            "https://arxiv.org/abs/2606.06462",
+            "https://arxiv.org/abs/2605.18747",
+            "https://arxiv.org/abs/2604.03610",
+            "https://arxiv.org/abs/2604.06296",
+            "https://arxiv.org/abs/2606.04990",
+        ]
+    )
+    return _unique_strings(_research_source_url(value) for value in values)
+
+
+def _framework_certification_regression_promotion_summary(
+    *,
+    source: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> Dict[str, Any]:
+    proof = _framework_certification_proof(source)
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    selected_metrics = {
+        str(key): float(value)
+        for key, value in dict(evidence.get("selected_metrics") or {}).items()
+        if key in _FRAMEWORK_READINESS_METRICS and _float_or_none(value) is not None
+    }
+    return {
+        "framework_certification_proof_status": proof.get("status"),
+        "framework_certification_proof_assurance_level": proof.get(
+            "assurance_level"
+        ),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "framework": proof.get("framework"),
+        "target_framework": proof.get("target_framework"),
+        "requires_external_service": False,
+        "environment_types": _framework_selected_environment_types(manifest),
+        "readiness_status": evidence.get("readiness_status"),
+        "metric_averages": selected_metrics,
+        "research_sources": _framework_certification_research_sources(source),
+    }
 
 
 def _framework_readiness_markdown(
@@ -11086,6 +11416,50 @@ def _regression_promotion_result(
                 "world hooks regression promotion requires a passed local "
                 "world-hook proof with native stateful_tool_world and "
                 "world_contract environments"
+            )
+        framework_certification_manifest = (
+            _framework_certification_optimization_regression_manifest(
+                source=source,
+                source_path=source_path,
+                source_name=source_name,
+                manifest_name=name or f"{source_name}-framework-certification-regression",
+                required_env=required_env,
+            )
+        )
+        if framework_certification_manifest is not None:
+            framework_summary = _framework_certification_regression_promotion_summary(
+                source=source,
+                manifest=framework_certification_manifest,
+            )
+            framework_proof = _framework_certification_proof(source)
+            return {
+                "schema_version": CLI_SCHEMA_VERSION,
+                "kind": "agent-simulate.regression_promotion.v1",
+                "name": str(framework_certification_manifest.get("name") or source_name),
+                "status": "passed",
+                "exit_code": 0,
+                "summary": {
+                    "source_name": source_name,
+                    "source_path": str(source_path),
+                    "source_status": source.get("status"),
+                    "source_schema_version": source.get("schema_version"),
+                    "candidate_finding_count": len(promotable),
+                    "promoted_finding_count": 0,
+                    "promoted_manifest_count": 1,
+                    "min_level": min_level,
+                    "max_findings": max_findings,
+                    "promotion_kind": "framework_certification_optimization",
+                    **framework_summary,
+                },
+                "framework_certification_proof": framework_proof,
+                "manifest": framework_certification_manifest,
+                "duration_seconds": duration_seconds,
+            }
+        if _framework_certification_proof(source):
+            raise ManifestError(
+                "framework certification regression promotion requires a "
+                "passed local framework_certification_proof with lifecycle, "
+                "capability, probe, and portability environments"
             )
         orchestration_manifest = _orchestration_optimization_regression_manifest(
             source=source,
