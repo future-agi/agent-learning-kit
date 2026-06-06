@@ -51,6 +51,7 @@ from fi.simulate import (
     ToolFaultInjectionEnvironment,
     ToolMockEnvironment,
     VoiceEnvironment,
+    WorkflowHookEnvironment,
     WorkspaceRunEnvironment,
     WorldAttackReplayEnvironment,
     WorldContractEnvironment,
@@ -335,6 +336,10 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "tool_fault",
         "tool_fault_injection",
         "tool_mock",
+        "workflow_hook",
+        "workflow_hooks",
+        "http_workflow_hook",
+        "http_tool_hook",
         "trust_boundary",
         "voice",
         "voice_replay",
@@ -834,6 +839,13 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_tool_mock_environment(payload))
         elif env_type in {"tool_fault_injection", "tool_fault"}:
             environments.append(_build_tool_fault_environment(payload))
+        elif env_type in {
+            "workflow_hook",
+            "workflow_hooks",
+            "http_workflow_hook",
+            "http_tool_hook",
+        }:
+            environments.append(_build_workflow_hook_environment(payload))
         elif env_type in {"browser", "browser_cua", "cua", "computer_use", "computer_use_browser"}:
             environments.append(_build_browser_environment(payload, base_dir))
         elif env_type in {"file", "files"}:
@@ -946,6 +958,27 @@ def _build_tool_fault_environment(payload: Mapping[str, Any]) -> ToolFaultInject
     return ToolFaultInjectionEnvironment(
         failures,
         default_error=str(source.get("default_error") or "Injected transient tool failure."),
+    )
+
+
+def _build_workflow_hook_environment(payload: Mapping[str, Any]) -> WorkflowHookEnvironment:
+    source = dict(payload)
+    hooks = source.get("hooks") or source.get("tools") or source.get("endpoints")
+    if hooks is None and (source.get("endpoint") or source.get("url")):
+        tool_name = str(source.get("tool_name") or source.get("name") or "workflow_hook")
+        hooks = {tool_name: source}
+    if not isinstance(hooks, Mapping) or not hooks:
+        raise ManifestError("workflow_hook environment requires data.hooks")
+    return WorkflowHookEnvironment(
+        {
+            str(name): dict(spec) if isinstance(spec, Mapping) else {"endpoint": spec}
+            for name, spec in hooks.items()
+        },
+        headers=dict(source.get("headers") or {}),
+        auth=dict(source.get("auth") or {}),
+        timeout=float(source.get("timeout") or 30.0),
+        initial_state=dict(source.get("initial_state") or source.get("state") or {}),
+        metadata=dict(source.get("metadata") or {}),
     )
 
 

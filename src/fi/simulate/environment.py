@@ -8,6 +8,8 @@ import math
 import os
 import re
 import struct
+import time
+import urllib.error
 import urllib.request
 import wave
 import zipfile
@@ -267,6 +269,290 @@ class ToolFaultInjectionEnvironment(EnvironmentAdapter):
         data["count"] = max(0, int(count))
         data.setdefault("error", default_error)
         return data
+
+
+class WorkflowHookEnvironment(EnvironmentAdapter):
+    """HTTP workflow/tool hooks with redacted auth and execution traces."""
+
+    name = "workflow_hook"
+
+    def __init__(
+        self,
+        hooks: Mapping[str, Mapping[str, Any]],
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+        auth: Optional[Mapping[str, Any]] = None,
+        timeout: float = 30.0,
+        initial_state: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        if not hooks:
+            raise ValueError("workflow hooks must contain at least one hook")
+        self.hooks = {
+            str(name): self._normalize_hook(str(name), spec)
+            for name, spec in hooks.items()
+        }
+        self.headers = {str(k): str(v) for k, v in dict(headers or {}).items()}
+        self.auth = dict(auth or {})
+        self.timeout = float(timeout)
+        self.initial_state = copy.deepcopy(initial_state or {})
+        self.metadata = dict(metadata or {})
+        self.state: Dict[str, Any] = {}
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self.state = {
+            **copy.deepcopy(self.initial_state),
+            "workflow_hooks": {
+                "configured_hooks": sorted(self.hooks),
+                "calls": [],
+                "summary": {
+                    "configured_hook_count": len(self.hooks),
+                    "call_count": 0,
+                    "success_count": 0,
+                    "failed_count": 0,
+                },
+            },
+        }
+        return EnvironmentSnapshot(
+            tools=[self._tool_spec(name, spec) for name, spec in self.hooks.items()],
+            state=copy.deepcopy(self.state),
+            events=[
+                SimulationEvent(
+                    type="environment",
+                    name="workflow_hook_ready",
+                    payload={
+                        "tools": sorted(self.hooks),
+                        "auth_enabled": bool(self.auth)
+                        or any(bool(spec.get("auth")) for spec in self.hooks.values()),
+                    },
+                )
+            ],
+            metadata={"workflow_hook": copy.deepcopy(self.metadata)},
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        name = _tool_name(tool_call)
+        if not name or name not in self.hooks:
+            return None
+
+        spec = self.hooks[name]
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+        started = time.time()
+        status_code = 0
+        response_payload: Any = {}
+        error: Optional[str] = None
+        try:
+            status_code, response_payload = self._post_hook(
+                name=name,
+                spec=spec,
+                arguments=arguments,
+                context=context,
+            )
+        except Exception as exc:
+            error = str(exc)
+            response_payload = {
+                "content": f"Workflow hook {name} failed: {exc}",
+                "success": False,
+                "error": str(exc),
+            }
+
+        if status_code >= 400 and error is None:
+            error = _workflow_error_text(response_payload) or (
+                f"Workflow hook returned status {status_code}"
+            )
+        latency_ms = round((time.time() - started) * 1000, 4)
+        trace = self._trace(
+            name=name,
+            spec=spec,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            success=error is None and 200 <= status_code < 300,
+            error=error,
+            argument_keys=sorted(arguments),
+        )
+        result = self._tool_result_from_payload(
+            name=name,
+            tool_call_id=call_id,
+            payload=response_payload,
+            trace=trace,
+        )
+        if error is not None:
+            result.success = False
+            result.error = error
+            if not result.content:
+                result.content = f"Workflow hook {name} failed: {error}"
+
+        self._record_trace(trace)
+        state_updates = dict(result.state_updates or {})
+        _deep_merge(state_updates, copy.deepcopy(self.state))
+        result.state_updates = state_updates
+        result.events.append(
+            SimulationEvent(
+                type="workflow_hook",
+                name=name,
+                payload=copy.deepcopy(trace),
+            )
+        )
+        result.artifacts.append(
+            SimulationArtifact(
+                type="trace",
+                role="tool",
+                data=copy.deepcopy(trace),
+                metadata={"kind": "workflow_hook_trace", "tool": name},
+            )
+        )
+        result.metadata = {
+            **dict(result.metadata or {}),
+            "workflow_hook_trace": copy.deepcopy(trace),
+        }
+        return result
+
+    @staticmethod
+    def _normalize_hook(name: str, spec: Mapping[str, Any]) -> Dict[str, Any]:
+        hook = dict(spec)
+        endpoint = hook.get("endpoint") or hook.get("url")
+        if not endpoint:
+            raise ValueError(f"workflow hook {name!r} requires endpoint or url")
+        method = str(hook.get("method") or "POST").upper()
+        if method not in {"POST", "PUT", "PATCH"}:
+            raise ValueError("workflow hook method must be POST, PUT, or PATCH")
+        hook["endpoint"] = str(endpoint)
+        hook["method"] = method
+        hook["headers"] = dict(hook.get("headers") or {})
+        hook["auth"] = dict(hook.get("auth") or {})
+        hook["timeout"] = float(hook.get("timeout", 0) or 0)
+        return hook
+
+    @staticmethod
+    def _tool_spec(name: str, spec: Mapping[str, Any]) -> Dict[str, Any]:
+        schema = dict(spec.get("schema") or {})
+        schema.setdefault("name", name)
+        schema.setdefault(
+            "description",
+            str(spec.get("description") or f"Call workflow hook {name}."),
+        )
+        schema.setdefault("parameters", {"type": "object", "properties": {}})
+        return schema
+
+    def _post_hook(
+        self,
+        *,
+        name: str,
+        spec: Mapping[str, Any],
+        arguments: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> tuple[int, Any]:
+        payload = {
+            "tool": name,
+            "arguments": dict(arguments),
+            "thread_id": context.get("thread_id"),
+            "turn_index": context.get("turn_index"),
+        }
+        headers = self._headers(spec)
+        request = urllib.request.Request(
+            str(spec["endpoint"]),
+            data=json.dumps(payload, default=str).encode("utf-8"),
+            headers=headers,
+            method=str(spec.get("method") or "POST"),
+        )
+        timeout = float(spec.get("timeout") or self.timeout)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = int(getattr(response, "status", 200))
+                text = response.read().decode(
+                    response.headers.get_content_charset() or "utf-8"
+                )
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+            text = exc.read().decode("utf-8")
+        if not text:
+            return status, {}
+        try:
+            return status, json.loads(text)
+        except json.JSONDecodeError:
+            return status, {"content": text, "result": text}
+
+    def _headers(self, spec: Mapping[str, Any]) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            **self.headers,
+            **{str(k): str(v) for k, v in dict(spec.get("headers") or {}).items()},
+        }
+        auth_headers = _workflow_auth_headers(
+            dict(self.auth or {}),
+            dict(spec.get("auth") or {}),
+        )
+        for key, value in auth_headers.items():
+            headers.setdefault(key, value)
+        return headers
+
+    def _trace(
+        self,
+        *,
+        name: str,
+        spec: Mapping[str, Any],
+        status_code: int,
+        latency_ms: float,
+        success: bool,
+        error: Optional[str],
+        argument_keys: Sequence[str],
+    ) -> Dict[str, Any]:
+        headers = self._headers(spec)
+        endpoint = str(spec["endpoint"])
+        parsed = urlparse(endpoint)
+        auth = dict(self.auth or {})
+        auth.update(dict(spec.get("auth") or {}))
+        return {
+            "kind": "workflow_hook_trace",
+            "tool": name,
+            "endpoint": _workflow_redacted_url(endpoint),
+            "endpoint_host": parsed.netloc,
+            "method": str(spec.get("method") or "POST"),
+            "status_code": int(status_code),
+            "latency_ms": latency_ms,
+            "success": bool(success),
+            "error": error,
+            "argument_keys": list(argument_keys),
+            "request_header_names": sorted(headers),
+            "auth": _workflow_auth_metadata(auth, headers),
+            **copy.deepcopy(self.metadata),
+            **copy.deepcopy(dict(spec.get("metadata") or {})),
+        }
+
+    @staticmethod
+    def _tool_result_from_payload(
+        *,
+        name: str,
+        tool_call_id: Optional[str],
+        payload: Any,
+        trace: Mapping[str, Any],
+    ) -> ToolExecutionResult:
+        if isinstance(payload, Mapping):
+            data = copy.deepcopy(dict(payload))
+        else:
+            data = {"content": str(payload), "result": payload}
+        data.setdefault("content", str(data.get("result") or "workflow hook executed"))
+        data.setdefault("success", bool(trace.get("success")))
+        metadata = dict(data.get("metadata") or {})
+        metadata["workflow_hook_trace"] = copy.deepcopy(dict(trace))
+        data["metadata"] = metadata
+        return _coerce_tool_result(data, tool_name=name, tool_call_id=tool_call_id)
+
+    def _record_trace(self, trace: Mapping[str, Any]) -> None:
+        workflow_state = self.state.setdefault("workflow_hooks", {})
+        calls = workflow_state.setdefault("calls", [])
+        calls.append(copy.deepcopy(dict(trace)))
+        workflow_state["last_call"] = copy.deepcopy(dict(trace))
+        summary = workflow_state.setdefault("summary", {})
+        summary["configured_hook_count"] = len(self.hooks)
+        summary["call_count"] = len(calls)
+        summary["success_count"] = len([call for call in calls if call.get("success")])
+        summary["failed_count"] = len([call for call in calls if not call.get("success")])
 
 
 class WorldContractEnvironment(EnvironmentAdapter):
@@ -19303,6 +19589,86 @@ def _export_request_headers(
     elif auth_map.get("authorization"):
         result.setdefault("Authorization", str(auth_map["authorization"]))
     return result
+
+
+def _workflow_auth_headers(*auth_specs: Mapping[str, Any]) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for auth in auth_specs:
+        auth_map = _as_mapping(auth)
+        if not auth_map:
+            continue
+        auth_type = str(auth_map.get("type") or auth_map.get("scheme") or "").lower()
+        token = (
+            auth_map.get("token")
+            or auth_map.get("bearer_token")
+            or auth_map.get("api_key")
+        )
+        token_env = (
+            auth_map.get("token_env")
+            or auth_map.get("api_key_env")
+            or auth_map.get("env")
+        )
+        if not token and token_env:
+            token = os.environ.get(str(token_env), "")
+        if auth_type in {"bearer", "token"} and token:
+            result.setdefault("Authorization", f"Bearer {token}")
+        elif auth_type in {"api_key", "apikey"} and token:
+            header_name = str(
+                auth_map.get("header") or auth_map.get("header_name") or "X-API-Key"
+            )
+            result.setdefault(header_name, str(token))
+        elif auth_map.get("authorization"):
+            result.setdefault("Authorization", str(auth_map["authorization"]))
+    return result
+
+
+def _workflow_auth_metadata(
+    auth: Mapping[str, Any],
+    headers: Mapping[str, str],
+) -> Dict[str, Any]:
+    auth_map = _as_mapping(auth)
+    header_names = sorted(str(key) for key in headers)
+    auth_header_names = [
+        name
+        for name in header_names
+        if name.lower()
+        in {
+            "authorization",
+            "x-api-key",
+            str(auth_map.get("header", "")).lower(),
+        }
+    ]
+    return {
+        "enabled": bool(auth_map or auth_header_names),
+        "type": str(auth_map.get("type") or auth_map.get("scheme") or ""),
+        "token_env": (
+            auth_map.get("token_env")
+            or auth_map.get("api_key_env")
+            or auth_map.get("env")
+        ),
+        "header_names": sorted(set(auth_header_names)),
+        "redacted": bool(auth_map or auth_header_names),
+    }
+
+
+def _workflow_redacted_url(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if parsed.query:
+        parsed = parsed._replace(query="<redacted>")
+    return parsed.geturl()
+
+
+def _workflow_error_text(payload: Any) -> str:
+    if isinstance(payload, Mapping):
+        error = payload.get("error")
+        if isinstance(error, Mapping):
+            return str(error.get("message") or error.get("detail") or error)
+        if error not in (None, ""):
+            return str(error)
+        for key in ("message", "detail", "content"):
+            if payload.get(key) not in (None, ""):
+                return str(payload.get(key))
+    return "" if payload in (None, "") else str(payload)
 
 
 def _export_source_metadata(

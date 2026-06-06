@@ -981,6 +981,16 @@ tool evidence. The SDK entry points are
 same `agent-learn report`, `actions`, and `action-run` CLI flow as the other
 promptfoo-style cookbooks.
 
+The `sdk_workflow_hook_optimization.py` example adds executable HTTP workflow
+hooks to the simulator. A manifest can expose `workflow_hook` tools backed by
+real POST endpoints, bearer/API-key env auth, redacted request metadata,
+HTTP status/latency traces, and state updates. The optimizer searches whole
+workflow-hook environment bundles, so it can reject mocked hooks and missing
+auth before selecting the verified authenticated hook. The SDK entry points are
+`simulate.build_workflow_hook_run_manifest()`,
+`optimize.build_workflow_hook_optimization_manifest()`, and
+`optimize.optimize_workflow_hooks()`.
+
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,
 CrewAI, and LangGraph. It uses `AgentEvolutionOptimizer` through

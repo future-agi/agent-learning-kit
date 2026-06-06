@@ -595,6 +595,122 @@ def optimize_external_agent_adapter(
     )
 
 
+def build_workflow_hook_optimization_manifest(
+    *,
+    name: str = "workflow-hook-optimization",
+    endpoint: str,
+    tool_name: str = "execute_refund_workflow",
+    api_key_env: str = "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over authenticated HTTP workflow hooks."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    from . import simulate as _agent_simulate
+
+    verified_run = _agent_simulate.build_workflow_hook_run_manifest(
+        name=name,
+        endpoint=endpoint,
+        tool_name=tool_name,
+        api_key_env=api_key_env,
+        agent=agent,
+        evaluation_config=evaluation_config,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+        research_sources=research_sources,
+    )
+    candidates = _workflow_hook_environment_candidates(
+        endpoint=endpoint,
+        tool_name=tool_name,
+        api_key_env=api_key_env,
+    )
+    search_space = {"simulation.environments": candidates}
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=[copy.deepcopy(dict(verified_run["agent"]))],
+        environment_candidates=candidates,
+        evaluation_config=copy.deepcopy(
+            verified_run["evaluation"]["agent_report"]["config"]
+        ),
+        scenario=copy.deepcopy(verified_run["scenario"]),
+        required_env=verified_run["required_env"],
+        optimizer=optimizer or _default_task_optimizer(search_space),
+        threshold=threshold,
+        layers=["tools", "security", "environment", "integration", "evaluator"],
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=verified_run["simulation"]["max_turns"],
+        auto_execute_tools=True,
+        base_agent=copy.deepcopy(dict(verified_run["agent"])),
+        target_metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_workflow_hook_optimization_manifest"
+            ),
+            "cookbook": "workflow-hook-optimization",
+            "task_kind": "workflow_hook",
+            "candidate_search_paths": ["simulation.environments"],
+            "research_sources": _unique_research_sources(
+                [
+                    *verified_run.get("metadata", {}).get("research_sources", []),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Workflow optimization should search complete hook execution "
+                "contracts: endpoint, auth mediation, schema, HTTP status, "
+                "result state, trace redaction, and evaluator requirements "
+                "move together as one environment candidate."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["target"]["search_space"] = copy.deepcopy(search_space)
+    manifest["optimization"]["target"]["base_config"] = {
+        "simulation": {"environments": copy.deepcopy(candidates[0])}
+    }
+    manifest["optimization"]["optimizer"] = copy.deepcopy(
+        dict(optimizer or _default_task_optimizer(search_space))
+    )
+    return manifest
+
+
+def optimize_workflow_hooks(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute HTTP workflow-hook optimization."""
+
+    manifest = build_workflow_hook_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_component_optimization_manifest(
     *,
     name: str = "component-optimization",
@@ -15466,6 +15582,100 @@ def _external_agent_adapter_candidates(
     ]
 
 
+def _workflow_hook_environment_candidates(
+    *,
+    endpoint: str,
+    tool_name: str,
+    api_key_env: str,
+) -> list[list[dict[str, Any]]]:
+    def workflow_candidate(
+        *,
+        include_auth: bool,
+        profile: str,
+    ) -> list[dict[str, Any]]:
+        hook: dict[str, Any] = {
+            "endpoint": str(endpoint),
+            "method": "POST",
+            "description": "Execute the refund workflow hook.",
+            "schema": {
+                "description": "Execute the refund workflow hook.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string"},
+                        "amount": {"type": "number"},
+                        "currency": {"type": "string"},
+                        "action": {"type": "string"},
+                    },
+                    "required": ["customer_id", "amount", "action"],
+                },
+            },
+            "metadata": {"candidate_profile": profile},
+        }
+        if include_auth and api_key_env:
+            hook["auth"] = {"type": "bearer", "token_env": str(api_key_env)}
+        return [
+            {
+                "type": "workflow_hook",
+                "data": {
+                    "hooks": {str(tool_name): hook},
+                    "metadata": {"candidate_profile": profile},
+                },
+            }
+        ]
+
+    return [
+        [
+            {
+                "type": "tool_mock",
+                "data": {
+                    "tools": {
+                        str(tool_name): {
+                            "schema": {
+                                "description": "Mock refund workflow hook.",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {
+                                        "customer_id": {"type": "string"},
+                                        "amount": {"type": "number"},
+                                        "action": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "response": {
+                                "content": (
+                                    "Workflow hook not executed; refund "
+                                    "approval remains pending and auth "
+                                    "redaction is unverified."
+                                ),
+                                "result": {"status": "pending", "mocked": True},
+                                "success": False,
+                                "state_updates": {
+                                    "refund_workflow": {
+                                        "status": "pending",
+                                        "mocked": True,
+                                    }
+                                },
+                            },
+                        }
+                    },
+                    "metadata": {
+                        "candidate_profile": "mocked_without_http_execution"
+                    },
+                },
+            }
+        ],
+        workflow_candidate(
+            include_auth=False,
+            profile="http_workflow_hook_missing_auth",
+        ),
+        workflow_candidate(
+            include_auth=True,
+            profile="verified_authenticated_workflow_hook",
+        ),
+    ]
+
+
 def _default_artifact_optimizer(
     field_candidates: Sequence[Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
@@ -15865,6 +16075,7 @@ __all__ = [
     "build_social_memory_framework_optimization_manifest",
     "build_stateful_tool_world_optimization_manifest",
     "build_task_optimization_manifest",
+    "build_workflow_hook_optimization_manifest",
     "build_workspace_observability_optimization_manifest",
     "build_workspace_import_certification_optimization_manifest",
     "optimize_eval_suite",
@@ -15906,6 +16117,7 @@ __all__ = [
     "optimize_social_memory_framework",
     "optimize_stateful_tool_world",
     "optimize_task",
+    "optimize_workflow_hooks",
     "optimize_suite",
     "optimize_suite_file",
     "optimize_workspace_observability",

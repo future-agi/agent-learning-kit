@@ -73,6 +73,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "ToolFaultInjectionEnvironment",
     "ToolMockEnvironment",
     "VoiceEnvironment",
+    "WorkflowHookEnvironment",
     "WorldAttackReplayEnvironment",
     "WorldContractEnvironment",
     "WorldOrchestrationReplayEnvironment",
@@ -518,6 +519,95 @@ def build_external_agent_run_manifest(
         },
     )
     return manifest
+
+
+def build_workflow_hook_run_manifest(
+    *,
+    name: str = "workflow-hook-run",
+    endpoint: str,
+    tool_name: str = "execute_refund_workflow",
+    api_key_env: str = "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY",
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a runnable manifest for authenticated HTTP workflow hooks."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    env_required = [api_key_env] if api_key_env else []
+    return build_task_run_manifest(
+        name=name,
+        agent=copy.deepcopy(
+            dict(agent or _workflow_hook_agent(tool_name=tool_name))
+        ),
+        task_description=(
+            "Execute an authenticated HTTP workflow hook, preserve auth "
+            "redaction, collect hook trace evidence, and verify completion."
+        ),
+        expected_result=(
+            "Workflow hook completed refund approval with approval_id "
+            "wf_refund_2026 and auth redacted."
+        ),
+        scenario=scenario,
+        environments=[
+            _workflow_hook_environment(
+                endpoint=endpoint,
+                tool_name=tool_name,
+                api_key_env=api_key_env,
+                include_auth=True,
+                candidate_profile="verified_authenticated_workflow_hook",
+            )
+        ],
+        required_env=_unique_strings([*required_env, *env_required]),
+        available_tools=[tool_name],
+        required_tools=[tool_name],
+        success_criteria=[
+            "workflow hook completed",
+            "approval_id wf_refund_2026 present",
+            "auth redacted in workflow hook trace",
+            "HTTP hook status is successful",
+        ],
+        evaluation_config=copy.deepcopy(
+            dict(evaluation_config or _workflow_hook_evaluation_config(tool_name))
+        ),
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=True,
+        metadata={
+            "source": "agent_learning.simulate.build_workflow_hook_run_manifest",
+            "cookbook": "workflow-hook-adapter",
+            "task_kind": "workflow_hook",
+            "research_sources": _unique_research_sources(
+                [
+                    *_workflow_hook_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Workflow hooks should be treated as executable protocol "
+                "boundaries, not mocked labels: the simulator must prove "
+                "auth mediation, HTTP status, latency, tool result, redacted "
+                "trace state, and domain state updates together."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
 
 
 def build_realtime_run_manifest(
@@ -2907,6 +2997,172 @@ def _external_agent_research_sources() -> list[dict[str, Any]]:
             "year": 2026,
             "url": "https://arxiv.org/abs/2604.04820",
             "used_for": "protocol-normalized external agent interaction contracts",
+        },
+    ]
+
+
+def _workflow_hook_agent(*, tool_name: str) -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "First, because refund approval must execute through an "
+                    "audited workflow hook, I will call the hook, then verify "
+                    "auth redaction, HTTP success, and completion evidence."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "call_workflow_hook",
+                        "name": str(tool_name),
+                        "arguments": {
+                            "customer_id": "cust_123",
+                            "amount": 42.0,
+                            "currency": "USD",
+                            "action": "approve_refund",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _workflow_hook_environment(
+    *,
+    endpoint: str,
+    tool_name: str,
+    api_key_env: str,
+    include_auth: bool,
+    candidate_profile: str,
+) -> dict[str, Any]:
+    hook: dict[str, Any] = {
+        "endpoint": str(endpoint),
+        "method": "POST",
+        "description": "Execute the refund workflow hook.",
+        "schema": {
+            "description": "Execute the refund workflow hook.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_id": {"type": "string"},
+                    "amount": {"type": "number"},
+                    "currency": {"type": "string"},
+                    "action": {"type": "string"},
+                },
+                "required": ["customer_id", "amount", "action"],
+            },
+        },
+        "metadata": {"candidate_profile": candidate_profile},
+    }
+    if include_auth and api_key_env:
+        hook["auth"] = {"type": "bearer", "token_env": str(api_key_env)}
+    return {
+        "type": "workflow_hook",
+        "data": {
+            "hooks": {str(tool_name): hook},
+            "metadata": {"candidate_profile": candidate_profile},
+        },
+    }
+
+
+def _workflow_hook_mock_environment(*, tool_name: str) -> dict[str, Any]:
+    return {
+        "type": "tool_mock",
+        "data": {
+            "tools": {
+                str(tool_name): {
+                    "schema": {
+                        "description": "Mock refund workflow hook.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "customer_id": {"type": "string"},
+                                "amount": {"type": "number"},
+                                "action": {"type": "string"},
+                            },
+                        },
+                    },
+                    "response": {
+                        "content": (
+                            "Workflow hook not executed; refund approval "
+                            "remains pending and auth redaction is unverified."
+                        ),
+                        "result": {"status": "pending", "mocked": True},
+                        "success": False,
+                        "state_updates": {
+                            "refund_workflow": {
+                                "status": "pending",
+                                "mocked": True,
+                            }
+                        },
+                    },
+                }
+            },
+            "metadata": {"candidate_profile": "mocked_without_http_execution"},
+        },
+    }
+
+
+def _workflow_hook_evaluation_config(tool_name: str) -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Execute an authenticated workflow hook and verify redacted "
+            "runtime evidence."
+        ),
+        "expected_result": (
+            "Workflow hook completed refund approval with approval_id "
+            "wf_refund_2026 and auth redacted."
+        ),
+        "available_tools": [str(tool_name)],
+        "required_tools": [str(tool_name)],
+        "success_criteria": [
+            "workflow hook completed",
+            "approval_id wf_refund_2026",
+            "auth redacted",
+            "HTTP success",
+        ],
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 3.0,
+            "tool_outcome": 3.0,
+            "secret_leakage": 2.0,
+        },
+    }
+
+
+def _workflow_hook_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "PRISM: A Framework for Decoupling and Assessing the Capabilities of VLMs in Open-Ended Computer Use Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.11853",
+            "used_for": "decoupled workflow/action capability assessment with executable hooks",
+        },
+        {
+            "title": "ClawGuard: Runtime Boundary Enforcement for LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.11790",
+            "used_for": "runtime boundary evidence around external workflow calls",
+        },
+        {
+            "title": "CapSeal: Capability-Sealed Secret Mediation for Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.16762",
+            "used_for": "secret and auth mediation for workflow hook execution",
+        },
+        {
+            "title": "Protocol-first Agent Interaction",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.04820",
+            "used_for": "protocol-normalized tool/workflow interaction contracts",
+        },
+        {
+            "title": "System-level Defenses for LLM Agent Security",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.30016",
+            "used_for": "system-level monitoring and containment around workflow hooks",
         },
     ]
 
@@ -6107,6 +6363,7 @@ __all__ = [
     "build_stateful_tool_world_environments",
     "build_stateful_tool_world_run_manifest",
     "build_task_run_manifest",
+    "build_workflow_hook_run_manifest",
     "build_workspace_observability_run_manifest",
     "build_workspace_import_certification_environments",
     "build_workspace_import_certification_run_manifest",
