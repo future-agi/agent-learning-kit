@@ -255,9 +255,10 @@ types, state keys, metrics, modalities, and search paths. Add `--require
 providers=vapi,retell --require frameworks=langgraph,pipecat` to fail fast
 before a suite or optimizer run when a required integration surface is missing.
 The catalog also records 2026 capability-discovery/governance research sources
-for Future AGI UI/API rendering.
-`agent-learn eval-cli ...` bridges the vendored ai-evaluation management CLI
-under the unified command for template listing, project scaffolding,
+for Future AGI UI/API rendering and exposes the unified SDK boundary as
+gateable `command_policies` and `sdk_boundaries` capabilities.
+`agent-learn eval-cli ...` bridges the vendored evaluation management CLI under
+the unified command for template listing, project scaffolding,
 configuration validation, history viewing, export, and config management.
 
 This package now contains the actual `fi.simulate`, `fi.evals`, and `fi.opt`

@@ -732,7 +732,7 @@ def _report_environment_state_keys(report: Mapping[str, Any]) -> list[str]:
 
 
 def load_eval_suite_file(path: str | Path) -> dict[str, Any]:
-    return _suite().load_eval_suite_file(path)
+    return public_payload(_suite().load_eval_suite_file(path))
 
 
 def build_eval_suite_manifest(

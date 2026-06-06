@@ -7290,6 +7290,13 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
             "environment_types": ["voice", "framework_trace", "agent_integration"],
             "metrics": ["agent_integration_quality", "world_contract_quality"],
             "commands": ["run", "optimize", "capabilities"],
+            "command_policies": ["agent_learn_only", "legacy_commands_rejected"],
+            "sdk_boundaries": [
+                "agent_learning_kit",
+                "agent_learning",
+                "agent_learn",
+                "vendored_engine_modules",
+            ],
         }
     )
     assert catalog["kind"] == "agent-learning.capabilities.v1"
@@ -7316,7 +7323,25 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
         "https://arxiv.org/abs/2601.14567",
         "https://arxiv.org/abs/2605.20690",
         "https://arxiv.org/abs/2604.11839",
+        "https://arxiv.org/abs/2606.06460",
     } <= {item["url"] for item in catalog["research_sources"]}
+    assert catalog["consolidation"]["legacy_public_commands_allowed"] is False
+    assert catalog["capabilities"]["command_policies"] == [
+        "agent_learn_only",
+        "legacy_commands_rejected",
+        "no_legacy_distribution_dependency",
+        "shared_agent_learning_api_key",
+        "unified_public_boundary",
+    ]
+    assert {
+        "agent_learning",
+        "agent_learning_kit",
+        "agent_learn",
+        "public_console_script_agent_learn",
+        "public_import_agent_learning",
+        "public_package_agent_learning_kit",
+        "vendored_engine_modules",
+    } == set(catalog["capabilities"]["sdk_boundaries"])
 
     output_path = tmp_path / "capabilities.json"
     markdown_path = tmp_path / "capabilities.md"
@@ -7332,6 +7357,10 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
         "environment_types=voice,framework_trace,agent_integration",
         "--require",
         "commands=run,optimize,capabilities",
+        "--require",
+        "command_policies=agent_learn_only,legacy_commands_rejected",
+        "--require",
+        "sdk_boundaries=agent_learning_kit,agent_learning,agent_learn,vendored_engine_modules",
         "--output",
         str(output_path),
         "--markdown",
@@ -7344,6 +7373,12 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["status"] == "passed"
     assert payload["summary"]["capability_gate_passed"] is True
+    assert payload["consolidation"]["public_console_scripts"] == ["agent-learn"]
+    assert payload["consolidation"]["rejected_legacy_console_scripts"] == [
+        "agent-simulate",
+        "ai-evaluation",
+        "agent-opt",
+    ]
     assert "Capability gate: True" in markdown_path.read_text(encoding="utf-8")
     assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
     sarif_payload = json.loads(sarif_path.read_text(encoding="utf-8"))
@@ -8362,11 +8397,18 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
         "public_package": "agent-learning-kit",
         "public_import": "agent_learning",
         "public_cli": "agent-learn",
+        "public_console_scripts": ["agent-learn"],
         "new_development_home": True,
         "shared_key_env": "AGENT_LEARNING_API_KEY",
         "shared_secret_env": "AGENT_LEARNING_SECRET_KEY",
         "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
         "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
+        "legacy_public_commands_allowed": False,
+        "rejected_legacy_console_scripts": [
+            "agent-simulate",
+            "ai-evaluation",
+            "agent-opt",
+        ],
         "unified_python_modules": [
             "agent_learning.capabilities",
             "agent_learning.simulate",
@@ -8385,7 +8427,75 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
             "ai-evaluation",
             "agent-opt",
         ],
+        "consolidation_claims": [
+            {
+                "id": "single_public_distribution",
+                "status": "passed",
+                "claim": "agent-learning-kit is the new public Python distribution.",
+                "evidence": "pyproject dependencies avoid legacy SDK distributions.",
+            },
+            {
+                "id": "single_public_cli",
+                "status": "passed",
+                "claim": "agent-learn is the only public CLI for new development.",
+                "evidence": "legacy command names are migration/provenance only.",
+            },
+            {
+                "id": "single_public_api_key",
+                "status": "passed",
+                "claim": "AGENT_LEARNING_API_KEY is the shared public key surface.",
+                "evidence": "legacy key names are aliases, not new SDK contracts.",
+            },
+            {
+                "id": "vendored_engine_boundary",
+                "status": "passed",
+                "claim": (
+                    "simulate, evals, and optimize engines are vendored behind "
+                    "agent_learning."
+                ),
+                "evidence": (
+                    "fi.* modules remain engine internals; public imports use "
+                    "agent_learning.*."
+                ),
+            },
+        ],
+        "research_sources": [
+            {
+                "id": "agent_identity_uri_capability_discovery",
+                "title": (
+                    "Agent Identity URI Scheme: Topology-Independent Naming and "
+                    "Capability-Based Discovery for Multi-Agent Systems"
+                ),
+                "source": "arxiv:2601.14567",
+                "url": "https://arxiv.org/abs/2601.14567",
+                "year": 2026,
+            },
+            {
+                "id": "recuse_signal_agent_governance",
+                "title": (
+                    "Will the Agent Recuse Itself? Measuring LLM-Agent Compliance "
+                    "with In-Band Access-Deny Signals"
+                ),
+                "source": "arxiv:2606.06460",
+                "url": "https://arxiv.org/abs/2606.06460",
+                "year": 2026,
+            },
+        ],
     }
+    assert payload["kind"] == "agent-learning.doctor.v1"
+    assert payload["status"] == "passed"
+    assert payload["exit_code"] == 0
+    assert payload["summary"]["public_boundary_passed"] is True
+    assert payload["summary"]["legacy_public_commands_allowed"] is False
+    assert payload["summary"]["public_console_scripts"] == ["agent-learn"]
+    assert payload["summary"]["rejected_legacy_console_scripts"] == [
+        "agent-simulate",
+        "ai-evaluation",
+        "agent-opt",
+    ]
+    assert payload["summary"]["missing_public_modules"] == []
+    assert payload["summary"]["missing_engine_modules"] == []
+    assert payload["findings"] == []
     assert payload == trinity.trinity_status()
     ready = trinity.assert_trinity_ready()
     assert ready["modules"]["simulate"]["available"] is True

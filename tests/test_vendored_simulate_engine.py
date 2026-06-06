@@ -554,7 +554,7 @@ def test_public_eval_suite_api_runs_local_prompt_provider(tmp_path: Path) -> Non
     loaded = simulate.load_eval_suite_file(suite_path)
     result = simulate.run_eval_suite_file(suite_path)
 
-    assert loaded["version"] == "agent-simulate.eval.v1"
+    assert loaded["version"] == "agent-learning.eval.v1"
     assert result["kind"] == "agent-learning.eval.v1"
     assert result["status"] == "passed"
     assert result["exit_code"] == 0

@@ -127,6 +127,16 @@ RESEARCH_SOURCES = [
         "url": "https://arxiv.org/abs/2604.11839",
         "year": 2026,
     },
+    {
+        "id": "recuse_signal_agent_governance",
+        "title": (
+            "Will the Agent Recuse Itself? Measuring LLM-Agent Compliance "
+            "with In-Band Access-Deny Signals"
+        ),
+        "source": "arxiv:2606.06460",
+        "url": "https://arxiv.org/abs/2606.06460",
+        "year": 2026,
+    },
 ]
 
 
@@ -155,6 +165,7 @@ def capability_catalog(
         "static_capabilities": static,
         "observed_capabilities": observed,
         "capabilities": capabilities,
+        "consolidation": _consolidation_metadata(),
         "provider_capabilities": provider_capabilities(),
         "research_sources": copy.deepcopy(RESEARCH_SOURCES),
         "summary": {
@@ -176,14 +187,24 @@ def capability_catalog(
 def static_capabilities() -> dict[str, list[str]]:
     """Return capabilities supported by the installed SDK, independent of a run."""
 
-    from agent_learning import simulate
+    from agent_learning import simulate, trinity
 
     provider_caps = provider_capabilities()
     provider_values = {
         value for values in provider_caps.values() for value in values
     }
+    consolidation = trinity.consolidation_metadata()
     return {
         "channels": sorted(provider_values),
+        "command_policies": sorted(
+            {
+                "agent_learn_only",
+                "legacy_commands_rejected",
+                "no_legacy_distribution_dependency",
+                "shared_agent_learning_api_key",
+                "unified_public_boundary",
+            }
+        ),
         "commands": sorted(COMMANDS),
         "environment_state_keys": sorted(
             {
@@ -216,6 +237,17 @@ def static_capabilities() -> dict[str, list[str]]:
                 "jobs.0",
                 "optimizer.backend_portfolio.backends",
                 "simulation.environments",
+            }
+        ),
+        "sdk_boundaries": sorted(
+            {
+                _capability_key(consolidation["public_package"]),
+                _capability_key(consolidation["public_import"]),
+                _capability_key(consolidation["public_cli"]),
+                "public_console_script_agent_learn",
+                "public_import_agent_learning",
+                "public_package_agent_learning_kit",
+                "vendored_engine_modules",
             }
         ),
     }
@@ -425,6 +457,7 @@ def _collect_payload_capabilities(
 def _empty_capability_sets() -> dict[str, set[str]]:
     return {
         "channels": set(),
+        "command_policies": set(),
         "commands": set(),
         "environment_state_keys": set(),
         "environment_types": set(),
@@ -434,6 +467,7 @@ def _empty_capability_sets() -> dict[str, set[str]]:
         "providers": set(),
         "result_kinds": set(),
         "search_paths": set(),
+        "sdk_boundaries": set(),
     }
 
 
@@ -491,6 +525,12 @@ def _as_list(value: Any) -> list[Any]:
 
 def _mapping_keys(value: Any) -> list[Any]:
     return list(value.keys()) if isinstance(value, Mapping) else []
+
+
+def _consolidation_metadata() -> dict[str, Any]:
+    from agent_learning import trinity
+
+    return trinity.consolidation_metadata()
 
 
 def _md_text(value: Any) -> str:

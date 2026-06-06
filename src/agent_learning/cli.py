@@ -318,7 +318,7 @@ def _capabilities(args: Sequence[str]) -> int:
         help=(
             "Require a capability as key=value or key=value1,value2; repeatable. "
             "Keys include providers, frameworks, channels, environment_types, "
-            "metrics, commands, and result_kinds."
+            "metrics, commands, command_policies, sdk_boundaries, and result_kinds."
         ),
     )
     parser.add_argument(
