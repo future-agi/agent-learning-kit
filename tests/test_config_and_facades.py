@@ -5739,6 +5739,45 @@ def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp
     assert observed["has_positive_learning_curve"] is True
     assert observed["requires_external_service"] is False
 
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=output_path,
+        name="sdk-redteam-attack-evolution-regression",
+        required_env=["AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == (
+        "redteam_attack_evolution_optimization"
+    )
+    assert promotion["summary"]["attack_evolution_profile"] == "verified"
+    assert promotion["summary"]["attack_evolution_minimized_replay_count"] == 1
+    assert promotion["summary"]["attack_evolution_replay_case_count"] == 1
+    regression_manifest = tmp_path / "sdk-redteam-attack-evolution-regression.json"
+    regression_manifest.write_text(
+        json.dumps(promotion["manifest"], indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    assert promotion["manifest"]["metadata"]["regression"]["promotion_kind"] == (
+        "redteam_attack_evolution_optimization"
+    )
+    assert promotion["manifest"]["simulation"]["environments"][0]["type"] == (
+        "red_team_attack_evolution"
+    )
+    replay = simulate.replay_manifests(
+        [regression_manifest],
+        name="sdk-redteam-attack-evolution-regression-replay",
+    )
+    assert replay["status"] == "passed"
+    assert replay["summary"]["passed_count"] == 1
+    assert replay["summary"]["failed_count"] == 0
+    replay_row = replay["replay"]["manifests"][0]
+    assert replay_row["summary"]["metric_averages"][
+        "red_team_attack_evolution_coverage"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "red_team_attack_evolution_quality"
+    ] == pytest.approx(1.0)
+
 
 def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
     monkeypatch.setenv(

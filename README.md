@@ -1091,7 +1091,13 @@ campaign breadth. Use `evals.redteam_attack_evolution_report()`,
 `examples/sdk_redteam_attack_evolution_optimization.py` proves a weak seed-only
 loop fails and the verified attack-evolution loop passes, writes a
 `.manifest.json` for `agent-learn optimize`, and attaches
-`agent-learning.optimization.redteam-attack-evolution-proof.v1`.
+`agent-learning.optimization.redteam-attack-evolution-proof.v1`. Its optimized
+result can be promoted with `simulate.promote_to_regression()` or
+`agent-learn promote-to-regression` into a replayable
+`red_team_attack_evolution` regression manifest; `agent-learn replay` then
+reruns status, mutation, counterexample, minimized-replay, and gap tools with
+`red_team_attack_evolution_coverage=1.0` and
+`red_team_attack_evolution_quality=1.0`.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of
