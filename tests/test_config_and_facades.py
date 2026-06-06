@@ -5690,6 +5690,23 @@ def test_sdk_agent_integration_optimization_example_runs(monkeypatch, tmp_path):
     assert summary["missing_required_trace_frameworks"] == []
     assert summary["providers_without_verified_credentials"] == []
 
+    readiness = result["agent_integration_readiness"]
+    assert readiness["kind"] == "agent_integration_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["gap_summary"]["total_gap_count"] == 0
+    assert readiness["weak_layers"] == []
+    assert readiness["weak_metrics"] == []
+    assert readiness["verified_provider_count"] == 16
+    assert len(readiness["provider_matrix"]) == 16
+    assert {
+        action["id"]
+        for action in readiness["actions"]
+    } >= {
+        "report_agent_integration_readiness",
+        "rerun_agent_integration_optimization",
+        "optimize_agent_integration_readiness",
+    }
+
     from agent_learning import optimize
 
     candidate = optimize.AgentCandidate.from_config(
@@ -5821,6 +5838,74 @@ def test_sdk_agent_integration_simulation_example_runs(monkeypatch, tmp_path):
     assert summary["missing_required_channels"] == []
     assert summary["missing_required_trace_frameworks"] == []
     assert summary["providers_without_verified_credentials"] == []
+
+    readiness = result["agent_integration_readiness"]
+    assert readiness["kind"] == "agent_integration_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["present_layers"] == [
+        "provider",
+        "channel",
+        "credential",
+        "session",
+        "observability",
+        "evaluation",
+        "trace_framework",
+    ]
+    assert readiness["gap_summary"]["total_gap_count"] == 0
+    assert readiness["session_summary"]["failed_session_count"] == 0
+    assert readiness["verified_provider_count"] == 16
+    assert len(readiness["provider_matrix"]) == 16
+    assert {
+        action["id"]
+        for action in readiness["actions"]
+    } >= {
+        "report_agent_integration_readiness",
+        "rerun_agent_integration_simulation",
+        "optimize_agent_integration_readiness",
+    }
+
+    report_path = tmp_path / "sdk-agent-integration-report.json"
+    report_md_path = tmp_path / "sdk-agent-integration-report.md"
+    assert main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_md_path),
+    ]) == 0
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "agent_integration_readiness" in report_payload["summary"]["sections"]
+    report_readiness = report_payload["report"]["agent_integration_readiness"]
+    assert report_readiness["status"] == "ready"
+    assert {
+        action["id"]
+        for action in report_readiness["actions"]
+    } >= {
+        "report_agent_integration_readiness",
+        "rerun_agent_integration_simulation",
+        "optimize_agent_integration_readiness",
+    }
+    report_markdown = report_md_path.read_text(encoding="utf-8")
+    assert "## Agent Integration Readiness" in report_markdown
+    assert "### Provider Matrix" in report_markdown
+    assert "### Agent Integration Actions" in report_markdown
+
+    from agent_learning import actions
+
+    catalog = actions.action_catalog(written_result, source_path=output_path)
+    assert {
+        "report_agent_integration_readiness",
+        "rerun_agent_integration_simulation",
+        "optimize_agent_integration_readiness",
+    } <= set(catalog["summary"]["action_ids"])
+    rerun_action = actions.get_action(
+        written_result,
+        "rerun_agent_integration_simulation",
+    )
+    assert rerun_action is not None
+    assert rerun_action["source_card_path"] == "agent_integration_readiness"
+    assert rerun_action["command_args"][:2] == ["agent-learn", "run"]
     event_names = {event["name"] for event in report_case["events"]}
     assert {
         "agent_integration_manifest_ready",

@@ -875,7 +875,10 @@ For direct, non-optimizer simulation,
 `examples/sdk_agent_integration_simulation.py` run the verified provider matrix
 as a normal `agent-learning.run.v1` artifact across LiveKit, Vapi, Retell,
 Bland, ElevenLabs, Deepgram, Agora, Pipecat, Twilio, and TraceAI-supported
-framework traces.
+framework traces. Run `agent-learn report <artifact>` on either artifact to get
+the `agent_integration_readiness` card with provider/channel/framework gaps,
+credential/session/observability/eval counts, provider matrix rows, Markdown,
+and actions for report, rerun, and optimization.
 
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,

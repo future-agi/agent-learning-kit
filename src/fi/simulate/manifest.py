@@ -497,6 +497,13 @@ async def run_manifest(
     )
     if framework_readiness is not None:
         result["framework_readiness"] = framework_readiness
+    agent_integration_readiness = cli._agent_integration_readiness_card(
+        result,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if agent_integration_readiness is not None:
+        result["agent_integration_readiness"] = agent_integration_readiness
     return result
 
 
@@ -725,6 +732,13 @@ def optimize_manifest(
     )
     if framework_readiness is not None:
         payload["framework_readiness"] = framework_readiness
+    agent_integration_readiness = cli._agent_integration_readiness_card(
+        payload,
+        source_path=manifest_path,
+        source_manifest_path=manifest_path,
+    )
+    if agent_integration_readiness is not None:
+        payload["agent_integration_readiness"] = agent_integration_readiness
     return payload
 
 

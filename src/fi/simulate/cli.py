@@ -2329,6 +2329,12 @@ def _report_result(
     framework_readiness = _framework_readiness_card(source, source_path=source_path)
     if framework_readiness is not None:
         report_payload["framework_readiness"] = framework_readiness
+    agent_integration_readiness = _agent_integration_readiness_card(
+        source,
+        source_path=source_path,
+    )
+    if agent_integration_readiness is not None:
+        report_payload["agent_integration_readiness"] = agent_integration_readiness
     harness_diagnosis = _harness_diagnosis_card(source, source_path=source_path)
     if harness_diagnosis is not None:
         report_payload["harness_diagnosis"] = harness_diagnosis
@@ -3607,6 +3613,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("orchestration_strategy")
     if _has_framework_readiness_card(result, source_path=source_path):
         sections.append("framework_readiness")
+    if _has_agent_integration_readiness_card(result, source_path=source_path):
+        sections.append("agent_integration_readiness")
     if result.get("compare") is not None:
         sections.append("compare")
     if result.get("optimization") is not None:
@@ -3662,6 +3670,13 @@ def _result_markdown(
         lines.extend(_orchestration_strategy_markdown(result, source_path=source_path))
     if "framework_readiness" in sections:
         lines.extend(_framework_readiness_markdown(result, source_path=source_path))
+    if "agent_integration_readiness" in sections:
+        lines.extend(
+            _agent_integration_readiness_markdown(
+                result,
+                source_path=source_path,
+            )
+        )
     if "compare" in sections:
         lines.extend(_compare_markdown(result))
     if "optimization" in sections:
@@ -6269,6 +6284,577 @@ def _framework_readiness_markdown(
         lines.extend(
             [
                 "### Framework Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Status", "Target layers", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+_AGENT_INTEGRATION_READINESS_METRICS = {
+    "agent_integration_coverage",
+    "agent_integration_quality",
+}
+
+
+def _has_agent_integration_readiness_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("agent_integration_readiness"), Mapping):
+        return True
+    return _agent_integration_readiness_card(result, source_path=source_path) is not None
+
+
+def _agent_integration_readiness_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    existing = result.get("agent_integration_readiness")
+    if not isinstance(existing, Mapping):
+        report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+        existing = (
+            report.get("agent_integration_readiness")
+            if isinstance(report, Mapping)
+            else None
+        )
+    existing_card = copy.deepcopy(dict(existing)) if isinstance(existing, Mapping) else {}
+    existing_manifest_path = existing_card.get("source_manifest_path")
+    if source_manifest_path is None and existing_manifest_path not in (None, ""):
+        source_manifest_path = Path(str(existing_manifest_path))
+    if source_manifest_path is None:
+        source_manifest_path = _framework_source_manifest_path(result)
+
+    state = _agent_integration_readiness_state(result)
+    metrics = {
+        name: value
+        for name, value in _result_metric_averages(result).items()
+        if name in _AGENT_INTEGRATION_READINESS_METRICS
+    }
+    if not state and not metrics and existing_card:
+        existing_card["source_path"] = str(source_path)
+        if source_manifest_path is not None:
+            existing_card["source_manifest_path"] = str(source_manifest_path)
+        return existing_card
+    if not state and not metrics:
+        return None
+
+    manifest = dict(state.get("agent_integration_manifest") or {})
+    summary = dict(manifest.get("summary") or {})
+    gap_summary = _agent_integration_gap_summary(summary)
+    layers = _agent_integration_layer_records(summary, metrics)
+    weak_layers = [
+        str(record["layer"])
+        for record in layers
+        if record.get("status") == "needs_attention"
+    ]
+    weak_metrics = [
+        name
+        for name, value in sorted(metrics.items())
+        if float(value) < 1.0
+    ]
+    status = "needs_attention" if gap_summary["total_gap_count"] or weak_metrics else "ready"
+    card = {
+        "kind": "agent_integration_readiness_map",
+        "taxonomy": "provider_channel_session_observability_eval_trace",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "platform": manifest.get("platform"),
+        "provider_count": summary.get("provider_count"),
+        "verified_provider_count": summary.get("verified_provider_count"),
+        "session_count": summary.get("session_count"),
+        "simulation_count": summary.get("simulation_count"),
+        "observability_hook_count": summary.get("observability_hook_count"),
+        "eval_metric_count": summary.get("eval_metric_count"),
+        "providers": _coerce_list(summary.get("observed_providers")),
+        "channels": _coerce_list(summary.get("observed_channels")),
+        "trace_frameworks": _coerce_list(summary.get("trace_frameworks")),
+        "gap_summary": gap_summary,
+        "layers": layers,
+        "present_layers": [
+            str(record["layer"])
+            for record in layers
+            if record.get("present") or record.get("verified")
+        ],
+        "weak_layers": weak_layers,
+        "weak_metrics": weak_metrics,
+        "metrics": metrics,
+        "provider_matrix": _agent_integration_provider_matrix(manifest),
+        "session_summary": {
+            "failed_session_count": summary.get("failed_session_count"),
+            "failed_sessions": _coerce_list(summary.get("failed_sessions")),
+            "trace_session_count": summary.get("trace_session_count"),
+            "transcript_session_count": summary.get("transcript_session_count"),
+        },
+        "research_sources": [
+            "https://arxiv.org/abs/2601.14567",
+            "https://arxiv.org/abs/2604.06148",
+            "https://arxiv.org/abs/2604.16338",
+            "https://arxiv.org/abs/2605.27827",
+        ],
+    }
+    if source_manifest_path is not None:
+        card["source_manifest_path"] = str(source_manifest_path)
+    card["actions"] = _agent_integration_readiness_actions(
+        source_path=source_path,
+        source_manifest_path=source_manifest_path,
+        source_kind=str(result.get("kind") or ""),
+        status=status,
+        weak_layers=weak_layers,
+    )
+    return card
+
+
+def _agent_integration_readiness_state(result: Mapping[str, Any]) -> Dict[str, Any]:
+    state = result.get("state")
+    if isinstance(state, Mapping) and isinstance(state.get("agent_integration_manifest"), Mapping):
+        return {"agent_integration_manifest": dict(state["agent_integration_manifest"])}
+    report_state = _environment_state_from_report(result.get("report"))
+    if isinstance(report_state.get("agent_integration_manifest"), Mapping):
+        return {"agent_integration_manifest": dict(report_state["agent_integration_manifest"])}
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        best_history = _best_optimization_history_item(optimization)
+        if best_history is not None:
+            history_state = _environment_state_from_report(best_history.get("report"))
+            if isinstance(history_state.get("agent_integration_manifest"), Mapping):
+                return {
+                    "agent_integration_manifest": dict(
+                        history_state["agent_integration_manifest"]
+                    )
+                }
+        best_config = optimization.get("best_config")
+        if isinstance(best_config, Mapping):
+            config_state = _agent_integration_state_from_environments(
+                dict(best_config.get("simulation") or {}).get("environments")
+            )
+            if isinstance(config_state.get("agent_integration_manifest"), Mapping):
+                return config_state
+    return {}
+
+
+def _agent_integration_state_from_environments(environments: Any) -> Dict[str, Any]:
+    for item in _coerce_list(environments):
+        if not isinstance(item, Mapping):
+            continue
+        environment_type = str(item.get("type") or item.get("kind") or "").lower().replace("-", "_")
+        if environment_type not in {"agent_integration", "agent_integration_manifest"}:
+            continue
+        data = item.get("data")
+        if not isinstance(data, Mapping):
+            data = {
+                key: value
+                for key, value in item.items()
+                if key not in {"type", "kind"}
+            }
+        return {"agent_integration_manifest": dict(data)}
+    return {}
+
+
+def _agent_integration_gap_summary(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    missing_providers = _coerce_list(summary.get("missing_required_providers"))
+    missing_channels = _coerce_list(summary.get("missing_required_channels"))
+    missing_frameworks = _coerce_list(summary.get("missing_required_trace_frameworks"))
+    credential_gaps = _coerce_list(summary.get("providers_without_verified_credentials"))
+    failed_sessions = _coerce_list(summary.get("failed_sessions"))
+    gaps = {
+        "missing_required_providers": missing_providers,
+        "missing_required_channels": missing_channels,
+        "missing_required_trace_frameworks": missing_frameworks,
+        "providers_without_verified_credentials": credential_gaps,
+        "failed_sessions": failed_sessions,
+    }
+    return {
+        **gaps,
+        "total_gap_count": sum(len(values) for values in gaps.values()),
+    }
+
+
+def _agent_integration_layer_records(
+    summary: Mapping[str, Any],
+    metrics: Mapping[str, float],
+) -> List[Dict[str, Any]]:
+    specs = [
+        (
+            "provider",
+            summary.get("provider_count"),
+            summary.get("verified_provider_count"),
+            summary.get("missing_required_providers"),
+        ),
+        (
+            "channel",
+            len(_coerce_list(summary.get("observed_channels"))),
+            len(_coerce_list(summary.get("observed_channels"))),
+            summary.get("missing_required_channels"),
+        ),
+        (
+            "credential",
+            summary.get("provider_count"),
+            summary.get("verified_provider_count"),
+            summary.get("providers_without_verified_credentials"),
+        ),
+        (
+            "session",
+            summary.get("session_count"),
+            summary.get("session_count"),
+            summary.get("failed_sessions"),
+        ),
+        (
+            "observability",
+            summary.get("observability_hook_count"),
+            summary.get("observability_hook_count"),
+            [],
+        ),
+        (
+            "evaluation",
+            summary.get("eval_metric_count"),
+            summary.get("eval_metric_count"),
+            [],
+        ),
+        (
+            "trace_framework",
+            len(_coerce_list(summary.get("trace_frameworks"))),
+            len(_coerce_list(summary.get("trace_frameworks"))),
+            summary.get("missing_required_trace_frameworks"),
+        ),
+    ]
+    records: List[Dict[str, Any]] = []
+    for layer, present_count, verified_count, raw_gaps in specs:
+        present_value = _int_or_none(present_count) or 0
+        verified_value = _int_or_none(verified_count) or 0
+        gaps = _coerce_list(raw_gaps)
+        metric_names = (
+            ["agent_integration_coverage", "agent_integration_quality"]
+            if layer in {"provider", "channel", "credential", "session", "trace_framework"}
+            else ["agent_integration_quality"]
+        )
+        layer_metrics = {
+            name: metrics[name]
+            for name in metric_names
+            if name in metrics
+        }
+        weak_metric_names = [
+            name
+            for name, value in layer_metrics.items()
+            if float(value) < 1.0
+        ]
+        present = present_value > 0
+        verified = verified_value > 0 and not gaps
+        status = "ready" if present and verified and not weak_metric_names else "needs_attention"
+        records.append(
+            {
+                "layer": layer,
+                "present": present,
+                "verified": verified,
+                "status": status,
+                "present_count": present_value,
+                "verified_count": verified_value,
+                "gaps": gaps,
+                "metrics": layer_metrics,
+                "weak_metrics": weak_metric_names,
+            }
+        )
+    return records
+
+
+def _agent_integration_provider_matrix(manifest: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    providers = [
+        item for item in _coerce_list(manifest.get("providers")) if isinstance(item, Mapping)
+    ]
+    sessions = [
+        item for item in _coerce_list(manifest.get("sessions")) if isinstance(item, Mapping)
+    ]
+    simulations = [
+        item for item in _coerce_list(manifest.get("simulations")) if isinstance(item, Mapping)
+    ]
+    rows: List[Dict[str, Any]] = []
+    for provider in providers:
+        provider_name = str(provider.get("provider") or provider.get("id") or "")
+        provider_sessions = [
+            item for item in sessions if str(item.get("provider") or "") == provider_name
+        ]
+        provider_simulations = [
+            item for item in simulations if str(item.get("provider") or "") == provider_name
+        ]
+        rows.append(
+            {
+                "provider": provider_name,
+                "channels": _coerce_list(provider.get("channels")),
+                "credential_status": provider.get("credential_status"),
+                "trace_framework": provider.get("trace_framework"),
+                "session_count": len(provider_sessions),
+                "failed_session_count": sum(
+                    1
+                    for item in provider_sessions
+                    if str(item.get("status") or "").lower() in {"failed", "error"}
+                ),
+                "simulation_count": len(provider_simulations),
+                "signals": _coerce_list(provider.get("signals")),
+            }
+        )
+    return rows
+
+
+def _agent_integration_readiness_actions(
+    *,
+    source_path: Path,
+    source_manifest_path: Optional[Path],
+    source_kind: str,
+    status: str,
+    weak_layers: Sequence[str],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_agent_integration_readiness",
+            "Report Agent Integration Readiness",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/agent-integration-readiness-report.json",
+                "--markdown",
+                "artifacts/agent-integration-readiness-report.md",
+            ],
+        )
+    ]
+    is_optimization = (
+        "optimization" in source_kind
+        or "optimize" in source_kind
+        or source_path.name.endswith("optimization.json")
+    )
+    if source_manifest_path is not None and is_optimization:
+        actions.append(
+            _cli_action(
+                "rerun_agent_integration_optimization",
+                "Rerun Agent Integration Optimization",
+                [
+                    "agent-learn",
+                    "optimize",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/agent-integration-optimization-rerun.json",
+                    "--junit",
+                    "artifacts/agent-integration-optimization-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/agent-integration-optimization-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/agent-integration-optimization-rerun.md",
+                ],
+            )
+        )
+    elif source_manifest_path is not None:
+        actions.append(
+            _cli_action(
+                "rerun_agent_integration_simulation",
+                "Rerun Agent Integration Simulation",
+                [
+                    "agent-learn",
+                    "run",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/agent-integration-rerun.json",
+                    "--junit",
+                    "artifacts/agent-integration-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/agent-integration-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/agent-integration-rerun.md",
+                ],
+            )
+        )
+    else:
+        actions.append(
+            _cli_action(
+                "rerun_agent_integration_simulation",
+                "Rerun Agent Integration Simulation",
+                [
+                    "agent-learn",
+                    "run",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/agent-integration-rerun.json",
+                    "--junit",
+                    "artifacts/agent-integration-rerun.junit.xml",
+                    "--sarif",
+                    "artifacts/agent-integration-rerun.sarif.json",
+                    "--markdown",
+                    "artifacts/agent-integration-rerun.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "Agent integration manifest",
+                        "default": "manifests/agent-integration.json",
+                    }
+                ],
+            )
+        )
+    actions.append(
+        _cli_action(
+            "optimize_agent_integration_readiness",
+            "Optimize Agent Integration Readiness",
+            [
+                "agent-learn",
+                "optimize",
+                "{{optimization_manifest_path}}",
+                "--output",
+                "artifacts/agent-integration-readiness-optimization.json",
+                "--markdown",
+                "artifacts/agent-integration-readiness-optimization.md",
+            ],
+            inputs=[
+                {
+                    "name": "optimization_manifest_path",
+                    "label": "Agent integration optimization manifest",
+                    "default": "manifests/agent-integration-optimization.json",
+                }
+            ],
+        )
+    )
+    for action in actions:
+        action["readiness_status"] = status
+        action["target_layers"] = list(weak_layers)
+    return actions
+
+
+def _agent_integration_readiness_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = (
+        report.get("agent_integration_readiness")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if not isinstance(card, Mapping):
+        card = _agent_integration_readiness_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+    layer_rows = [
+        [
+            item.get("layer"),
+            item.get("status"),
+            item.get("present_count"),
+            item.get("verified_count"),
+            _join_values(item.get("gaps")),
+            _join_values(item.get("weak_metrics")),
+        ]
+        for item in _coerce_list(card.get("layers"))
+        if isinstance(item, Mapping)
+    ]
+    provider_rows = [
+        [
+            item.get("provider"),
+            _join_values(item.get("channels")),
+            item.get("credential_status"),
+            item.get("trace_framework"),
+            item.get("session_count"),
+            item.get("failed_session_count"),
+        ]
+        for item in _coerce_list(card.get("provider_matrix"))
+        if isinstance(item, Mapping)
+    ]
+    gap_summary = dict(card.get("gap_summary") or {})
+    gap_rows = [
+        ["Missing providers", _join_values(gap_summary.get("missing_required_providers"))],
+        ["Missing channels", _join_values(gap_summary.get("missing_required_channels"))],
+        [
+            "Missing trace frameworks",
+            _join_values(gap_summary.get("missing_required_trace_frameworks")),
+        ],
+        [
+            "Credential gaps",
+            _join_values(gap_summary.get("providers_without_verified_credentials")),
+        ],
+        ["Failed sessions", _join_values(gap_summary.get("failed_sessions"))],
+    ]
+    action_rows = [
+        [
+            action.get("id"),
+            action.get("label"),
+            action.get("readiness_status"),
+            _join_values(action.get("target_layers")),
+            action.get("command"),
+        ]
+        for action in _coerce_list(card.get("actions"))
+        if isinstance(action, Mapping)
+    ]
+    lines = [
+        "## Agent Integration Readiness",
+        "",
+        *_key_value_table(
+            [
+                ("Status", card.get("status")),
+                ("Platform", card.get("platform")),
+                ("Providers", card.get("provider_count")),
+                ("Verified providers", card.get("verified_provider_count")),
+                ("Sessions", card.get("session_count")),
+                ("Simulations", card.get("simulation_count")),
+                ("Observability hooks", card.get("observability_hook_count")),
+                ("Eval metrics", card.get("eval_metric_count")),
+                ("Total gaps", gap_summary.get("total_gap_count")),
+                ("Weak layers", _join_values(card.get("weak_layers"))),
+                ("Weak metrics", _join_values(card.get("weak_metrics"))),
+            ]
+        ),
+        "",
+    ]
+    if layer_rows:
+        lines.extend(
+            [
+                "### Agent Integration Layers",
+                "",
+                *_markdown_table(
+                    ["Layer", "Status", "Present", "Verified", "Gaps", "Weak metrics"],
+                    layer_rows,
+                ),
+                "",
+            ]
+        )
+    if provider_rows:
+        lines.extend(
+            [
+                "### Provider Matrix",
+                "",
+                *_markdown_table(
+                    [
+                        "Provider",
+                        "Channels",
+                        "Credential",
+                        "Trace framework",
+                        "Sessions",
+                        "Failed sessions",
+                    ],
+                    provider_rows,
+                ),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "### Integration Gaps",
+            "",
+            *_markdown_table(["Gap", "Values"], gap_rows),
+            "",
+        ]
+    )
+    if action_rows:
+        lines.extend(
+            [
+                "### Agent Integration Actions",
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Status", "Target layers", "Command"],
