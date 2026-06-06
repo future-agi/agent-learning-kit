@@ -12232,3 +12232,65 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
     )
     action_run_payload = json.loads(action_run_path.read_text(encoding="utf-8"))
     assert action_run_payload["status"] == "passed"
+
+
+def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-world-hooks-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_HOOKS_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / "sdk_world_hooks_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_world_hooks_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"]
+    assert manifest["metadata"]["task_kind"] == "world_hooks"
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == "world_hooks"
+    assert manifest["optimization"]["target"]["metadata"]["world_hooks"][
+        "requires_external_service"
+    ] is False
+    assert {"endpoint", "auth", "api_key", "secret", "token"} & _nested_keys(
+        manifest
+    ) == set()
+
+    output_path = tmp_path / "sdk-world-hooks-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["world_hook_proof_status"] == "passed"
+    assert result["summary"]["world_hook_proof_assurance_level"] == (
+        "l3_verified_native_world_hooks"
+    )
+    assert result["world_hook_proof"]["task_kind"] == "world_hooks"
+    assert result["world_hook_proof"]["requires_external_service"] is False
+    assert result["world_hook_proof"]["failed_check_ids"] == []
+    assert result["world_hook_proof"]["warning_check_ids"] == []
+    assert {"endpoint", "auth", "api_key", "secret", "token"} & _nested_keys(
+        result["optimization"]["best_config"]
+    ) == set()
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] == pytest.approx(1.0)
+    assert best_history["metrics"]["world_hook_contract_quality"] == pytest.approx(1.0)
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    best_env = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_env["data"]["world_hooks_contract"]["mode"] == (
+        "native_world_state_hooks"
+    )
+    assert best_env["data"]["world_hooks_contract"]["runtime"] == "in_process"
+    assert best_env["data"]["world_hooks_contract"]["requires_external_service"] is False

@@ -758,6 +758,10 @@ AGENT_LEARNING_SDK_WORLD_FRAMEWORK_MEMORY_KEY=... \
   PYTHONPATH=src python examples/sdk_world_framework_memory_optimization.py \
   artifacts/sdk-world-framework-memory-optimization.json
 
+AGENT_LEARNING_SDK_WORLD_HOOKS_KEY=... \
+  PYTHONPATH=src python examples/sdk_world_hooks_optimization.py \
+  artifacts/sdk-world-hooks-optimization.json
+
 AGENT_LEARNING_SDK_ORCHESTRATION_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_orchestration_simulation.py \
   artifacts/sdk-orchestration-simulation.json
@@ -1112,7 +1116,9 @@ invariants and success conditions closed, adversarial pressure was contained,
 persistent memory/provenance channels were contained, and closed
 `world_hook_contract_quality`, world, and eval metrics are present. Passing L3
 candidates report `l3_verified_native_world_hooks` in both `world_hook_proof`
-and the artifact summary.
+and the artifact summary. `examples/sdk_world_hooks_optimization.py` is the
+dedicated cookbook for this native surface; it uses a local key only for SDK
+configuration and redaction checks, not for any external hook endpoint.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized
