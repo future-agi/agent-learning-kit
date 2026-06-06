@@ -234,6 +234,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND == (
         "agent-learning.optimization.multi-agent-coordination-proof.v1"
     )
+    assert optimize.AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND == (
+        "agent-learning.optimization.orchestration-stack-proof.v1"
+    )
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -1509,9 +1512,10 @@ def test_sdk_optimization_lifecycle_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-orchestration-example-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY",
-        "real-local-sdk-orchestration-example-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -1547,8 +1551,25 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     result = module.run(output_path)
 
     assert output_path.exists()
-    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
     assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["orchestration_stack_proof_status"] == "passed"
+    assert result["summary"]["orchestration_stack_proof_passed"] is True
+    assert result["summary"]["orchestration_stack_proof_assurance_level"] == (
+        "l3_native_orchestration_stack_verified"
+    )
+    assert result["summary"]["orchestration_stack_proof_failed_check_count"] == 0
     best_config = result["optimization"]["best_config"]
     assert [
         environment["type"]
@@ -1612,6 +1633,63 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     assert strategy["retrieval"]["document_count"] == 1
     assert strategy["memory"]["operation_types"] == ["read", "recall", "write"]
     assert set(strategy["multi_agent"]["roles"]) == {"planner", "retriever", "critic"}
+    proof = result["orchestration_stack_proof"]
+    assert saved["orchestration_stack_proof"] == proof
+    assert result["optimization"]["orchestration_stack_proof"] == proof
+    assert proof["kind"] == (
+        "agent-learning.optimization.orchestration-stack-proof.v1"
+    )
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_orchestration_stack_verified"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["evidence"]["environment_types"] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    assert proof["evidence"]["present_layers"] == [
+        "world",
+        "framework",
+        "retrieval",
+        "memory",
+        "multi_agent",
+    ]
+    assert proof["evidence"]["retrieval_current_doc_ids"] == ["doc_refund_2026"]
+    assert proof["evidence"]["retrieval_cited_doc_ids"] == ["doc_refund_2026"]
+    assert proof["evidence"]["multi_agent_participants"] == [
+        "planner",
+        "retriever",
+        "critic",
+    ]
+    assert proof["evidence"]["multi_agent_counts"] == {
+        "handoffs": 0,
+        "reconciliations": 1,
+        "reviews": 1,
+    }
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_orchestration_dependency",
+        "orchestration_environment_bundle_present",
+        "orchestration_strategy_card_closed",
+        "trace_provenance_graph_closed",
+        "world_contract_replay_closed",
+        "framework_trace_evidence_closed",
+        "retrieval_memory_grounding_closed",
+        "memory_lineage_governance_closed",
+        "multi_agent_coordination_closed",
+        "tool_action_policy_verified",
+        "cross_layer_patch_surface_present",
+        "orchestration_topology_trace_present",
+        "optimization_regression_gate_passed",
+        "orchestration_metric_evidence_closed",
+    }
     rollout_plan = strategy["orchestration_rollout_plan"]
     assert rollout_plan["kind"] == "orchestration_candidate_rollout_plan"
     assert rollout_plan["method"] == "structure_guided_counterfactual_rollout"

@@ -29,6 +29,9 @@ AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND = (
 AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND = (
     "agent-learning.optimization.multi-agent-coordination-proof.v1"
 )
+AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND = (
+    "agent-learning.optimization.orchestration-stack-proof.v1"
+)
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -346,6 +349,7 @@ def optimize_manifest_file(
     payload = with_framework_certification_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
+    payload = with_orchestration_stack_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -374,6 +378,7 @@ def optimize_manifest(
     payload = with_framework_certification_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
+    payload = with_orchestration_stack_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -494,6 +499,36 @@ def with_multi_agent_coordination_proof(payload: Mapping[str, Any]) -> dict[str,
         proof["failed_check_ids"]
     )
     summary["multi_agent_coordination_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_orchestration_stack_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for full orchestration-stack optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_orchestration_stack_optimization(result, optimization):
+        return result
+
+    proof = _orchestration_stack_proof(result, optimization)
+    result["orchestration_stack_proof"] = proof
+    optimization["orchestration_stack_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["orchestration_stack_proof_status"] = proof["status"]
+    summary["orchestration_stack_proof_passed"] = proof["passed"]
+    summary["orchestration_stack_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["orchestration_stack_proof_check_count"] = proof["check_count"]
+    summary["orchestration_stack_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["orchestration_stack_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -3713,6 +3748,525 @@ def _multi_agent_coordination_proof(
                 1 for check in coordination_checks if check.get("match") is True
             ),
             "room_state": copy.deepcopy(room_state.get("state")),
+            "selected_metrics": selected_metric_evidence,
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _orchestration_stack_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    required_environment_types = {
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    }
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    report_state = _selected_report_environment_state(selected_history)
+
+    world_state = _plain_mapping(report_state.get("world_contract"))
+    world_summary = _plain_mapping(world_state.get("summary"))
+    framework_state = _plain_mapping(report_state.get("framework_trace"))
+    adapter_conformance = _plain_mapping(framework_state.get("adapter_conformance"))
+    retrieval_state = _plain_mapping(report_state.get("retrieval_memory"))
+    lineage_state = _plain_mapping(report_state.get("agent_memory_lineage"))
+    lineage_summary = _plain_mapping(lineage_state.get("summary"))
+    multi_agent_state = _plain_mapping(report_state.get("multi_agent"))
+
+    retrieval_documents = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval_state.get("documents"))
+        if _plain_mapping(item)
+    ]
+    retrieval_citations = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval_state.get("citations"))
+        if _plain_mapping(item)
+    ]
+    current_doc_ids = {
+        str(doc.get("id") or "")
+        for doc in retrieval_documents
+        if doc.get("current") is True and str(doc.get("id") or "")
+    }
+    cited_doc_ids = {
+        str(doc_id)
+        for citation in retrieval_citations
+        for doc_id in _plain_list(citation.get("doc_ids"))
+        if str(doc_id)
+    }
+    operation_types = {
+        _scope_key(item.get("operation"))
+        for item in _plain_list(lineage_state.get("operations"))
+        if _plain_mapping(item)
+    }
+
+    participants = _unique_strings(multi_agent_state.get("participants"))
+    participant_set = set(participants)
+    handoffs = [
+        _plain_mapping(item)
+        for item in _plain_list(multi_agent_state.get("handoffs"))
+        if _plain_mapping(item)
+    ]
+    reviews = [
+        _plain_mapping(item)
+        for item in _plain_list(multi_agent_state.get("reviews"))
+        if _plain_mapping(item)
+    ]
+    reconciliations = [
+        _plain_mapping(item)
+        for item in _plain_list(multi_agent_state.get("reconciliations"))
+        if _plain_mapping(item)
+    ]
+    coordination_checks = [
+        _plain_mapping(item)
+        for item in _plain_list(multi_agent_state.get("coordination_checks"))
+        if _plain_mapping(item)
+    ]
+    unmatched_coordination_checks = [
+        item for item in coordination_checks if item.get("match") is not True
+    ]
+    expected_handoffs = _plain_list(multi_agent_state.get("expected_handoffs"))
+    expected_reviews = _plain_list(multi_agent_state.get("expected_reviews"))
+    expected_reconciliation = _plain_mapping(
+        multi_agent_state.get("expected_reconciliation")
+    )
+    matched_coordination_check_names = {
+        _scope_key(item.get("check"))
+        for item in coordination_checks
+        if item.get("match") is True
+    }
+    required_coordination_check_names = {
+        "expected_review",
+        "expected_reconciliation",
+    }
+    if expected_handoffs:
+        required_coordination_check_names.add("expected_handoff")
+    handoff_contract_closed = not expected_handoffs or bool(handoffs)
+
+    strategy = _plain_mapping(payload.get("orchestration_strategy"))
+    rollout_plan = _plain_mapping(strategy.get("orchestration_rollout_plan"))
+    present_layers = {_scope_key(layer) for layer in _plain_list(strategy.get("present_layers"))}
+    required_layers = {"world", "framework", "retrieval", "memory", "multi_agent"}
+    selected_rollout_environment_types = [
+        _scope_key(item)
+        for item in _plain_list(rollout_plan.get("selected_environment_types"))
+        if str(item or "")
+    ]
+    graph_summary = _plain_mapping(strategy.get("graph_summary"))
+
+    agent = _plain_mapping(best_config.get("agent"))
+    agent_responses = [
+        _plain_mapping(item)
+        for item in _plain_list(agent.get("responses"))
+        if _plain_mapping(item)
+    ]
+    tool_calls = [
+        _plain_mapping(call)
+        for response in agent_responses
+        for call in _plain_list(response.get("tool_calls"))
+        if _plain_mapping(call)
+    ]
+    tool_call_names = _unique_strings(call.get("name") for call in tool_calls)
+
+    metric_thresholds = {
+        "orchestration_flow_quality": 1.0,
+        "orchestration_trace_coverage": 1.0,
+        "world_contract_quality": 1.0,
+        "framework_trace_coverage": 1.0,
+        "retrieval_context_quality": 1.0,
+        "agent_memory_lineage_quality": 1.0,
+        "multi_agent_coordination_quality": 1.0,
+        "multi_agent_trace_coverage": 1.0,
+        "tool_selection_accuracy": 1.0,
+        "task_completion": 1.0,
+        "source_grounding": 0.7,
+    }
+    selected_metric_evidence = {
+        key: selected_metrics.get(key)
+        for key in metric_thresholds
+        if key in selected_metrics
+    }
+    summary = _plain_mapping(payload.get("summary"))
+    selected_candidate_id = str(
+        optimization.get("best_candidate_id")
+        or summary.get("best_candidate_id")
+        or ""
+    )
+    score_threshold = (
+        _as_float(summary.get("threshold"))
+        or _as_float(_plain_mapping(optimization.get("source_manifest")).get("threshold"))
+        or 0.9
+    )
+    selected_score = _as_float(selected_history.get("score"))
+    score_delta = _as_float(summary.get("candidate_lineage_selected_score_delta"))
+    candidate_lineage_count = _as_int(summary.get("candidate_lineage_count"))
+
+    forbidden_keys = {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+    checks = [
+        _proof_check(
+            "native_no_external_orchestration_dependency",
+            passed=not _contains_nested_keys(best_config, forbidden_keys),
+            required=True,
+            reason=(
+                "selected orchestration stack is local and has no endpoint/auth/key "
+                "dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(best_config, forbidden_keys)
+                ),
+            },
+        ),
+        _proof_check(
+            "orchestration_environment_bundle_present",
+            passed=required_environment_types.issubset(set(environment_types)),
+            required=True,
+            reason=(
+                "selected candidate carries world, framework, retrieval, memory, "
+                "and multi-agent environments as one bundle"
+            ),
+            evidence={
+                "required_environment_types": sorted(required_environment_types),
+                "environment_types": environment_types,
+            },
+        ),
+        _proof_check(
+            "orchestration_strategy_card_closed",
+            passed=strategy.get("status") == "covered"
+            and required_layers.issubset(present_layers)
+            and not _plain_list(strategy.get("weak_layers"))
+            and not _plain_list(strategy.get("weak_metrics"))
+            and rollout_plan.get("status") == "ready",
+            required=True,
+            reason=(
+                "UI/CLI orchestration strategy card and rollout plan are covered "
+                "with no weak layers or weak metrics"
+            ),
+            evidence={
+                "strategy_status": strategy.get("status"),
+                "present_layers": strategy.get("present_layers"),
+                "weak_layers": strategy.get("weak_layers"),
+                "weak_metrics": strategy.get("weak_metrics"),
+                "rollout_status": rollout_plan.get("status"),
+            },
+        ),
+        _proof_check(
+            "trace_provenance_graph_closed",
+            passed=bool(world_state.get("transition_log"))
+            and bool(framework_state.get("spans"))
+            and bool(retrieval_citations)
+            and bool(lineage_state.get("lineage"))
+            and bool(lineage_state.get("operations"))
+            and (
+                bool(multi_agent_state.get("messages"))
+                or bool(handoffs)
+                or bool(reviews)
+                or bool(reconciliations)
+            )
+            and bool(reviews)
+            and bool(reconciliations),
+            required=True,
+            reason=(
+                "world transitions, framework spans, retrieval citations, memory "
+                "lineage, and multi-agent coordination all have trace evidence"
+            ),
+            evidence={
+                "world_transition_count": len(_plain_list(world_state.get("transition_log"))),
+                "framework_span_count": len(_plain_list(framework_state.get("spans"))),
+                "retrieval_citation_count": len(retrieval_citations),
+                "memory_lineage_count": len(_plain_list(lineage_state.get("lineage"))),
+                "memory_operation_count": len(_plain_list(lineage_state.get("operations"))),
+                "multi_agent_message_count": len(_plain_list(multi_agent_state.get("messages"))),
+                "handoff_count": len(handoffs),
+                "review_count": len(reviews),
+                "reconciliation_count": len(reconciliations),
+            },
+        ),
+        _proof_check(
+            "world_contract_replay_closed",
+            passed=world_summary.get("terminal_status") == "success"
+            and _as_int(world_summary.get("violation_count")) == 0
+            and _as_int(world_summary.get("forbidden_transition_count")) == 0
+            and _as_int(world_summary.get("success_condition_pass_count"))
+            >= _as_int(world_summary.get("success_condition_count"))
+            and _as_int(world_summary.get("completed_required_transition_count"))
+            >= _as_int(world_summary.get("required_transition_count")),
+            required=True,
+            reason=(
+                "world contract reaches terminal success with required transitions "
+                "and success conditions closed"
+            ),
+            evidence={
+                "terminal_status": world_summary.get("terminal_status"),
+                "violation_count": world_summary.get("violation_count"),
+                "forbidden_transition_count": world_summary.get(
+                    "forbidden_transition_count"
+                ),
+                "required_transition_count": world_summary.get(
+                    "required_transition_count"
+                ),
+                "completed_required_transition_count": world_summary.get(
+                    "completed_required_transition_count"
+                ),
+                "success_condition_count": world_summary.get(
+                    "success_condition_count"
+                ),
+                "success_condition_pass_count": world_summary.get(
+                    "success_condition_pass_count"
+                ),
+            },
+        ),
+        _proof_check(
+            "framework_trace_evidence_closed",
+            passed=bool(framework_state.get("spans"))
+            and adapter_conformance.get("passed") is True
+            and _as_float(adapter_conformance.get("score")) >= 1.0,
+            required=True,
+            reason=(
+                "framework trace spans and adapter conformance evidence are closed"
+            ),
+            evidence={
+                "framework": framework_state.get("framework"),
+                "span_count": len(_plain_list(framework_state.get("spans"))),
+                "adapter_conformance": adapter_conformance,
+            },
+        ),
+        _proof_check(
+            "retrieval_memory_grounding_closed",
+            passed=bool(current_doc_ids)
+            and bool(cited_doc_ids)
+            and cited_doc_ids.issubset(current_doc_ids)
+            and all(
+                citation.get("freshness_checked") is True
+                for citation in retrieval_citations
+            ),
+            required=True,
+            reason=(
+                "retrieval evidence cites only current documents with freshness "
+                "checks"
+            ),
+            evidence={
+                "current_doc_ids": sorted(current_doc_ids),
+                "cited_doc_ids": sorted(cited_doc_ids),
+                "freshness_checked_count": sum(
+                    1
+                    for citation in retrieval_citations
+                    if citation.get("freshness_checked") is True
+                ),
+            },
+        ),
+        _proof_check(
+            "memory_lineage_governance_closed",
+            passed=_as_int(lineage_summary.get("memory_count")) > 0
+            and bool(lineage_summary.get("has_lineage"))
+            and bool(lineage_summary.get("has_source_attribution"))
+            and {"read", "write", "recall"}.issubset(operation_types)
+            and bool(lineage_summary.get("has_tenant_isolation"))
+            and bool(lineage_summary.get("has_retention_policy"))
+            and bool(lineage_summary.get("has_deletion_policy"))
+            and bool(lineage_summary.get("has_redaction"))
+            and _as_int(lineage_summary.get("blocking_gap_count")) == 0
+            and _as_int(lineage_summary.get("policy_violation_count")) == 0
+            and _as_int(lineage_summary.get("open_poisoning_count")) == 0,
+            required=True,
+            reason=(
+                "memory lineage, operations, governance, and poisoning gaps are "
+                "closed"
+            ),
+            evidence={
+                "memory_count": lineage_summary.get("memory_count"),
+                "operation_types": sorted(operation_types),
+                "has_source_attribution": lineage_summary.get(
+                    "has_source_attribution"
+                ),
+                "has_tenant_isolation": lineage_summary.get("has_tenant_isolation"),
+                "has_retention_policy": lineage_summary.get("has_retention_policy"),
+                "has_deletion_policy": lineage_summary.get("has_deletion_policy"),
+                "has_redaction": lineage_summary.get("has_redaction"),
+                "blocking_gap_count": lineage_summary.get("blocking_gap_count"),
+                "policy_violation_count": lineage_summary.get(
+                    "policy_violation_count"
+                ),
+                "open_poisoning_count": lineage_summary.get("open_poisoning_count"),
+            },
+        ),
+        _proof_check(
+            "multi_agent_coordination_closed",
+            passed=len(participant_set) >= 2
+            and handoff_contract_closed
+            and bool(reviews)
+            and bool(reconciliations)
+            and not unmatched_coordination_checks
+            and required_coordination_check_names.issubset(
+                matched_coordination_check_names
+            )
+            and all(
+                str(review.get("reviewer") or "") in participant_set
+                for review in reviews
+            )
+            and all(
+                str(reconciliation.get("accepted_source") or "") in participant_set
+                for reconciliation in reconciliations
+            )
+            and all(
+                not _plain_list(reconciliation.get("conflicts"))
+                for reconciliation in reconciliations
+            )
+            and _scope_key(
+                _plain_mapping(_plain_mapping(multi_agent_state.get("state")).get("case")).get(
+                    "status"
+                )
+            )
+            not in {"", "triage", "open", "pending"},
+            required=True,
+            reason=(
+                "multi-agent roles, handoff, review, reconciliation, and room "
+                "terminal state are closed"
+            ),
+            evidence={
+                "participants": participants,
+                "handoff_count": len(handoffs),
+                "expected_handoff_count": len(expected_handoffs),
+                "expected_review_count": len(expected_reviews),
+                "expected_reconciliation_present": bool(expected_reconciliation),
+                "matched_coordination_check_names": sorted(
+                    matched_coordination_check_names
+                ),
+                "review_count": len(reviews),
+                "reconciliation_count": len(reconciliations),
+                "unmatched_coordination_check_count": len(unmatched_coordination_checks),
+                "room_state": multi_agent_state.get("state"),
+            },
+        ),
+        _proof_check(
+            "tool_action_policy_verified",
+            passed=bool(tool_calls)
+            and all(str(call.get("id") or "") for call in tool_calls)
+            and all(str(call.get("name") or "") for call in tool_calls)
+            and _as_float(selected_metrics.get("tool_selection_accuracy")) >= 1.0,
+            required=True,
+            reason=(
+                "all selected tool calls have stable ids/names and the report "
+                "closes tool-selection accuracy"
+            ),
+            evidence={
+                "tool_call_count": len(tool_calls),
+                "tool_call_names": tool_call_names,
+                "tool_selection_accuracy": selected_metrics.get(
+                    "tool_selection_accuracy"
+                ),
+            },
+        ),
+        _proof_check(
+            "cross_layer_patch_surface_present",
+            passed={"agent", "simulation.environments"}.issubset(set(selected_patch)),
+            required=True,
+            reason=(
+                "selected patch covers both agent behavior and the structural "
+                "orchestration environment bundle"
+            ),
+            evidence={"selected_patch_paths": sorted(selected_patch)},
+        ),
+        _proof_check(
+            "orchestration_topology_trace_present",
+            passed=_as_int(graph_summary.get("node_count")) > 0
+            and _as_int(graph_summary.get("step_count")) > 0
+            and required_environment_types.issubset(
+                set(selected_rollout_environment_types)
+            ),
+            required=True,
+            reason=(
+                "orchestration graph/topology and selected environment bundle are "
+                "recorded for replay"
+            ),
+            evidence={
+                "graph_summary": graph_summary,
+                "selected_environment_types": selected_rollout_environment_types,
+            },
+        ),
+        _proof_check(
+            "optimization_regression_gate_passed",
+            passed=bool(selected_candidate_id)
+            and selected_score >= score_threshold
+            and score_delta >= 0.0
+            and candidate_lineage_count >= 2,
+            required=True,
+            reason=(
+                "selected candidate is lineaged, beats the run threshold, and does "
+                "not regress from the seed candidate"
+            ),
+            evidence={
+                "selected_candidate_id": selected_candidate_id,
+                "selected_score": selected_score,
+                "score_threshold": score_threshold,
+                "candidate_lineage_selected_score_delta": score_delta,
+                "candidate_lineage_count": candidate_lineage_count,
+            },
+        ),
+        _proof_check(
+            "orchestration_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(key)) >= threshold
+                for key, threshold in metric_thresholds.items()
+            ),
+            required=True,
+            reason=(
+                "selected report closes orchestration, world, framework, retrieval, "
+                "memory, multi-agent, tool, task, and grounding metrics"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_orchestration_stack_verified"
+            if passed
+            else "orchestration_stack_proof_failed"
+        ),
+        "selected_candidate_id": selected_candidate_id,
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "present_layers": strategy.get("present_layers"),
+            "graph_summary": graph_summary,
+            "selected_environment_types": selected_rollout_environment_types,
+            "world_contract_summary": copy.deepcopy(world_summary),
+            "framework_adapter_conformance": copy.deepcopy(adapter_conformance),
+            "retrieval_current_doc_ids": sorted(current_doc_ids),
+            "retrieval_cited_doc_ids": sorted(cited_doc_ids),
+            "agent_memory_lineage_summary": copy.deepcopy(lineage_summary),
+            "multi_agent_participants": participants,
+            "multi_agent_counts": {
+                "handoffs": len(handoffs),
+                "reviews": len(reviews),
+                "reconciliations": len(reconciliations),
+            },
             "selected_metrics": selected_metric_evidence,
         },
         "check_count": len(checks),
@@ -17919,6 +18473,62 @@ def _is_multi_agent_coordination_optimization(
     return set(_selected_report_environment_state(selected_history)) == {"multi_agent"}
 
 
+def _is_orchestration_stack_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) == "orchestration_stack":
+        return True
+
+    required_environment_types = {
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    }
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environment_types = {
+        _scope_key(_plain_mapping(item).get("type"))
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    }
+    if required_environment_types.issubset(environment_types):
+        return True
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    state_keys = set(_selected_report_environment_state(selected_history))
+    if {
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent",
+    }.issubset(state_keys):
+        return True
+
+    strategy = _plain_mapping(payload.get("orchestration_strategy"))
+    present_layers = {
+        _scope_key(layer) for layer in _plain_list(strategy.get("present_layers"))
+    }
+    return strategy.get("kind") == "orchestration_strategy_map" and {
+        "world",
+        "framework",
+        "retrieval",
+        "memory",
+        "multi_agent",
+    }.issubset(present_layers)
+
+
 def _proof_check(
     check_id: str,
     *,
@@ -18205,6 +18815,7 @@ __all__ = [
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
+    "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
     "diagnose_text",
@@ -18304,5 +18915,6 @@ __all__ = [
     "with_framework_certification_proof",
     "with_memory_lineage_proof",
     "with_multi_agent_coordination_proof",
+    "with_orchestration_stack_proof",
     "with_world_hook_proof",
 ]

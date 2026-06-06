@@ -556,6 +556,17 @@ Both simulation and optimization artifacts expose an `orchestration_strategy`
 report card for Future AGI UI, CLI, SDK, and CI surfaces; run artifacts rerun
 with `agent-learn run`, while optimization artifacts rerun with
 `agent-learn optimize`.
+Orchestration-stack optimization artifacts also emit
+`agent-learning.optimization.orchestration-stack-proof.v1`, a native proof
+derived from the selected candidate and selected report. It checks that the
+selected stack is local and has no endpoint/auth/key dependency, the world,
+framework, retrieval, memory-lineage, and multi-agent environments move as one
+bundle, the UI/CLI strategy card is closed, trace provenance exists across
+world transitions, framework spans, retrieval citations, memory lineage, and
+multi-agent review/reconciliation, world/framework/retrieval/memory/
+multi-agent/tool evidence closes, the selected patch covers both agent behavior
+and the orchestration environment bundle, topology/replay metadata exists, the
+optimizer did not regress from the seed, and orchestration metrics pass.
 
 For retrieval and memory layers, pass candidates with `retrieval_memory` and
 `agent_memory_lineage` data. The SDK builds a runnable local manifest that
