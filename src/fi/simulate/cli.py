@@ -78,6 +78,18 @@ from fi.simulate.suite import (
     run_eval_suite,
 )
 
+_ATTACK_EVOLUTION_METRICS = {
+    "red_team_attack_evolution_coverage",
+    "red_team_attack_evolution_quality",
+}
+_ATTACK_EVOLUTION_RESEARCH_SOURCES = [
+    "https://arxiv.org/abs/2603.22341",
+    "https://arxiv.org/abs/2604.04989",
+    "https://arxiv.org/abs/2605.11891",
+    "https://arxiv.org/abs/2606.02240",
+    "https://arxiv.org/abs/2603.21357",
+]
+
 
 REDTEAM_ENV_TYPES = frozenset(
     {
@@ -2497,6 +2509,9 @@ def _report_result(
     optimizer_replay = _optimizer_replay_card(source, source_path=source_path)
     if optimizer_replay is not None:
         report_payload["optimizer_replay"] = optimizer_replay
+    attack_evolution = _attack_evolution_card(source, source_path=source_path)
+    if attack_evolution is not None:
+        report_payload["attack_evolution"] = attack_evolution
     artifact_action_plan = _artifact_action_plan_card(source)
     if artifact_action_plan is not None:
         report_payload["artifact_action_plan"] = artifact_action_plan
@@ -2713,6 +2728,757 @@ def _optimizer_trace_card(trace: Any) -> Dict[str, Any]:
         "final_score": summary.get("final_score") or trace.get("final_score"),
         "passed": summary.get("passed") if "passed" in summary else trace.get("passed"),
     }
+
+
+def _attack_evolution_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    existing = report.get("attack_evolution") if isinstance(report, Mapping) else None
+    if isinstance(existing, Mapping):
+        card = copy.deepcopy(dict(existing))
+        card["source_path"] = str(source_path)
+        if "actions" not in card:
+            card["actions"] = _attack_evolution_actions(
+                result=result,
+                source_path=source_path,
+                card=card,
+            )
+        return card
+
+    envelopes = _attack_evolution_evidence_envelopes(result)
+    metrics = _attack_evolution_metrics(result, envelopes)
+    proof = _attack_evolution_proof_summary(result)
+    replay = _attack_evolution_replay_summary(result)
+    if not envelopes and not metrics and proof["status"] in (None, "") and not replay:
+        return None
+
+    aggregate = _attack_evolution_aggregate_summary(
+        [envelope["environment"] for envelope in envelopes],
+    )
+    status = _attack_evolution_card_status(
+        result=result,
+        aggregate=aggregate,
+        metrics=metrics,
+        proof=proof,
+        replay=replay,
+    )
+    card: Dict[str, Any] = {
+        "kind": "attack_evolution_evidence",
+        "taxonomy": (
+            "trajectory_mutation_feedback_counterexample_minimization_replay"
+        ),
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "local_only": not bool(aggregate.get("requires_external_service")),
+        "profile": _attack_evolution_best_profile(
+            [envelope["environment"] for envelope in envelopes],
+        ),
+        "summary": aggregate,
+        "metrics": metrics,
+        "proof": proof,
+        "replay": replay,
+        "lineage": _attack_evolution_lineage(envelopes),
+        "counterexamples": _attack_evolution_counterexample_records(envelopes),
+        "regressions": _attack_evolution_regression_records(envelopes),
+        "research_sources": _attack_evolution_card_research_sources(
+            result,
+            envelopes,
+        ),
+        "artifacts": _attack_evolution_artifacts(
+            result=result,
+            source_path=source_path,
+            envelopes=envelopes,
+            aggregate=aggregate,
+            proof=proof,
+            replay=replay,
+            metrics=metrics,
+        ),
+    }
+    card["actions"] = _attack_evolution_actions(
+        result=result,
+        source_path=source_path,
+        card=card,
+    )
+    return card
+
+
+def _attack_evolution_evidence_envelopes(
+    result: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    envelopes: List[Dict[str, Any]] = []
+
+    def add_environments(source: str, environments: Sequence[Mapping[str, Any]]) -> None:
+        for index, environment in enumerate(environments):
+            if not isinstance(environment, Mapping):
+                continue
+            item = copy.deepcopy(dict(environment))
+            data = item.get("data") if isinstance(item.get("data"), Mapping) else {}
+            summary = data.get("summary") if isinstance(data, Mapping) else None
+            if not isinstance(summary, Mapping):
+                summary = _attack_evolution_summary_from_data(data)
+            envelopes.append(
+                {
+                    "source": source,
+                    "index": index,
+                    "environment": item,
+                    "data": copy.deepcopy(dict(data)),
+                    "summary": copy.deepcopy(dict(summary)),
+                }
+            )
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        add_environments(
+            "optimization.best_config",
+            _attack_evolution_environments_from_config(
+                optimization.get("best_config")
+            ),
+        )
+        add_environments(
+            "optimization.history.selected_report",
+            _attack_evolution_environments_from_history(optimization, result),
+        )
+        add_environments(
+            "optimization.source_manifest",
+            _attack_evolution_environments_from_config(
+                optimization.get("source_manifest")
+            ),
+        )
+
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        add_environments(
+            "manifest",
+            _attack_evolution_environments_from_config(manifest),
+        )
+
+    replay = result.get("replay")
+    if isinstance(replay, Mapping):
+        for child in _coerce_list(replay.get("manifests")):
+            if not isinstance(child, Mapping):
+                continue
+            manifest_path = child.get("path")
+            if not manifest_path:
+                continue
+            try:
+                replay_manifest = load_manifest(Path(str(manifest_path)))
+            except Exception:
+                continue
+            add_environments(
+                f"replay.manifest:{manifest_path}",
+                _attack_evolution_environments_from_config(replay_manifest),
+            )
+
+    return _dedupe_attack_evolution_envelopes(envelopes)
+
+
+def _dedupe_attack_evolution_envelopes(
+    envelopes: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+    for envelope in envelopes:
+        data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else {}
+        summary = (
+            envelope.get("summary")
+            if isinstance(envelope.get("summary"), Mapping)
+            else {}
+        )
+        key_payload = {
+            "name": data.get("name"),
+            "profile": dict(data.get("metadata") or {}).get("profile")
+            if isinstance(data.get("metadata"), Mapping)
+            else None,
+            "summary": summary,
+            "seed_ids": [
+                item.get("id")
+                for item in _coerce_list(data.get("seed_attacks"))
+                if isinstance(item, Mapping)
+            ],
+            "counterexample_ids": [
+                item.get("id")
+                for item in _coerce_list(data.get("counterexamples"))
+                if isinstance(item, Mapping)
+            ],
+            "replay_ids": [
+                item.get("id")
+                for item in _coerce_list(data.get("replay_cases"))
+                if isinstance(item, Mapping)
+            ],
+        }
+        key = json.dumps(key_payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(copy.deepcopy(dict(envelope)))
+    return deduped
+
+
+def _attack_evolution_metrics(
+    result: Mapping[str, Any],
+    envelopes: Sequence[Mapping[str, Any]],
+) -> Dict[str, float]:
+    metrics: Dict[str, float] = {}
+    for key, value in _result_metric_averages(result).items():
+        if key in _ATTACK_EVOLUTION_METRICS:
+            metrics[key] = float(value)
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        selected_id = str(
+            optimization.get("best_candidate_id")
+            or dict(result.get("summary") or {}).get("best_candidate_id")
+            or ""
+        )
+        for item in _coerce_list(optimization.get("history")):
+            if not isinstance(item, Mapping):
+                continue
+            if selected_id and str(item.get("candidate_id") or "") != selected_id:
+                continue
+            for key, value in dict(item.get("metrics") or {}).items():
+                if key in _ATTACK_EVOLUTION_METRICS and _float_or_none(value) is not None:
+                    metrics[str(key)] = float(value)
+            if metrics:
+                break
+
+    replay = result.get("replay")
+    if isinstance(replay, Mapping):
+        for child in _coerce_list(replay.get("manifests")):
+            if not isinstance(child, Mapping):
+                continue
+            child_metrics = dict(dict(child.get("summary") or {}).get("metric_averages") or {})
+            for key, value in child_metrics.items():
+                if key in _ATTACK_EVOLUTION_METRICS and _float_or_none(value) is not None:
+                    metrics[str(key)] = float(value)
+
+    if envelopes and not metrics:
+        aggregate = _attack_evolution_aggregate_summary(
+            [envelope["environment"] for envelope in envelopes],
+        )
+        if aggregate.get("has_replayable_regressions") and not aggregate.get(
+            "requires_external_service"
+        ):
+            metrics["red_team_attack_evolution_coverage"] = 1.0
+            metrics["red_team_attack_evolution_quality"] = 1.0
+    return metrics
+
+
+def _attack_evolution_proof_summary(result: Mapping[str, Any]) -> Dict[str, Any]:
+    proof = result.get("redteam_attack_evolution_proof")
+    optimization = result.get("optimization")
+    if not isinstance(proof, Mapping) and isinstance(optimization, Mapping):
+        proof = optimization.get("redteam_attack_evolution_proof")
+    summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
+    if not isinstance(proof, Mapping):
+        return {
+            "status": summary.get("redteam_attack_evolution_proof_status"),
+            "passed": summary.get("redteam_attack_evolution_proof_passed"),
+            "assurance_level": summary.get(
+                "redteam_attack_evolution_proof_assurance_level"
+            ),
+            "check_count": summary.get(
+                "redteam_attack_evolution_proof_check_count"
+            ),
+            "failed_check_ids": [],
+            "warning_check_ids": [],
+        }
+    return {
+        "status": proof.get("status"),
+        "passed": proof.get("passed"),
+        "assurance_level": proof.get("assurance_level"),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "requires_external_service": proof.get("requires_external_service"),
+        "check_count": proof.get("check_count"),
+        "passed_check_count": proof.get("passed_check_count"),
+        "failed_check_ids": _unique_strings(proof.get("failed_check_ids") or []),
+        "warning_check_ids": _unique_strings(proof.get("warning_check_ids") or []),
+    }
+
+
+def _attack_evolution_replay_summary(result: Mapping[str, Any]) -> Dict[str, Any]:
+    replay = result.get("replay")
+    if not isinstance(replay, Mapping):
+        return {}
+    summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
+    manifests = [
+        item
+        for item in _coerce_list(replay.get("manifests"))
+        if isinstance(item, Mapping)
+    ]
+    attack_manifests = []
+    for item in manifests:
+        metrics = dict(dict(item.get("summary") or {}).get("metric_averages") or {})
+        if _ATTACK_EVOLUTION_METRICS & set(metrics):
+            attack_manifests.append(item)
+            continue
+        manifest_path = item.get("path")
+        if manifest_path and _manifest_path_has_attack_evolution(manifest_path):
+            attack_manifests.append(item)
+    if not attack_manifests:
+        return {}
+    return {
+        "status": result.get("status"),
+        "pass_rate": summary.get("replay_pass_rate", summary.get("score")),
+        "manifest_count": len(attack_manifests),
+        "passed_count": sum(
+            1 for item in attack_manifests if int(item.get("exit_code", 1)) == 0
+        ),
+        "failed_count": sum(
+            1 for item in attack_manifests if int(item.get("exit_code", 1)) != 0
+        ),
+        "manifest_paths": _unique_strings(
+            item.get("path") for item in attack_manifests
+        ),
+        "metrics": {
+            str(key): float(value)
+            for item in attack_manifests
+            for key, value in dict(
+                dict(item.get("summary") or {}).get("metric_averages") or {}
+            ).items()
+            if key in _ATTACK_EVOLUTION_METRICS and _float_or_none(value) is not None
+        },
+    }
+
+
+def _manifest_path_has_attack_evolution(value: Any) -> bool:
+    try:
+        manifest = load_manifest(Path(str(value)))
+    except Exception:
+        return False
+    return bool(_attack_evolution_environments_from_config(manifest))
+
+
+def _attack_evolution_card_status(
+    *,
+    result: Mapping[str, Any],
+    aggregate: Mapping[str, Any],
+    metrics: Mapping[str, float],
+    proof: Mapping[str, Any],
+    replay: Mapping[str, Any],
+) -> str:
+    if proof.get("passed") is False or proof.get("status") == "failed":
+        return "needs_attention"
+    if result.get("status") == "failed":
+        return "needs_attention"
+    if aggregate.get("requires_external_service"):
+        return "needs_attention"
+    if any(float(value) < 1.0 for value in metrics.values()):
+        return "needs_attention"
+    if replay and replay.get("failed_count"):
+        return "needs_attention"
+    if (
+        aggregate.get("has_counterexample_minimization")
+        and aggregate.get("has_replayable_regressions")
+        and aggregate.get("has_cross_round_feedback")
+    ):
+        return "closed_loop_verified"
+    return "evidence_present"
+
+
+def _attack_evolution_lineage(
+    envelopes: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for envelope in envelopes:
+        data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else {}
+        source = envelope.get("source")
+        for item in _coerce_list(data.get("seed_attacks")):
+            if not isinstance(item, Mapping):
+                continue
+            rows.append(
+                {
+                    "id": item.get("id"),
+                    "source": source,
+                    "stage": "seed",
+                    "parent_id": None,
+                    "round_id": item.get("round_id"),
+                    "attack_type": item.get("attack_type"),
+                    "surface": item.get("surface"),
+                    "operator": item.get("operator", "seed"),
+                    "status": item.get("status"),
+                    "success": item.get("success"),
+                    "score": item.get("score"),
+                }
+            )
+        for item in _coerce_list(data.get("mutations")):
+            if not isinstance(item, Mapping):
+                continue
+            rows.append(
+                {
+                    "id": item.get("id"),
+                    "source": source,
+                    "stage": "mutation",
+                    "parent_id": item.get("parent_id"),
+                    "round_id": item.get("round_id"),
+                    "attack_type": item.get("attack_type"),
+                    "surface": item.get("surface"),
+                    "operator": item.get("operator"),
+                    "status": item.get("status"),
+                    "success": item.get("success"),
+                    "score": item.get("score"),
+                }
+            )
+        for round_item in _coerce_list(data.get("mutation_rounds")):
+            if not isinstance(round_item, Mapping):
+                continue
+            for item in _coerce_list(round_item.get("mutations")):
+                if not isinstance(item, Mapping):
+                    continue
+                rows.append(
+                    {
+                        "id": item.get("id"),
+                        "source": source,
+                        "stage": "mutation",
+                        "parent_id": item.get("parent_id"),
+                        "round_id": item.get("round_id", round_item.get("id")),
+                        "attack_type": item.get("attack_type"),
+                        "surface": item.get("surface"),
+                        "operator": item.get("operator"),
+                        "status": item.get("status"),
+                        "success": item.get("success"),
+                        "score": item.get("score", round_item.get("score")),
+                    }
+                )
+    return _dedupe_records(rows, keys=("id", "stage", "source"))[:100]
+
+
+def _attack_evolution_counterexample_records(
+    envelopes: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for envelope in envelopes:
+        data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else {}
+        source = envelope.get("source")
+        minimized_by = {
+            str(item.get("minimized_from") or item.get("source_id") or ""): item
+            for item in _coerce_list(data.get("minimized_replays"))
+            if isinstance(item, Mapping)
+        }
+        replayed_by = {
+            str(item.get("counterexample_id") or item.get("parent_id") or ""): item
+            for item in _coerce_list(data.get("replay_cases"))
+            if isinstance(item, Mapping)
+        }
+        for item in _coerce_list(data.get("counterexamples")):
+            if not isinstance(item, Mapping):
+                continue
+            item_id = str(item.get("id") or "")
+            minimized = minimized_by.get(item_id)
+            replayed = replayed_by.get(item_id)
+            rows.append(
+                {
+                    "id": item.get("id"),
+                    "source": source,
+                    "attack_type": item.get("attack_type"),
+                    "surface": item.get("surface"),
+                    "operator": item.get("operator"),
+                    "status": item.get("status"),
+                    "verifier": item.get("verifier"),
+                    "minimized_replay_id": minimized.get("id")
+                    if isinstance(minimized, Mapping)
+                    else None,
+                    "replay_case_id": replayed.get("id")
+                    if isinstance(replayed, Mapping)
+                    else None,
+                }
+            )
+    return _dedupe_records(rows, keys=("id", "source"))[:100]
+
+
+def _attack_evolution_regression_records(
+    envelopes: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for envelope in envelopes:
+        data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else {}
+        source = envelope.get("source")
+        for item in _coerce_list(data.get("replay_cases")):
+            if not isinstance(item, Mapping):
+                continue
+            rows.append(
+                {
+                    "id": item.get("id"),
+                    "source": source,
+                    "counterexample_id": item.get("counterexample_id")
+                    or item.get("parent_id"),
+                    "attack_type": item.get("attack_type"),
+                    "surface": item.get("surface"),
+                    "operator": item.get("operator"),
+                    "status": item.get("status"),
+                    "success": item.get("success"),
+                }
+            )
+    return _dedupe_records(rows, keys=("id", "source"))[:100]
+
+
+def _dedupe_records(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    keys: Sequence[str],
+) -> List[Dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    deduped: List[Dict[str, Any]] = []
+    for row in rows:
+        key = tuple(row.get(item) for item in keys)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(copy.deepcopy(dict(row)))
+    return deduped
+
+
+def _attack_evolution_card_research_sources(
+    result: Mapping[str, Any],
+    envelopes: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    values: List[Any] = []
+    values.extend(_attack_evolution_research_sources(result))
+    for envelope in envelopes:
+        data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else {}
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), Mapping) else {}
+        values.extend(_coerce_list(metadata.get("research_basis")))
+        values.extend(_coerce_list(metadata.get("research_sources")))
+    values.extend(_ATTACK_EVOLUTION_RESEARCH_SOURCES)
+    return _unique_strings(_research_source_url(value) for value in values)
+
+
+def _research_source_url(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return str(value.get("url") or value.get("source") or value.get("id") or "")
+    text = str(value or "")
+    if text.startswith("arxiv:"):
+        return f"https://arxiv.org/abs/{text.split(':', 1)[1]}"
+    return text
+
+
+def _attack_evolution_artifacts(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    envelopes: Sequence[Mapping[str, Any]],
+    aggregate: Mapping[str, Any],
+    proof: Mapping[str, Any],
+    replay: Mapping[str, Any],
+    metrics: Mapping[str, float],
+) -> Dict[str, Any]:
+    manifest = result.get("manifest") if isinstance(result.get("manifest"), Mapping) else None
+    return {
+        "action_card": {
+            "source_path": str(source_path),
+            "summary": copy.deepcopy(dict(aggregate)),
+            "metrics": copy.deepcopy(dict(metrics)),
+            "proof": copy.deepcopy(dict(proof)),
+            "replay": copy.deepcopy(dict(replay)),
+        },
+        "trace_jsonl": _attack_evolution_trace_jsonl(envelopes),
+        "minimal_repro": _attack_evolution_minimal_repro(envelopes),
+        "replay_lock": {
+            "source_path": str(source_path),
+            "manifest_paths": _attack_evolution_manifest_paths(result),
+            "metric_thresholds": {
+                "red_team_attack_evolution_coverage": 1.0,
+                "red_team_attack_evolution_quality": 1.0,
+            },
+            "requires_external_service": bool(
+                aggregate.get("requires_external_service")
+            ),
+            "proof_status": proof.get("status"),
+            "replay_status": replay.get("status"),
+        },
+        "promoted_manifest": copy.deepcopy(dict(manifest)) if manifest else None,
+    }
+
+
+def _attack_evolution_trace_jsonl(
+    envelopes: Sequence[Mapping[str, Any]],
+) -> str:
+    records: List[Dict[str, Any]] = []
+    for lineage in _attack_evolution_lineage(envelopes):
+        records.append({"type": "lineage", **lineage})
+    for counterexample in _attack_evolution_counterexample_records(envelopes):
+        records.append({"type": "counterexample", **counterexample})
+    for regression in _attack_evolution_regression_records(envelopes):
+        records.append({"type": "regression_replay", **regression})
+    return "\n".join(json.dumps(record, sort_keys=True, default=str) for record in records)
+
+
+def _attack_evolution_minimal_repro(
+    envelopes: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    counterexamples = _attack_evolution_counterexample_records(envelopes)
+    regressions = _attack_evolution_regression_records(envelopes)
+    lineage = _attack_evolution_lineage(envelopes)
+    counterexample = counterexamples[0] if counterexamples else {}
+    regression = regressions[0] if regressions else {}
+    ancestors = []
+    parent_id = counterexample.get("id") or regression.get("counterexample_id")
+    if parent_id:
+        ancestors = [
+            item
+            for item in lineage
+            if item.get("id") == parent_id or item.get("id") == counterexample.get("id")
+        ][:5]
+    return {
+        "counterexample": copy.deepcopy(dict(counterexample)),
+        "regression": copy.deepcopy(dict(regression)),
+        "lineage": ancestors,
+        "replay_assertions": [
+            "red_team_attack_evolution_status",
+            "list_red_team_attack_mutations",
+            "list_red_team_counterexamples",
+            "list_red_team_minimized_replays",
+            "list_red_team_evolution_gaps",
+        ],
+    }
+
+
+def _attack_evolution_manifest_paths(result: Mapping[str, Any]) -> List[str]:
+    replay = result.get("replay")
+    if isinstance(replay, Mapping):
+        return _unique_strings(
+            item.get("path")
+            for item in _coerce_list(replay.get("manifests"))
+            if isinstance(item, Mapping)
+            and _manifest_path_has_attack_evolution(item.get("path"))
+        )
+    return []
+
+
+def _attack_evolution_actions(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    card: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_attack_evolution",
+            "Report Attack Evolution",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/attack-evolution-report.json",
+                "--markdown",
+                "artifacts/attack-evolution-report.md",
+            ],
+        )
+    ]
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping) and _attack_evolution_evidence_envelopes(result):
+        actions.append(
+            _cli_action(
+                "promote_attack_evolution_regression",
+                "Promote Attack Evolution Regression",
+                [
+                    "agent-learn",
+                    "promote-to-regression",
+                    str(source_path),
+                    "--output",
+                    "artifacts/attack-evolution-promotion.json",
+                    "--manifest",
+                    "artifacts/attack-evolution-regression.json",
+                    "--min-level",
+                    "note",
+                    "--max-findings",
+                    "1",
+                ],
+            )
+        )
+
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        manifest_filename = f"{_slug(manifest.get('name'), default='attack-evolution-regression')}.json"
+        actions.append(
+            _cli_action(
+                "replay_attack_evolution_regression",
+                "Replay Attack Evolution Regression",
+                [
+                    "agent-learn",
+                    "replay",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/attack-evolution-replay.json",
+                    "--junit",
+                    "artifacts/attack-evolution-replay.junit.xml",
+                    "--sarif",
+                    "artifacts/attack-evolution-replay.sarif.json",
+                    "--markdown",
+                    "artifacts/attack-evolution-replay.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "Attack-evolution regression manifest",
+                        "default": f"artifacts/{manifest_filename}",
+                    }
+                ],
+            )
+        )
+
+    replay_paths = _unique_strings(
+        _coerce_list(dict(card.get("replay") or {}).get("manifest_paths"))
+    )
+    if replay_paths:
+        actions.insert(
+            0,
+            _cli_action(
+                "rerun_attack_evolution_replay",
+                "Rerun Attack Evolution Replay",
+                [
+                    "agent-learn",
+                    "replay",
+                    *replay_paths,
+                    "--output",
+                    "artifacts/attack-evolution-replay.json",
+                    "--junit",
+                    "artifacts/attack-evolution-replay.junit.xml",
+                    "--sarif",
+                    "artifacts/attack-evolution-replay.sarif.json",
+                    "--markdown",
+                    "artifacts/attack-evolution-replay.md",
+                ],
+            ),
+        )
+
+    actions.extend(
+        [
+            {
+                "id": "export_attack_evolution_action_card",
+                "label": "Export Attack Evolution Action Card",
+                "kind": "download",
+                "artifact_ref": "report.attack_evolution.artifacts.action_card",
+                "default_filename": "attack-evolution-action-card.json",
+            },
+            {
+                "id": "export_attack_evolution_trace_jsonl",
+                "label": "Export Attack Evolution Trace",
+                "kind": "download",
+                "artifact_ref": "report.attack_evolution.artifacts.trace_jsonl",
+                "default_filename": "attack-evolution-trace.jsonl",
+            },
+            {
+                "id": "export_attack_evolution_minimal_repro",
+                "label": "Export Attack Evolution Minimal Repro",
+                "kind": "download",
+                "artifact_ref": "report.attack_evolution.artifacts.minimal_repro",
+                "default_filename": "attack-evolution-minimal-repro.json",
+            },
+            {
+                "id": "export_attack_evolution_replay_lock",
+                "label": "Export Attack Evolution Replay Lock",
+                "kind": "download",
+                "artifact_ref": "report.attack_evolution.artifacts.replay_lock",
+                "default_filename": "attack-evolution-replay.lock.json",
+            },
+        ]
+    )
+    return actions
 
 
 def _promoted_manifest_card(manifest: Mapping[str, Any]) -> Dict[str, Any]:
@@ -3804,6 +4570,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("optimization")
     if _has_optimization_replay_card(result):
         sections.append("optimization_replay")
+    if _has_attack_evolution_card(result, source_path=source_path):
+        sections.append("attack_evolution")
     if _has_artifact_action_plan_card(result):
         sections.append("artifact_action_plan")
     if _has_harness_diagnosis_card(result, source_path=source_path):
@@ -3866,6 +4634,8 @@ def _result_markdown(
         lines.extend(_optimization_markdown(result))
     if "optimization_replay" in sections:
         lines.extend(_optimization_replay_markdown(result))
+    if "attack_evolution" in sections:
+        lines.extend(_attack_evolution_markdown(result, source_path=source_path))
     if "artifact_action_plan" in sections:
         lines.extend(_artifact_action_plan_markdown(result))
     if "harness_diagnosis" in sections:
@@ -7116,6 +7886,17 @@ def _has_optimization_replay_card(result: Mapping[str, Any]) -> bool:
     return False
 
 
+def _has_attack_evolution_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("attack_evolution"), Mapping):
+        return True
+    return _attack_evolution_card(result, source_path=source_path) is not None
+
+
 def _artifact_action_plan_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     existing = result.get("artifact_action_plan")
     if isinstance(existing, Mapping):
@@ -7407,6 +8188,193 @@ def _harness_diagnosis_markdown(
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Target layers", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+def _attack_evolution_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = report.get("attack_evolution") if isinstance(report, Mapping) else None
+    if not isinstance(card, Mapping):
+        card = _attack_evolution_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+
+    summary = card.get("summary") if isinstance(card.get("summary"), Mapping) else {}
+    proof = card.get("proof") if isinstance(card.get("proof"), Mapping) else {}
+    replay = card.get("replay") if isinstance(card.get("replay"), Mapping) else {}
+    metrics = card.get("metrics") if isinstance(card.get("metrics"), Mapping) else {}
+    rows = [
+        ("Status", card.get("status")),
+        ("Profile", card.get("profile")),
+        ("Local only", card.get("local_only")),
+        ("Seed attacks", summary.get("seed_attack_count")),
+        ("Mutation rounds", summary.get("mutation_round_count")),
+        ("Mutations", summary.get("mutation_count")),
+        ("Successful mutations", summary.get("successful_mutation_count")),
+        ("Counterexamples", summary.get("counterexample_count")),
+        ("Minimized replays", summary.get("minimized_replay_count")),
+        ("Replay cases", summary.get("replay_case_count")),
+        ("Cross-round feedback", summary.get("has_cross_round_feedback")),
+        ("Counterexample minimization", summary.get("has_counterexample_minimization")),
+        ("Replayable regressions", summary.get("has_replayable_regressions")),
+        ("Positive learning curve", summary.get("has_positive_learning_curve")),
+        ("External markers", _join_values(summary.get("external_markers"))),
+        ("Proof status", proof.get("status")),
+        ("Proof assurance", proof.get("assurance_level")),
+        ("Proof failed checks", _join_values(proof.get("failed_check_ids"))),
+        ("Replay status", replay.get("status")),
+        ("Replay pass rate", replay.get("pass_rate")),
+        ("Replay manifests", replay.get("manifest_count")),
+        ("Research sources", _join_values(card.get("research_sources"))),
+    ]
+    metric_rows = [
+        [name, value]
+        for name, value in sorted(metrics.items())
+    ]
+    lineage_rows = [
+        [
+            item.get("id"),
+            item.get("stage"),
+            item.get("parent_id"),
+            item.get("round_id"),
+            item.get("attack_type"),
+            item.get("surface"),
+            item.get("operator"),
+            item.get("status"),
+            item.get("score"),
+        ]
+        for item in _coerce_list(card.get("lineage"))[:20]
+        if isinstance(item, Mapping)
+    ]
+    counterexample_rows = [
+        [
+            item.get("id"),
+            item.get("attack_type"),
+            item.get("surface"),
+            item.get("operator"),
+            item.get("status"),
+            item.get("minimized_replay_id"),
+            item.get("replay_case_id"),
+        ]
+        for item in _coerce_list(card.get("counterexamples"))[:20]
+        if isinstance(item, Mapping)
+    ]
+    regression_rows = [
+        [
+            item.get("id"),
+            item.get("counterexample_id"),
+            item.get("attack_type"),
+            item.get("surface"),
+            item.get("operator"),
+            item.get("status"),
+            item.get("success"),
+        ]
+        for item in _coerce_list(card.get("regressions"))[:20]
+        if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("kind"),
+            item.get("command") or item.get("artifact_ref"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## Attack Evolution",
+        "",
+        *_key_value_table(rows),
+        "",
+    ]
+    if metric_rows:
+        lines.extend(
+            [
+                "### Attack Evolution Metrics",
+                "",
+                *_markdown_table(["Metric", "Value"], metric_rows),
+                "",
+            ]
+        )
+    if lineage_rows:
+        lines.extend(
+            [
+                "### Mutation Lineage",
+                "",
+                *_markdown_table(
+                    [
+                        "ID",
+                        "Stage",
+                        "Parent",
+                        "Round",
+                        "Attack",
+                        "Surface",
+                        "Operator",
+                        "Status",
+                        "Score",
+                    ],
+                    lineage_rows,
+                ),
+                "",
+            ]
+        )
+    if counterexample_rows:
+        lines.extend(
+            [
+                "### Counterexample Minimization",
+                "",
+                *_markdown_table(
+                    [
+                        "ID",
+                        "Attack",
+                        "Surface",
+                        "Operator",
+                        "Status",
+                        "Minimized replay",
+                        "Replay case",
+                    ],
+                    counterexample_rows,
+                ),
+                "",
+            ]
+        )
+    if regression_rows:
+        lines.extend(
+            [
+                "### Replayable Regressions",
+                "",
+                *_markdown_table(
+                    [
+                        "ID",
+                        "Counterexample",
+                        "Attack",
+                        "Surface",
+                        "Operator",
+                        "Status",
+                        "Success",
+                    ],
+                    regression_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Attack Evolution Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Kind", "Command or artifact"],
                     action_rows,
                 ),
                 "",

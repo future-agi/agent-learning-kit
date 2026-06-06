@@ -1098,6 +1098,17 @@ result can be promoted with `simulate.promote_to_regression()` or
 reruns status, mutation, counterexample, minimized-replay, and gap tools with
 `red_team_attack_evolution_coverage=1.0` and
 `red_team_attack_evolution_quality=1.0`.
+`agent-learn report` now renders the same loop as a native
+`attack_evolution` action card for Future AGI UI, SDK, and CI users. The card
+summarizes mutation lineage, counterexample minimization, replay closure,
+proof status, metrics, and exact CLI actions to report, promote, replay, and
+export local artifacts: `attack-evolution-action-card.json`,
+`attack-evolution-trace.jsonl`, `attack-evolution-minimal-repro.json`, and
+`attack-evolution-replay.lock.json`. This follows the 2026 research direction
+toward trajectory-aware attack evolution, feedback-driven attack refinement,
+self-evolving skill red teams, dynamic integration benchmarks, and replaying
+failed trajectories into regression evidence without adding external runtime
+services.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of

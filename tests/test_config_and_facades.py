@@ -5739,6 +5739,65 @@ def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp
     assert observed["has_positive_learning_curve"] is True
     assert observed["requires_external_service"] is False
 
+    report_path = tmp_path / "sdk-redteam-attack-evolution-report.json"
+    report_markdown_path = tmp_path / "sdk-redteam-attack-evolution-report.md"
+    exit_code = main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_markdown_path),
+    ])
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "attack_evolution" in report["summary"]["sections"]
+    attack_card = report["report"]["attack_evolution"]
+    assert attack_card["kind"] == "attack_evolution_evidence"
+    assert attack_card["status"] == "closed_loop_verified"
+    assert attack_card["local_only"] is True
+    assert attack_card["profile"] == "verified"
+    assert attack_card["summary"]["mutation_round_count"] >= 2
+    assert attack_card["summary"]["counterexample_count"] == 1
+    assert attack_card["summary"]["minimized_replay_count"] == 1
+    assert attack_card["summary"]["replay_case_count"] == 1
+    assert attack_card["proof"]["assurance_level"] == (
+        "l3_native_redteam_attack_evolution_verified"
+    )
+    assert attack_card["metrics"]["red_team_attack_evolution_quality"] == pytest.approx(
+        1.0
+    )
+    assert {
+        "report_attack_evolution",
+        "promote_attack_evolution_regression",
+        "export_attack_evolution_action_card",
+        "export_attack_evolution_trace_jsonl",
+        "export_attack_evolution_minimal_repro",
+        "export_attack_evolution_replay_lock",
+    } <= {action["id"] for action in attack_card["actions"]}
+    assert "https://arxiv.org/abs/2605.11891" in attack_card["research_sources"]
+    assert "cx_prompt_memory_001" in attack_card["artifacts"]["trace_jsonl"]
+    assert attack_card["artifacts"]["minimal_repro"]["counterexample"]["id"] == (
+        "cx_prompt_memory_001"
+    )
+    assert attack_card["artifacts"]["replay_lock"]["requires_external_service"] is False
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "## Attack Evolution" in report_markdown
+    assert "### Mutation Lineage" in report_markdown
+    assert "### Attack Evolution Actions" in report_markdown
+
+    catalog = actions.action_catalog(result, source_path=output_path)
+    export_action = next(
+        action
+        for action in catalog["actions"]
+        if action["id"] == "export_attack_evolution_minimal_repro"
+    )
+    assert export_action["source_card_path"] == "attack_evolution"
+    assert export_action["kind"] == "download"
+    assert export_action["artifact_ref"] == (
+        "report.attack_evolution.artifacts.minimal_repro"
+    )
+
     promotion = simulate.promote_to_regression(
         result,
         source_path=output_path,
@@ -5763,6 +5822,21 @@ def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp
     assert promotion["manifest"]["simulation"]["environments"][0]["type"] == (
         "red_team_attack_evolution"
     )
+    promotion_report = simulate.render_report(
+        promotion,
+        source_path=tmp_path / "sdk-redteam-attack-evolution-promotion.json",
+    )
+    promotion_card = promotion_report["report"]["attack_evolution"]
+    assert "attack_evolution" in promotion_report["summary"]["sections"]
+    assert promotion_card["status"] == "closed_loop_verified"
+    assert promotion_card["metrics"]["red_team_attack_evolution_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert any(
+        action["id"] == "replay_attack_evolution_regression"
+        for action in promotion_card["actions"]
+    )
+
     replay = simulate.replay_manifests(
         [regression_manifest],
         name="sdk-redteam-attack-evolution-regression-replay",
@@ -5777,6 +5851,22 @@ def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp
     assert replay_row["summary"]["metric_averages"][
         "red_team_attack_evolution_quality"
     ] == pytest.approx(1.0)
+    replay_report = simulate.render_report(
+        replay,
+        source_path=tmp_path / "sdk-redteam-attack-evolution-replay.json",
+    )
+    replay_card = replay_report["report"]["attack_evolution"]
+    assert "attack_evolution" in replay_report["summary"]["sections"]
+    assert replay_card["status"] == "closed_loop_verified"
+    assert replay_card["replay"]["pass_rate"] == pytest.approx(1.0)
+    assert replay_card["replay"]["manifest_count"] == 1
+    assert replay_card["metrics"]["red_team_attack_evolution_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert any(
+        action["id"] == "rerun_attack_evolution_replay"
+        for action in replay_card["actions"]
+    )
 
 
 def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
