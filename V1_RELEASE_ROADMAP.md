@@ -156,9 +156,14 @@ Status: in progress.
 Current checkpoint:
 
 - `agent-learn release-check` now gates representative UI/action/report
-  readiness. It renders reports, builds action catalogs, verifies required
-  report sections/action ids, checks saved `action-run` output evidence, and
-  scans generated UI payloads for key-like secret markers.
+  readiness across run, action-run, optimization, red-team, red-team campaign
+  optimization, provider-integration optimization, and suite artifacts. It
+  renders reports, builds action catalogs, verifies required report sections,
+  required UI card keys, required action ids, saved `action-run` output
+  evidence, and scans generated UI payloads for key-like secret markers.
+- Provider integration fixtures use UI-safe credential-slot references instead
+  of key-like labels such as `*_API_KEY`; actual real-key execution remains
+  declared through env requirements and explicit live-target runs.
 
 Acceptance gates:
 
@@ -172,8 +177,8 @@ Acceptance gates:
 
 Next implementation focus:
 
-- Extend the same gate to additional representative optimization, red-team, and
-  suite artifacts as the V1 fixture set grows.
+- Extend the same gate to additional artifact classes only when V1 adds a new
+  user-visible report/action surface.
 
 ### M6: Framework/Provider Simulation Surface
 

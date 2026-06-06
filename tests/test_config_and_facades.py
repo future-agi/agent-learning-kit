@@ -12568,6 +12568,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert ui_readiness["missing_files"] == []
     assert ui_readiness["failing_reports"] == []
     assert ui_readiness["missing_report_sections"] == []
+    assert ui_readiness["missing_report_card_keys"] == []
     assert ui_readiness["missing_action_ids"] == []
     assert ui_readiness["missing_output_evidence"] == []
     assert ui_readiness["secret_marker_findings"] == []
@@ -12606,6 +12607,58 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert action_run_artifact["outputs_written_count"] == 2
     assert action_run_artifact["output_completion_rate"] == pytest.approx(1.0)
     assert "report_artifact" in action_run_artifact["action_ids"]
+    optimization_artifact = artifacts["examples/optimization_manifest.json"]
+    assert optimization_artifact["source_kind"] == "agent-learning.optimization.v1"
+    assert {"summary", "optimization"} <= set(
+        optimization_artifact["report_sections"]
+    )
+    assert "optimizer_replay" in optimization_artifact["report_card_keys"]
+    assert {"report_artifact", "promote_to_regression"} <= set(
+        optimization_artifact["action_ids"]
+    )
+    redteam_artifact = artifacts["examples/redteam_manifest.json"]
+    assert redteam_artifact["source_kind"] == "agent-learning.redteam.v1"
+    assert {"summary", "redteam", "redteam_strategy"} <= set(
+        redteam_artifact["report_sections"]
+    )
+    assert "redteam_strategy" in redteam_artifact["report_card_keys"]
+    assert {
+        "report_artifact",
+        "report_redteam_strategy",
+        "optimize_redteam_strategy",
+    } <= set(redteam_artifact["action_ids"])
+    redteam_campaign_artifact = artifacts[
+        "examples/redteam_campaign_optimization.json"
+    ]
+    assert redteam_campaign_artifact["source_kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert {
+        "summary",
+        "redteam",
+        "redteam_strategy",
+        "optimization",
+    } <= set(redteam_campaign_artifact["report_sections"])
+    assert {"optimizer_replay", "redteam_strategy"} <= set(
+        redteam_campaign_artifact["report_card_keys"]
+    )
+    assert {
+        "report_artifact",
+        "promote_to_regression",
+        "report_redteam_strategy",
+        "optimize_redteam_strategy",
+    } <= set(redteam_campaign_artifact["action_ids"])
+    integration_artifact = artifacts["examples/agent_integration_optimization.json"]
+    assert integration_artifact["source_kind"] == "agent-learning.optimization.v1"
+    assert {"summary", "optimization"} <= set(integration_artifact["report_sections"])
+    assert "optimizer_replay" in integration_artifact["report_card_keys"]
+    assert {"report_artifact", "promote_to_regression"} <= set(
+        integration_artifact["action_ids"]
+    )
+    suite_artifact = artifacts["examples/agent_learning_suite.json"]
+    assert suite_artifact["source_kind"] == "agent-learning.suite.v1"
+    assert suite_artifact["report_sections"] == ["summary"]
+    assert "report_artifact" in suite_artifact["action_ids"]
     assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
     framework_provider = checks["framework_provider_contract_readiness"]["evidence"]
     assert framework_provider["required_frameworks"] == (

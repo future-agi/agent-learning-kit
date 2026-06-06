@@ -103,6 +103,7 @@ V1_UI_ACTION_REPORT_ARTIFACTS = [
         "path": "examples/fixtures/task_artifacts/refund_task_run.json",
         "source_kind": "agent-learning.run.v1",
         "required_report_sections": ["summary", "orchestration_strategy"],
+        "required_report_card_keys": ["orchestration_strategy"],
         "required_action_ids": [
             "report_artifact",
             "report_orchestration_strategy",
@@ -115,8 +116,63 @@ V1_UI_ACTION_REPORT_ARTIFACTS = [
         "path": "examples/artifacts/action-loop/action-run.json",
         "source_kind": "agent-learning.action-run.v1",
         "required_report_sections": ["summary"],
+        "required_report_card_keys": [],
         "required_action_ids": ["report_artifact"],
         "requires_outputs_written": True,
+    },
+    {
+        "path": "examples/optimization_manifest.json",
+        "source_kind": "agent-learning.optimization.v1",
+        "required_report_sections": ["summary", "optimization"],
+        "required_report_card_keys": ["optimizer_replay"],
+        "required_action_ids": ["report_artifact", "promote_to_regression"],
+        "requires_outputs_written": False,
+    },
+    {
+        "path": "examples/redteam_manifest.json",
+        "source_kind": "agent-learning.redteam.v1",
+        "required_report_sections": ["summary", "redteam", "redteam_strategy"],
+        "required_report_card_keys": ["redteam_strategy"],
+        "required_action_ids": [
+            "report_artifact",
+            "report_redteam_strategy",
+            "optimize_redteam_strategy",
+        ],
+        "requires_outputs_written": False,
+    },
+    {
+        "path": "examples/redteam_campaign_optimization.json",
+        "source_kind": "agent-learning.optimization.v1",
+        "required_report_sections": [
+            "summary",
+            "redteam",
+            "redteam_strategy",
+            "optimization",
+        ],
+        "required_report_card_keys": ["optimizer_replay", "redteam_strategy"],
+        "required_action_ids": [
+            "report_artifact",
+            "promote_to_regression",
+            "report_redteam_strategy",
+            "optimize_redteam_strategy",
+        ],
+        "requires_outputs_written": False,
+    },
+    {
+        "path": "examples/agent_integration_optimization.json",
+        "source_kind": "agent-learning.optimization.v1",
+        "required_report_sections": ["summary", "optimization"],
+        "required_report_card_keys": ["optimizer_replay"],
+        "required_action_ids": ["report_artifact", "promote_to_regression"],
+        "requires_outputs_written": False,
+    },
+    {
+        "path": "examples/agent_learning_suite.json",
+        "source_kind": "agent-learning.suite.v1",
+        "required_report_sections": ["summary"],
+        "required_report_card_keys": [],
+        "required_action_ids": ["report_artifact"],
+        "requires_outputs_written": False,
     },
 ]
 
@@ -543,6 +599,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             not ui_action_report["missing_files"]
             and not ui_action_report["failing_reports"]
             and not ui_action_report["missing_report_sections"]
+            and not ui_action_report["missing_report_card_keys"]
             and not ui_action_report["missing_action_ids"]
             and not ui_action_report["missing_output_evidence"]
             and not ui_action_report["secret_marker_findings"]
@@ -877,6 +934,7 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
     missing_files: list[str] = []
     failing_reports: list[dict[str, Any]] = []
     missing_report_sections: list[dict[str, Any]] = []
+    missing_report_card_keys: list[dict[str, Any]] = []
     missing_action_ids: list[dict[str, Any]] = []
     missing_output_evidence: list[dict[str, Any]] = []
     secret_marker_findings: list[dict[str, str]] = []
@@ -893,6 +951,7 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
             "missing_files": [],
             "failing_reports": [],
             "missing_report_sections": [],
+            "missing_report_card_keys": [],
             "missing_action_ids": [],
             "missing_output_evidence": [],
             "secret_marker_findings": [],
@@ -972,6 +1031,19 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
                     "required": required_sections,
                     "observed": report_sections,
                     "missing": missing_sections,
+                }
+            )
+        required_card_keys = [
+            str(item) for item in spec.get("required_report_card_keys") or []
+        ]
+        missing_card_keys = sorted(set(required_card_keys) - set(report_card_keys))
+        if missing_card_keys:
+            missing_report_card_keys.append(
+                {
+                    "path": relative_path,
+                    "required": required_card_keys,
+                    "observed": report_card_keys,
+                    "missing": missing_card_keys,
                 }
             )
 
@@ -1070,6 +1142,7 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
         "missing_files": missing_files,
         "failing_reports": failing_reports,
         "missing_report_sections": missing_report_sections,
+        "missing_report_card_keys": missing_report_card_keys,
         "missing_action_ids": missing_action_ids,
         "missing_output_evidence": missing_output_evidence,
         "secret_marker_findings": secret_marker_findings,

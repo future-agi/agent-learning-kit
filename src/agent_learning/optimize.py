@@ -19661,17 +19661,17 @@ def _agent_integration_primary_channel(
 
 def _agent_integration_credential_ref(provider: str) -> str:
     special = {
-        "livekit": "LIVEKIT_API_KEY",
-        "vapi": "VAPI_API_KEY",
-        "retell": "RETELL_API_KEY",
-        "bland": "BLAND_API_KEY",
-        "elevenlabs": "ELEVENLABS_API_KEY",
-        "deepgram": "DEEPGRAM_API_KEY",
-        "agora": "AGORA_APP_ID",
+        "livekit": "livekit_credential_slot",
+        "vapi": "vapi_credential_slot",
+        "retell": "retell_credential_slot",
+        "bland": "bland_credential_slot",
+        "elevenlabs": "elevenlabs_credential_slot",
+        "deepgram": "deepgram_credential_slot",
+        "agora": "agora_credential_slot",
         "pipecat": "PIPECAT_PIPELINE_REF",
-        "twilio": "TWILIO_ACCOUNT_SID",
+        "twilio": "twilio_credential_slot",
     }
-    return special.get(provider, f"TRACEAI_{provider.upper()}")
+    return special.get(provider, f"traceai_{provider}_credential_slot")
 
 
 def _default_agent_integration_evaluation_config(

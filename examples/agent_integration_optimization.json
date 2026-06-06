@@ -491,7 +491,7 @@
                       "sip"
                     ],
                     "trace_framework": "livekit",
-                    "credential_ref": "LIVEKIT_API_KEY",
+                    "credential_ref": "livekit_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -504,7 +504,7 @@
                       "sip",
                       "websocket"
                     ],
-                    "credential_ref": "VAPI_API_KEY",
+                    "credential_ref": "vapi_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -515,7 +515,7 @@
                       "phone",
                       "web_call"
                     ],
-                    "credential_ref": "RETELL_API_KEY",
+                    "credential_ref": "retell_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -527,7 +527,7 @@
                       "web_call",
                       "websocket"
                     ],
-                    "credential_ref": "BLAND_API_KEY",
+                    "credential_ref": "bland_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -538,7 +538,7 @@
                       "sip",
                       "websocket"
                     ],
-                    "credential_ref": "ELEVENLABS_API_KEY",
+                    "credential_ref": "elevenlabs_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -547,7 +547,7 @@
                       "voice",
                       "websocket"
                     ],
-                    "credential_ref": "DEEPGRAM_API_KEY",
+                    "credential_ref": "deepgram_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -556,7 +556,7 @@
                       "voice",
                       "webrtc"
                     ],
-                    "credential_ref": "AGORA_APP_ID",
+                    "credential_ref": "agora_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
@@ -577,7 +577,7 @@
                       "sip",
                       "media_stream"
                     ],
-                    "credential_ref": "TWILIO_ACCOUNT_SID",
+                    "credential_ref": "twilio_credential_slot",
                     "credential_status": "live_verified"
                   },
                   {
