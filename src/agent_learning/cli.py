@@ -4,6 +4,7 @@ import argparse
 import importlib
 import json
 import shlex
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,6 +43,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _doctor(args[1:])
     if command in {"release-check", "v1-check", "release"}:
         return _release_check(args[1:])
+    if command in {"release-proof", "v1-proof"}:
+        return _release_proof(args[1:])
     if command == "init":
         return _init(args[1:])
     if command in {"capabilities", "capability-catalog", "caps"}:
@@ -3162,6 +3165,170 @@ def _release_check(args: Sequence[str] = ()) -> int:
     return int(payload.get("exit_code", 0))
 
 
+def _release_proof(args: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn release-proof",
+        description=(
+            "Run local V1 release proof commands and emit one JSON artifact."
+        ),
+    )
+    parser.add_argument(
+        "--project-root",
+        default=None,
+        help="Source checkout root to verify; defaults to this package root.",
+    )
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        choices=[
+            "release_check",
+            "ruff",
+            "pytest",
+            "build",
+            "git_diff_check",
+        ],
+        help="Run only this proof check; repeatable. Omit for full release proof.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Emit the release-proof plan without running proof commands.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Per-command timeout in seconds.",
+    )
+    parser.add_argument(
+        "--tail-bytes",
+        type=int,
+        default=8000,
+        help="Keep only this many bytes from each command stream.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Write the V1 release-proof JSON payload to this path.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print the release-proof payload to stdout.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    from agent_learning import trinity
+
+    root = (
+        Path(parsed.project_root).expanduser().resolve()
+        if parsed.project_root
+        else Path(__file__).resolve().parents[2]
+    )
+    selected = list(parsed.only or trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS)
+    command_results: dict[str, dict[str, Any]] = {}
+    if not parsed.dry_run:
+        for check_id in selected:
+            command_results[check_id] = _run_release_proof_command(
+                check_id,
+                project_root=root,
+                timeout_seconds=float(parsed.timeout),
+                tail_bytes=max(int(parsed.tail_bytes), 0),
+            )
+    payload = trinity.release_proof_status(
+        project_root=root,
+        command_results=command_results,
+        selected_check_ids=selected,
+        dry_run=bool(parsed.dry_run),
+    )
+    if parsed.output:
+        output_path = Path(parsed.output).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload.setdefault("outputs_written", []).append(str(output_path))
+        output_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+    if not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _run_release_proof_command(
+    check_id: str,
+    *,
+    project_root: Path,
+    timeout_seconds: float,
+    tail_bytes: int,
+) -> dict[str, Any]:
+    command = _release_proof_command_args(check_id, project_root=project_root)
+    started = time.time()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=project_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        exit_code = int(completed.returncode)
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        exit_code = 124
+        stdout = str(exc.stdout or "")
+        stderr = str(exc.stderr or "")
+        timed_out = True
+    duration = round(time.time() - started, 4)
+    return {
+        "command": command,
+        "cwd": str(project_root),
+        "exit_code": exit_code,
+        "duration_seconds": duration,
+        "timed_out": timed_out,
+        "stdout_tail": _tail_text(stdout, tail_bytes),
+        "stderr_tail": _tail_text(stderr, tail_bytes),
+        "stdout_bytes": len(stdout.encode("utf-8")),
+        "stderr_bytes": len(stderr.encode("utf-8")),
+    }
+
+
+def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[str]:
+    python = sys.executable
+    if check_id == "release_check":
+        return [
+            python,
+            "-m",
+            "agent_learning.cli",
+            "release-check",
+            "--project-root",
+            str(project_root),
+            "--quiet",
+        ]
+    if check_id == "ruff":
+        return [python, "-m", "ruff", "check", "."]
+    if check_id == "pytest":
+        return [python, "-m", "pytest", "-q"]
+    if check_id == "build":
+        return [python, "-m", "build"]
+    if check_id == "git_diff_check":
+        return ["git", "diff", "--check"]
+    raise ValueError(f"unknown release proof check: {check_id}")
+
+
+def _tail_text(value: str, limit_bytes: int) -> str:
+    if limit_bytes <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit_bytes:
+        return value
+    return encoded[-limit_bytes:].decode("utf-8", errors="replace")
+
+
 def _help(error: Optional[str] = None) -> int:
     if error:
         print(f"agent-learn: {error}", file=sys.stderr)
@@ -3176,7 +3343,8 @@ def _help(error: Optional[str] = None) -> int:
             "doctor, release-check, simulate, run, eval, redteam, optimize, "
             "replay, report, compare, baseline, promote-to-regression, shrink, "
             "optimize-eval, optimize-suite, suite, capabilities, actions, "
-            "action-run, action-optimize, trust, redteam-corpus, eval-cli, init"
+            "action-run, action-optimize, trust, redteam-corpus, release-proof, "
+            "eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

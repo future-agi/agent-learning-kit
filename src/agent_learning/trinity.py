@@ -64,6 +64,7 @@ RESEARCH_SOURCES = [
 V1_REQUIRED_CLI_COMMANDS = [
     "doctor",
     "release-check",
+    "release-proof",
     "init",
     "run",
     "eval",
@@ -96,6 +97,15 @@ V1_REQUIRED_SCHEMA_KINDS = [
     "agent-learning.suite-optimization.v1",
     "agent-learning.actions.v1",
     "agent-learning.action-run.v1",
+    "agent-learning.release-proof.v1",
+]
+
+V1_RELEASE_PROOF_REQUIRED_CHECKS = [
+    "release_check",
+    "ruff",
+    "pytest",
+    "build",
+    "git_diff_check",
 ]
 
 V1_UI_ACTION_REPORT_ARTIFACTS = [
@@ -736,6 +746,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_UI_ACTION_REPORT_ARTIFACTS
         ),
         "forbidden_ui_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
+        "required_release_proof_checks": list(V1_RELEASE_PROOF_REQUIRED_CHECKS),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_framework_provider_frameworks": list(
             V1_FRAMEWORK_PROVIDER_FRAMEWORKS
@@ -755,6 +766,154 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_docs": list(V1_REQUIRED_DOCS),
         "required_evidence_components": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "trinity": trinity,
+        "findings": findings,
+    }
+
+
+def release_proof_status(
+    project_root: str | Path | None = None,
+    *,
+    command_results: Mapping[str, Mapping[str, Any]] | None = None,
+    selected_check_ids: Iterable[str] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Return a Future AGI-ready V1 release-proof artifact.
+
+    ``release_status()`` is intentionally fast and deterministic. This artifact
+    records the heavier local proof stack used when cutting V1: release-check,
+    ruff, pytest, build, and git diff hygiene.
+    """
+
+    root = _release_project_root(project_root)
+    required_checks = list(V1_RELEASE_PROOF_REQUIRED_CHECKS)
+    raw_selected = [str(item) for item in (selected_check_ids or required_checks)]
+    selected: list[str] = []
+    seen_selected: set[str] = set()
+    for check_id in raw_selected:
+        if check_id in seen_selected:
+            continue
+        selected.append(check_id)
+        seen_selected.add(check_id)
+    required_set = set(required_checks)
+    unknown_selected = [check_id for check_id in selected if check_id not in required_set]
+    selected_required = [
+        check_id for check_id in required_checks if check_id in seen_selected
+    ]
+    selected_set = set(selected_required)
+    results = {
+        str(key): dict(value)
+        for key, value in dict(command_results or {}).items()
+    }
+    checks: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+
+    for check_id in unknown_selected:
+        findings.append(
+            {
+                "type": "v1_release_proof_unknown_check",
+                "level": "error",
+                "check": check_id,
+                "reason": f"Unknown V1 release proof check: {check_id}",
+                "allowed_check_ids": required_checks,
+            }
+        )
+
+    for check_id in required_checks:
+        required = check_id in selected_set
+        raw = results.get(check_id)
+        if raw is None:
+            status = "skipped" if not required else "pending" if dry_run else "failed"
+            exit_code = None
+            evidence: dict[str, Any] = {
+                "reason": "check was not selected" if not required else "check did not run"
+            }
+        else:
+            exit_code = raw.get("exit_code")
+            status = "passed" if exit_code == 0 else "failed"
+            evidence = dict(raw)
+        check = {
+            "id": check_id,
+            "required": required,
+            "status": status,
+            "passed": status == "passed" or (status == "skipped" and not required),
+            "exit_code": exit_code,
+            "evidence": evidence,
+        }
+        checks.append(check)
+        if required and status != "passed":
+            pending = dry_run and status == "pending"
+            findings.append(
+                {
+                    "type": (
+                        "v1_release_proof_check_pending"
+                        if pending
+                        else "v1_release_proof_check_failed"
+                    ),
+                    "level": "warning" if pending else "error",
+                    "check": check_id,
+                    "reason": (
+                        f"V1 release proof check pending: {check_id}"
+                        if pending
+                        else f"V1 release proof check failed: {check_id}"
+                    ),
+                    "evidence": evidence,
+                }
+            )
+
+    full_proof = not unknown_selected and selected_set == required_set
+    if not full_proof:
+        findings.append(
+            {
+                "type": "v1_release_proof_partial",
+                "level": "warning",
+                "selected_check_ids": selected_required,
+                "required_check_ids": required_checks,
+                "unknown_selected_check_ids": unknown_selected,
+                "reason": "This artifact proves only the selected release checks.",
+            }
+        )
+    error_findings = [item for item in findings if item["level"] == "error"]
+    if error_findings:
+        status = "failed"
+    elif dry_run:
+        status = "planned"
+    else:
+        status = "passed"
+    return {
+        "kind": "agent-learning.release-proof.v1",
+        "schema_version": "agent-learning.cli.v1",
+        "status": status,
+        "exit_code": 1 if error_findings else 0,
+        "project_root": str(root),
+        "dry_run": bool(dry_run),
+        "summary": {
+            "release": "v1",
+            "ready": status == "passed" and full_proof,
+            "full_proof": full_proof,
+            "required_check_count": len(required_checks),
+            "selected_check_count": len(selected_required),
+            "unknown_selected_check_count": len(unknown_selected),
+            "passed_check_count": sum(
+                1
+                for check in checks
+                if check["required"] and check["status"] == "passed"
+            ),
+            "failed_check_count": sum(
+                1
+                for check in checks
+                if check["required"] and check["status"] == "failed"
+            ),
+            "pending_check_count": sum(
+                1
+                for check in checks
+                if check["required"] and check["status"] == "pending"
+            ),
+            "skipped_check_count": sum(1 for check in checks if check["status"] == "skipped"),
+        },
+        "required_check_ids": required_checks,
+        "selected_check_ids": selected_required,
+        "unknown_selected_check_ids": unknown_selected,
+        "checks": checks,
         "findings": findings,
     }
 
@@ -2009,6 +2168,7 @@ __all__ = [
     "V1_REQUIRED_EVIDENCE_COMPONENTS",
     "V1_REQUIRED_EXAMPLES",
     "V1_REQUIRED_SCHEMA_KINDS",
+    "V1_RELEASE_PROOF_REQUIRED_CHECKS",
     "V1_FRAMEWORK_PROVIDER_EXAMPLES",
     "V1_FRAMEWORK_PROVIDER_FRAMEWORKS",
     "V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS",
@@ -2032,6 +2192,7 @@ __all__ = [
     "assert_trinity_ready",
     "consolidation_metadata",
     "module_status",
+    "release_proof_status",
     "release_status",
     "trinity_status",
 ]

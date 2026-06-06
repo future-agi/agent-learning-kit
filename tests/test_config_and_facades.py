@@ -4,6 +4,7 @@ import copy
 import importlib
 import json
 import os
+import sys
 import tomllib
 from pathlib import Path
 
@@ -12500,6 +12501,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
+    assert payload["required_release_proof_checks"] == (
+        trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
+    )
     assert payload["required_evidence_components"] == (
         trinity.V1_REQUIRED_EVIDENCE_COMPONENTS
     )
@@ -12799,6 +12803,124 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         if key != "outputs_written"
     } == direct
     assert trinity.assert_release_ready(project_root=PROJECT_ROOT)["status"] == "passed"
+
+
+def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
+    from agent_learning import trinity
+
+    output_path = tmp_path / "release-proof.json"
+    exit_code = main(
+        [
+            "release-proof",
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--only",
+            "release_check",
+            "--only",
+            "git_diff_check",
+            "--output",
+            str(output_path),
+            "--quiet",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert captured.out == ""
+    assert payload["kind"] == "agent-learning.release-proof.v1"
+    assert payload["schema_version"] == "agent-learning.cli.v1"
+    assert payload["status"] == "passed"
+    assert payload["exit_code"] == 0
+    assert payload["outputs_written"] == [str(output_path.resolve())]
+    assert payload["project_root"] == str(PROJECT_ROOT)
+    assert payload["required_check_ids"] == trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
+    assert payload["selected_check_ids"] == ["release_check", "git_diff_check"]
+    assert payload["summary"]["full_proof"] is False
+    assert payload["summary"]["ready"] is False
+    assert payload["summary"]["selected_check_count"] == 2
+    assert payload["summary"]["unknown_selected_check_count"] == 0
+    assert payload["summary"]["passed_check_count"] == 2
+    assert payload["summary"]["failed_check_count"] == 0
+    assert payload["summary"]["skipped_check_count"] == 3
+    checks = {check["id"]: check for check in payload["checks"]}
+    assert set(checks) == set(trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS)
+    assert checks["release_check"]["status"] == "passed"
+    assert checks["release_check"]["exit_code"] == 0
+    assert checks["release_check"]["evidence"]["command"][:3] == [
+        sys.executable,
+        "-m",
+        "agent_learning.cli",
+    ]
+    assert checks["git_diff_check"]["status"] == "passed"
+    assert checks["git_diff_check"]["exit_code"] == 0
+    assert checks["git_diff_check"]["evidence"]["command"] == [
+        "git",
+        "diff",
+        "--check",
+    ]
+    assert checks["pytest"]["status"] == "skipped"
+    assert checks["build"]["status"] == "skipped"
+    assert checks["ruff"]["status"] == "skipped"
+    assert {
+        finding["type"] for finding in payload["findings"]
+    } == {"v1_release_proof_partial"}
+
+
+def test_agent_learn_release_proof_dry_run_emits_plan(tmp_path, capsys):
+    output_path = tmp_path / "release-proof-plan.json"
+    exit_code = main(
+        [
+            "release-proof",
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--dry-run",
+            "--output",
+            str(output_path),
+            "--quiet",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert captured.out == ""
+    assert payload["status"] == "planned"
+    assert payload["exit_code"] == 0
+    assert payload["dry_run"] is True
+    assert payload["summary"]["ready"] is False
+    assert payload["summary"]["full_proof"] is True
+    assert payload["summary"]["pending_check_count"] == 5
+    assert payload["summary"]["failed_check_count"] == 0
+    assert payload["summary"]["unknown_selected_check_count"] == 0
+    assert {check["status"] for check in payload["checks"]} == {"pending"}
+    assert {
+        finding["type"] for finding in payload["findings"]
+    } == {"v1_release_proof_check_pending"}
+
+
+def test_release_proof_status_rejects_unknown_sdk_check_id():
+    from agent_learning import trinity
+
+    payload = trinity.release_proof_status(
+        project_root=PROJECT_ROOT,
+        command_results={},
+        selected_check_ids=["release_check", "unknown_check"],
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["exit_code"] == 1
+    assert payload["selected_check_ids"] == ["release_check"]
+    assert payload["unknown_selected_check_ids"] == ["unknown_check"]
+    assert payload["summary"]["selected_check_count"] == 1
+    assert payload["summary"]["unknown_selected_check_count"] == 1
+    assert {
+        finding["type"] for finding in payload["findings"]
+    } == {
+        "v1_release_proof_check_failed",
+        "v1_release_proof_partial",
+        "v1_release_proof_unknown_check",
+    }
 
 
 def test_stateful_tool_world_manifest_builds_research_backed_candidates():

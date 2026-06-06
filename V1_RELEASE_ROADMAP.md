@@ -22,7 +22,8 @@ V1 is releasable when a user can:
    simulation, red-team, and optimizer results.
 7. Run a promptfoo-style CLI workflow without writing platform code.
 8. Verify release readiness with `agent-learn doctor` and
-   `agent-learn release-check`.
+   `agent-learn release-check`, then cut V1 with
+   `agent-learn release-proof`.
 
 ## Milestones
 
@@ -30,7 +31,10 @@ Each milestone has a small release gate. `agent-learn release-check --project-ro
 is the V1 source of truth for these gates, including research-backed red-team
 coverage across required examples, canonical corpus rows, attack types,
 surfaces, source lineage, UI/action/report readiness, and executable
-framework/provider contract readiness.
+framework/provider contract readiness. `agent-learn release-proof --project-root .`
+is the heavier release-cut artifact; it runs release-check, full-repo ruff,
+pytest, package build, and `git diff --check`, then stores their command
+evidence in `agent-learning.release-proof.v1`.
 
 ## Release-Cut Breakdown
 
@@ -43,7 +47,7 @@ framework/provider contract readiness.
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness` |
 | M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness` |
-| M7 | Packaging and release proof | `release_docs_present`, `package_metadata` |
+| M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
 
@@ -73,8 +77,8 @@ Acceptance gates:
 - `agent-learn run`, `eval`, `eval-artifact`, `eval-task`, `redteam`,
   `redteam-corpus`, `optimize`, `optimize-eval`, `optimize-suite`, `suite`,
   `report`, `replay`, `promote-to-regression`, `actions`, `action-run`,
-  `action-optimize`, `trust`, `capabilities`, `doctor`, `release-check`, and
-  `init` are available.
+  `action-optimize`, `trust`, `capabilities`, `doctor`, `release-check`,
+  `release-proof`, and `init` are available.
 - Each command writes JSON output; core workflows also write JUnit, SARIF, and
   Markdown where supported.
 - CLI examples use `agent-learning-kit` and `agent-learn`, not legacy SDK names.
@@ -235,11 +239,16 @@ Current checkpoint:
 
 - Full-repo `PYTHONPATH=src python -m ruff check .` now passes across the
   public SDK plus vendored `fi.{simulate,evals,opt}` engine tree.
+- `agent-learn release-proof` emits one release-cut artifact with command,
+  duration, exit-code, timeout, and output-tail evidence for each required local
+  proof check.
 
 Acceptance gates:
 
 - `python -m build` succeeds.
 - `agent-learn release-check --project-root .` passes.
+- `agent-learn release-proof --project-root .` passes with
+  `agent-learning.release-proof.v1` and `ready=true`.
 - Full pytest passes with real local keys used by examples/tests.
 - Ruff and `git diff --check` pass.
 - README, development boundary, roadmap, and examples are aligned.
@@ -251,6 +260,7 @@ Verification:
 - `PYTHONPATH=src python -m pytest -q`
 - `python -m build`
 - `git diff --check`
+- `PYTHONPATH=src python -m agent_learning.cli release-proof --project-root . --output /tmp/agent-learning-release-proof.json --quiet`
 
 ## Current Implementation Order
 
@@ -260,5 +270,5 @@ Verification:
 4. Tighten Future AGI UI/action/report artifact gates.
 5. Finish provider/framework simulation contracts that are local-first and
    verified with real user-provided target keys only where necessary.
-6. Cut V1 only after the release-check, full tests, package build, and artifact
-   redaction checks all pass.
+6. Cut V1 only after `agent-learn release-proof --project-root .` passes and
+   the saved artifact has `ready=true`.

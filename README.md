@@ -60,6 +60,12 @@ adapter matrix for LangChain, LangGraph, LiveKit, and Pipecat, requires local
 fixture targets with no external service dependency, and validates
 representative LiveKit, Pipecat, and realtime voice manifests.
 
+For the heavier release cut, run `agent-learn release-proof --project-root .`.
+It emits `agent-learning.release-proof.v1` with command evidence for the full
+local proof stack: release-check, full-repo ruff, pytest, package build, and
+`git diff --check`. Use `--only <check>` for a partial proof during development
+or `--dry-run` to print the exact plan without executing commands.
+
 Python code can verify the same boundary without shelling out:
 
 ```python
@@ -157,6 +163,7 @@ agent-learn run examples/voice_streaming_realtime_manifest.json --no-eval \
 agent-learn eval-cli list categories --format json
 agent-learn eval-cli init ./eval-project --template basic --force
 agent-learn doctor --output artifacts/agent-learning-doctor.json
+agent-learn release-proof --project-root . --output artifacts/release-proof.json
 ```
 
 `agent-learn init` scaffolds runnable Agent Learning projects. The optimize
