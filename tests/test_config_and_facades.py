@@ -5405,6 +5405,8 @@ def test_optimize_facade_builds_and_runs_redteam_campaign_manifest(monkeypatch):
 
 
 def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize, simulate
+
     key = "real-local-sdk-redteam-example-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY",
@@ -5429,6 +5431,7 @@ def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
 
     output_path = tmp_path / "sdk-redteam-result.json"
     result = module.run(output_path)
+    result = optimize.with_redteam_campaign_proof(result)
 
     assert output_path.exists()
     saved = json.loads(output_path.read_text(encoding="utf-8"))
@@ -5490,6 +5493,157 @@ def test_sdk_redteam_optimization_example_runs(monkeypatch, tmp_path):
         "redteam_optimization_regression_gate_passed",
         "redteam_metric_evidence_closed",
     }
+
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=output_path,
+        name="sdk-redteam-campaign-regression",
+        min_level="note",
+        max_findings=1,
+        required_env=["AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == (
+        "redteam_campaign_optimization"
+    )
+    assert promotion["summary"]["requires_external_service"] is False
+    assert promotion["summary"]["redteam_campaign_proof_status"] == "passed"
+    assert promotion["summary"]["redteam_campaign_proof_assurance_level"] == (
+        "l3_native_redteam_campaign_verified"
+    )
+    assert promotion["summary"]["coverage_cell_count"] == 4
+    assert promotion["summary"]["executed_cell_count"] == 4
+    assert promotion["summary"]["metric_averages"]["red_team_campaign_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert promotion["summary"]["metric_averages"]["adversarial_resilience"] >= 0.9
+    assert promotion["redteam_campaign_proof"] == proof
+    promoted_manifest = promotion["manifest"]
+    assert promoted_manifest["version"] == "agent-learning.run.v1"
+    assert promoted_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY"
+    ]
+    assert promoted_manifest["metadata"]["regression"]["promotion_kind"] == (
+        "redteam_campaign_optimization"
+    )
+    assert promoted_manifest["metadata"]["regression"]["assurance_level"] == (
+        "l3_native_redteam_campaign_verified"
+    )
+    assert promoted_manifest["metadata"]["regression"]["selected_attacks"] == [
+        "prompt_injection",
+        "credential_exfiltration",
+    ]
+    assert promoted_manifest["metadata"]["regression"]["selected_surfaces"] == [
+        "tool",
+        "memory",
+    ]
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "local_only"
+    ] is True
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "requires_external_service"
+    ] is False
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "metric_thresholds"
+    ]["red_team_campaign_quality"] == 1.0
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "evidence_policy"
+    ] == {
+        "store_attack_trajectories": True,
+        "store_execution_provenance": True,
+        "deterministic_local_judges": True,
+        "external_runtime_dependencies": "forbidden",
+    }
+    assert {
+        "https://arxiv.org/abs/2605.04808",
+        "https://arxiv.org/abs/2606.04990",
+        "https://arxiv.org/abs/2606.05233",
+    } <= set(promoted_manifest["metadata"]["regression"]["research_sources"])
+    promoted_config = promoted_manifest["evaluation"]["agent_report"]["config"]
+    assert promoted_config["metadata"]["promotion_kind"] == (
+        "redteam_campaign_optimization"
+    )
+    assert promoted_config["metadata"]["local_only"] is True
+    assert key not in json.dumps(promotion, sort_keys=True, default=str)
+
+    regression_manifest_path = tmp_path / "sdk-redteam-campaign-regression.json"
+    regression_manifest_path.write_text(
+        json.dumps(promoted_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    replay = simulate.replay_manifests(
+        [regression_manifest_path],
+        name="sdk-redteam-campaign-regression-replay",
+    )
+    assert replay["status"] == "passed"
+    assert replay["summary"]["passed_count"] == 1
+    assert replay["summary"]["failed_count"] == 0
+    replay_row = replay["replay"]["manifests"][0]
+    assert replay_row["summary"]["metric_averages"][
+        "red_team_campaign_quality"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "adversarial_resilience"
+    ] >= 0.9
+    assert key not in json.dumps(replay, sort_keys=True, default=str)
+
+    cli_promotion_path = tmp_path / "sdk-redteam-campaign-cli-promotion.json"
+    cli_regression_manifest_path = tmp_path / (
+        "sdk-redteam-campaign-cli-regression.json"
+    )
+    assert (
+        main(
+            [
+                "promote-to-regression",
+                str(output_path),
+                "--output",
+                str(cli_promotion_path),
+                "--manifest",
+                str(cli_regression_manifest_path),
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+                "--required-env",
+                "AGENT_LEARNING_SDK_REDTEAM_EXAMPLE_KEY",
+            ]
+        )
+        == 0
+    )
+    cli_promotion = json.loads(cli_promotion_path.read_text(encoding="utf-8"))
+    assert cli_promotion["summary"]["promotion_kind"] == (
+        "redteam_campaign_optimization"
+    )
+    cli_regression = json.loads(
+        cli_regression_manifest_path.read_text(encoding="utf-8")
+    )
+    assert cli_regression["metadata"]["regression"]["promotion_kind"] == (
+        "redteam_campaign_optimization"
+    )
+    assert key not in cli_promotion_path.read_text(encoding="utf-8")
+    assert key not in cli_regression_manifest_path.read_text(encoding="utf-8")
+
+    externalized = copy.deepcopy(result)
+    externalized["optimization"]["best_config"].setdefault("redteam", {})[
+        "endpoint"
+    ] = "https://redteam.example.com/campaign"
+    externalized["optimization"]["best_config"]["redteam"]["auth"] = {
+        "token": "external-redteam-token"
+    }
+    externalized["optimization"]["best_config"]["redteam"][
+        "api_key"
+    ] = "external-redteam-key"
+    with pytest.raises(
+        ManifestError,
+        match=r"red[-_ ]?team campaign regression promotion",
+    ):
+        simulate.promote_to_regression(
+            externalized,
+            source_path=output_path,
+            name="sdk-redteam-campaign-externalized-regression",
+            min_level="note",
+            max_findings=1,
+        )
 
 
 def test_sdk_redteam_autogen_optimization_example_runs(monkeypatch, tmp_path):

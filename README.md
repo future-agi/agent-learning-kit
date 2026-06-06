@@ -1070,6 +1070,15 @@ evidence, red-team councils close handoff/review/reconciliation contracts when
 present, causal attribution graphs close root-cause/mitigation/evidence mapping
 when present, the selected patch changes a red-team harness surface, the
 optimizer does not regress from the seed, and red-team metrics pass.
+Proof-carrying campaign results can be promoted with
+`simulate.promote_to_regression()` or `agent-learn promote-to-regression` into a
+typed `redteam_campaign_optimization` replay manifest. Promotion freezes the
+selected attack/surface/channel/provider matrix, stores a local-only
+`replay_lock`, carries selected metric thresholds and 2026 research provenance,
+and fails closed if the selected artifact contains endpoint/auth/key markers.
+`agent-learn replay` then reruns the local campaign judges from the promoted
+manifest, giving promptfoo-style CLI users and SDK users the same regression
+gate without requiring an external optimizer, judge, or observability service.
 
 For evidence-driven adaptive red teaming, pass a prior red-team artifact/path or
 failure text to `optimize.build_adaptive_redteam_optimization_manifest()`. The
