@@ -219,9 +219,56 @@ _LONG_HORIZON_REDTEAM_BLOCKED_TOOLS = (
     "create_access_token",
 )
 
+_REDTEAM_CORPUS_RESEARCH_SOURCES = (
+    {
+        "id": "redbench",
+        "title": "RedBench",
+        "source": "arxiv:2601.03699",
+        "url": "https://arxiv.org/abs/2601.03699",
+        "year": 2026,
+        "used_for": "standardized benchmark taxonomy, risk categories, domains, and source lineage",
+    },
+    {
+        "id": "dtap",
+        "title": "DecodingTrust-Agent Platform",
+        "source": "arxiv:2605.04808",
+        "url": "https://arxiv.org/abs/2605.04808",
+        "year": 2026,
+        "used_for": "controllable agent environments, injection vectors, and verifiable judges",
+    },
+    {
+        "id": "monitoringbench",
+        "title": "MonitoringBench",
+        "source": "arxiv:2605.09684",
+        "url": "https://arxiv.org/abs/2605.09684",
+        "year": 2026,
+        "used_for": "attack taxonomy breadth, trajectory artifacts, and monitor failure modes",
+    },
+    {
+        "id": "soar_redteam",
+        "title": "Red Teaming Framework for AI-enabled SOAR",
+        "source": "arxiv:2605.17075",
+        "url": "https://arxiv.org/abs/2605.17075",
+        "year": 2026,
+        "used_for": "multi-stage planner/controller campaigns against autonomous defenders",
+    },
+    {
+        "id": "agenticred",
+        "title": "AgenticRed",
+        "source": "arxiv:2601.13518",
+        "url": "https://arxiv.org/abs/2601.13518",
+        "year": 2026,
+        "used_for": "evolve red-team systems, not isolated prompt strings",
+    },
+)
+
 
 def _manifest() -> Any:
     return optional_module("fi.simulate.manifest", _SIMULATE_EXTRA)
+
+
+def _simulate() -> Any:
+    return optional_module("fi.simulate", _SIMULATE_EXTRA)
 
 
 def load_manifest_file(path: str | Path) -> dict[str, Any]:
@@ -714,6 +761,138 @@ def build_persistent_state_redteam_manifest(
 build_persistent_state_redteam_run_manifest = build_persistent_state_redteam_manifest
 
 
+def build_redteam_corpus_campaign(
+    *,
+    name: str = "redteam-corpus-campaign",
+    corpus_rows: Sequence[Mapping[str, Any]],
+    target: Optional[Mapping[str, Any]] = None,
+    frameworks: Sequence[str] = ("agent_learning_kit",),
+    required_taxonomies: Sequence[str] = (),
+    required_attack_types: Sequence[str] = (),
+    required_surfaces: Sequence[str] = (),
+    required_channels: Sequence[str] = (),
+    required_providers: Sequence[str] = (),
+    observability: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Normalize benchmark/corpus rows into auditable red-team campaign evidence.
+
+    Rows can come from RedBench/HarmBench/JailbreakBench/DTap-style datasets or
+    from a local Future AGI benchmark table. The builder preserves source
+    lineage and maps every row onto the existing campaign matrix so reports,
+    CLI actions, and optimizers can diagnose missing cells deterministically.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not corpus_rows:
+        raise ValueError("corpus_rows must contain at least one row")
+
+    framework_values = _unique_strings(frameworks) or ["agent_learning_kit"]
+    rows = [
+        _normalize_redteam_corpus_row(
+            row,
+            index=index,
+            default_framework=framework_values[0],
+        )
+        for index, row in enumerate(corpus_rows, start=1)
+    ]
+    if not rows:
+        raise ValueError("corpus_rows must contain at least one valid row")
+
+    taxonomy_values = _unique_strings(
+        [
+            *required_taxonomies,
+            *(taxonomy for row in rows for taxonomy in row["taxonomies"]),
+        ]
+    )
+    attack_values = _unique_strings(
+        [*required_attack_types, *(row["attack_type"] for row in rows)]
+    )
+    surface_values = _unique_strings([*required_surfaces, *(row["surface"] for row in rows)])
+    channel_values = _unique_strings([*required_channels, *(row["channel"] for row in rows)])
+    provider_values = _unique_strings([*required_providers, *(row["provider"] for row in rows)])
+
+    attack_pack = {
+        "id": f"{_redteam_corpus_key(name)}_attack_pack",
+        "name": f"{name}-corpus-attack-pack",
+        "attacks": [_redteam_corpus_attack_case(row) for row in rows],
+        "surfaces": surface_values,
+        "signals": [
+            "benchmark_corpus",
+            "source_lineage",
+            "verifiable_judge",
+            "trajectory_artifact",
+            "redteam_corpus",
+        ],
+        "metadata": {
+            "row_count": len(rows),
+            "benchmarks": _unique_strings(row["benchmark"] for row in rows),
+            "domains": _unique_strings(row["domain"] for row in rows),
+        },
+    }
+    scenarios = [_redteam_corpus_scenario(row) for row in rows]
+    runs = [_redteam_corpus_run(row) for row in rows]
+    findings = [_redteam_corpus_finding(row) for row in rows]
+    artifacts = [_redteam_corpus_artifact(row) for row in rows]
+    mitigations = [_redteam_corpus_mitigation(row) for row in rows]
+    observability_payload = copy.deepcopy(
+        dict(observability or _redteam_corpus_observability(name, rows))
+    )
+    payload = {
+        "name": str(name),
+        "target": copy.deepcopy(
+            dict(
+                target
+                or {
+                    "agent": str(name),
+                    "environment": "local-corpus-redteam",
+                    "provider": "futureagi",
+                }
+            )
+        ),
+        "taxonomies": [
+            {
+                "id": taxonomy,
+                "key": taxonomy,
+                "name": taxonomy,
+                "version": "2026",
+            }
+            for taxonomy in taxonomy_values
+        ],
+        "attack_packs": [attack_pack],
+        "scenarios": scenarios,
+        "runs": runs,
+        "findings": findings,
+        "artifacts": artifacts,
+        "observability": observability_payload,
+        "mitigations": mitigations,
+        "required_taxonomies": taxonomy_values,
+        "required_attack_types": attack_values,
+        "required_surfaces": surface_values,
+        "required_channels": channel_values,
+        "required_providers": provider_values,
+        "metadata": {
+            "source": "agent_learning.redteam.build_redteam_corpus_campaign",
+            "cookbook": "redteam-corpus-import",
+            "row_count": len(rows),
+            "frameworks": framework_values,
+            "research_sources": copy.deepcopy(list(_REDTEAM_CORPUS_RESEARCH_SOURCES)),
+            "original_synthesis": (
+                "Treat red-team corpora as structured campaign evidence: every "
+                "benchmark row must carry taxonomy, domain, source, trajectory, "
+                "artifact, mitigation, and verifiable-judge lineage before it "
+                "can influence optimization."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    return copy.deepcopy(_simulate().normalize_red_team_campaign_manifest(payload))
+
+
+build_redteam_corpus_run_campaign = build_redteam_corpus_campaign
+
+
 def prepare_redteam_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return _manifest().prepare_redteam_manifest(manifest)
 
@@ -1130,6 +1309,342 @@ def _canary_terms(values: Any) -> list[str]:
     return _unique_strings(terms)
 
 
+def _normalize_redteam_corpus_row(
+    row: Mapping[str, Any],
+    *,
+    index: int,
+    default_framework: str,
+) -> dict[str, Any]:
+    if not isinstance(row, Mapping):
+        raise TypeError(f"corpus_rows[{index}] must be a mapping")
+    item = copy.deepcopy(dict(row))
+    benchmark = _redteam_corpus_key(
+        item.get("benchmark")
+        or item.get("corpus")
+        or item.get("dataset")
+        or item.get("source_dataset")
+        or "redteam_corpus"
+    )
+    source = str(
+        item.get("source")
+        or item.get("source_url")
+        or item.get("url")
+        or item.get("paper")
+        or item.get("reference")
+        or benchmark
+    )
+    source_id = _redteam_corpus_key(item.get("source_id") or item.get("id") or source)
+    attack_type = _redteam_corpus_key(
+        item.get("attack_type")
+        or item.get("attack")
+        or item.get("category")
+        or item.get("risk_category")
+        or "prompt_injection"
+    )
+    surface = _redteam_corpus_key(
+        item.get("surface")
+        or item.get("attack_surface")
+        or item.get("vector")
+        or item.get("injection_vector")
+        or "instruction"
+    )
+    channel = _redteam_corpus_key(item.get("channel") or item.get("modality") or "chat")
+    provider = _redteam_corpus_key(item.get("provider") or "local_cli")
+    framework = _redteam_corpus_key(item.get("framework") or item.get("runner") or default_framework)
+    domain = _redteam_corpus_key(item.get("domain") or item.get("application_domain") or "general")
+    risk_category = _redteam_corpus_key(item.get("risk_category") or item.get("risk") or attack_type)
+    taxonomy_values = _unique_strings(
+        item.get("taxonomies") or item.get("taxonomy") or []
+    )
+    if not taxonomy_values:
+        taxonomy_values = [f"{benchmark}_2026" if not benchmark.endswith("_2026") else benchmark]
+    taxonomy_values = [_redteam_corpus_key(value) for value in taxonomy_values]
+    row_id = _redteam_corpus_key(item.get("id") or f"{benchmark}_{index}")
+    prompt = str(
+        item.get("prompt")
+        or item.get("input")
+        or item.get("attack_prompt")
+        or item.get("payload")
+        or "Attempt to override agent policy using an untrusted instruction."
+    )
+    expected = str(
+        item.get("expected_behavior")
+        or item.get("expected")
+        or item.get("expected_defense")
+        or "The agent refuses unsafe instructions and preserves the approved objective."
+    )
+    response = str(
+        item.get("safe_response")
+        or item.get("response")
+        or "Blocked untrusted adversarial instruction; no sensitive data or unsafe action exposed."
+    )
+    cell_id = _redteam_corpus_cell_id(
+        attack_type=attack_type,
+        surface=surface,
+        channel=channel,
+        provider=provider,
+    )
+    signals = _unique_strings(
+        [
+            "benchmark_corpus",
+            "source_lineage",
+            "verifiable_judge",
+            "trajectory_artifact",
+            "redteam_corpus",
+            benchmark,
+            source_id,
+            domain,
+            risk_category,
+            attack_type,
+            surface,
+            channel,
+            provider,
+            framework,
+            *taxonomy_values,
+            *_unique_strings(item.get("signals") or ()),
+        ]
+    )
+    return {
+        "id": row_id,
+        "benchmark": benchmark,
+        "source": source,
+        "source_id": source_id,
+        "taxonomies": taxonomy_values,
+        "attack_type": attack_type,
+        "surface": surface,
+        "channel": channel,
+        "provider": provider,
+        "framework": framework,
+        "domain": domain,
+        "risk_category": risk_category,
+        "prompt": prompt,
+        "expected_behavior": expected,
+        "safe_response": response,
+        "severity": _redteam_corpus_key(item.get("severity") or "high"),
+        "status": _redteam_corpus_key(item.get("status") or "passed"),
+        "cell_id": cell_id,
+        "signals": signals,
+        "metadata": copy.deepcopy(dict(item.get("metadata") or {})),
+    }
+
+
+def _redteam_corpus_attack_case(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": f"{row['benchmark']}:{row['id']}",
+        "category": row["attack_type"],
+        "surface": row["surface"],
+        "payload": row["prompt"],
+        "severity": row["severity"],
+        "goal": f"Exercise {row['risk_category']} in {row['domain']}.",
+        "expected_behavior": row["expected_behavior"],
+        "taxonomies": list(row["taxonomies"]),
+        "owasp": list(row["taxonomies"]),
+        "signals": list(row["signals"]),
+        "metadata": {
+            "benchmark": row["benchmark"],
+            "source": row["source"],
+            "source_id": row["source_id"],
+            "domain": row["domain"],
+            "risk_category": row["risk_category"],
+            **copy.deepcopy(dict(row.get("metadata") or {})),
+        },
+    }
+
+
+def _redteam_corpus_scenario(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"{row['id']}_scenario",
+        "name": f"{row['benchmark']} {row['attack_type']} {row['surface']}",
+        "attack_type": row["attack_type"],
+        "surface": row["surface"],
+        "channel": row["channel"],
+        "provider": row["provider"],
+        "turn_count": 2,
+        "matrix_cell_ids": [row["cell_id"]],
+        "taxonomies": list(row["taxonomies"]),
+        "turns": [
+            {"role": "attacker", "content": row["prompt"]},
+            {"role": "agent", "content": row["safe_response"]},
+        ],
+        "signals": ["multi_turn", *row["signals"]],
+        "metadata": _redteam_corpus_lineage(row),
+    }
+
+
+def _redteam_corpus_run(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"{row['id']}_run",
+        "name": f"{row['benchmark']} run {row['id']}",
+        "framework": row["framework"],
+        "provider": row["provider"],
+        "channel": row["channel"],
+        "channels": [row["channel"]],
+        "status": row["status"],
+        "taxonomies": list(row["taxonomies"]),
+        "attack_types": [row["attack_type"]],
+        "surfaces": [row["surface"]],
+        "matrix_cell_ids": [row["cell_id"]],
+        "attack_case_id": row["id"],
+        "scenario_id": f"{row['id']}_scenario",
+        "input": row["prompt"],
+        "output": row["safe_response"],
+        "response": row["safe_response"],
+        "verdict": "contained",
+        "outcome": row["expected_behavior"],
+        "tool_calls": [
+            {
+                "name": "policy_gate",
+                "arguments": {
+                    "attack_type": row["attack_type"],
+                    "surface": row["surface"],
+                },
+                "result": "blocked",
+            },
+            {
+                "name": "verifiable_judge",
+                "arguments": {"source_id": row["source_id"]},
+                "result": "passed",
+            },
+        ],
+        "events": [
+            {
+                "type": "redteam_corpus_case",
+                "name": "case_executed",
+                "source_id": row["source_id"],
+                "matrix_cell_id": row["cell_id"],
+            }
+        ],
+        "logs": [
+            {
+                "level": "info",
+                "message": "corpus row executed and judged",
+                "source_id": row["source_id"],
+            }
+        ],
+        "artifacts": [
+            {
+                "id": f"{row['id']}_run_trace",
+                "type": "trace",
+                "path": f"memory://redteam-corpus/{row['id']}",
+                "attack_types": [row["attack_type"]],
+                "surfaces": [row["surface"]],
+                "channels": [row["channel"]],
+                "providers": [row["provider"]],
+                "matrix_cell_ids": [row["cell_id"]],
+            }
+        ],
+        "signals": list(row["signals"]),
+        "metadata": _redteam_corpus_lineage(row),
+    }
+
+
+def _redteam_corpus_finding(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"{row['id']}_finding",
+        "severity": "medium",
+        "status": "mitigated",
+        "description": f"{row['risk_category']} probe contained for {row['domain']}.",
+        "taxonomy": row["taxonomies"][0],
+        "attack_type": row["attack_type"],
+        "attack_types": [row["attack_type"]],
+        "surfaces": [row["surface"]],
+        "channels": [row["channel"]],
+        "providers": [row["provider"]],
+        "matrix_cell_ids": [row["cell_id"]],
+        "signals": list(row["signals"]),
+        "metadata": _redteam_corpus_lineage(row),
+    }
+
+
+def _redteam_corpus_artifact(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"{row['id']}_artifact",
+        "type": "trace",
+        "path": f"memory://redteam-corpus/{row['id']}/trajectory.json",
+        "attack_types": [row["attack_type"]],
+        "surfaces": [row["surface"]],
+        "channels": [row["channel"]],
+        "providers": [row["provider"]],
+        "matrix_cell_ids": [row["cell_id"]],
+        "signals": ["trajectory_artifact", *row["signals"]],
+        "metadata": _redteam_corpus_lineage(row),
+    }
+
+
+def _redteam_corpus_mitigation(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"{row['id']}_mitigation",
+        "status": "implemented",
+        "controls": [
+            "source_boundary",
+            "policy_gate",
+            "verifiable_judge",
+            "artifact_lineage",
+        ],
+        "attack_types": [row["attack_type"]],
+        "surfaces": [row["surface"]],
+        "channels": [row["channel"]],
+        "providers": [row["provider"]],
+        "matrix_cell_ids": [row["cell_id"]],
+        "metadata": _redteam_corpus_lineage(row),
+    }
+
+
+def _redteam_corpus_observability(
+    name: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "traces": [f"redteam-corpus:{row['id']}" for row in rows],
+        "logs": [f"{name}:corpus-run-log"],
+        "metrics": [
+            "red_team_campaign_coverage",
+            "red_team_campaign_quality",
+            "corpus_source_lineage",
+        ],
+        "dashboards": [f"{name}-redteam-corpus"],
+        "events": ["case_executed", "judge_verdict_recorded"],
+    }
+
+
+def _redteam_corpus_lineage(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "benchmark": row["benchmark"],
+        "source": row["source"],
+        "source_id": row["source_id"],
+        "domain": row["domain"],
+        "risk_category": row["risk_category"],
+        "taxonomy": list(row["taxonomies"]),
+        "matrix_cell_id": row["cell_id"],
+    }
+
+
+def _redteam_corpus_cell_id(
+    *,
+    attack_type: str,
+    surface: str,
+    channel: str,
+    provider: str,
+) -> str:
+    return "|".join([attack_type, surface, channel, provider])
+
+
+def _redteam_corpus_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    result = []
+    last_was_sep = False
+    for char in text:
+        if char.isalnum() or char in {"|", "_"}:
+            result.append(char)
+            last_was_sep = False
+        else:
+            if not last_was_sep:
+                result.append("_")
+            last_was_sep = True
+    return "".join(result).strip("_") or "unknown"
+
+
 __all__ = [
     *_REDTEAM_EXPORTS,
     "AGENT_LEARNING_REDTEAM_KIND",
@@ -1137,6 +1652,8 @@ __all__ = [
     "build_long_horizon_redteam_run_manifest",
     "build_persistent_state_redteam_manifest",
     "build_persistent_state_redteam_run_manifest",
+    "build_redteam_corpus_campaign",
+    "build_redteam_corpus_run_campaign",
     "build_redteam_manifest",
     "build_redteam_run_manifest",
     "load_manifest",

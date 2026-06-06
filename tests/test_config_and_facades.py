@@ -128,10 +128,13 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.write_manifest_file is not None
     assert simulate.build_agent_integration_run_manifest is not None
     assert simulate.build_workspace_observability_run_manifest is not None
+    assert simulate.build_redteam_corpus_run_manifest is not None
+    assert simulate.build_redteam_corpus_environments is not None
     assert redteam.redteam_manifest_file is not None
     assert redteam.prepare_redteam_manifest is not None
     assert redteam.build_redteam_manifest is not None
     assert redteam.build_redteam_run_manifest is redteam.build_redteam_manifest
+    assert redteam.build_redteam_corpus_campaign is not None
     assert redteam.RedTeamCampaignEnvironment is fi_simulate.RedTeamCampaignEnvironment
     assert redteam.RedTeamReadinessEnvironment is (
         fi_simulate.RedTeamReadinessEnvironment
@@ -181,6 +184,8 @@ def test_facades_expose_unified_agent_learning_modules():
         is not None
     )
     assert optimize.optimize_redteam_readiness_certification is not None
+    assert optimize.build_redteam_corpus_optimization_manifest is not None
+    assert optimize.optimize_redteam_corpus is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -7951,6 +7956,126 @@ def test_sdk_redteam_readiness_certification_optimization_example_runs(
     } == {
         "tool_coverage": 1.0,
         "red_team_readiness": 1.0,
+    }
+
+
+def test_sdk_redteam_corpus_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_CORPUS_KEY",
+        "real-local-sdk-redteam-corpus-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_redteam_corpus_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_corpus_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_REDTEAM_CORPUS_KEY"]
+    metadata = manifest["optimization"]["target"]["metadata"]
+    assert metadata["task_kind"] == "redteam_corpus_import"
+    assert {item["year"] for item in metadata["research_sources"]} == {2026}
+    assert {
+        item["url"] for item in metadata["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2601.03699",
+        "https://arxiv.org/abs/2605.04808",
+        "https://arxiv.org/abs/2605.09684",
+        "https://arxiv.org/abs/2605.17075",
+        "https://arxiv.org/abs/2601.13518",
+    }
+    assert manifest["optimization"]["scoring"]["layers"] == ["red_team_campaign"]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    weak_summary = candidates[0][0]["data"]["summary"]
+    verified_summary = candidates[-1][0]["data"]["summary"]
+    assert weak_summary["missing_required_attack_types"] == ["monitor_evasion"]
+    assert weak_summary["missing_required_surfaces"] == ["environment"]
+    assert weak_summary["missing_coverage_cells"]
+    assert verified_summary["observed_taxonomies"] == [
+        "dtap_2026",
+        "monitoringbench_2026",
+        "redbench_2026",
+        "soar_2026",
+    ]
+    assert verified_summary["coverage_cell_count"] == 4
+    assert verified_summary["covered_cell_count"] == 4
+    assert verified_summary["executed_cell_count"] == 4
+    assert verified_summary["missing_coverage_cells"] == []
+    assert verified_summary["missing_executed_cells"] == []
+    assert verified_summary["missing_run_artifact_cells"] == []
+    assert verified_summary["missing_mitigation_cells"] == []
+    assert verified_summary["unmapped_findings"] == []
+
+    output_path = tmp_path / "sdk-redteam-corpus-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert min(item["score"] for item in result["optimization"]["history"]) < 1.0
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) in (set(), {"simulation.environments"})
+    for metric in (
+        "red_team_campaign_coverage",
+        "red_team_campaign_quality",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"red_team_campaign"}
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 4
+    assert campaign_summary["coverage_cell_count"] == 4
+    assert campaign_summary["covered_cell_count"] == 4
+    assert campaign_summary["executed_cell_count"] == 4
+    assert campaign_summary["artifact_count"] == 8
+    assert campaign_summary["mitigation_count"] == 4
+    assert campaign_summary["open_high_finding_count"] == 0
+    assert campaign_summary["failed_run_count"] == 0
+    assert campaign_summary["missing_required_taxonomies"] == []
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+    assert campaign_summary["missing_run_artifact_cells"] == []
+    assert campaign_summary["missing_mitigation_cells"] == []
+    assert campaign_summary["unmapped_findings"] == []
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "red_team_campaign": 1.0,
     }
 
 

@@ -12,6 +12,7 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "agent_integration": 3.0,
     "framework_trace": 2.0,
     "framework_import": 2.0,
+    "red_team_campaign": 3.0,
     "red_team_readiness": 3.0,
     "runtime_semantics": 1.0,
     "world_contract": 3.0,
@@ -97,6 +98,15 @@ def score_simulation_evidence(
     if _should_score("red_team_readiness", layers, env_states, cfg):
         components.append(
             _score_red_team_readiness(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
+    if _should_score("red_team_campaign", layers, env_states, cfg):
+        components.append(
+            _score_red_team_campaign(
                 env_states,
                 cfg=cfg,
                 manifest_config=manifest_config,
@@ -578,6 +588,90 @@ def _score_red_team_readiness(
     }
 
 
+def _score_red_team_campaign(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "red_team_campaign")
+    if not payload:
+        return _missing_component(
+            "red_team_campaign",
+            "No red_team_campaign environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("red_team_campaign_quality"),
+        manifest_config.get("red_team_campaign_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    signals = {_norm(item) for item in _as_list(payload.get("signals")) if _norm(item)}
+    observed = _red_team_campaign_observed(summary, signals)
+    required_campaign = {
+        _norm(item)
+        for item in _configured_list(
+            "required_red_team_campaign",
+            cfg,
+            manifest_config,
+        )
+        if _norm(item)
+    }
+    coverage_matched = sorted(required_campaign & observed)
+    coverage_missing = sorted(required_campaign - observed)
+    coverage_score = (
+        len(coverage_matched) / len(required_campaign)
+        if required_campaign
+        else (1.0 if observed else 0.0)
+    )
+
+    checks: list[dict[str, Any]] = []
+    _append_red_team_campaign_count_checks(checks, summary, quality)
+    _append_red_team_campaign_limit_checks(checks, summary, quality)
+    _append_red_team_campaign_boolean_checks(checks, summary, quality)
+    _append_red_team_campaign_required_checks(checks, summary, quality)
+    _append_red_team_campaign_matrix_checks(checks, summary, quality)
+    quality_score = (
+        sum(1 for check in checks if check["match"]) / len(checks)
+        if checks
+        else 1.0
+    )
+    blocking_gaps = {
+        "coverage_missing": coverage_missing,
+        "missing_required_taxonomies": _as_list(summary.get("missing_required_taxonomies")),
+        "missing_required_attack_types": _as_list(summary.get("missing_required_attack_types")),
+        "missing_required_surfaces": _as_list(summary.get("missing_required_surfaces")),
+        "missing_required_channels": _as_list(summary.get("missing_required_channels")),
+        "missing_required_providers": _as_list(summary.get("missing_required_providers")),
+        "missing_coverage_cells": _as_list(summary.get("missing_coverage_cells")),
+        "missing_run_artifact_cells": _as_list(summary.get("missing_run_artifact_cells")),
+        "missing_executed_cells": _as_list(summary.get("missing_executed_cells")),
+        "unmapped_findings": _as_list(summary.get("unmapped_findings")),
+        "missing_mitigation_cells": _as_list(summary.get("missing_mitigation_cells")),
+        "failed_runs": _as_list(summary.get("failed_runs")),
+        "open_high_findings": _as_list(summary.get("open_high_findings")),
+    }
+    gap_count = sum(len(values) for values in blocking_gaps.values())
+    gap_score = 1.0 if gap_count == 0 else 0.0
+    score = round(0.35 * coverage_score + 0.45 * quality_score + 0.20 * gap_score, 4)
+    return {
+        "name": "red_team_campaign",
+        "score": score,
+        "reason": (
+            "red-team campaign evidence is complete and gap-free"
+            if score >= 0.99
+            else "red-team campaign evidence incomplete"
+        ),
+        "details": {
+            "matched_required": coverage_matched,
+            "missing_required": coverage_missing,
+            "checks": checks,
+            "blocking_gaps": blocking_gaps,
+            "summary": copy.deepcopy(summary),
+        },
+    }
+
+
 def _score_world_contract(
     env_states: Sequence[Mapping[str, Any]],
     *,
@@ -842,6 +936,16 @@ def _should_score(
             "byo_framework",
             "byo_framework_import",
         },
+        "red_team_campaign": {
+            "red_team_campaign",
+            "redteam_campaign",
+            "campaign",
+            "benchmark",
+            "corpus",
+            "red_team",
+            "redteam",
+            "security",
+        },
         "red_team_readiness": {
             "red_team_readiness",
             "redteam_readiness",
@@ -881,6 +985,12 @@ def _should_score(
             "red_team_readiness" in keys
             or bool(cfg.get("red_team_readiness_quality"))
             or bool(cfg.get("required_red_team_readiness"))
+        )
+    if layer == "red_team_campaign":
+        return (
+            "red_team_campaign" in keys
+            or bool(cfg.get("red_team_campaign_quality"))
+            or bool(cfg.get("required_red_team_campaign"))
         )
     if layer == "world":
         return "world_contract" in keys
@@ -1391,6 +1501,298 @@ def _red_team_readiness_observed(
     if summary:
         observed.update({"red_team_readiness", "readiness", "preflight", "gate"})
     return {item for item in observed if item}
+
+
+def _red_team_campaign_observed(
+    summary: Mapping[str, Any],
+    signals: set[str],
+) -> set[str]:
+    observed = set(signals)
+    for key in (
+        "observed_taxonomies",
+        "observed_attack_types",
+        "observed_surfaces",
+        "observed_channels",
+        "observed_providers",
+        "frameworks",
+        "artifact_types",
+    ):
+        observed.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+    for boolean_key, signal in (
+        ("has_target", "target"),
+        ("attack_pack_count", "attack_pack"),
+        ("scenario_count", "scenario"),
+        ("run_count", "run"),
+        ("finding_count", "finding"),
+        ("artifact_count", "artifact"),
+        ("mitigation_count", "mitigation"),
+        ("observability_hook_count", "observability"),
+        ("coverage_cell_count", "coverage_matrix"),
+        ("executed_cell_count", "executed_evidence"),
+        ("mitigation_bound_cell_count", "mitigation_mapping"),
+    ):
+        if summary.get(boolean_key):
+            observed.add(signal)
+    if summary:
+        observed.update({"red_team_campaign", "red_team", "adversarial"})
+    return {item for item in observed if item}
+
+
+def _append_red_team_campaign_count_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for field, summary_key in [
+        ("min_attack_pack_count", "attack_pack_count"),
+        ("min_attack_count", "attack_count"),
+        ("min_scenario_count", "scenario_count"),
+        ("min_multi_turn_scenarios", "multi_turn_scenario_count"),
+        ("min_run_count", "run_count"),
+        ("min_passed_runs", "passed_run_count"),
+        ("min_artifact_count", "artifact_count"),
+        ("min_mitigation_count", "mitigation_count"),
+        ("min_observability_hooks", "observability_hook_count"),
+    ]:
+        minimum = _int_or_none(quality.get(field))
+        if minimum is None:
+            continue
+        actual = _int_or_none(summary.get(summary_key)) or 0
+        _append_red_team_campaign_check(
+            checks,
+            check=field,
+            expected=minimum,
+            actual=actual,
+            match=actual >= minimum,
+        )
+
+
+def _append_red_team_campaign_limit_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for field, summary_key in [
+        ("max_failed_runs", "failed_run_count"),
+        ("max_open_high_findings", "open_high_finding_count"),
+    ]:
+        maximum = _int_or_none(quality.get(field))
+        if maximum is None:
+            continue
+        actual = _int_or_none(summary.get(summary_key)) or 0
+        _append_red_team_campaign_check(
+            checks,
+            check=field,
+            expected=maximum,
+            actual=actual,
+            match=actual <= maximum,
+        )
+
+
+def _append_red_team_campaign_boolean_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for field, summary_key in [
+        ("require_target", "has_target"),
+        ("require_multi_turn", "has_multi_turn"),
+        ("require_artifacts", "has_artifacts"),
+        ("require_mitigations", "has_mitigations"),
+        ("require_observability", "has_observability"),
+    ]:
+        if quality.get(field) is None:
+            continue
+        expected = bool(quality.get(field))
+        actual = _red_team_campaign_summary_bool(summary, summary_key)
+        _append_red_team_campaign_check(
+            checks,
+            check=field,
+            expected=expected,
+            actual=actual,
+            match=actual is expected,
+        )
+
+
+def _append_red_team_campaign_required_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    for field, summary_key, check_name in [
+        ("required_taxonomies", "observed_taxonomies", "required_taxonomy"),
+        ("taxonomies", "observed_taxonomies", "required_taxonomy"),
+        ("required_attack_types", "observed_attack_types", "required_attack_type"),
+        ("attack_types", "observed_attack_types", "required_attack_type"),
+        ("required_surfaces", "observed_surfaces", "required_surface"),
+        ("surfaces", "observed_surfaces", "required_surface"),
+        ("required_channels", "observed_channels", "required_channel"),
+        ("channels", "observed_channels", "required_channel"),
+        ("required_providers", "observed_providers", "required_provider"),
+        ("providers", "observed_providers", "required_provider"),
+        ("required_frameworks", "frameworks", "required_framework"),
+        ("frameworks", "frameworks", "required_framework"),
+    ]:
+        values = {_norm(item) for item in _as_list(quality.get(field)) if _norm(item)}
+        if not values:
+            continue
+        observed = {_norm(item) for item in _as_list(summary.get(summary_key)) if _norm(item)}
+        for item in sorted(values):
+            _append_red_team_campaign_check(
+                checks,
+                check=check_name,
+                expected=item,
+                actual=sorted(observed),
+                match=item in observed,
+            )
+
+
+def _append_red_team_campaign_matrix_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+) -> None:
+    matrix_required = quality.get("require_attack_surface_matrix")
+    if matrix_required is None:
+        matrix_required = quality.get("require_coverage_matrix")
+    if matrix_required is not None:
+        missing = _red_team_campaign_cell_list(
+            summary,
+            "missing_coverage_cells",
+            "missing_attack_matrix_cells",
+        )
+        _append_red_team_campaign_check(
+            checks,
+            check="require_attack_surface_matrix",
+            expected=bool(matrix_required),
+            actual=missing,
+            match=(not missing) is bool(matrix_required),
+        )
+    for field, summary_keys in [
+        ("require_run_artifacts", ("missing_run_artifact_cells", "runs_without_artifacts")),
+        ("require_executed_run_evidence", ("missing_executed_cells", "cells_without_executed_evidence")),
+        ("require_mitigation_mapping", ("missing_mitigation_cells", "orphan_mitigations")),
+    ]:
+        if quality.get(field) is None:
+            continue
+        missing = _red_team_campaign_cell_list(summary, *summary_keys)
+        _append_red_team_campaign_check(
+            checks,
+            check=field,
+            expected=bool(quality.get(field)),
+            actual=missing,
+            match=(not missing) is bool(quality.get(field)),
+        )
+    if quality.get("require_finding_mapping") is not None:
+        unmapped = [
+            item
+            for item in _as_list(summary.get("unmapped_findings"))
+            if _as_mapping(item)
+        ]
+        _append_red_team_campaign_check(
+            checks,
+            check="require_finding_mapping",
+            expected=bool(quality.get("require_finding_mapping")),
+            actual=unmapped,
+            match=(not unmapped) is bool(quality.get("require_finding_mapping")),
+        )
+
+    observed_cells = {
+        _red_team_campaign_cell_id(cell)
+        for cell in _red_team_campaign_cell_list(
+            summary,
+            "coverage_matrix",
+            "observed_attack_matrix_cells",
+        )
+        if _red_team_campaign_cell_id(cell)
+    }
+    missing_cells = {
+        _red_team_campaign_cell_id(cell)
+        for cell in _red_team_campaign_cell_list(
+            summary,
+            "missing_coverage_cells",
+            "missing_attack_matrix_cells",
+        )
+        if _red_team_campaign_cell_id(cell)
+    }
+    for item in _as_list(quality.get("required_attack_matrix_cells")):
+        expected = _red_team_campaign_cell_id(item)
+        if not expected:
+            continue
+        _append_red_team_campaign_check(
+            checks,
+            check="required_attack_matrix_cell",
+            expected=expected,
+            actual=sorted(observed_cells - missing_cells),
+            match=expected in observed_cells and expected not in missing_cells,
+        )
+
+
+def _append_red_team_campaign_check(
+    checks: list[dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": bool(match),
+        }
+    )
+
+
+def _red_team_campaign_cell_list(
+    summary: Mapping[str, Any],
+    *keys: str,
+) -> list[dict[str, Any]]:
+    cells: list[dict[str, Any]] = []
+    for key in keys:
+        for item in _as_list(summary.get(key)):
+            mapped = _as_mapping(item)
+            if mapped:
+                cells.append(mapped)
+    return cells
+
+
+def _red_team_campaign_cell_id(value: Any) -> str:
+    if isinstance(value, Mapping):
+        cell = _as_mapping(value)
+        explicit = _norm(
+            cell.get("id")
+            or cell.get("matrix_cell_id")
+            or cell.get("coverage_cell_id")
+            or cell.get("cell_id")
+        )
+        if explicit:
+            return explicit
+        parts = [
+            _norm(cell.get("attack_type")),
+            _norm(cell.get("surface")),
+            _norm(cell.get("channel")),
+            _norm(cell.get("provider")),
+        ]
+        return "|".join(parts) if all(parts) else ""
+    return _norm(value)
+
+
+def _red_team_campaign_summary_bool(summary: Mapping[str, Any], key: str) -> bool:
+    if key in summary:
+        return bool(summary.get(key))
+    fallback_counts = {
+        "has_multi_turn": "multi_turn_scenario_count",
+        "has_artifacts": "artifact_count",
+        "has_mitigations": "mitigation_count",
+        "has_observability": "observability_hook_count",
+    }
+    count_key = fallback_counts.get(key)
+    if count_key:
+        return (_int_or_none(summary.get(count_key)) or 0) > 0
+    return False
 
 
 def _append_red_team_readiness_count_checks(

@@ -1359,6 +1359,218 @@ def optimize_redteam_readiness_certification(
     )
 
 
+def build_redteam_corpus_optimization_manifest(
+    *,
+    name: str = "redteam-corpus-optimization",
+    corpus_rows: Sequence[Mapping[str, Any]],
+    target: Optional[Mapping[str, Any]] = None,
+    frameworks: Sequence[str] = ("agent_learning_kit",),
+    required_taxonomies: Sequence[str] = (),
+    required_attack_types: Sequence[str] = (),
+    required_surfaces: Sequence[str] = (),
+    required_channels: Sequence[str] = (),
+    required_providers: Sequence[str] = (),
+    observability: Optional[Mapping[str, Any]] = None,
+    corpus_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build an AgentOptimizer search over benchmark-backed red-team corpus import."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not corpus_rows:
+        raise ValueError("corpus_rows must contain at least one row")
+
+    from . import simulate as _agent_simulate
+
+    run_manifest = _agent_simulate.build_redteam_corpus_run_manifest(
+        name=name,
+        corpus_rows=corpus_rows,
+        target=target,
+        frameworks=frameworks,
+        required_taxonomies=required_taxonomies,
+        required_attack_types=required_attack_types,
+        required_surfaces=required_surfaces,
+        required_channels=required_channels,
+        required_providers=required_providers,
+        observability=observability,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+    )
+    verified_candidate = copy.deepcopy(run_manifest["simulation"]["environments"])
+    verified_campaign = verified_candidate[0]["data"]
+    verified_summary = copy.deepcopy(dict(verified_campaign.get("summary") or {}))
+    candidate_row_sets = (
+        [
+            [copy.deepcopy(dict(row)) for row in candidate]
+            for candidate in corpus_candidates
+        ]
+        if corpus_candidates is not None
+        else _default_redteam_corpus_candidate_rows(corpus_rows)
+    )
+    if not candidate_row_sets:
+        raise ValueError("corpus_candidates must contain at least one candidate")
+
+    required_taxonomy_values = _unique_strings(
+        required_taxonomies or verified_summary.get("observed_taxonomies") or []
+    )
+    required_attack_values = _unique_strings(
+        required_attack_types or verified_summary.get("observed_attack_types") or []
+    )
+    required_surface_values = _unique_strings(
+        required_surfaces or verified_summary.get("observed_surfaces") or []
+    )
+    required_channel_values = _unique_strings(
+        required_channels or verified_summary.get("observed_channels") or []
+    )
+    required_provider_values = _unique_strings(
+        required_providers or verified_summary.get("observed_providers") or []
+    )
+    environment_candidates = [
+        _agent_simulate.build_redteam_corpus_environments(
+            name=name,
+            corpus_rows=candidate,
+            target=target,
+            frameworks=frameworks,
+            required_taxonomies=required_taxonomy_values,
+            required_attack_types=required_attack_values,
+            required_surfaces=required_surface_values,
+            required_channels=required_channel_values,
+            required_providers=required_provider_values,
+            observability=observability,
+            metadata=target_metadata,
+        )
+        for candidate in candidate_row_sets
+    ]
+    if not environment_candidates:
+        raise ValueError("corpus_candidates must contain at least one candidate")
+
+    search_space = {"simulation.environments": environment_candidates}
+    eval_config = copy.deepcopy(
+        run_manifest["evaluation"]["agent_report"]["config"]
+    )
+    manifest = {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": str(name),
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(run_manifest["scenario"]),
+        "agent": copy.deepcopy(run_manifest["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(run_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(verified_candidate),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": str(name),
+                "layers": [
+                    "security",
+                    "environment",
+                    "harness",
+                    "evaluator",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(verified_candidate)
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_redteam_corpus_optimization_manifest"
+                    ),
+                    "cookbook": "redteam-corpus-optimization",
+                    "task_kind": "redteam_corpus_import",
+                    "research_sources": _unique_research_sources(
+                        [
+                            *run_manifest.get("metadata", {}).get(
+                                "research_sources",
+                                [],
+                            ),
+                            *[dict(item) for item in research_sources],
+                        ]
+                    ),
+                    "original_synthesis": (
+                        "Benchmark import is an optimization target, not a "
+                        "static file load: weak corpora expose missing "
+                        "taxonomy/source/matrix evidence, while verified "
+                        "candidates must close source lineage, trajectories, "
+                        "artifacts, findings, mitigations, observability, and "
+                        "judge evidence."
+                    ),
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["red_team_campaign"],
+        "required_tools": eval_config.get("required_tools", []),
+        "required_red_team_campaign": eval_config.get(
+            "required_red_team_campaign",
+            [],
+        ),
+        "red_team_campaign_quality": eval_config.get(
+            "red_team_campaign_quality",
+            {},
+        ),
+        "weights": {"red_team_campaign": 10.0, "tool_coverage": 2.0},
+    }
+    return manifest
+
+
+def optimize_redteam_corpus(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute benchmark-backed red-team corpus optimization."""
+
+    manifest = build_redteam_corpus_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_orchestration_optimization_manifest(
     *,
     name: str,
@@ -9272,6 +9484,23 @@ def _default_redteam_scenario(name: str) -> dict[str, Any]:
     }
 
 
+def _default_redteam_corpus_candidate_rows(
+    corpus_rows: Sequence[Mapping[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    rows = [copy.deepcopy(dict(row)) for row in corpus_rows]
+    if not rows:
+        raise ValueError("corpus_rows must contain at least one row")
+    if len(rows) == 1:
+        return [rows]
+    partial_count = max(2, len(rows) // 2)
+    partial_count = min(partial_count, len(rows))
+    return [
+        rows[:1],
+        rows[:partial_count],
+        rows,
+    ]
+
+
 def _default_redteam_autogen_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -15156,6 +15385,7 @@ __all__ = [
     "build_report_repair_optimization_manifest",
     "build_redteam_autogen_optimization_manifest",
     "build_redteam_causal_attribution_optimization_manifest",
+    "build_redteam_corpus_optimization_manifest",
     "build_redteam_optimization_manifest",
     "build_redteam_readiness_certification_optimization_manifest",
     "build_redteam_society_optimization_manifest",
@@ -15194,6 +15424,7 @@ __all__ = [
     "optimize_report_repair",
     "optimize_redteam_autogen",
     "optimize_redteam_causal_attribution",
+    "optimize_redteam_corpus",
     "optimize_redteam_campaign",
     "optimize_redteam_readiness_certification",
     "optimize_redteam_society",

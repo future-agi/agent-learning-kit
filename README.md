@@ -901,6 +901,19 @@ runtime trust, controllable environment, autonomous red-team, and stored prompt
 injection research as input, then adds our own zero-blocking-gap Future AGI
 certification contract.
 
+`redteam.build_redteam_corpus_campaign()`,
+`simulate.build_redteam_corpus_run_manifest()`, and
+`optimize.build_redteam_corpus_optimization_manifest()` add benchmark/corpus
+red-team import inside the same SDK. Rows from RedBench/HarmBench/
+JailbreakBench/DTap-style datasets become normalized `red_team_campaign`
+evidence with taxonomy, domain, source lineage, trajectories, findings,
+artifacts, mitigations, observability, and verifiable-judge metadata. The
+optimizer searches weak/partial/verified corpus candidates as
+`simulation.environments` and scores the campaign directly with deterministic
+`simulation_evidence`, so missing taxonomy/source/matrix evidence becomes an
+optimizer diagnosis rather than a silent prompt-list gap. See
+`examples/sdk_redteam_corpus_optimization.py`.
+
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It
 optimizes the Future AGI UI/control-plane evidence loop: repository checkout,
