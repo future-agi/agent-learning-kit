@@ -3944,6 +3944,9 @@ def optimize_manifest_file(
     )
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
+    from . import optimize as _agent_optimize
+
+    payload = _agent_optimize.with_framework_runtime_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -3968,6 +3971,9 @@ def optimize_manifest(
     )
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
+    from . import optimize as _agent_optimize
+
+    payload = _agent_optimize.with_framework_runtime_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 

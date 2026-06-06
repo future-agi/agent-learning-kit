@@ -23,6 +23,9 @@ AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
 AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
     "agent-learning.optimization.framework-certification-proof.v1"
 )
+AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND = (
+    "agent-learning.optimization.framework-runtime-proof.v1"
+)
 AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND = (
     "agent-learning.optimization.memory-lineage-proof.v1"
 )
@@ -349,6 +352,7 @@ def optimize_manifest_file(
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
     payload = with_redteam_campaign_proof(payload)
+    payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_memory_lineage_proof(payload)
@@ -379,6 +383,7 @@ def optimize_manifest(
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
     payload = with_redteam_campaign_proof(payload)
+    payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_memory_lineage_proof(payload)
@@ -444,6 +449,34 @@ def with_redteam_campaign_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
         proof["failed_check_ids"]
     )
     summary["redteam_campaign_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_framework_runtime_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for runnable framework optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_framework_runtime_optimization(result, optimization):
+        return result
+
+    proof = _framework_runtime_proof(result, optimization)
+    result["framework_runtime_proof"] = proof
+    optimization["framework_runtime_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["framework_runtime_proof_status"] = proof["status"]
+    summary["framework_runtime_proof_passed"] = proof["passed"]
+    summary["framework_runtime_proof_assurance_level"] = proof["assurance_level"]
+    summary["framework_runtime_proof_check_count"] = proof["check_count"]
+    summary["framework_runtime_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["framework_runtime_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -2850,6 +2883,326 @@ def _world_hook_proof(
                 )
                 if key in selected_metrics
             },
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _framework_runtime_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    agent = _plain_mapping(best_config.get("agent"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    patch_paths = sorted(str(path) for path in selected_patch)
+    report_state = _selected_report_environment_state(selected_history)
+
+    runtime_state = _plain_mapping(report_state.get("framework_runtime"))
+    runtime_summary = _plain_mapping(runtime_state.get("summary"))
+    framework_trace = _plain_mapping(report_state.get("framework_trace"))
+    adapter_conformance = _plain_mapping(framework_trace.get("adapter_conformance"))
+    spans = [
+        _plain_mapping(item)
+        for item in _plain_list(framework_trace.get("spans"))
+        if _plain_mapping(item)
+    ]
+    span_tool_calls = [
+        _plain_mapping(call)
+        for span in spans
+        for call in _plain_list(span.get("tool_calls"))
+        if _plain_mapping(call)
+    ]
+    span_tool_names = _unique_strings(
+        [
+            *(span.get("tool_name") for span in spans),
+            *(call.get("name") for call in span_tool_calls),
+        ]
+    )
+
+    framework = str(agent.get("framework") or "")
+    target = str(agent.get("target") or "")
+    method = str(agent.get("method") or "")
+    input_mode = str(agent.get("input_mode") or "")
+    target_scheme = urlparse(target).scheme.lower()
+    local_target = bool(target) and target_scheme not in {"http", "https"}
+
+    observed_signals = set(_unique_strings(adapter_conformance.get("observed_signals")))
+    required_signals = set(_unique_strings(adapter_conformance.get("required_signals")))
+    findings = _plain_list(adapter_conformance.get("findings"))
+    required_mappings = _plain_mapping(adapter_conformance.get("required_mappings"))
+    required_tool_mapping = _unique_strings(required_mappings.get("tool"))
+    tool_mapping_closed = "tool_name" in required_tool_mapping or bool(span_tool_calls)
+
+    metric_thresholds = {
+        "framework_runtime_contract": 1.0,
+        "framework_runtime_coverage": 1.0,
+        "framework_trace_coverage": 1.0,
+        "tool_selection_accuracy": 1.0,
+    }
+    selected_metric_evidence = {
+        key: selected_metrics.get(key)
+        for key in metric_thresholds
+        if key in selected_metrics
+    }
+
+    optimizer_trace = _plain_mapping(optimization.get("optimizer_trace"))
+    trace_summary = _plain_mapping(optimizer_trace.get("summary"))
+    governance = _plain_mapping(optimizer_trace.get("governance"))
+    governance_summary = _plain_mapping(governance.get("summary"))
+    social_trace_present = optimizer_trace.get("kind") == "optimizer_society_trace"
+    social_governance_passed = not social_trace_present or (
+        trace_summary.get("has_governance") is True
+        and trace_summary.get("has_contract_gate") is True
+        and trace_summary.get("has_locality") is True
+        and trace_summary.get("has_rollback") is True
+        and trace_summary.get("has_role_diversity") is True
+        and _as_float(trace_summary.get("governance_pass_rate")) >= 1.0
+        and governance_summary.get("has_governance") is True
+        and governance_summary.get("has_contract_gate") is True
+        and governance_summary.get("has_locality") is True
+        and governance_summary.get("has_rollback") is True
+        and governance_summary.get("has_role_diversity") is True
+        and _as_float(governance_summary.get("governance_pass_rate")) >= 1.0
+        and str(optimizer_trace.get("best_candidate_id") or "")
+        == str(
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+            or ""
+        )
+    )
+
+    summary = _plain_mapping(payload.get("summary"))
+    selected_candidate_id = str(
+        optimization.get("best_candidate_id")
+        or summary.get("best_candidate_id")
+        or ""
+    )
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    score_threshold = (
+        _as_float(summary.get("threshold"))
+        or _as_float(source_manifest.get("threshold"))
+        or 0.9
+    )
+    selected_score = _as_float(selected_history.get("score"))
+    score_delta = _as_float(summary.get("candidate_lineage_selected_score_delta"))
+    candidate_lineage_count = _as_int(summary.get("candidate_lineage_count"))
+
+    forbidden_keys = {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+    checks = [
+        _proof_check(
+            "native_no_external_framework_runtime_dependency",
+            passed=not _contains_nested_keys(best_config, forbidden_keys),
+            required=True,
+            reason=(
+                "selected framework runtime candidate is local and has no "
+                "endpoint/auth/key dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(best_config, forbidden_keys)
+                ),
+            },
+        ),
+        _proof_check(
+            "framework_adapter_target_local_closed",
+            passed=_scope_key(agent.get("type")) == "framework"
+            and bool(framework)
+            and bool(method)
+            and bool(input_mode)
+            and local_target
+            and agent.get("trace_runtime") is True,
+            required=True,
+            reason=(
+                "selected adapter is a local framework fixture with method, "
+                "input-mode, target, and runtime tracing enabled"
+            ),
+            evidence={
+                "agent_type": agent.get("type"),
+                "framework": framework,
+                "target": target,
+                "target_scheme": target_scheme,
+                "method": method,
+                "input_mode": input_mode,
+                "trace_runtime": agent.get("trace_runtime"),
+            },
+        ),
+        _proof_check(
+            "framework_runtime_evidence_present",
+            passed=bool(runtime_summary)
+            and _as_int(runtime_summary.get("invocation_count")) > 0
+            and _as_int(runtime_summary.get("error_count")) == 0
+            and _as_int(runtime_summary.get("tool_call_count")) > 0,
+            required=True,
+            reason=(
+                "selected report carries framework runtime invocations, zero "
+                "runtime errors, and tool-call evidence"
+            ),
+            evidence={
+                "runtime_summary": copy.deepcopy(runtime_summary),
+            },
+        ),
+        _proof_check(
+            "runtime_contract_matches_selected_adapter",
+            passed=str(runtime_summary.get("framework") or "") == framework
+            and method in _unique_strings(runtime_summary.get("methods"))
+            and input_mode in _unique_strings(runtime_summary.get("input_modes"))
+            and bool(_unique_strings(runtime_summary.get("output_types"))),
+            required=True,
+            reason=(
+                "runtime summary matches the selected framework, method, and "
+                "input-mode contract"
+            ),
+            evidence={
+                "runtime_framework": runtime_summary.get("framework"),
+                "runtime_methods": runtime_summary.get("methods"),
+                "runtime_input_modes": runtime_summary.get("input_modes"),
+                "runtime_output_types": runtime_summary.get("output_types"),
+            },
+        ),
+        _proof_check(
+            "framework_trace_conformance_closed",
+            passed=bool(framework_trace)
+            and bool(spans)
+            and adapter_conformance.get("passed") is True
+            and _as_float(adapter_conformance.get("score")) >= 1.0
+            and bool(required_signals)
+            and required_signals.issubset(observed_signals)
+            and not findings,
+            required=True,
+            reason=(
+                "framework trace spans satisfy adapter conformance with required "
+                "signals and no findings"
+            ),
+            evidence={
+                "framework": framework_trace.get("framework"),
+                "span_count": len(spans),
+                "adapter_conformance": copy.deepcopy(adapter_conformance),
+            },
+        ),
+        _proof_check(
+            "framework_trace_runtime_bridge_closed",
+            passed=str(framework_trace.get("framework") or "") == framework
+            and bool(spans)
+            and bool(span_tool_names)
+            and tool_mapping_closed
+            and _as_int(runtime_summary.get("tool_call_count")) > 0,
+            required=True,
+            reason=(
+                "runtime tool calls and trace spans are bridged through the "
+                "normalized framework_trace envelope"
+            ),
+            evidence={
+                "framework_trace_framework": framework_trace.get("framework"),
+                "span_tool_names": span_tool_names,
+                "required_tool_mapping": required_tool_mapping,
+                "runtime_tool_call_count": runtime_summary.get("tool_call_count"),
+            },
+        ),
+        _proof_check(
+            "framework_patch_surface_present",
+            passed=any(
+                path == "agent"
+                or path.startswith("agent.")
+                or path == "simulation.environments"
+                or path.startswith("simulation.environments.")
+                for path in patch_paths
+            ),
+            required=True,
+            reason=(
+                "selected candidate changes the framework adapter or runtime "
+                "trace environment, not an unrelated prompt-only surface"
+            ),
+            evidence={"selected_patch_paths": patch_paths},
+        ),
+        _proof_check(
+            "social_memory_optimizer_trace_closed",
+            passed=social_governance_passed,
+            required=True,
+            reason=(
+                "when social-memory search is used, its governance, locality, "
+                "rollback, role-diversity, and contract gate all close"
+            ),
+            evidence={
+                "social_trace_present": social_trace_present,
+                "trace_summary": copy.deepcopy(trace_summary),
+                "governance_summary": copy.deepcopy(governance_summary),
+            },
+        ),
+        _proof_check(
+            "framework_runtime_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(key)) >= threshold
+                for key, threshold in metric_thresholds.items()
+            ),
+            required=True,
+            reason=(
+                "selected report closes framework runtime, trace, and tool "
+                "metrics required for runnable adapter optimization"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+        _proof_check(
+            "framework_runtime_optimization_regression_gate_passed",
+            passed=bool(selected_candidate_id)
+            and selected_score >= score_threshold
+            and score_delta >= 0.0
+            and candidate_lineage_count >= 2,
+            required=True,
+            reason=(
+                "selected framework runtime candidate is lineaged, beats the run "
+                "threshold, and does not regress from the seed candidate"
+            ),
+            evidence={
+                "selected_candidate_id": selected_candidate_id,
+                "selected_score": selected_score,
+                "score_threshold": score_threshold,
+                "candidate_lineage_selected_score_delta": score_delta,
+                "candidate_lineage_count": candidate_lineage_count,
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_framework_runtime_verified"
+            if passed
+            else "framework_runtime_proof_failed"
+        ),
+        "selected_candidate_id": selected_candidate_id,
+        "framework": framework,
+        "target": target,
+        "method": method,
+        "input_mode": input_mode,
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "runtime_summary": copy.deepcopy(runtime_summary),
+            "adapter_conformance": copy.deepcopy(adapter_conformance),
+            "span_tool_names": span_tool_names,
+            "selected_metrics": selected_metric_evidence,
+            "selected_patch_paths": patch_paths,
+            "optimizer_trace_summary": copy.deepcopy(trace_summary),
         },
         "check_count": len(checks),
         "passed_check_count": sum(1 for check in checks if check["passed"]),
@@ -18923,6 +19276,37 @@ def _world_hook_report_environment_state(
     return _selected_report_environment_state(selected_history)
 
 
+def _is_framework_runtime_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    if _is_framework_certification_optimization(payload, optimization):
+        return False
+
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) in {
+        "framework_adapter",
+        "social_memory_framework",
+    }:
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    best_agent = _plain_mapping(best_config.get("agent"))
+    if _scope_key(best_agent.get("type")) == "framework":
+        return True
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    state_keys = set(_selected_report_environment_state(selected_history))
+    return {"framework_runtime", "framework_trace"}.issubset(state_keys)
+
+
 def _is_framework_certification_optimization(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -19403,6 +19787,7 @@ def __dir__() -> list[str]:
 __all__ = [
     *_OPTIMIZE_EXPORTS,
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
+    "AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
@@ -19504,6 +19889,7 @@ __all__ = [
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
     "with_framework_certification_proof",
+    "with_framework_runtime_proof",
     "with_memory_lineage_proof",
     "with_multi_agent_coordination_proof",
     "with_orchestration_stack_proof",

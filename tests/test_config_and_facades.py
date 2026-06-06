@@ -228,6 +228,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND == (
         "agent-learning.optimization.framework-certification-proof.v1"
     )
+    assert optimize.AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND == (
+        "agent-learning.optimization.framework-runtime-proof.v1"
+    )
     assert optimize.AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND == (
         "agent-learning.optimization.memory-lineage-proof.v1"
     )
@@ -751,10 +754,51 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert result["summary"]["optimizer_governance_status"] == "passed"
     assert result["summary"]["optimizer_governance_passed"] is True
     assert result["summary"]["optimizer_governance_failed_check_count"] == 0
+    assert result["summary"]["framework_runtime_proof_status"] == "passed"
+    assert result["summary"]["framework_runtime_proof_passed"] is True
+    assert result["summary"]["framework_runtime_proof_assurance_level"] == (
+        "l3_native_framework_runtime_verified"
+    )
+    assert result["summary"]["framework_runtime_proof_failed_check_count"] == 0
     required_checks = {check["id"]: check for check in governance["checks"]}
     assert required_checks["candidate_lineage_content_addressed"]["passed"] is True
     assert required_checks["selected_candidate_top_ranked"]["passed"] is True
     assert required_checks["metric_evidence_present"]["passed"] is True
+    proof = result["framework_runtime_proof"]
+    assert result["optimization"]["framework_runtime_proof"] == proof
+    assert proof["kind"] == optimize.AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_framework_runtime_verified"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["framework"] == "custom_refund_orchestrator"
+    assert proof["method"] == "execute_task"
+    assert proof["input_mode"] == "dict"
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_framework_runtime_dependency",
+        "framework_adapter_target_local_closed",
+        "framework_runtime_evidence_present",
+        "runtime_contract_matches_selected_adapter",
+        "framework_trace_conformance_closed",
+        "framework_trace_runtime_bridge_closed",
+        "framework_patch_surface_present",
+        "social_memory_optimizer_trace_closed",
+        "framework_runtime_metric_evidence_closed",
+        "framework_runtime_optimization_regression_gate_passed",
+    }
+    assert proof["evidence"]["runtime_summary"]["tool_call_count"] == 1
+    assert proof["evidence"]["adapter_conformance"]["passed"] is True
+    assert set(proof["evidence"]["selected_metrics"]) >= {
+        "framework_runtime_contract",
+        "framework_runtime_coverage",
+        "framework_trace_coverage",
+        "tool_selection_accuracy",
+    }
     assert "real-local-sdk-framework-opt-key" not in json.dumps(result)
     simulate_result = simulate.optimize_manifest(
         manifest,
@@ -770,6 +814,10 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
         "agent-learning.optimization.governance.v1"
     )
     assert simulate_result["summary"]["optimizer_governance_passed"] is True
+    assert simulate_result["framework_runtime_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND
+    )
+    assert simulate_result["summary"]["framework_runtime_proof_passed"] is True
     best_agent = result["optimization"]["best_config"]["agent"]
     assert best_agent["method"] == "execute_task"
     assert best_agent["input_mode"] == "dict"
@@ -837,9 +885,12 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    from agent_learning import optimize
+
+    key = "real-local-sdk-social-memory-framework-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_SOCIAL_MEMORY_FRAMEWORK_EXAMPLE_KEY",
-        "real-local-sdk-social-memory-framework-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / (
         "sdk_social_memory_framework_optimization.py"
@@ -888,8 +939,24 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     assert saved["status"] == "passed"
     assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
     assert result["summary"]["optimization_score"] >= 0.95
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["framework_runtime_proof_status"] == "passed"
+    assert result["summary"]["framework_runtime_proof_passed"] is True
+    assert result["summary"]["framework_runtime_proof_assurance_level"] == (
+        "l3_native_framework_runtime_verified"
+    )
+    assert result["summary"]["framework_runtime_proof_failed_check_count"] == 0
 
     best_agent = result["optimization"]["best_config"]["agent"]
     assert best_agent["framework"] == "custom_refund_orchestrator"
@@ -929,6 +996,47 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     assert state["framework_runtime"]["summary"]["input_modes"] == ["dict"]
     assert state["framework_runtime"]["summary"]["tool_call_count"] == 1
     assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+
+    proof = result["framework_runtime_proof"]
+    assert saved["framework_runtime_proof"] == proof
+    assert result["optimization"]["framework_runtime_proof"] == proof
+    assert proof["kind"] == optimize.AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_framework_runtime_verified"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["selected_candidate_id"] == result["summary"]["best_candidate_id"]
+    assert proof["framework"] == "custom_refund_orchestrator"
+    assert proof["method"] == "execute_task"
+    assert proof["input_mode"] == "dict"
+    assert proof["evidence"]["runtime_summary"]["invocation_count"] == 1
+    assert proof["evidence"]["runtime_summary"]["error_count"] == 0
+    assert proof["evidence"]["runtime_summary"]["tool_call_count"] == 1
+    assert proof["evidence"]["adapter_conformance"]["passed"] is True
+    assert proof["evidence"]["optimizer_trace_summary"]["has_governance"] is True
+    assert proof["evidence"]["optimizer_trace_summary"]["governance_pass_rate"] == (
+        pytest.approx(1.0)
+    )
+    checks = {check["id"]: check for check in proof["checks"]}
+    assert set(checks) == {
+        "native_no_external_framework_runtime_dependency",
+        "framework_adapter_target_local_closed",
+        "framework_runtime_evidence_present",
+        "runtime_contract_matches_selected_adapter",
+        "framework_trace_conformance_closed",
+        "framework_trace_runtime_bridge_closed",
+        "framework_patch_surface_present",
+        "social_memory_optimizer_trace_closed",
+        "framework_runtime_metric_evidence_closed",
+        "framework_runtime_optimization_regression_gate_passed",
+    }
+    assert checks["social_memory_optimizer_trace_closed"]["evidence"][
+        "social_trace_present"
+    ] is True
+    assert checks["framework_patch_surface_present"]["evidence"][
+        "selected_patch_paths"
+    ] == ["agent", "simulation.environments"]
 
 
 def test_sdk_social_memory_framework_simulation_example_runs(

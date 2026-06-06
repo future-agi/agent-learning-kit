@@ -459,6 +459,14 @@ framework path through `agent-learn optimize`. It starts with a runnable but wea
 `run`/`text` adapter and deterministically selects the `execute_task`/`dict`
 adapter because only that candidate emits tool evidence and passes the framework
 runtime contract.
+Framework-runtime optimization artifacts also emit
+`agent-learning.optimization.framework-runtime-proof.v1`, a native proof
+attached at the top level and under `optimization.framework_runtime_proof`.
+The proof is derived from the selected candidate and selected report state:
+local adapter target, runtime summary, framework trace conformance, normalized
+trace/tool bridge, patch surface, optimizer lineage, optional social-memory
+governance, and closed framework runtime metrics. It does not require an
+external observability, eval, or optimizer service.
 
 The `social_memory_framework_optimization.json` example selects
 `optimization.optimizer.algorithm: "social_memory"`, a multi-round optimizer
