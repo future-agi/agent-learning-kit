@@ -55,6 +55,9 @@ Future AGI UI/action/report readiness: renderable report payloads, executable
 action catalogs, saved action-run output evidence, and key-like secret-marker
 redaction across representative run, action-run, optimization, red-team,
 red-team campaign, provider-integration, and suite artifacts.
+It also runs a local retrospective harness optimization and verifies the
+rendered `harness_diagnosis` card, diagnosis actions, rollout plan, proof, and
+2026 research lineage without calling hosted optimizer/eval services.
 Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
 CrewAI, PydanticAI, LiveKit, and Pipecat, requires local fixture targets with

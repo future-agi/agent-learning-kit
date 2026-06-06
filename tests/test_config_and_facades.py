@@ -12483,6 +12483,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["forbidden_ui_secret_markers"] == (
         trinity.V1_UI_FORBIDDEN_SECRET_MARKERS
     )
+    assert payload["required_harness_diagnosis_source"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_SOURCE
+    )
+    assert payload["required_harness_diagnosis_actions"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS
+    )
+    assert payload["required_harness_diagnosis_layers"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS
+    )
+    assert payload["required_harness_diagnosis_research_sources"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
+    )
     assert payload["required_framework_provider_examples"] == (
         trinity.V1_FRAMEWORK_PROVIDER_EXAMPLES
     )
@@ -12520,6 +12532,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "redteam_corpus_execution_readiness",
         "schema_kind_contract",
         "ui_action_report_readiness",
+        "harness_diagnosis_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
         "package_metadata",
@@ -12722,6 +12735,60 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert suite_artifact["source_kind"] == "agent-learning.suite.v1"
     assert suite_artifact["report_sections"] == ["summary"]
     assert "report_artifact" in suite_artifact["action_ids"]
+    harness_diagnosis = checks["harness_diagnosis_readiness"]["evidence"]
+    assert harness_diagnosis["source"] == trinity.V1_HARNESS_DIAGNOSIS_SOURCE
+    assert harness_diagnosis["missing_files"] == []
+    assert harness_diagnosis["optimization_errors"] == []
+    assert harness_diagnosis["report_errors"] == []
+    assert harness_diagnosis["diagnosis_errors"] == []
+    assert harness_diagnosis["action_errors"] == []
+    assert harness_diagnosis["rollout_errors"] == []
+    assert harness_diagnosis["proof_errors"] == []
+    assert harness_diagnosis["secret_marker_findings"] == []
+    assert harness_diagnosis["required_actions"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS
+    )
+    assert harness_diagnosis["required_layers"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS
+    )
+    assert harness_diagnosis["required_research_sources"] == (
+        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
+    )
+    diagnosis_evidence = harness_diagnosis["evidence"]
+    assert diagnosis_evidence["result_status"] == "passed"
+    assert diagnosis_evidence["report_status"] == "passed"
+    assert "harness_diagnosis" in diagnosis_evidence["report_sections"]
+    assert diagnosis_evidence["diagnosis_kind"] == "harness_layer_diagnosis"
+    assert diagnosis_evidence["diagnosis_status"] == "passed"
+    assert set(trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS) <= set(
+        diagnosis_evidence["observed_layers"]
+    )
+    assert set(trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS) <= set(
+        diagnosis_evidence["target_layers"]
+    )
+    assert set(trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS) <= set(
+        diagnosis_evidence["diagnosis_action_ids"]
+    )
+    assert set(trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS) <= set(
+        diagnosis_evidence["report_action_ids"]
+    )
+    assert set(trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES) <= set(
+        diagnosis_evidence["research_sources"]
+    )
+    assert diagnosis_evidence["rollout_kind"] == "retrospective_harness_rollout_plan"
+    assert diagnosis_evidence["rollout_status"] == "ready"
+    assert diagnosis_evidence["rollout_candidate_count"] >= 2
+    assert set(diagnosis_evidence["rollout_step_ids"]) == {
+        "replay_selected_candidate",
+        "repair_weak_layers",
+        "promote_or_hold",
+    }
+    assert diagnosis_evidence["proof_kind"] == (
+        "agent-learning.optimization.retrospective-harness-proof.v1"
+    )
+    assert diagnosis_evidence["proof_status"] == "passed"
+    assert diagnosis_evidence["proof_failed_check_ids"] == []
+    assert diagnosis_evidence["proof_warning_check_ids"] == []
     assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
     framework_provider = checks["framework_provider_contract_readiness"]["evidence"]
     assert framework_provider["required_frameworks"] == (

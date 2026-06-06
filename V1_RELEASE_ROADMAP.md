@@ -45,7 +45,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
-| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness` |
+| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `harness_diagnosis_readiness` |
 | M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
@@ -177,6 +177,10 @@ Current checkpoint:
   renders reports, builds action catalogs, verifies required report sections,
   required UI card keys, required action ids, saved `action-run` output
   evidence, and scans generated UI payloads for key-like secret markers.
+- The same release-check now runs a local retrospective harness optimization and
+  proves the rendered `harness_diagnosis` card, diagnosis actions, retrospective
+  rollout plan, retrospective-harness proof, required diagnosis layers, and 2026
+  research-source lineage.
 - Provider integration fixtures use UI-safe credential-slot references instead
   of key-like labels such as `*_API_KEY`; actual real-key execution remains
   declared through env requirements and explicit live-target runs.
@@ -188,6 +192,8 @@ Acceptance gates:
 - `agent-learn report` and `agent-learn actions` expose UI-ready cards and
   executable actions for simulation, eval, red-team, optimization, replay,
   promotion, and downloads.
+- Harness diagnosis cards expose layer attribution, repair operators, rollout
+  plans, and reproducible follow-up commands for failed or weak harness layers.
 - Artifacts are safe to send to Future AGI for observability/evals/simulation UI
   without leaking local keys.
 

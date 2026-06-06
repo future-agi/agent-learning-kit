@@ -200,6 +200,26 @@ V1_UI_FORBIDDEN_SECRET_MARKERS = [
     "bearer ",
 ]
 
+V1_HARNESS_DIAGNOSIS_SOURCE = "examples/sdk_retrospective_harness_optimization.py"
+
+V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS = [
+    "report_harness_diagnosis",
+    "rerun_optimization_for_diagnosed_layers",
+    "promote_diagnosed_regression",
+]
+
+V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS = [
+    "observability",
+    "verification",
+]
+
+V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES = [
+    "https://arxiv.org/abs/2606.06324",
+    "https://arxiv.org/abs/2606.05922",
+    "https://arxiv.org/abs/2606.06284",
+    "https://arxiv.org/abs/2606.06473",
+]
+
 V1_REQUIRED_DOCS = [
     "README.md",
     "DEVELOPMENT.md",
@@ -715,6 +735,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M5",
         evidence=ui_action_report,
     )
+    harness_diagnosis = _release_harness_diagnosis_status(root)
+    _append_release_check(
+        checks,
+        check_id="harness_diagnosis_readiness",
+        passed=(
+            not harness_diagnosis["missing_files"]
+            and not harness_diagnosis["optimization_errors"]
+            and not harness_diagnosis["report_errors"]
+            and not harness_diagnosis["diagnosis_errors"]
+            and not harness_diagnosis["action_errors"]
+            and not harness_diagnosis["rollout_errors"]
+            and not harness_diagnosis["proof_errors"]
+            and not harness_diagnosis["secret_marker_findings"]
+        ),
+        milestone="M5",
+        evidence=harness_diagnosis,
+    )
     missing_framework_provider = _missing_relative_paths(
         root,
         V1_FRAMEWORK_PROVIDER_EXAMPLES,
@@ -816,6 +853,16 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_UI_ACTION_REPORT_ARTIFACTS
         ),
         "forbidden_ui_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
+        "required_harness_diagnosis_source": V1_HARNESS_DIAGNOSIS_SOURCE,
+        "required_harness_diagnosis_actions": list(
+            V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS
+        ),
+        "required_harness_diagnosis_layers": list(
+            V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS
+        ),
+        "required_harness_diagnosis_research_sources": list(
+            V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
+        ),
         "required_release_proof_checks": list(V1_RELEASE_PROOF_REQUIRED_CHECKS),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_framework_provider_frameworks": list(
@@ -1641,6 +1688,332 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_harness_diagnosis_status(root: Path) -> dict[str, Any]:
+    source = V1_HARNESS_DIAGNOSIS_SOURCE
+    source_path = root / source
+    missing_files = [] if source_path.exists() else [source]
+    optimization_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    diagnosis_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
+    rollout_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    secret_marker_findings: list[dict[str, str]] = []
+    evidence: dict[str, Any] = {
+        "source": source,
+        "result_status": None,
+        "report_status": None,
+        "report_sections": [],
+        "diagnosis_kind": None,
+        "diagnosis_status": None,
+        "primary_layers": [],
+        "observed_layers": [],
+        "target_layers": [],
+        "repair_operator_layers": [],
+        "diagnosis_action_ids": [],
+        "report_action_ids": [],
+        "research_sources": [],
+        "rollout_kind": None,
+        "rollout_status": None,
+        "rollout_candidate_count": 0,
+        "rollout_step_ids": [],
+        "proof_kind": None,
+        "proof_status": None,
+        "proof_failed_check_ids": [],
+        "proof_warning_check_ids": [],
+    }
+    if missing_files:
+        return {
+            "source": source,
+            "required_actions": list(V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS),
+            "required_layers": list(V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS),
+            "required_research_sources": list(
+                V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
+            ),
+            "evidence": evidence,
+            "missing_files": missing_files,
+            "optimization_errors": optimization_errors,
+            "report_errors": report_errors,
+            "diagnosis_errors": diagnosis_errors,
+            "action_errors": action_errors,
+            "rollout_errors": rollout_errors,
+            "proof_errors": proof_errors,
+            "secret_marker_findings": secret_marker_findings,
+        }
+
+    result: Mapping[str, Any] = {}
+    report: Mapping[str, Any] = {}
+    diagnosis: Mapping[str, Any] = {}
+    rollout: Mapping[str, Any] = {}
+    proof: Mapping[str, Any] = {}
+    try:
+        from agent_learning import actions, optimize, simulate
+
+        result = optimize.optimize_retrospective_harness(
+            name="release-harness-diagnosis-readiness",
+            required_env=[],
+            target_metadata={"release_check": "harness_diagnosis_readiness"},
+            manifest_path=source_path,
+        )
+        report = simulate.render_report(result, source_path=source_path)
+        report_actions = [
+            str(action.get("id"))
+            for action in actions.extract_actions(report)
+            if action.get("id")
+        ]
+    except Exception as exc:
+        optimization_errors.append({"path": source, "error": str(exc)})
+        report_actions = []
+    else:
+        result_summary = dict(result.get("summary") or {})
+        report_summary = dict(report.get("summary") or {})
+        report_body = (
+            report.get("report")
+            if isinstance(report.get("report"), Mapping)
+            else {}
+        )
+        diagnosis = (
+            report_body.get("harness_diagnosis")
+            if isinstance(report_body.get("harness_diagnosis"), Mapping)
+            else {}
+        )
+        rollout = (
+            diagnosis.get("retrospective_rollout_plan")
+            if isinstance(diagnosis.get("retrospective_rollout_plan"), Mapping)
+            else {}
+        )
+        proof = (
+            result.get("retrospective_harness_proof")
+            if isinstance(result.get("retrospective_harness_proof"), Mapping)
+            else {}
+        )
+        report_sections = list(
+            report_summary.get("sections") or report_body.get("sections") or []
+        )
+        diagnosis_actions = [
+            str(action.get("id"))
+            for action in diagnosis.get("actions") or []
+            if isinstance(action, Mapping) and action.get("id")
+        ]
+        layer_records = [
+            item
+            for item in diagnosis.get("layers") or []
+            if isinstance(item, Mapping)
+        ]
+        target_layers = sorted(
+            {
+                str(layer)
+                for action in diagnosis.get("actions") or []
+                if isinstance(action, Mapping)
+                for layer in action.get("target_layers") or []
+                if layer
+            }
+        )
+        repair_operator_layers = sorted(
+            {
+                str(operator.get("layer"))
+                for operator in diagnosis.get("repair_operators") or []
+                if isinstance(operator, Mapping) and operator.get("layer")
+            }
+        )
+        evidence.update(
+            {
+                "result_status": result.get("status"),
+                "optimization_score": result_summary.get("optimization_score"),
+                "report_status": report.get("status"),
+                "report_sections": report_sections,
+                "diagnosis_kind": diagnosis.get("kind"),
+                "diagnosis_status": diagnosis.get("status"),
+                "primary_layers": list(diagnosis.get("primary_layers") or []),
+                "observed_layers": sorted(
+                    str(item.get("layer"))
+                    for item in layer_records
+                    if item.get("layer")
+                ),
+                "target_layers": target_layers,
+                "repair_operator_layers": repair_operator_layers,
+                "diagnosis_action_ids": diagnosis_actions,
+                "report_action_ids": report_actions,
+                "research_sources": list(diagnosis.get("research_sources") or []),
+                "rollout_kind": rollout.get("kind"),
+                "rollout_status": rollout.get("status"),
+                "rollout_candidate_count": rollout.get("candidate_count") or 0,
+                "rollout_step_ids": [
+                    str(step.get("id"))
+                    for step in rollout.get("rollout_steps") or []
+                    if isinstance(step, Mapping) and step.get("id")
+                ],
+                "proof_kind": proof.get("kind"),
+                "proof_status": proof.get("status"),
+                "proof_failed_check_ids": list(proof.get("failed_check_ids") or []),
+                "proof_warning_check_ids": list(
+                    proof.get("warning_check_ids") or []
+                ),
+            }
+        )
+        if result.get("status") != "passed":
+            optimization_errors.append(
+                {
+                    "path": source,
+                    "field": "result.status",
+                    "expected": "passed",
+                    "observed": result.get("status"),
+                }
+            )
+        if report.get("kind") != "agent-learning.report.v1" or report.get("status") != "passed":
+            report_errors.append(
+                {
+                    "path": source,
+                    "field": "report",
+                    "expected": "agent-learning.report.v1/passed",
+                    "observed": {
+                        "kind": report.get("kind"),
+                        "status": report.get("status"),
+                    },
+                }
+            )
+        if "harness_diagnosis" not in report_sections:
+            report_errors.append(
+                {
+                    "path": source,
+                    "field": "report.sections",
+                    "expected": "harness_diagnosis",
+                    "observed": report_sections,
+                }
+            )
+        if diagnosis.get("kind") != "harness_layer_diagnosis" or diagnosis.get("status") != "passed":
+            diagnosis_errors.append(
+                {
+                    "path": source,
+                    "field": "report.harness_diagnosis",
+                    "expected": "harness_layer_diagnosis/passed",
+                    "observed": {
+                        "kind": diagnosis.get("kind"),
+                        "status": diagnosis.get("status"),
+                    },
+                }
+            )
+        missing_layers = sorted(
+            set(V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS)
+            - set(evidence["observed_layers"])
+        )
+        if missing_layers:
+            diagnosis_errors.append(
+                {
+                    "path": source,
+                    "field": "report.harness_diagnosis.layers",
+                    "required": list(V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS),
+                    "observed": evidence["observed_layers"],
+                    "missing": missing_layers,
+                }
+            )
+        missing_research = sorted(
+            set(V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES)
+            - set(evidence["research_sources"])
+        )
+        if missing_research:
+            diagnosis_errors.append(
+                {
+                    "path": source,
+                    "field": "report.harness_diagnosis.research_sources",
+                    "required": list(V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES),
+                    "observed": evidence["research_sources"],
+                    "missing": missing_research,
+                }
+            )
+        missing_actions = sorted(
+            set(V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS) - set(diagnosis_actions)
+        )
+        missing_report_actions = sorted(
+            set(V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS) - set(report_actions)
+        )
+        if missing_actions or missing_report_actions:
+            action_errors.append(
+                {
+                    "path": source,
+                    "required": list(V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS),
+                    "diagnosis_action_ids": diagnosis_actions,
+                    "report_action_ids": report_actions,
+                    "missing_diagnosis_actions": missing_actions,
+                    "missing_report_actions": missing_report_actions,
+                }
+            )
+        if (
+            rollout.get("kind") != "retrospective_harness_rollout_plan"
+            or rollout.get("status") != "ready"
+            or int(rollout.get("candidate_count") or 0) < 2
+        ):
+            rollout_errors.append(
+                {
+                    "path": source,
+                    "field": "retrospective_rollout_plan",
+                    "expected": "ready plan with at least two candidates",
+                    "observed": {
+                        "kind": rollout.get("kind"),
+                        "status": rollout.get("status"),
+                        "candidate_count": rollout.get("candidate_count"),
+                    },
+                }
+            )
+        missing_rollout_steps = sorted(
+            {"replay_selected_candidate", "repair_weak_layers", "promote_or_hold"}
+            - set(evidence["rollout_step_ids"])
+        )
+        if missing_rollout_steps:
+            rollout_errors.append(
+                {
+                    "path": source,
+                    "field": "retrospective_rollout_plan.rollout_steps",
+                    "observed": evidence["rollout_step_ids"],
+                    "missing": missing_rollout_steps,
+                }
+            )
+        if (
+            proof.get("kind")
+            != "agent-learning.optimization.retrospective-harness-proof.v1"
+            or proof.get("status") != "passed"
+            or proof.get("failed_check_ids")
+            or proof.get("warning_check_ids")
+        ):
+            proof_errors.append(
+                {
+                    "path": source,
+                    "field": "retrospective_harness_proof",
+                    "expected": "passed proof with no failed/warning checks",
+                    "observed": {
+                        "kind": proof.get("kind"),
+                        "status": proof.get("status"),
+                        "failed_check_ids": proof.get("failed_check_ids"),
+                        "warning_check_ids": proof.get("warning_check_ids"),
+                    },
+                }
+            )
+        secret_marker_findings.extend(
+            _release_secret_marker_findings(
+                source,
+                {"result": result, "report": report},
+            )
+        )
+
+    return {
+        "source": source,
+        "required_actions": list(V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS),
+        "required_layers": list(V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS),
+        "required_research_sources": list(
+            V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
+        ),
+        "evidence": evidence,
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "report_errors": report_errors,
+        "diagnosis_errors": diagnosis_errors,
+        "action_errors": action_errors,
+        "rollout_errors": rollout_errors,
+        "proof_errors": proof_errors,
+        "secret_marker_findings": secret_marker_findings,
+    }
+
+
 def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
     required_frameworks = list(V1_FRAMEWORK_PROVIDER_FRAMEWORKS)
     required_framework_set = set(required_frameworks)
@@ -2239,6 +2612,10 @@ __all__ = [
     "V1_REQUIRED_EXAMPLES",
     "V1_REQUIRED_SCHEMA_KINDS",
     "V1_RELEASE_PROOF_REQUIRED_CHECKS",
+    "V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS",
+    "V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS",
+    "V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES",
+    "V1_HARNESS_DIAGNOSIS_SOURCE",
     "V1_FRAMEWORK_PROVIDER_EXAMPLES",
     "V1_FRAMEWORK_PROVIDER_FRAMEWORKS",
     "V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS",
