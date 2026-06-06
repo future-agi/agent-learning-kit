@@ -151,6 +151,12 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_eval_suite_file is not None
     assert optimize.optimize_suite_file is not None
     assert optimize.problem_from_agent_learning_suite_file is not None
+    assert optimize.build_adaptive_redteam_optimization_manifest is not None
+    assert optimize.build_adaptive_redteam_strategy_optimization_manifest is (
+        optimize.build_adaptive_redteam_optimization_manifest
+    )
+    assert optimize.optimize_adaptive_redteam is not None
+    assert optimize.optimize_adaptive_redteam_strategy is optimize.optimize_adaptive_redteam
     assert optimize.build_agent_control_plane_optimization_manifest is not None
     assert optimize.optimize_agent_control_plane is not None
     assert optimize.build_autonomous_redteam_task_world_optimization_manifest is not None
@@ -4271,6 +4277,128 @@ def test_sdk_redteam_autogen_optimization_example_runs(monkeypatch, tmp_path):
     campaign_summary = state["red_team_campaign"]["summary"]
     assert campaign_summary["attack_count"] == 4
     assert campaign_summary["coverage_cell_count"] == 4
+    assert campaign_summary["missing_coverage_cells"] == []
+    assert campaign_summary["missing_executed_cells"] == []
+
+
+def test_sdk_adaptive_redteam_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_ADAPTIVE_REDTEAM_OPT_KEY",
+        "real-local-sdk-adaptive-redteam-opt-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_adaptive_redteam_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_adaptive_redteam_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["version"] == "agent-learning.optimization.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ADAPTIVE_REDTEAM_OPT_KEY"
+    ]
+    assert manifest["redteam"]["auto_generate"] is True
+    assert manifest["redteam"]["attacks"] == ["prompt_injection"]
+    assert manifest["redteam"]["surfaces"] == ["tool"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {"redteam"}
+    candidates = manifest["optimization"]["target"]["search_space"]["redteam"]
+    assert [candidate["profile"] for candidate in candidates] == [
+        "seed_static_prompt_probe",
+        "expanded_trajectory_refinement",
+        "hardened_adaptive_campaign",
+    ]
+    assert candidates[-1]["attacks"] == [
+        "prompt_injection",
+        "indirect_prompt_injection",
+        "credential_exfiltration",
+        "memory_poisoning",
+    ]
+    assert candidates[-1]["surfaces"] == [
+        "tool",
+        "memory",
+        "retrieval",
+        "multi_agent_handoff",
+    ]
+    target_metadata = manifest["optimization"]["target"]["metadata"]
+    assert target_metadata["task_kind"] == "adaptive_redteam_campaign"
+    assert target_metadata["adaptive_source"]["blind_spot_surfaces"] == ["memory"]
+    assert target_metadata["adaptive_source"]["missing_coverage_cells"] == [
+        "prompt_injection|memory|chat|local_cli"
+    ]
+    assert {
+        "security",
+        "harness",
+        "memory",
+        "evaluator",
+    } & set(target_metadata["diagnosed_components"])
+    assert manifest["optimization"]["optimizer"]["diagnoses"]
+    assert manifest["optimization"]["optimizer"]["auto_diagnose"] is True
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["adversarial_resilience"]["expected_attack_count"] == 16
+    assert config["red_team_campaign_quality"]["required_attack_matrix_cells"] == [
+        "prompt_injection|tool|chat|local_cli",
+        "prompt_injection|memory|chat|local_cli",
+        "prompt_injection|retrieval|chat|local_cli",
+        "prompt_injection|multi_agent_handoff|chat|local_cli",
+        "indirect_prompt_injection|tool|chat|local_cli",
+        "indirect_prompt_injection|memory|chat|local_cli",
+        "indirect_prompt_injection|retrieval|chat|local_cli",
+        "indirect_prompt_injection|multi_agent_handoff|chat|local_cli",
+        "credential_exfiltration|tool|chat|local_cli",
+        "credential_exfiltration|memory|chat|local_cli",
+        "credential_exfiltration|retrieval|chat|local_cli",
+        "credential_exfiltration|multi_agent_handoff|chat|local_cli",
+        "memory_poisoning|tool|chat|local_cli",
+        "memory_poisoning|memory|chat|local_cli",
+        "memory_poisoning|retrieval|chat|local_cli",
+        "memory_poisoning|multi_agent_handoff|chat|local_cli",
+    ]
+
+    source_path = tmp_path / "source-redteam-result.json"
+    source_path.write_text(
+        json.dumps(module.source_result(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    manifest_from_path = optimize.build_adaptive_redteam_optimization_manifest(
+        name="sdk-adaptive-redteam-from-path",
+        required_env=["AGENT_LEARNING_SDK_ADAPTIVE_REDTEAM_OPT_KEY"],
+        source_result=source_path,
+    )
+    assert manifest_from_path["optimization"]["target"]["metadata"][
+        "adaptive_source"
+    ]["blind_spot_surfaces"] == ["memory"]
+
+    output_path = tmp_path / "sdk-adaptive-redteam-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert output_path.with_suffix(".manifest.json").exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert "redteam" in result["summary"]["search_paths"]
+    best_config = result["optimization"]["best_config"]
+    assert best_config["redteam"]["profile"] == "hardened_adaptive_campaign"
+    best_history = max(result["optimization"]["history"], key=lambda item: item["score"])
+    assert best_history["patch"].keys() == {"redteam"}
+    assert best_history["metrics"]["adversarial_resilience"] == pytest.approx(1.0)
+    assert best_history["metrics"]["red_team_campaign_quality"] == pytest.approx(1.0)
+    assert best_history["metrics"]["red_team_campaign_coverage"] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    campaign_summary = state["red_team_campaign"]["summary"]
+    assert campaign_summary["attack_count"] == 16
+    assert campaign_summary["coverage_cell_count"] == 16
     assert campaign_summary["missing_coverage_cells"] == []
     assert campaign_summary["missing_executed_cells"] == []
 

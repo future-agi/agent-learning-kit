@@ -622,6 +622,10 @@ AGENT_LEARNING_SDK_REDTEAM_AUTOGEN_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_autogen_optimization.py \
   artifacts/sdk-redteam-autogen-optimization.json
 
+AGENT_LEARNING_SDK_ADAPTIVE_REDTEAM_OPT_KEY=... \
+  PYTHONPATH=src python examples/sdk_adaptive_redteam_optimization.py \
+  artifacts/sdk-adaptive-redteam-optimization.json
+
 AGENT_LEARNING_SDK_REDTEAM_RUN_KEY=... \
   PYTHONPATH=src python examples/sdk_redteam_simulation.py \
   artifacts/sdk-redteam-run.json
@@ -793,6 +797,17 @@ prompt-injection seed and searches the tool-plus-memory prompt-injection plus
 credential-exfiltration campaign. Red-team reports expose `surface_matrix` and
 `adaptive_surface_risk` fields so CI and the Future AGI UI can show which
 attack surface is still blind even when aggregate campaign quality is high.
+
+For evidence-driven adaptive red teaming, pass a prior red-team artifact/path or
+failure text to `optimize.build_adaptive_redteam_optimization_manifest()`. The
+SDK reads `redteam_strategy.adaptive_surface_risk`, missing campaign cells, and
+raw red-team findings when present, converts them into component diagnoses, and
+searches coherent campaign candidates where attacks, surfaces, personas,
+trajectory-refinement strategy, canaries, and blocked tools move together. The
+same helper is exposed as `optimize_adaptive_redteam_strategy()` for report
+action-card workflows, and `examples/sdk_adaptive_redteam_optimization.py`
+selects the hardened adaptive campaign from a blind memory-surface source
+artifact.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of
