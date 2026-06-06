@@ -634,6 +634,16 @@ multi-agent review/reconciliation, world/framework/retrieval/memory/
 multi-agent/tool evidence closes, the selected patch covers both agent behavior
 and the orchestration environment bundle, topology/replay metadata exists, the
 optimizer did not regress from the seed, and orchestration metrics pass.
+The same optimization result can be promoted with
+`simulate.promote_to_regression()` or `agent-learn promote-to-regression` into
+an `orchestration_stack_optimization` regression manifest. The promoted manifest
+freezes the selected local world/framework/retrieval/memory/multi-agent
+environment bundle, preserves the orchestration proof and replay lock under
+`metadata.regression`, and replays through `agent-learn replay` without importing
+the target framework or calling external observability/eval services. Promotion
+is fail-closed: endpoint/auth/API-key/secret/token markers or
+`requires_external_service=true` refuse admission instead of falling through to a
+generic optimized-manifest regression.
 
 For retrieval and memory layers, pass candidates with `retrieval_memory` and
 `agent_memory_lineage` data. The SDK builds a runnable local manifest that

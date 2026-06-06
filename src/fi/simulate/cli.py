@@ -6675,6 +6675,9 @@ def _orchestration_strategy_card(
         source_manifest_path = Path(str(existing_manifest_path))
     if source_manifest_path is None:
         source_manifest_path = _orchestration_source_manifest_path(result)
+    regression_manifest = (
+        result.get("manifest") if isinstance(result.get("manifest"), Mapping) else None
+    )
 
     state = _orchestration_environment_state(result)
     metrics = {
@@ -6755,6 +6758,10 @@ def _orchestration_strategy_card(
             card["artifacts"] = {
                 "selected_orchestration_manifest": copy.deepcopy(dict(selected_manifest)),
             }
+    elif isinstance(regression_manifest, Mapping) and _orchestration_selected_environment_types(regression_manifest):
+        card["artifacts"] = {
+            "selected_orchestration_manifest": copy.deepcopy(dict(regression_manifest)),
+        }
     card["actions"] = _orchestration_strategy_actions(
         source_path=source_path,
         source_manifest_path=source_manifest_path,
@@ -6768,6 +6775,48 @@ def _orchestration_strategy_card(
                 rollout_plan,
                 status=status,
                 weak_layers=weak_layers,
+            )
+        )
+    if isinstance(regression_manifest, Mapping) and _orchestration_selected_environment_types(regression_manifest):
+        manifest_filename = f"{_slug(regression_manifest.get('name'), default='orchestration-regression')}.json"
+        card["actions"].append(
+            {
+                "id": "export_orchestration_regression_manifest",
+                "label": "Export Orchestration Regression Manifest",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.orchestration_strategy.artifacts."
+                    "selected_orchestration_manifest"
+                ),
+                "default_filename": f"artifacts/{manifest_filename}",
+                "strategy_status": status,
+                "target_layers": list(weak_layers),
+            }
+        )
+        card["actions"].append(
+            _cli_action(
+                "replay_orchestration_regression",
+                "Replay Orchestration Regression",
+                [
+                    "agent-learn",
+                    "replay",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/orchestration-replay.json",
+                    "--junit",
+                    "artifacts/orchestration-replay.junit.xml",
+                    "--sarif",
+                    "artifacts/orchestration-replay.sarif.json",
+                    "--markdown",
+                    "artifacts/orchestration-replay.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "Orchestration regression manifest",
+                        "default": f"artifacts/{manifest_filename}",
+                    }
+                ],
             )
         )
     return card
@@ -6804,6 +6853,13 @@ def _orchestration_environment_state(result: Mapping[str, Any]) -> Dict[str, Any
             )
             if _has_orchestration_state(config_state):
                 return config_state
+    manifest = result.get("manifest")
+    if isinstance(manifest, Mapping):
+        manifest_state = _orchestration_state_from_environments(
+            dict(manifest.get("simulation") or {}).get("environments")
+        )
+        if _has_orchestration_state(manifest_state):
+            return manifest_state
     return {}
 
 
@@ -7547,6 +7603,26 @@ def _orchestration_strategy_actions(
         or "optimize" in source_kind
         or source_path.name.endswith("optimization.json")
     )
+    if is_optimization:
+        actions.append(
+            _cli_action(
+                "promote_orchestration_regression",
+                "Promote Orchestration Regression",
+                [
+                    "agent-learn",
+                    "promote-to-regression",
+                    str(source_path),
+                    "--output",
+                    "artifacts/orchestration-promotion.json",
+                    "--manifest",
+                    "artifacts/orchestration-regression.json",
+                    "--min-level",
+                    "note",
+                    "--max-findings",
+                    "1",
+                ],
+            )
+        )
     if source_manifest_path is not None and is_optimization:
         actions.append(
             _cli_action(
@@ -7640,6 +7716,239 @@ def _orchestration_strategy_actions(
         action["strategy_status"] = status
         action["target_layers"] = list(weak_layers)
     return actions
+
+
+_ORCHESTRATION_REQUIRED_ENVIRONMENT_TYPES = {
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent_room",
+}
+
+
+def _orchestration_stack_proof(result: Mapping[str, Any]) -> Dict[str, Any]:
+    proof = result.get("orchestration_stack_proof")
+    if isinstance(proof, Mapping):
+        return copy.deepcopy(dict(proof))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        nested = optimization.get("orchestration_stack_proof")
+        if isinstance(nested, Mapping):
+            return copy.deepcopy(dict(nested))
+    return {}
+
+
+def _orchestration_optimization_regression_manifest(
+    *,
+    source: Mapping[str, Any],
+    source_path: Path,
+    source_name: str,
+    manifest_name: str,
+    required_env: Sequence[Any],
+) -> Optional[Dict[str, Any]]:
+    proof = _orchestration_stack_proof(source)
+    if not proof:
+        return None
+    if str(proof.get("status") or "") != "passed":
+        return None
+    if proof.get("requires_external_service") is not False:
+        return None
+    if _coerce_list(proof.get("failed_check_ids")):
+        return None
+    manifest = _optimized_manifest_regression_manifest(
+        source=source,
+        source_path=source_path,
+        source_name=source_name,
+        manifest_name=manifest_name,
+        required_env=required_env,
+    )
+    if manifest is None:
+        return None
+    environment_types = set(_orchestration_selected_environment_types(manifest))
+    if not _ORCHESTRATION_REQUIRED_ENVIRONMENT_TYPES.issubset(environment_types):
+        return None
+    if _orchestration_external_markers(manifest):
+        return None
+
+    optimization = (
+        source.get("optimization")
+        if isinstance(source.get("optimization"), Mapping)
+        else {}
+    )
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    metric_thresholds = _orchestration_regression_metric_thresholds()
+    selected_metrics = {
+        str(key): value
+        for key, value in dict(evidence.get("selected_metrics") or {}).items()
+        if key in metric_thresholds and _float_or_none(value) is not None
+    }
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    metadata["regression"] = {
+        "promotion_kind": "orchestration_stack_optimization",
+        "promoted_from": str(source_path),
+        "source_name": source_name,
+        "source_status": source.get("status"),
+        "source_schema_version": source.get("schema_version"),
+        "source_kind": source.get("kind"),
+        "source_score": _persistent_state_source_score(source),
+        "assurance_level": proof.get("assurance_level"),
+        "selected_candidate_id": proof.get("selected_candidate_id")
+        or optimization.get("best_candidate_id"),
+        "environment_types": _orchestration_selected_environment_types(manifest),
+        "present_layers": _unique_strings(evidence.get("present_layers")),
+        "graph_summary": copy.deepcopy(dict(evidence.get("graph_summary") or {})),
+        "research_sources": _orchestration_research_sources(source),
+        "replay_lock": {
+            "local_only": True,
+            "requires_external_service": False,
+            "assurance_level": proof.get("assurance_level"),
+            "selected_candidate_id": proof.get("selected_candidate_id")
+            or optimization.get("best_candidate_id"),
+            "metric_thresholds": metric_thresholds,
+        },
+        "original_synthesis": (
+            "Promote an optimized world/framework/retrieval/memory/multi-agent "
+            "stack into an admitted local replay gate: freeze the selected "
+            "framework-neutral environment bundle, preserve trace provenance, "
+            "and fail closed if endpoint/auth/key dependencies appear."
+        ),
+    }
+
+    evaluation = manifest.setdefault("evaluation", {})
+    if not isinstance(evaluation, dict):
+        evaluation = {}
+        manifest["evaluation"] = evaluation
+    agent_report = evaluation.setdefault("agent_report", {})
+    if not isinstance(agent_report, dict):
+        agent_report = {}
+        evaluation["agent_report"] = agent_report
+    config = agent_report.setdefault("config", {})
+    if not isinstance(config, dict):
+        config = {}
+        agent_report["config"] = config
+    config_metadata = config.setdefault("metadata", {})
+    if isinstance(config_metadata, dict):
+        config_metadata["promotion_kind"] = "orchestration_stack_optimization"
+        config_metadata["assurance_level"] = proof.get("assurance_level")
+        config_metadata["selected_candidate_id"] = (
+            proof.get("selected_candidate_id") or optimization.get("best_candidate_id")
+        )
+    if selected_metrics:
+        summary = manifest.setdefault("summary", {})
+        if isinstance(summary, dict):
+            summary["metric_averages"] = selected_metrics
+    return manifest
+
+
+def _orchestration_regression_metric_thresholds() -> Dict[str, float]:
+    return {
+        "orchestration_flow_quality": 1.0,
+        "orchestration_trace_coverage": 1.0,
+        "world_contract_quality": 1.0,
+        "framework_trace_coverage": 1.0,
+        "retrieval_context_quality": 1.0,
+        "agent_memory_lineage_quality": 1.0,
+        "multi_agent_coordination_quality": 1.0,
+        "multi_agent_trace_coverage": 1.0,
+        "tool_selection_accuracy": 1.0,
+        "task_completion": 1.0,
+    }
+
+
+def _orchestration_external_markers(value: Any) -> List[str]:
+    markers: set[str] = set()
+    sensitive_keys = {"endpoint", "auth", "api_key", "apikey", "secret", "token"}
+    runtime_url_keys = {
+        "endpoint",
+        "hook",
+        "webhook",
+        "base_url",
+        "callback_url",
+        "hook_url",
+        "service_url",
+        "target_url",
+    }
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized_key = str(key or "").lower().replace("-", "_")
+            if normalized_key in sensitive_keys:
+                markers.add(normalized_key)
+            if normalized_key == "requires_external_service" and bool(item):
+                markers.add("requires_external_service")
+            if (
+                normalized_key in runtime_url_keys
+                and isinstance(item, str)
+                and item.startswith(("http://", "https://"))
+                and "127.0.0.1" not in item
+                and "localhost" not in item
+            ):
+                markers.add(normalized_key or "external_url")
+            markers.update(_orchestration_external_markers(item))
+    elif isinstance(value, list):
+        for item in value:
+            markers.update(_orchestration_external_markers(item))
+    return sorted(markers)
+
+
+def _orchestration_research_sources(source: Mapping[str, Any]) -> List[str]:
+    values: List[Any] = []
+    proof = _orchestration_stack_proof(source)
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    values.extend(_coerce_list(evidence.get("research_sources")))
+    optimization = source.get("optimization")
+    if isinstance(optimization, Mapping):
+        source_manifest = optimization.get("source_manifest")
+        if isinstance(source_manifest, Mapping):
+            metadata = source_manifest.get("metadata")
+            if isinstance(metadata, Mapping):
+                values.extend(_coerce_list(metadata.get("research_sources")))
+                values.extend(_coerce_list(metadata.get("research_basis")))
+            target = dict(
+                dict(source_manifest.get("optimization") or {}).get("target") or {}
+            )
+            target_metadata = target.get("metadata")
+            if isinstance(target_metadata, Mapping):
+                values.extend(_coerce_list(target_metadata.get("research_sources")))
+                values.extend(_coerce_list(target_metadata.get("research_basis")))
+    values.extend(
+        [
+            "https://arxiv.org/abs/2606.06324",
+            "https://arxiv.org/abs/2606.05922",
+            "https://arxiv.org/abs/2606.04990",
+            "https://arxiv.org/abs/2606.06448",
+            "https://arxiv.org/abs/2606.06473",
+        ]
+    )
+    return _unique_strings(_research_source_url(value) for value in values)
+
+
+def _orchestration_regression_promotion_summary(
+    *,
+    source: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> Dict[str, Any]:
+    proof = _orchestration_stack_proof(source)
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    selected_metrics = {
+        str(key): float(value)
+        for key, value in dict(evidence.get("selected_metrics") or {}).items()
+        if key in _ORCHESTRATION_METRICS and _float_or_none(value) is not None
+    }
+    return {
+        "orchestration_stack_proof_status": proof.get("status"),
+        "orchestration_stack_proof_assurance_level": proof.get("assurance_level"),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "requires_external_service": False,
+        "environment_types": _orchestration_selected_environment_types(manifest),
+        "present_layers": _unique_strings(evidence.get("present_layers")),
+        "graph_summary": copy.deepcopy(dict(evidence.get("graph_summary") or {})),
+        "metric_averages": selected_metrics,
+        "research_sources": _orchestration_research_sources(source),
+    }
 
 
 def _orchestration_strategy_markdown(
@@ -10777,6 +11086,48 @@ def _regression_promotion_result(
                 "world hooks regression promotion requires a passed local "
                 "world-hook proof with native stateful_tool_world and "
                 "world_contract environments"
+            )
+        orchestration_manifest = _orchestration_optimization_regression_manifest(
+            source=source,
+            source_path=source_path,
+            source_name=source_name,
+            manifest_name=name or f"{source_name}-orchestration-regression",
+            required_env=required_env,
+        )
+        if orchestration_manifest is not None:
+            orchestration_summary = _orchestration_regression_promotion_summary(
+                source=source,
+                manifest=orchestration_manifest,
+            )
+            orchestration_proof = _orchestration_stack_proof(source)
+            return {
+                "schema_version": CLI_SCHEMA_VERSION,
+                "kind": "agent-simulate.regression_promotion.v1",
+                "name": str(orchestration_manifest.get("name") or source_name),
+                "status": "passed",
+                "exit_code": 0,
+                "summary": {
+                    "source_name": source_name,
+                    "source_path": str(source_path),
+                    "source_status": source.get("status"),
+                    "source_schema_version": source.get("schema_version"),
+                    "candidate_finding_count": len(promotable),
+                    "promoted_finding_count": 0,
+                    "promoted_manifest_count": 1,
+                    "min_level": min_level,
+                    "max_findings": max_findings,
+                    "promotion_kind": "orchestration_stack_optimization",
+                    **orchestration_summary,
+                },
+                "orchestration_stack_proof": orchestration_proof,
+                "manifest": orchestration_manifest,
+                "duration_seconds": duration_seconds,
+            }
+        if _orchestration_stack_proof(source):
+            raise ManifestError(
+                "orchestration regression promotion requires a passed local "
+                "orchestration_stack_proof with world, framework, retrieval, "
+                "memory, and multi-agent environments"
             )
         attack_evolution_manifest = _attack_evolution_optimization_regression_manifest(
             source=source,

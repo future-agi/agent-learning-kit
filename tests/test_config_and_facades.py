@@ -2061,6 +2061,8 @@ def test_sdk_optimization_lifecycle_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import simulate
+
     key = "real-local-sdk-orchestration-example-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY",
@@ -2290,6 +2292,7 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     } <= set(rollout_plan["research_sources"])
     assert {
         "report_orchestration_strategy",
+        "promote_orchestration_regression",
         "rerun_orchestration_optimization",
         "optimize_orchestration_strategy",
         "export_selected_orchestration_manifest",
@@ -2377,6 +2380,142 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
         and output["exists"] is True
         for output in replay_action_payload["outputs"]
     )
+
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=output_path,
+        name="sdk-orchestration-regression",
+        min_level="note",
+        max_findings=1,
+        required_env=["AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == (
+        "orchestration_stack_optimization"
+    )
+    assert promotion["summary"]["orchestration_stack_proof_status"] == "passed"
+    assert promotion["summary"]["orchestration_stack_proof_assurance_level"] == (
+        "l3_native_orchestration_stack_verified"
+    )
+    assert promotion["summary"]["requires_external_service"] is False
+    assert promotion["summary"]["metric_averages"]["world_contract_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert promotion["orchestration_stack_proof"]["failed_check_ids"] == []
+    promoted_manifest = promotion["manifest"]
+    assert promoted_manifest["version"] == "agent-learning.run.v1"
+    assert promoted_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY"
+    ]
+    assert promoted_manifest["metadata"]["regression"]["promotion_kind"] == (
+        "orchestration_stack_optimization"
+    )
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "local_only"
+    ] is True
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "requires_external_service"
+    ] is False
+    promoted_env_types = {
+        item["type"] for item in promoted_manifest["simulation"]["environments"]
+    }
+    assert {
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    } <= promoted_env_types
+    promoted_config = promoted_manifest["evaluation"]["agent_report"]["config"]
+    assert promoted_config["metadata"]["promotion_kind"] == (
+        "orchestration_stack_optimization"
+    )
+    assert key not in json.dumps(promotion, sort_keys=True, default=str)
+
+    promotion_report = simulate.render_report(
+        promotion,
+        source_path=tmp_path / "sdk-orchestration-promotion.json",
+    )
+    assert "orchestration_strategy" in promotion_report["summary"]["sections"]
+    promotion_strategy = promotion_report["report"]["orchestration_strategy"]
+    assert promotion_strategy["status"] == "covered"
+    assert {
+        "export_orchestration_regression_manifest",
+        "replay_orchestration_regression",
+        "rerun_orchestration_simulation",
+        "optimize_orchestration_strategy",
+    } <= {action["id"] for action in promotion_strategy["actions"]}
+
+    regression_manifest_path = tmp_path / "sdk-orchestration-regression.json"
+    regression_manifest_path.write_text(
+        json.dumps(promoted_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    replay = simulate.replay_manifests(
+        [regression_manifest_path],
+        name="sdk-orchestration-regression-replay",
+    )
+    assert replay["status"] == "passed"
+    assert replay["summary"]["passed_count"] == 1
+    assert replay["summary"]["failed_count"] == 0
+    replay_row = replay["replay"]["manifests"][0]
+    assert replay_row["summary"]["metric_averages"][
+        "world_contract_quality"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "framework_trace_coverage"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "multi_agent_coordination_quality"
+    ] == pytest.approx(1.0)
+    assert key not in json.dumps(replay, sort_keys=True, default=str)
+
+    cli_promotion_path = tmp_path / "sdk-orchestration-cli-promotion.json"
+    cli_regression_manifest_path = tmp_path / "sdk-orchestration-cli-regression.json"
+    assert (
+        main(
+            [
+                "promote-to-regression",
+                str(output_path),
+                "--output",
+                str(cli_promotion_path),
+                "--manifest",
+                str(cli_regression_manifest_path),
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+                "--required-env",
+                "AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY",
+            ]
+        )
+        == 0
+    )
+    cli_promotion = json.loads(cli_promotion_path.read_text(encoding="utf-8"))
+    assert cli_promotion["summary"]["promotion_kind"] == (
+        "orchestration_stack_optimization"
+    )
+    cli_regression = json.loads(
+        cli_regression_manifest_path.read_text(encoding="utf-8")
+    )
+    assert cli_regression["metadata"]["regression"]["promotion_kind"] == (
+        "orchestration_stack_optimization"
+    )
+    assert key not in cli_promotion_path.read_text(encoding="utf-8")
+    assert key not in cli_regression_manifest_path.read_text(encoding="utf-8")
+
+    externalized = copy.deepcopy(result)
+    externalized["optimization"]["best_config"]["simulation"]["environments"][1][
+        "data"
+    ]["endpoint"] = "https://framework.example.com/trace"
+    with pytest.raises(ManifestError, match="orchestration regression promotion"):
+        simulate.promote_to_regression(
+            externalized,
+            source_path=output_path,
+            name="sdk-orchestration-externalized-regression",
+            min_level="note",
+            max_findings=1,
+        )
 
     action_opt_dir = tmp_path / "orchestration-action-optimization"
     action_opt_output_path = tmp_path / "orchestration-action-optimization.json"
