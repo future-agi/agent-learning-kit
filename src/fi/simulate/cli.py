@@ -1366,6 +1366,27 @@ def _build_multi_agent_room_environment(
     )
     if not participants:
         raise ManifestError("multi_agent_room environment requires data.participants")
+    known_keys = {
+        "agents",
+        "allow_unknown_roles",
+        "contracts",
+        "expected_handoffs",
+        "expected_reconciliation",
+        "expected_reviews",
+        "handoff_contracts",
+        "handoffs",
+        "messages",
+        "participants",
+        "reconciliations",
+        "reviews",
+        "roles",
+        "state",
+    }
+    extra_trace = {
+        key: copy.deepcopy(value)
+        for key, value in source.items()
+        if key not in known_keys
+    }
     return MultiAgentRoomEnvironment(
         participants,
         handoff_contracts=source.get("handoff_contracts")
@@ -1373,8 +1394,13 @@ def _build_multi_agent_room_environment(
         expected_handoffs=_coerce_list(source.get("expected_handoffs")),
         expected_reviews=_coerce_list(source.get("expected_reviews")),
         expected_reconciliation=dict(source.get("expected_reconciliation") or {}),
+        messages=_coerce_list(source.get("messages")),
+        handoffs=_coerce_list(source.get("handoffs")),
+        reviews=_coerce_list(source.get("reviews")),
+        reconciliations=_coerce_list(source.get("reconciliations")),
         state=dict(source.get("state") or {}),
         allow_unknown_roles=bool(source.get("allow_unknown_roles", True)),
+        extra_trace=extra_trace,
     )
 
 

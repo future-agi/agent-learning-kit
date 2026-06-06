@@ -173,6 +173,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.run_eval_suite_file is not None
     assert evals.behavior_entropy_report is not None
     assert simulate.behavior_entropy_artifact is not None
+    assert evals.collaborative_competence_report is not None
+    assert simulate.collaborative_competence_artifact is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
@@ -1625,6 +1627,123 @@ def test_sdk_behavior_entropy_optimization_example_runs(monkeypatch, tmp_path):
     assert best_history["metrics"]["behavior_entropy_quality"] == pytest.approx(1.0)
     assert best_history["metrics"]["tool_selection_accuracy"] == pytest.approx(1.0)
     assert "behavior_entropy_quality" in {
+        metric["name"]
+        for metric in best_history["report"]["results"][0]["evaluation"][
+            "agent_report"
+        ]["metrics"]
+    }
+
+
+def test_sdk_collaborative_competence_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import evals, simulate
+
+    key = "real-local-sdk-collaborative-competence-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_COLLABORATIVE_COMPETENCE_KEY", key)
+    example_path = (
+        PROJECT_ROOT / "examples" / "sdk_collaborative_competence_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_collaborative_competence_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    weak_room = module.weak_room()
+    strong_room = module.collaborative_room()
+    weak_report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Approve refund collaboratively."},
+                    module.weak_agent()["responses"][0] | {"role": "assistant"},
+                    module.weak_agent()["responses"][1] | {"role": "assistant"},
+                    module.weak_agent()["responses"][2] | {"role": "assistant"},
+                ],
+                "artifacts": [{"type": "trace", "data": weak_room}],
+                "metadata": {
+                    "task_description": "Approve refund collaboratively.",
+                    "expected_result": module.evaluation_config()["expected_result"],
+                    "environment_state": {"multi_agent": weak_room},
+                },
+            }
+        ]
+    }
+    strong_report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Approve refund collaboratively."},
+                    module.collaborative_agent()["responses"][0]
+                    | {"role": "assistant"},
+                    module.collaborative_agent()["responses"][1]
+                    | {"role": "assistant"},
+                    module.collaborative_agent()["responses"][2]
+                    | {"role": "assistant"},
+                ],
+                "artifacts": [{"type": "trace", "data": strong_room}],
+                "metadata": {
+                    "task_description": "Approve refund collaboratively.",
+                    "expected_result": module.evaluation_config()["expected_result"],
+                    "environment_state": {"multi_agent": strong_room},
+                },
+            }
+        ]
+    }
+    weak_competence = evals.collaborative_competence_report(
+        weak_report,
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    strong_competence = simulate.collaborative_competence_artifact(
+        strong_report,
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    assert weak_competence["kind"] == (
+        "agent-learning.eval.collaborative-competence.v1"
+    )
+    assert weak_competence["status"] == "failed"
+    assert weak_competence["score"] < 0.9
+    assert strong_competence["status"] == "passed"
+    assert strong_competence["score"] == pytest.approx(1.0)
+    assert strong_competence["metadata"]["requires_external_service"] is False
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_COLLABORATIVE_COMPETENCE_KEY"
+    ]
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == (
+        "collaborative_competence_optimization"
+    )
+    assert manifest["evaluation"]["agent_report"]["config"]["metric_weights"][
+        "collaborative_competence_quality"
+    ] == 10.0
+
+    output_path = tmp_path / "sdk-collaborative-competence-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    best_config = result["optimization"]["best_config"]
+    assert best_config["agent"]["name"] == "collaborative-competence-agent"
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["collaborative_competence_quality"] == pytest.approx(
+        1.0
+    )
+    assert best_history["metrics"]["multi_agent_coordination_quality"] == pytest.approx(
+        1.0
+    )
+    assert best_history["metrics"]["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert "collaborative_competence_quality" in {
         metric["name"]
         for metric in best_history["report"]["results"][0]["evaluation"][
             "agent_report"

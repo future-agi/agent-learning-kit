@@ -177,6 +177,7 @@ class AgentReportEvalConfig(BaseModel):
     expected_multi_agent_handoffs: List[Any] = Field(default_factory=list)
     expected_multi_agent_reviews: List[Any] = Field(default_factory=list)
     expected_multi_agent_reconciliation: Dict[str, Any] = Field(default_factory=dict)
+    collaborative_competence_quality: Dict[str, Any] = Field(default_factory=dict)
     required_causal_attribution: List[str] = Field(default_factory=list)
     causal_attribution_quality: Dict[str, Any] = Field(default_factory=dict)
     required_orchestration_trace: List[str] = Field(default_factory=list)
@@ -476,6 +477,7 @@ class AgentReportEvaluator:
                 *_source_contradiction_metrics(report_context, config),
                 _multi_agent_trace_coverage_metric(report_context, config),
                 _multi_agent_coordination_quality_metric(report_context, config),
+                *_collaborative_competence_quality_metrics(report_context, config),
                 *_causal_attribution_quality_metrics(report_context, config),
                 _orchestration_trace_coverage_metric(report_context, config),
                 _orchestration_flow_quality_metric(report_context, config),
@@ -6340,6 +6342,683 @@ def _multi_agent_coordination_quality_metric(
         reason=f"{matched}/{len(checks)} multi-agent coordination check(s) matched.",
         details={"checks": checks, "findings": findings},
     )
+
+
+def _collaborative_competence_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.collaborative_competence_quality
+        and "collaborative_competence_quality" not in config.metric_weights
+    ):
+        return []
+    return [_collaborative_competence_quality_metric(context, config)]
+
+
+def _collaborative_competence_quality_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    quality = dict(config.collaborative_competence_quality or {})
+    payloads = _multi_agent_trace_payloads_from_context(context)
+    final_state = _extract_final_state(context)
+    multi_agent_state = _as_dict(final_state.get("multi_agent"))
+    text = _multi_agent_transcript_text(context, payloads, multi_agent_state)
+    text_lower = text.lower()
+    roles = _multi_agent_roles_from_payloads(payloads, multi_agent_state)
+    handoffs = _multi_agent_handoffs_from_payloads(payloads, context, multi_agent_state)
+    reviews = _multi_agent_reviews_from_payloads(payloads, context, multi_agent_state)
+    reconciliations = _multi_agent_reconciliations_from_payloads(
+        payloads,
+        context,
+        multi_agent_state,
+    )
+    messages = _multi_agent_messages_from_payloads(context, payloads, multi_agent_state)
+    mental_models = _multi_agent_mental_models_from_payloads(payloads, multi_agent_state)
+    common_ground = _collab_records_from_sources(
+        payloads,
+        multi_agent_state,
+        ("common_ground", "common_ground_updates", "shared_context"),
+    )
+    shared_task_states = _collab_records_from_sources(
+        payloads,
+        multi_agent_state,
+        ("shared_task_state", "task_state", "shared_state"),
+    )
+    intent_predictions = _collab_records_from_sources(
+        payloads,
+        multi_agent_state,
+        (
+            "intent_predictions",
+            "partner_intent",
+            "partner_intents",
+            "predicted_partner_intents",
+        ),
+    )
+    repair_moves = _collab_records_from_sources(
+        payloads,
+        multi_agent_state,
+        ("repair_moves", "alignment_repairs", "misalignment_repairs"),
+    )
+    value_diversity = _collab_records_from_sources(
+        payloads,
+        multi_agent_state,
+        ("value_diversity", "diversity_checks", "perspective_diversity"),
+    )
+
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    def append_check(
+        check: str,
+        *,
+        expected: Any,
+        actual: Any,
+        match: bool,
+        finding_type: str,
+    ) -> None:
+        item = {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": bool(match),
+        }
+        checks.append(item)
+        if not match:
+            findings.append({"type": finding_type, **item})
+
+    required_roles = _multi_agent_string_list(
+        quality.get("required_roles") or config.required_multi_agent_roles
+    )
+    for role in required_roles:
+        append_check(
+            "role_present",
+            expected=role,
+            actual=sorted(roles),
+            match=role in roles,
+            finding_type="collaborative_role_missing",
+        )
+
+    expected_common_ground = _multi_agent_string_list(
+        quality.get("expected_common_ground")
+    )
+    for term in expected_common_ground:
+        append_check(
+            "common_ground",
+            expected=term,
+            actual=text,
+            match=term.lower() in text_lower,
+            finding_type="collaborative_common_ground_missing",
+        )
+
+    expected_shared_state = _multi_agent_string_list(
+        quality.get("expected_shared_state")
+    )
+    for term in expected_shared_state:
+        append_check(
+            "shared_task_state",
+            expected=term,
+            actual=text,
+            match=term.lower() in text_lower,
+            finding_type="collaborative_shared_state_missing",
+        )
+
+    expected_intents = _as_dict(quality.get("expected_partner_intents"))
+    for role, expected in expected_intents.items():
+        expected_terms = _multi_agent_string_list(expected)
+        role_models = [
+            model
+            for model in mental_models
+            if str(model.get("role") or model.get("agent") or "").lower()
+            == str(role).lower()
+        ]
+        role_text = _stringify(role_models) + "\n" + text
+        append_check(
+            "partner_intent",
+            expected={str(role): expected_terms},
+            actual=role_models or text,
+            match=all(term.lower() in role_text.lower() for term in expected_terms),
+            finding_type="collaborative_partner_intent_missing",
+        )
+
+    min_common_ground_updates = _collab_int_config(
+        quality,
+        "min_common_ground_updates",
+        1,
+    )
+    append_check(
+        "common_ground_updates",
+        expected=f">= {min_common_ground_updates}",
+        actual=len(common_ground),
+        match=len(common_ground) >= min_common_ground_updates,
+        finding_type="collaborative_common_ground_updates_low",
+    )
+
+    if _collab_bool_config(quality, "require_shared_task_state", True):
+        append_check(
+            "shared_task_state_record",
+            expected="structured shared task state",
+            actual=shared_task_states,
+            match=bool(shared_task_states),
+            finding_type="collaborative_shared_task_state_missing",
+        )
+
+    min_mental_model_updates = _collab_int_config(
+        quality,
+        "min_mental_model_updates",
+        1,
+    )
+    append_check(
+        "mental_model_updates",
+        expected=f">= {min_mental_model_updates}",
+        actual=len(mental_models),
+        match=len(mental_models) >= min_mental_model_updates,
+        finding_type="collaborative_mental_model_updates_low",
+    )
+
+    min_intent_predictions = _collab_int_config(
+        quality,
+        "min_intent_predictions",
+        1,
+    )
+    append_check(
+        "intent_predictions",
+        expected=f">= {min_intent_predictions}",
+        actual=len(intent_predictions),
+        match=len(intent_predictions) >= min_intent_predictions,
+        finding_type="collaborative_intent_predictions_low",
+    )
+
+    min_repair_moves = _collab_int_config(quality, "min_repair_moves", 1)
+    append_check(
+        "repair_moves",
+        expected=f">= {min_repair_moves}",
+        actual=len(repair_moves),
+        match=len(repair_moves) >= min_repair_moves,
+        finding_type="collaborative_repair_moves_low",
+    )
+
+    min_message_count = int(quality.get("min_message_count") or 0)
+    if min_message_count:
+        append_check(
+            "message_count",
+            expected=min_message_count,
+            actual=len(messages),
+            match=len(messages) >= min_message_count,
+            finding_type="collaborative_message_count_low",
+        )
+
+    min_role_count = int(quality.get("min_role_count") or 0)
+    if min_role_count:
+        append_check(
+            "role_count",
+            expected=min_role_count,
+            actual=len(roles),
+            match=len(roles) >= min_role_count,
+            finding_type="collaborative_role_count_low",
+        )
+
+    if quality.get("require_common_ground"):
+        append_check(
+            "common_ground_signal",
+            expected="common ground established",
+            actual=text,
+            match=_collab_any_signal(
+                text_lower,
+                [
+                    "common ground",
+                    "shared understanding",
+                    "agree on",
+                    "we agree",
+                    "same task state",
+                ],
+            ),
+            finding_type="collaborative_common_ground_absent",
+        )
+
+    if quality.get("require_shared_task_state"):
+        append_check(
+            "shared_task_state_signal",
+            expected="shared task state maintained",
+            actual=text,
+            match=_collab_any_signal(
+                text_lower,
+                [
+                    "shared task",
+                    "task state",
+                    "case state",
+                    "status",
+                    "decision state",
+                ],
+            ),
+            finding_type="collaborative_shared_state_absent",
+        )
+
+    if quality.get("require_partner_intent"):
+        append_check(
+            "partner_intent_signal",
+            expected="partner intent modeled",
+            actual=text,
+            match=bool(mental_models)
+            or _collab_any_signal(
+                text_lower,
+                [
+                    "intent",
+                    "intends",
+                    "needs",
+                    "planner will",
+                    "retriever will",
+                    "critic will",
+                ],
+            ),
+            finding_type="collaborative_partner_intent_absent",
+        )
+
+    if quality.get("require_repair"):
+        append_check(
+            "misalignment_repair",
+            expected="misalignment repaired",
+            actual=text,
+            match=_collab_any_signal(
+                text_lower,
+                [
+                    "repair",
+                    "misalignment",
+                    "clarify",
+                    "correction",
+                    "resolve confusion",
+                    "resolve conflict",
+                ],
+            ),
+            finding_type="collaborative_repair_absent",
+        )
+
+    if _collab_bool_config(quality, "require_protocol_trace", True):
+        append_check(
+            "protocol_trace",
+            expected="messages/tools/state plus multi-agent trace payload",
+            actual={
+                "messages": len(messages),
+                "payloads": len(payloads),
+                "handoffs": len(handoffs),
+                "reviews": len(reviews),
+                "reconciliations": len(reconciliations),
+            },
+            match=bool(payloads)
+            and (
+                bool(messages)
+                or bool(handoffs)
+                or bool(reviews)
+                or bool(reconciliations)
+            ),
+            finding_type="collaborative_protocol_trace_missing",
+        )
+
+    if quality.get("require_review"):
+        append_check(
+            "review_present",
+            expected="at least one review",
+            actual=reviews,
+            match=bool(reviews),
+            finding_type="collaborative_review_missing",
+        )
+
+    if _collab_bool_config(quality, "require_reconciliation", True):
+        append_check(
+            "reconciliation_present",
+            expected="at least one reconciliation",
+            actual=reconciliations,
+            match=bool(reconciliations),
+            finding_type="collaborative_reconciliation_missing",
+        )
+
+    if quality.get("require_handoff"):
+        append_check(
+            "handoff_present",
+            expected="at least one handoff",
+            actual=handoffs,
+            match=bool(handoffs),
+            finding_type="collaborative_handoff_missing",
+        )
+
+    if _collab_bool_config(quality, "require_balanced_participation", True):
+        participation = _multi_agent_participation_counts(
+            messages,
+            roles,
+            [
+                *common_ground,
+                *shared_task_states,
+                *mental_models,
+                *intent_predictions,
+                *repair_moves,
+                *handoffs,
+                *reviews,
+                *reconciliations,
+            ],
+        )
+        active_roles = [role for role, count in participation.items() if count > 0]
+        min_participation_roles = _collab_int_config(
+            quality,
+            "min_participation_roles",
+            max(2, min(len(required_roles or roles), 3)),
+        )
+        append_check(
+            "balanced_participation",
+            expected={
+                "required_roles": sorted(required_roles or roles),
+                "min_participation_roles": min_participation_roles,
+            },
+            actual=participation,
+            match=len(active_roles) >= min_participation_roles,
+            finding_type="collaborative_participation_unbalanced",
+        )
+
+    if _collab_bool_config(quality, "require_value_diversity", False):
+        value_diversity_text = _stringify(value_diversity).lower()
+        append_check(
+            "value_diversity",
+            expected="structured role/perspective diversity evidence",
+            actual=value_diversity,
+            match=bool(value_diversity)
+            and not _collab_any_signal(
+                value_diversity_text,
+                ["homogenized\": true", "homogenized true"],
+            ),
+            finding_type="collaborative_value_diversity_missing",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="collaborative_competence_quality",
+            score=1.0,
+            reason="No collaborative competence checks provided.",
+            details={
+                "kind": "agent-learning.eval.collaborative-competence.v1",
+                "roles": sorted(roles),
+                "message_count": len(messages),
+            },
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    score = matched / len(checks)
+    return AgentReportMetricResult(
+        name="collaborative_competence_quality",
+        score=round(score, 4),
+        reason=(
+            f"{matched}/{len(checks)} collaborative competence check(s) matched."
+        ),
+        details={
+            "kind": "agent-learning.eval.collaborative-competence.v1",
+            "checks": checks,
+            "findings": findings,
+            "roles": sorted(roles),
+            "handoff_count": len(handoffs),
+            "review_count": len(reviews),
+            "reconciliation_count": len(reconciliations),
+            "message_count": len(messages),
+            "common_ground_count": len(common_ground),
+            "shared_task_state_count": len(shared_task_states),
+            "mental_model_count": len(mental_models),
+            "intent_prediction_count": len(intent_predictions),
+            "repair_move_count": len(repair_moves),
+            "value_diversity_count": len(value_diversity),
+            "research_sources": [
+                {
+                    "id": "2606.06399",
+                    "title": "CollabSim: A CSCW-Grounded Methodology for Investigating Collaborative Competence of LLM Agents through Controlled Multi-Agent Experiments",
+                    "source": "arxiv:2606.06399",
+                    "url": "https://arxiv.org/abs/2606.06399",
+                    "used_for": (
+                        "common-ground, shared task understanding, "
+                        "misalignment repair, and controlled multi-agent "
+                        "collaboration checks"
+                    ),
+                },
+                {
+                    "id": "2606.06388",
+                    "title": "Humans' ALMANAC: A Human Collaboration Dataset of Action-Level Mental Model Annotations for Agent Collaboration",
+                    "source": "arxiv:2606.06388",
+                    "url": "https://arxiv.org/abs/2606.06388",
+                    "used_for": (
+                        "action-level mental model and partner-intent "
+                        "annotations for collaboration"
+                    ),
+                },
+                {
+                    "id": "2606.05985",
+                    "title": "Beyond Alignment: Value Diversity as a Collective Property in Multicultural Agent Systems",
+                    "source": "arxiv:2606.05985",
+                    "url": "https://arxiv.org/abs/2606.05985",
+                    "used_for": (
+                        "system-level value diversity and homogenization "
+                        "checks for multi-agent deliberation"
+                    ),
+                },
+                {
+                    "id": "2606.05670",
+                    "title": "Do More Agents Help? Controlled and Protocol-Aligned Evaluation of LLM Agent Workflows",
+                    "source": "arxiv:2606.05670",
+                    "url": "https://arxiv.org/abs/2606.05670",
+                    "used_for": (
+                        "protocol-aligned trajectory logging and normalized "
+                        "workflow comparison"
+                    ),
+                },
+                {
+                    "id": "2606.05704",
+                    "title": "Critic-Guided Heterogeneous Multi-Agent Reasoning for Reliable Mathematical Problem Solving",
+                    "source": "arxiv:2606.05704",
+                    "url": "https://arxiv.org/abs/2606.05704",
+                    "used_for": (
+                        "critic feedback loops and adaptive error repair"
+                    ),
+                },
+                {
+                    "id": "2606.06025",
+                    "title": "EGTR-Review: Efficient Evidence-Grounded Scientific Peer Review Generation via Multi-Agent Teacher Distillation",
+                    "source": "arxiv:2606.06025",
+                    "url": "https://arxiv.org/abs/2606.06025",
+                    "used_for": "evidence-grounded critique traceability",
+                },
+            ],
+        },
+    )
+
+
+def _multi_agent_transcript_text(
+    context: Mapping[str, Any],
+    payloads: Sequence[Mapping[str, Any]],
+    multi_agent_state: Mapping[str, Any],
+) -> str:
+    parts = [
+        str(context.get("transcript") or ""),
+        _stringify(context.get("messages", [])),
+        _stringify(context.get("events", [])),
+        _stringify(multi_agent_state),
+    ]
+    parts.extend(_stringify(payload) for payload in payloads)
+    return "\n".join(part for part in parts if part)
+
+
+def _multi_agent_messages_from_payloads(
+    context: Mapping[str, Any],
+    payloads: Sequence[Mapping[str, Any]],
+    multi_agent_state: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    for item in _as_list(context.get("messages", [])):
+        item_dict = _as_dict(item)
+        if item_dict:
+            messages.append(item_dict)
+    for source in [multi_agent_state, *payloads]:
+        for key in ("messages", "utterances", "turns", "actions"):
+            for item in _as_list(_as_dict(source).get(key, [])):
+                item_dict = _as_dict(item)
+                if item_dict:
+                    messages.append(item_dict)
+    return _dedupe_dicts(messages)
+
+
+def _multi_agent_mental_models_from_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    multi_agent_state: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for source in [multi_agent_state, *payloads]:
+        source_dict = _as_dict(source)
+        for key in (
+            "mental_models",
+            "mental_model_annotations",
+            "mental_model_updates",
+        ):
+            raw = source_dict.get(key)
+            if isinstance(raw, Mapping):
+                for role, value in raw.items():
+                    row = _as_dict(value)
+                    row.setdefault("role", str(role))
+                    rows.append(row)
+            else:
+                for item in _as_list(raw):
+                    item_dict = _as_dict(item)
+                    if item_dict:
+                        rows.append(item_dict)
+    return _dedupe_dicts(rows)
+
+
+def _collab_records_from_sources(
+    payloads: Sequence[Mapping[str, Any]],
+    multi_agent_state: Mapping[str, Any],
+    keys: Sequence[str],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for source in [multi_agent_state, *payloads]:
+        source_dict = _as_dict(source)
+        for key in keys:
+            raw = source_dict.get(key)
+            if isinstance(raw, Mapping):
+                if _collab_mapping_is_record(raw):
+                    item = dict(raw)
+                    item.setdefault("source_key", key)
+                    rows.append(item)
+                else:
+                    for record_key, value in raw.items():
+                        row = _as_dict(value)
+                        if row:
+                            row.setdefault("source_key", key)
+                            row.setdefault("key", str(record_key))
+                            rows.append(row)
+                        elif value not in (None, ""):
+                            rows.append(
+                                {
+                                    "source_key": key,
+                                    "key": str(record_key),
+                                    "value": value,
+                                }
+                            )
+            else:
+                for item in _as_list(raw):
+                    item_dict = _as_dict(item)
+                    if item_dict:
+                        item_dict.setdefault("source_key", key)
+                        rows.append(item_dict)
+                    elif item not in (None, ""):
+                        rows.append({"source_key": key, "value": item})
+    return _dedupe_dicts(rows)
+
+
+def _collab_mapping_is_record(value: Mapping[str, Any]) -> bool:
+    record_keys = {
+        "actor",
+        "agent",
+        "claim",
+        "goal",
+        "homogenized",
+        "observer",
+        "partner",
+        "perceived_partner_intent",
+        "perceived_team_goal",
+        "perspectives",
+        "repair",
+        "role",
+        "roles",
+        "self_reasoning",
+        "state",
+        "status",
+        "team_goal",
+    }
+    return bool(record_keys & {str(key) for key in value.keys()})
+
+
+def _collab_bool_config(
+    quality: Mapping[str, Any],
+    key: str,
+    default: bool,
+) -> bool:
+    if key not in quality:
+        return default
+    value = quality.get(key)
+    if isinstance(value, str):
+        return value.lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
+def _collab_int_config(
+    quality: Mapping[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    try:
+        value = int(quality.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(0, value)
+
+
+def _multi_agent_participation_counts(
+    messages: Sequence[Mapping[str, Any]],
+    roles: set[str],
+    records: Sequence[Mapping[str, Any]] = (),
+) -> Dict[str, int]:
+    counts = {role: 0 for role in roles}
+    for message in messages:
+        speaker = str(
+            message.get("speaker")
+            or message.get("agent")
+            or message.get("role")
+            or message.get("from")
+            or ""
+        )
+        if speaker in counts:
+            counts[speaker] += 1
+    for record in records:
+        for role in _collab_record_roles(record):
+            if role in counts:
+                counts[role] += 1
+    return counts
+
+
+def _collab_record_roles(record: Mapping[str, Any]) -> List[str]:
+    values: List[Any] = []
+    for key in (
+        "role",
+        "agent",
+        "actor",
+        "observer",
+        "partner",
+        "reviewer",
+        "from",
+        "to",
+    ):
+        if record.get(key) not in (None, ""):
+            values.append(record.get(key))
+    for key in ("roles", "participants", "accepted_by", "contributors"):
+        values.extend(_multi_agent_string_list(record.get(key)))
+    return _dedupe_strings(values)
+
+
+def _collab_any_signal(text: str, terms: Sequence[str]) -> bool:
+    return any(term in text for term in terms)
 
 
 def _causal_attribution_quality_metrics(
@@ -27286,7 +27965,22 @@ def _multi_agent_roles_from_payloads(
     roles: set[str] = set()
 
     def merge(source: Mapping[str, Any]) -> None:
-        roles.update(str(item) for item in _as_list(source.get("participants", [])) if item not in (None, ""))
+        participants = source.get("participants", [])
+        if isinstance(participants, Mapping):
+            roles.update(
+                str(key)
+                for key in participants.keys()
+                if key not in (None, "")
+            )
+        else:
+            for item in _as_list(participants):
+                item_dict = _as_dict(item)
+                if item_dict:
+                    role = item_dict.get("name") or item_dict.get("role") or item_dict.get("id")
+                    if role not in (None, ""):
+                        roles.add(str(role))
+                elif item not in (None, ""):
+                    roles.add(str(item))
         roles.update(str(key) for key in _as_dict(source.get("roles", {})).keys())
 
     merge(multi_agent_state)
@@ -27465,7 +28159,23 @@ def _dedupe_dicts(values: Iterable[Any]) -> List[Dict[str, Any]]:
 def _looks_like_multi_agent_trace(data: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
     kind = str(data.get("kind") or metadata.get("kind") or "").lower()
     return kind == "multi_agent_trace" or any(
-        key in data for key in ("participants", "roles", "handoffs", "reviews", "reconciliations")
+        key in data
+        for key in (
+            "participants",
+            "roles",
+            "handoffs",
+            "reviews",
+            "reconciliations",
+            "common_ground",
+            "common_ground_updates",
+            "shared_task_state",
+            "mental_models",
+            "mental_model_updates",
+            "intent_predictions",
+            "partner_intents",
+            "repair_moves",
+            "value_diversity",
+        )
     )
 
 
@@ -27484,6 +28194,18 @@ def _merge_multi_agent_trace_payload(observed: set[str], payload: Mapping[str, A
         observed.add("reconciliation")
     if payload.get("state"):
         observed.add("state")
+    if _as_list(payload.get("common_ground", [])) or _as_list(payload.get("common_ground_updates", [])):
+        observed.add("common_ground")
+    if _as_dict(payload.get("shared_task_state", {})) or _as_dict(payload.get("task_state", {})):
+        observed.add("shared_task_state")
+    if _as_list(payload.get("mental_models", [])) or _as_dict(payload.get("mental_models", {})):
+        observed.add("mental_model")
+    if _as_list(payload.get("intent_predictions", [])) or _as_list(payload.get("partner_intents", [])):
+        observed.add("partner_intent")
+    if _as_list(payload.get("repair_moves", [])) or _as_list(payload.get("misalignment_repairs", [])):
+        observed.add("repair")
+    if payload.get("value_diversity") or payload.get("diversity_checks"):
+        observed.add("value_diversity")
     for key in payload:
         _add_multi_agent_trace_key(observed, str(key))
 

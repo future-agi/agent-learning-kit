@@ -8467,16 +8467,26 @@ class MultiAgentRoomEnvironment(EnvironmentAdapter):
         expected_handoffs: Optional[Iterable[Mapping[str, Any]]] = None,
         expected_reviews: Optional[Iterable[Mapping[str, Any]]] = None,
         expected_reconciliation: Optional[Mapping[str, Any]] = None,
+        messages: Optional[Iterable[Mapping[str, Any]]] = None,
+        handoffs: Optional[Iterable[Mapping[str, Any]]] = None,
+        reviews: Optional[Iterable[Mapping[str, Any]]] = None,
+        reconciliations: Optional[Iterable[Mapping[str, Any]]] = None,
         state: Optional[Mapping[str, Any]] = None,
         allow_unknown_roles: bool = True,
+        extra_trace: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.participants = _normalize_participants(participants)
         self.handoff_contracts = _normalize_handoff_contracts(handoff_contracts)
         self.expected_handoffs = [copy.deepcopy(dict(item)) for item in expected_handoffs or []]
         self.expected_reviews = [copy.deepcopy(dict(item)) for item in expected_reviews or []]
         self.expected_reconciliation = copy.deepcopy(dict(expected_reconciliation or {}))
+        self.initial_messages = [copy.deepcopy(dict(item)) for item in messages or []]
+        self.initial_handoffs = [copy.deepcopy(dict(item)) for item in handoffs or []]
+        self.initial_reviews = [copy.deepcopy(dict(item)) for item in reviews or []]
+        self.initial_reconciliations = [copy.deepcopy(dict(item)) for item in reconciliations or []]
         self.initial_state = copy.deepcopy(dict(state or {}))
         self.allow_unknown_roles = allow_unknown_roles
+        self.extra_trace = copy.deepcopy(dict(extra_trace or {}))
         self.messages: List[Dict[str, Any]] = []
         self.handoffs: List[Dict[str, Any]] = []
         self.reviews: List[Dict[str, Any]] = []
@@ -8484,10 +8494,10 @@ class MultiAgentRoomEnvironment(EnvironmentAdapter):
         self.state = copy.deepcopy(self.initial_state)
 
     def reset(self, **context: Any) -> EnvironmentSnapshot:
-        self.messages = []
-        self.handoffs = []
-        self.reviews = []
-        self.reconciliations = []
+        self.messages = copy.deepcopy(self.initial_messages)
+        self.handoffs = copy.deepcopy(self.initial_handoffs)
+        self.reviews = copy.deepcopy(self.initial_reviews)
+        self.reconciliations = copy.deepcopy(self.initial_reconciliations)
         self.state = copy.deepcopy(self.initial_state)
         return EnvironmentSnapshot(
             tools=[
@@ -8525,6 +8535,7 @@ class MultiAgentRoomEnvironment(EnvironmentAdapter):
                         "expected_handoffs": copy.deepcopy(self.expected_handoffs),
                         "expected_reviews": copy.deepcopy(self.expected_reviews),
                         "expected_reconciliation": copy.deepcopy(self.expected_reconciliation),
+                        **copy.deepcopy(self.extra_trace),
                     },
                 )
             ],
@@ -8688,6 +8699,7 @@ class MultiAgentRoomEnvironment(EnvironmentAdapter):
             "participants": list(self.participants.keys()),
             "roles": copy.deepcopy(self.participants),
             "handoff_contracts": copy.deepcopy(self.handoff_contracts),
+            **copy.deepcopy(self.extra_trace),
             "messages": copy.deepcopy(self.messages),
             "handoffs": copy.deepcopy(self.handoffs),
             "reviews": copy.deepcopy(self.reviews),

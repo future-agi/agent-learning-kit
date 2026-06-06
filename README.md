@@ -698,6 +698,17 @@ AgentOptimizer can select candidates that solve the task without repeatedly
 calling the same tool. The metric is inspired by 2026 behavior-entropy research
 and runs without external eval, observability, or optimizer services.
 
+Collaborative competence is a native local multi-agent process metric.
+`collaborative_competence_quality` scores explicit common-ground updates, shared
+task state, mental-model annotations, partner-intent predictions, misalignment
+repair moves, balanced role participation, value-diversity preservation, and
+protocol trace evidence. Use `evals.collaborative_competence_report()` or
+`simulate.collaborative_competence_artifact()` for direct artifacts, or add the
+metric to AgentOptimizer weights so candidate search selects teams that
+collaborate well instead of only producing a final answer. The metric builds on
+June 2026 collaboration, mental-model, value-diversity, critique, and
+protocol-aligned trajectory research, but remains deterministic and local-only.
+
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
@@ -730,6 +741,10 @@ AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY=... \
   PYTHONPATH=src python examples/sdk_behavior_entropy_optimization.py \
   artifacts/sdk-behavior-entropy-optimization.json
+
+AGENT_LEARNING_SDK_COLLABORATIVE_COMPETENCE_KEY=... \
+  PYTHONPATH=src python examples/sdk_collaborative_competence_optimization.py \
+  artifacts/sdk-collaborative-competence-optimization.json
 
 AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_component_optimization.py \
