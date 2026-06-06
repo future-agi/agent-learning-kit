@@ -212,6 +212,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_report_repair is not None
     assert optimize.build_framework_import_repair_optimization_manifest is not None
     assert optimize.optimize_framework_import_repair is not None
+    assert simulate.probe_framework_imports is not None
+    assert simulate.build_framework_import_run_manifest is not None
     assert optimize.build_social_memory_framework_optimization_manifest is not None
     assert optimize.optimize_social_memory_framework is not None
     assert simulate.build_social_memory_framework_run_manifest is not None
@@ -5179,6 +5181,186 @@ def test_sdk_framework_import_repair_optimization_example_runs(
         "tool_coverage": 1.0,
         "framework_import": 1.0,
     }
+
+
+def test_framework_import_probe_records_runtime_import_evidence(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import simulate
+
+    module_dir = tmp_path / "probe_modules"
+    module_dir.mkdir()
+    (module_dir / "runtime_probe_target.py").write_text(
+        """
+def build_agent():
+    return {"status": "ready"}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(module_dir))
+
+    manifest = simulate.probe_framework_imports(
+        [
+            {
+                "id": "good_factory",
+                "framework": "langgraph",
+                "module": "runtime_probe_target",
+                "attribute": "build_agent",
+                "callable": True,
+                "invoke": True,
+                "expected_result": {"status": "ready"},
+            },
+            {
+                "id": "missing_module",
+                "framework": "langgraph",
+                "module": "missing_runtime_probe_target",
+            },
+        ],
+        name="runtime-probe-test",
+        framework="langgraph",
+        required_frameworks=["langgraph"],
+        required_export_types=["probe_suite"],
+        required_signals=[
+            "framework_import",
+            "runtime_import",
+            "python_import",
+            "module_import",
+            "callable",
+            "runtime_call",
+        ],
+    )
+
+    assert manifest["kind"] == "framework_import_manifest"
+    assert manifest["metadata"]["runtime_probe"]["target_count"] == 2
+    summary = manifest["summary"]
+    assert summary["source_count"] == 2
+    assert summary["passed_source_count"] == 1
+    assert summary["failed_source_count"] == 1
+    assert summary["failed_sources"] == ["missing_module"]
+    assert summary["observed_frameworks"] == ["langgraph"]
+    assert summary["observed_export_types"] == ["probe_suite"]
+    assert summary["missing_required_frameworks"] == []
+    assert summary["missing_required_export_types"] == []
+    assert summary["missing_required_signals"] == []
+    good_source = next(
+        item for item in manifest["sources"] if item["id"] == "good_factory"
+    )
+    assert good_source["status"] == "passed"
+    assert good_source["call_result_type"] == "dict"
+    missing_source = next(
+        item for item in manifest["sources"] if item["id"] == "missing_module"
+    )
+    assert missing_source["status"] == "failed"
+    assert missing_source["exception_type"] == "ModuleNotFoundError"
+
+
+def test_sdk_framework_import_probe_simulation_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_IMPORT_PROBE_KEY",
+        "real-local-framework-import-probe-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_framework_import_probe_simulation.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_import_probe_simulation",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_FRAMEWORK_IMPORT_PROBE_KEY"]
+    assert manifest["simulation"]["environments"][0]["type"] == "framework_import"
+    assert manifest["metadata"]["framework"] == "langgraph"
+    assert {item["year"] for item in manifest["metadata"]["research_sources"]} == {2026}
+    assert {
+        item["url"] for item in manifest["metadata"]["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2606.04104",
+        "https://arxiv.org/abs/2605.20173",
+        "https://arxiv.org/abs/2603.22341",
+        "https://agentoptimizer.github.io/agentopt/",
+    }
+    import_payload = manifest["simulation"]["environments"][0]["data"]
+    summary = import_payload["summary"]
+    assert summary["source_count"] == 3
+    assert summary["passed_source_count"] == 3
+    assert summary["failed_source_count"] == 0
+    assert summary["observed_frameworks"] == [
+        "langchain",
+        "langgraph",
+        "pipecat",
+    ]
+    assert summary["missing_required_frameworks"] == []
+    assert summary["missing_required_export_types"] == []
+    assert summary["missing_required_signals"] == []
+
+    output_path = tmp_path / "sdk-framework-import-probe-simulation.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {"framework_import_manifest"}
+    runtime_summary = state["framework_import_manifest"]["summary"]
+    assert runtime_summary["source_count"] == 3
+    assert runtime_summary["passed_source_count"] == 3
+    assert runtime_summary["failed_source_count"] == 0
+
+    readiness = result["framework_readiness"]
+    assert readiness["kind"] == "framework_readiness_map"
+    assert readiness["status"] == "ready"
+    assert readiness["present_layers"] == ["import"]
+    assert readiness["weak_layers"] == []
+    assert readiness["import"]["source_count"] == 3
+    assert readiness["import"]["failed_source_count"] == 0
+    assert readiness["import"]["has_adapter"] is True
+    assert readiness["import"]["has_target"] is True
+    assert readiness["import"]["has_observability"] is True
+    assert readiness["import"]["has_artifacts"] is True
+    assert {
+        action["id"]
+        for action in readiness["actions"]
+    } >= {
+        "report_framework_readiness",
+        "rerun_framework_certification",
+        "optimize_framework_readiness",
+    }
+
+    candidate = optimize.AgentCandidate.from_config(
+        {"simulation.environments": manifest["simulation"]["environments"]},
+        layers=["framework"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        result["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config={
+            "layers": ["framework_import"],
+            "required_framework_import": [
+                "langgraph",
+                "langchain",
+                "pipecat",
+                "probe_suite",
+                "runtime_import",
+                "runtime_call",
+            ],
+            "framework_import_quality": {
+                "min_source_count": 3,
+                "min_passed_sources": 3,
+                "max_failed_sources": 0,
+            },
+        },
+    )
+    assert evidence.score == pytest.approx(1.0)
 
 
 def test_sdk_agent_control_plane_optimization_example_runs(monkeypatch, tmp_path):

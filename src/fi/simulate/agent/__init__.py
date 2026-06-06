@@ -2,6 +2,7 @@ from .definition import AgentDefinition, LLMConfig, TTSConfig, STTConfig, VADCon
 from .wrapper import AgentInput, AgentResponse, AgentWrapper, SimulationArtifact, SimulationEvent
 from .generic import GenericAgentWrapper, wrap_agent
 from .frameworks import FrameworkAdapterSpec, supported_frameworks, wrap_framework
+from .import_probe import probe_framework_imports
 from .mocks import EchoAgentWrapper, RuleBasedAgentWrapper, ScriptedAgentWrapper, make_tool_response
 from .wrappers import (
     OpenAIAgentWrapper,
@@ -25,6 +26,7 @@ __all__ = [
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
     "supported_frameworks",
+    "probe_framework_imports",
     "wrap_agent",
     "wrap_framework",
     "EchoAgentWrapper",

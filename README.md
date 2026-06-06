@@ -834,6 +834,14 @@ framework import readiness contract. The same repair search is available from
 Python through
 `optimize.build_framework_import_repair_optimization_manifest()` and
 `examples/sdk_framework_import_repair_optimization.py`.
+For direct promptfoo-style preflight, `simulate.probe_framework_imports()` now
+performs real Python imports and optional explicit callable invocation, then
+returns normalized `framework_import_manifest` evidence. Use
+`simulate.build_framework_import_run_manifest()` or
+`examples/sdk_framework_import_probe_simulation.py` to write a runnable
+`agent-learning.run.v1` artifact, execute it with `agent-learn run`, report it
+with `agent-learn report`, and feed the same evidence into framework-readiness
+optimization.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It

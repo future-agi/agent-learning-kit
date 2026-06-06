@@ -217,6 +217,7 @@ _SIMULATE_SUBMODULE_ALIASES = {
     "agent.definition": "fi.simulate.agent.definition",
     "agent.frameworks": "fi.simulate.agent.frameworks",
     "agent.generic": "fi.simulate.agent.generic",
+    "agent.import_probe": "fi.simulate.agent.import_probe",
     "agent.mocks": "fi.simulate.agent.mocks",
     "agent.wrapper": "fi.simulate.agent.wrapper",
     "agent.wrappers": "fi.simulate.agent.wrappers",
@@ -1226,6 +1227,168 @@ def build_multimodal_image_run_manifest(
             "source": "agent_learning.simulate.build_multimodal_image_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
+    return manifest
+
+
+def probe_framework_imports(
+    targets: Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any],
+    *,
+    name: str = "framework-import-runtime-probe",
+    framework: str = "custom",
+    adapter: Optional[Mapping[str, Any]] = None,
+    target: Optional[Mapping[str, Any]] = None,
+    observability: Optional[Mapping[str, Any]] = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+    required_sources: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    required_export_types: Sequence[str] = (),
+    required_signals: Sequence[str] = (),
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Probe real Python imports and return normalized framework-import evidence."""
+
+    return copy.deepcopy(
+        _simulate().probe_framework_imports(
+            targets,
+            name=name,
+            framework=framework,
+            adapter=adapter,
+            target=target,
+            observability=observability,
+            artifacts=artifacts,
+            required_sources=required_sources,
+            required_frameworks=required_frameworks,
+            required_export_types=required_export_types,
+            required_signals=required_signals,
+            metadata=metadata,
+        )
+    )
+
+
+def build_framework_import_run_manifest(
+    *,
+    name: str,
+    targets: Optional[Sequence[str | Mapping[str, Any]] | str | Mapping[str, Any]] = None,
+    import_manifest: Optional[Mapping[str, Any]] = None,
+    framework: str = "custom",
+    adapter: Optional[Mapping[str, Any]] = None,
+    target: Optional[Mapping[str, Any]] = None,
+    observability: Optional[Mapping[str, Any]] = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+    required_sources: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    required_export_types: Sequence[str] = (),
+    required_signals: Sequence[str] = (),
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a runnable manifest that proves BYO framework import readiness."""
+
+    if not name:
+        raise ValueError("name is required")
+    if import_manifest is None and targets is None:
+        raise ValueError("targets or import_manifest is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    resolved_max_turns = int(max_turns if max_turns is not None else min_turns)
+    if resolved_max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    framework_key = _framework_key(framework)
+    required_framework_list = _unique_strings(required_frameworks or [framework_key])
+    required_export_type_list = _unique_strings(required_export_types or ["probe_suite"])
+    required_signal_list = _unique_strings(
+        required_signals
+        or [
+            "framework_import",
+            "runtime_import",
+            "python_import",
+            "module_import",
+        ]
+    )
+    if import_manifest is None:
+        import_payload = probe_framework_imports(
+            targets,
+            name=f"{name}-runtime-import-probe",
+            framework=framework_key,
+            adapter=adapter,
+            target=target,
+            observability=observability,
+            artifacts=artifacts,
+            required_sources=required_sources,
+            required_frameworks=required_framework_list,
+            required_export_types=required_export_type_list,
+            required_signals=required_signal_list,
+            metadata={
+                "source": "agent_learning.simulate.probe_framework_imports",
+                **copy.deepcopy(dict(metadata or {})),
+            },
+        )
+    else:
+        import_payload = copy.deepcopy(
+            _simulate().normalize_framework_import_manifest(
+                import_manifest,
+                name=f"{name}-runtime-import-probe",
+                framework=framework_key,
+                adapter=adapter,
+                target=target,
+                observability=observability,
+                artifacts=artifacts,
+                required_sources=required_sources,
+                required_frameworks=required_framework_list,
+                required_export_types=required_export_type_list,
+                required_signals=required_signal_list,
+                metadata={
+                    "source": "agent_learning.simulate.build_framework_import_run_manifest",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            )
+        )
+    summary = dict(import_payload.get("summary") or {})
+    if int(summary.get("source_count") or 0) < 1:
+        raise ValueError("framework import manifest must contain at least one source")
+
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(scenario)
+            if scenario is not None
+            else _default_framework_import_probe_scenario(str(name), framework_key)
+        ),
+        "agent": copy.deepcopy(dict(agent or _default_framework_import_probe_agent())),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": resolved_max_turns,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": [{"type": "framework_import", "data": import_payload}],
+        },
+        "evaluation": _framework_import_probe_evaluation(
+            import_payload,
+            evaluation_config=evaluation_config,
+            threshold=threshold,
+        ),
+        "metadata": {
+            "source": "agent_learning.simulate.build_framework_import_run_manifest",
+            "framework": framework_key,
+            "research_sources": _framework_import_probe_research_sources(),
+            "original_synthesis": (
+                "Runtime import readiness is a deterministic proof step before "
+                "Future AGI treats BYO agent code as observable, simulatable, "
+                "red-teamable, or optimizable."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
     return manifest
 
 
@@ -2509,6 +2672,141 @@ def _framework_certification_environment(item: Mapping[str, Any]) -> dict[str, A
     return {"type": "framework_lifecycle", "data": copied}
 
 
+def _default_framework_import_probe_scenario(name: str, framework: str) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {"name": "Mira", "role": "framework-integration-owner"},
+                "situation": (
+                    f"Mira needs the {framework} agent code imported and probed "
+                    "before Future AGI can expose it for observability, evals, "
+                    "red-team runs, and optimization."
+                ),
+                "outcome": (
+                    "The runtime import probe has source, export, required "
+                    "signal, and failed-source evidence ready for reporting."
+                ),
+            }
+        ],
+    }
+
+
+def _default_framework_import_probe_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "framework-import-runtime-probe-agent",
+        "responses": [
+            {
+                "content": "Checking runtime import evidence before certification.",
+                "tool_calls": [
+                    {
+                        "id": "framework_import_status",
+                        "name": "framework_import_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_sources",
+                        "name": "list_framework_import_sources",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_exports",
+                        "name": "list_framework_import_exports",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "framework_import_gaps",
+                        "name": "list_framework_import_gaps",
+                        "arguments": {},
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def _framework_import_probe_evaluation(
+    import_payload: Mapping[str, Any],
+    *,
+    evaluation_config: Optional[Mapping[str, Any]],
+    threshold: float,
+) -> dict[str, Any]:
+    summary = dict(import_payload.get("summary") or {})
+    config = {
+        "task_description": (
+            "Verify runtime framework imports and surface framework-import "
+            "readiness evidence."
+        ),
+        "expected_result": (
+            "All required import sources, frameworks, export types, and signals "
+            "are present with zero failed import sources."
+        ),
+        "required_tools": [
+            "framework_import_status",
+            "list_framework_import_sources",
+            "list_framework_import_exports",
+            "list_framework_import_gaps",
+        ],
+        "success_criteria": [
+            "framework import status is inspected",
+            "source evidence is listed",
+            "export evidence is listed",
+            "framework import gaps are checked",
+        ],
+        "required_framework_import": _unique_strings(
+            [
+                *list(import_payload.get("required_frameworks") or []),
+                *list(import_payload.get("required_export_types") or []),
+                *list(import_payload.get("required_signals") or []),
+            ]
+        ),
+        "framework_import_quality": {
+            "min_source_count": int(summary.get("source_count") or 1),
+            "min_passed_sources": int(summary.get("source_count") or 1),
+            "max_failed_sources": 0,
+        },
+    }
+    config.update(copy.deepcopy(dict(evaluation_config or {})))
+    return {
+        "enabled": True,
+        "agent_report": {
+            "threshold": float(threshold),
+            "config": config,
+        },
+    }
+
+
+def _framework_import_probe_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.04104",
+            "used_for": "runtime-neutral proof/certificate shape for heterogeneous agent systems",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.20173",
+            "used_for": "stochastic-deterministic runtime boundary diagnostics",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "deployment runtime semantics as first-class agent evidence",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.22341",
+            "used_for": "trajectory-aware execution evidence before agent red-team search",
+        },
+        {
+            "year": 2026,
+            "url": "https://agentoptimizer.github.io/agentopt/",
+            "used_for": "client-side candidate search and metric-based diagnosis baseline",
+        },
+    ]
+
+
 def _framework_trace_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     copied = copy.deepcopy(dict(item))
     if copied.get("type") == "framework_trace":
@@ -2636,6 +2934,7 @@ __all__ = [
     "build_eval_suite_manifest",
     "build_browser_cua_run_manifest",
     "build_framework_certification_run_manifest",
+    "build_framework_import_run_manifest",
     "build_framework_run_manifest",
     "build_manifest_agent_callback",
     "build_manifest_environments",
@@ -2662,6 +2961,7 @@ __all__ = [
     "missing_manifest_env",
     "normalize_agent_integration_provider_name",
     "optimize_manifest_file",
+    "probe_framework_imports",
     "promote_to_regression",
     "promote_to_regression_file",
     "public_result",
