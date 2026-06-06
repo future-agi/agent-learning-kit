@@ -23,6 +23,9 @@ AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
 AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
     "agent-learning.optimization.framework-certification-proof.v1"
 )
+AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND = (
+    "agent-learning.optimization.framework-adapter-matrix-proof.v1"
+)
 AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND = (
     "agent-learning.optimization.framework-runtime-proof.v1"
 )
@@ -355,6 +358,7 @@ def optimize_manifest_file(
     payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
+    payload = with_framework_adapter_matrix_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
@@ -386,6 +390,7 @@ def optimize_manifest(
     payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
+    payload = with_framework_adapter_matrix_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
@@ -507,6 +512,36 @@ def with_framework_certification_proof(payload: Mapping[str, Any]) -> dict[str, 
         proof["failed_check_ids"]
     )
     summary["framework_certification_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_framework_adapter_matrix_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for adapter-matrix optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_framework_adapter_matrix_optimization(result, optimization):
+        return result
+
+    proof = _framework_adapter_matrix_proof(result, optimization)
+    result["framework_adapter_matrix_proof"] = proof
+    optimization["framework_adapter_matrix_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["framework_adapter_matrix_proof_status"] = proof["status"]
+    summary["framework_adapter_matrix_proof_passed"] = proof["passed"]
+    summary["framework_adapter_matrix_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["framework_adapter_matrix_proof_check_count"] = proof["check_count"]
+    summary["framework_adapter_matrix_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["framework_adapter_matrix_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -2285,6 +2320,190 @@ def optimize_redteam_corpus(
     )
 
 
+def build_framework_adapter_matrix_optimization_manifest(
+    *,
+    name: str = "framework-adapter-matrix-optimization",
+    frameworks: Sequence[str] = (
+        "langchain",
+        "langgraph",
+        "llamaindex",
+        "crewai",
+        "autogen",
+        "openai_agents",
+        "livekit",
+        "pipecat",
+    ),
+    matrix_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over native framework adapter matrices.
+
+    The search unit is the whole matrix evidence bundle, not a prompt. This
+    lets Future AGI optimize the framework support surface itself: required
+    frameworks, local executable fixtures, schemas, capabilities, and metric
+    gates move together as one candidate.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    framework_keys = _unique_strings(frameworks)
+    if not framework_keys:
+        raise ValueError("frameworks must contain at least one framework")
+
+    from . import simulate as _agent_simulate
+
+    verified_matrix = _agent_simulate.framework_adapter_contract_matrix(
+        framework_keys
+    )
+    weak_frameworks = (
+        framework_keys[: max(1, min(2, len(framework_keys) - 1))]
+        if len(framework_keys) > 1
+        else framework_keys
+    )
+    weak_matrix = _agent_simulate.framework_adapter_contract_matrix(weak_frameworks)
+    matrices = (
+        [copy.deepcopy(dict(item)) for item in matrix_candidates]
+        if matrix_candidates is not None
+        else [weak_matrix, verified_matrix]
+    )
+    if not matrices:
+        raise ValueError("matrix_candidates must contain at least one matrix")
+
+    verified_run = _agent_simulate.build_framework_adapter_matrix_run_manifest(
+        name=name,
+        frameworks=framework_keys,
+        matrix=verified_matrix,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+    )
+    environment_candidates = [
+        _agent_simulate.build_framework_adapter_matrix_run_manifest(
+            name=name,
+            frameworks=framework_keys,
+            matrix=matrix,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            metadata=target_metadata,
+        )["simulation"]["environments"]
+        for matrix in matrices
+    ]
+    search_space = {"simulation.environments": copy.deepcopy(environment_candidates)}
+    eval_config = copy.deepcopy(
+        verified_run["evaluation"]["agent_report"]["config"]
+    )
+    max_turns_value = int(verified_run["simulation"]["max_turns"])
+    return {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": str(name),
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(verified_run["scenario"]),
+        "agent": copy.deepcopy(verified_run["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": str(name),
+                "layers": [
+                    "framework",
+                    "integration",
+                    "harness",
+                    "evaluator",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_framework_adapter_matrix_optimization_manifest"
+                    ),
+                    "cookbook": "framework-adapter-matrix-optimization",
+                    "task_kind": "framework_adapter_matrix",
+                    "frameworks": framework_keys,
+                    "candidate_search_paths": ["simulation.environments"],
+                    "research_sources": _unique_research_sources(
+                        [
+                            *_framework_adapter_matrix_research_sources(),
+                            *[dict(item) for item in research_sources],
+                        ]
+                    ),
+                    "original_synthesis": (
+                        "Framework optimization should search an executable "
+                        "adapter-contract matrix, not one-off framework imports: "
+                        "local fixtures, schemas, lifecycle hooks, capabilities, "
+                        "modalities, and metric evidence are selected together "
+                        "and verified from simulation report state."
+                    ),
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_framework_adapter_matrix(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute native framework adapter-matrix optimization."""
+
+    manifest = build_framework_adapter_matrix_optimization_manifest(
+        **manifest_kwargs
+    )
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_stateful_tool_world_optimization_manifest(
     *,
     name: str = "stateful-tool-world-optimization",
@@ -3657,6 +3876,192 @@ def _framework_certification_proof(
             "readiness_status": readiness.get("status"),
             "readiness_present_layers": readiness.get("present_layers"),
             "selected_metrics": selected_metric_evidence,
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _framework_adapter_matrix_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    report_state = _selected_report_environment_state(selected_history)
+    report_trace = _plain_mapping(report_state.get("framework_trace"))
+    matrix = _framework_adapter_matrix_from_environments(environments)
+    report_matrix = _framework_adapter_matrix_from_trace(report_trace)
+    matrix_summary = _plain_mapping(matrix.get("summary"))
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    source_target = _plain_mapping(source_optimization.get("target"))
+    source_target_metadata = _plain_mapping(source_target.get("metadata"))
+    required_frameworks = _unique_strings(
+        matrix.get("frameworks")
+        or matrix_summary.get("frameworks")
+        or source_target_metadata.get("frameworks")
+    )
+    matrix_frameworks = _unique_strings(
+        matrix.get("frameworks") or matrix_summary.get("frameworks")
+    )
+    selected_metric_evidence = {
+        "framework_adapter_contract_quality": selected_metrics.get(
+            "framework_adapter_contract_quality"
+        )
+    }
+
+    checks = [
+        _proof_check(
+            "native_no_external_adapter_matrix_dependency",
+            passed=not _contains_nested_keys(
+                matrix,
+                {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+            ),
+            required=True,
+            reason=(
+                "selected adapter matrix is a local contract artifact with no "
+                "endpoint/auth/key dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(
+                        matrix,
+                        {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+                    )
+                ),
+            },
+        ),
+        _proof_check(
+            "adapter_matrix_environment_present",
+            passed="framework_trace" in environment_types
+            and matrix.get("kind")
+            == "agent-learning.framework-adapter-contract-matrix.v1",
+            required=True,
+            reason=(
+                "selected candidate carries the matrix through framework_trace "
+                "simulation evidence"
+            ),
+            evidence={
+                "environment_types": environment_types,
+                "matrix_kind": matrix.get("kind"),
+            },
+        ),
+        _proof_check(
+            "adapter_matrix_status_closed",
+            passed=str(matrix.get("status") or "") == "passed"
+            and not _plain_list(matrix.get("findings")),
+            required=True,
+            reason="selected matrix has passed status and no matrix findings",
+            evidence={
+                "status": matrix.get("status"),
+                "finding_count": len(_plain_list(matrix.get("findings"))),
+            },
+        ),
+        _proof_check(
+            "adapter_matrix_framework_coverage_closed",
+            passed=bool(matrix_frameworks)
+            and set(required_frameworks or matrix_frameworks).issubset(
+                set(matrix_frameworks)
+            )
+            and _as_int(matrix.get("framework_count")) == len(matrix_frameworks),
+            required=True,
+            reason=(
+                "selected matrix covers every required framework with a "
+                "deduplicated contract row"
+            ),
+            evidence={
+                "required_frameworks": required_frameworks,
+                "frameworks": matrix_frameworks,
+                "framework_count": matrix.get("framework_count"),
+            },
+        ),
+        _proof_check(
+            "adapter_matrix_local_fixture_closed",
+            passed=_as_int(matrix_summary.get("requires_external_service_count")) == 0
+            and _as_int(matrix_summary.get("external_target_count")) == 0
+            and _as_int(matrix_summary.get("local_executable_fixture_count"))
+            >= len(matrix_frameworks),
+            required=True,
+            reason=(
+                "selected matrix uses local executable fixtures and no external "
+                "service or external target schemes"
+            ),
+            evidence={
+                "requires_external_service_count": matrix_summary.get(
+                    "requires_external_service_count"
+                ),
+                "external_target_count": matrix_summary.get("external_target_count"),
+                "local_executable_fixture_count": matrix_summary.get(
+                    "local_executable_fixture_count"
+                ),
+            },
+        ),
+        _proof_check(
+            "adapter_matrix_metric_evidence_closed",
+            passed=_as_float(
+                selected_metrics.get("framework_adapter_contract_quality")
+            )
+            >= 1.0,
+            required=True,
+            reason=(
+                "selected candidate report closes the native adapter contract "
+                "quality metric"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+        _proof_check(
+            "adapter_matrix_report_evidence_closed",
+            passed=report_matrix.get("kind")
+            == "agent-learning.framework-adapter-contract-matrix.v1"
+            and _unique_strings(report_matrix.get("frameworks")) == matrix_frameworks,
+            required=True,
+            reason=(
+                "the selected report state contains the same matrix artifact "
+                "that the optimizer selected"
+            ),
+            evidence={
+                "report_matrix_kind": report_matrix.get("kind"),
+                "report_frameworks": report_matrix.get("frameworks"),
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_framework_adapter_matrix_verified"
+            if passed
+            else "framework_adapter_matrix_proof_failed"
+        ),
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "frameworks": matrix_frameworks,
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "matrix_summary": copy.deepcopy(matrix_summary),
+            "selected_metrics": selected_metric_evidence,
+            "report_matrix_status": report_matrix.get("status"),
         },
         "check_count": len(checks),
         "passed_check_count": sum(1 for check in checks if check["passed"]),
@@ -14868,6 +15273,35 @@ def _unique_research_sources(values: Sequence[Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _framework_adapter_matrix_research_sources() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "code_as_agent_harness",
+            "title": "Code as Agent Harness",
+            "source": "arxiv:2605.18747",
+            "url": "https://arxiv.org/abs/2605.18747",
+        },
+        {
+            "id": "ai_harness_engineering",
+            "title": "AI Harness Engineering",
+            "source": "arxiv:2605.13357",
+            "url": "https://arxiv.org/abs/2605.13357",
+        },
+        {
+            "id": "agent_execution_provenance",
+            "title": "From Agent Traces to Trust",
+            "source": "arxiv:2606.04990",
+            "url": "https://arxiv.org/abs/2606.04990",
+        },
+        {
+            "id": "retrospective_harness_optimization",
+            "title": "Retrospective Harness Optimization",
+            "source": "arxiv:2606.05922",
+            "url": "https://arxiv.org/abs/2606.05922",
+        },
+    ]
+
+
 def _default_redteam_society_environment_candidates() -> list[list[dict[str, Any]]]:
     return [
         [_redteam_society_environment(_weak_redteam_society_room())],
@@ -19498,6 +19932,64 @@ def _is_framework_certification_optimization(
     }.issubset(state_keys)
 
 
+def _is_framework_adapter_matrix_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) == "framework_adapter_matrix":
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    matrix = _framework_adapter_matrix_from_environments(environments)
+    return matrix.get("kind") == "agent-learning.framework-adapter-contract-matrix.v1"
+
+
+def _framework_adapter_matrix_from_environments(
+    environments: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    for environment in environments:
+        env = _plain_mapping(environment)
+        data = _plain_mapping(env.get("data"))
+        for candidate in (
+            data.get("framework_adapter_contract_matrix"),
+            _plain_mapping(data.get("metadata")).get(
+                "framework_adapter_contract_matrix"
+            ),
+            _plain_mapping(data.get("state")).get("framework_adapter_contract_matrix"),
+        ):
+            matrix = _plain_mapping(candidate)
+            if matrix.get("kind") == "agent-learning.framework-adapter-contract-matrix.v1":
+                return matrix
+    return {}
+
+
+def _framework_adapter_matrix_from_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _plain_mapping(trace)
+    for candidate in (
+        payload.get("framework_adapter_contract_matrix"),
+        _plain_mapping(payload.get("metadata")).get("framework_adapter_contract_matrix"),
+        _plain_mapping(payload.get("state")).get("framework_adapter_contract_matrix"),
+    ):
+        matrix = _plain_mapping(candidate)
+        if matrix.get("kind") == "agent-learning.framework-adapter-contract-matrix.v1":
+            return matrix
+    return {}
+
+
 def _is_memory_lineage_optimization(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -19935,6 +20427,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     *_OPTIMIZE_EXPORTS,
+    "AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
@@ -19956,6 +20449,7 @@ __all__ = [
     "build_eval_suite_optimization_manifest",
     "build_evaluation_hook_optimization_manifest",
     "build_external_agent_adapter_optimization_manifest",
+    "build_framework_adapter_matrix_optimization_manifest",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",
     "build_framework_optimization_manifest",
@@ -20000,6 +20494,7 @@ __all__ = [
     "optimize_component",
     "optimize_evaluation_hooks",
     "optimize_external_agent_adapter",
+    "optimize_framework_adapter_matrix",
     "optimize_framework_certification",
     "optimize_framework_import_repair",
     "optimize_long_horizon_redteam",
@@ -20037,6 +20532,7 @@ __all__ = [
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
+    "with_framework_adapter_matrix_proof",
     "with_framework_certification_proof",
     "with_framework_runtime_proof",
     "with_memory_lineage_proof",

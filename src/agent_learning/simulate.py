@@ -3022,6 +3022,108 @@ def build_framework_run_manifest(
     }
 
 
+def build_framework_adapter_matrix_run_manifest(
+    *,
+    name: str = "framework-adapter-matrix-simulation",
+    frameworks: Sequence[str] = (
+        "langchain",
+        "langgraph",
+        "llamaindex",
+        "crewai",
+        "autogen",
+        "openai_agents",
+        "livekit",
+        "pipecat",
+    ),
+    matrix: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct native framework-adapter matrix simulation manifest.
+
+    This is the simulation half of the native matrix cookbook: framework
+    support is represented as local adapter contracts and scored by
+    ``framework_adapter_contract_quality`` without importing or calling the
+    target frameworks.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    matrix_payload = (
+        copy.deepcopy(dict(matrix))
+        if matrix is not None
+        else framework_adapter_contract_matrix(frameworks)
+    )
+    framework_keys = _unique_strings(matrix_payload.get("frameworks") or frameworks)
+    agent_config = copy.deepcopy(
+        dict(
+            agent
+            or {
+                "type": "scripted",
+                "responses": [{"content": "Native framework adapter matrix certified."}],
+            }
+        )
+    )
+    config = copy.deepcopy(
+        dict(
+            evaluation_config
+            or _framework_adapter_matrix_evaluation_config(matrix_payload)
+        )
+    )
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(
+                scenario
+                or _default_framework_adapter_matrix_scenario(
+                    str(name),
+                    framework_keys,
+                )
+            )
+        ),
+        "agent": agent_config,
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": [_framework_adapter_matrix_environment(matrix_payload)],
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "metadata": {
+            "source": (
+                "agent_learning.simulate."
+                "build_framework_adapter_matrix_run_manifest"
+            ),
+            "task_kind": "framework_adapter_matrix",
+            "frameworks": framework_keys,
+            "framework_adapter_contract_matrix": matrix_payload,
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    return manifest
+
+
 def build_multi_framework_suite_manifest(
     *,
     name: str,
@@ -4255,6 +4357,111 @@ def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:
 
 def framework_adapter_contract_matrix(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract_matrix(*args, **kwargs)
+
+
+def _default_framework_adapter_matrix_scenario(
+    name: str,
+    frameworks: Sequence[str],
+) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {"name": "Maya", "role": "framework-platform-owner"},
+                "situation": (
+                    "Maya needs Future AGI to certify the native adapter "
+                    f"matrix across {', '.join(_unique_strings(frameworks))}."
+                ),
+                "outcome": "Native framework adapter matrix certified.",
+            }
+        ],
+    }
+
+
+def _framework_adapter_matrix_environment(
+    matrix: Mapping[str, Any],
+) -> dict[str, Any]:
+    matrix_payload = copy.deepcopy(dict(matrix))
+    frameworks = _unique_strings(matrix_payload.get("frameworks"))
+    return {
+        "type": "framework_trace",
+        "data": {
+            "framework": "agent_learning_adapter_matrix",
+            "spans": [
+                {
+                    "id": "framework_adapter_contract_matrix",
+                    "name": "FrameworkAdapterContractMatrix",
+                    "kind": "adapter_matrix",
+                    "signals": [
+                        "adapter_contract_matrix",
+                        "local_fixture",
+                        "metric_evidence",
+                    ],
+                    "metadata": {
+                        "framework_count": len(frameworks),
+                        "frameworks": frameworks,
+                    },
+                }
+            ],
+            "metadata": {
+                "framework_adapter_contract_matrix": matrix_payload,
+            },
+        },
+    }
+
+
+def _framework_adapter_matrix_evaluation_config(
+    matrix: Mapping[str, Any],
+) -> dict[str, Any]:
+    matrix_payload = copy.deepcopy(dict(matrix))
+    summary = (
+        dict(matrix_payload.get("summary"))
+        if isinstance(matrix_payload.get("summary"), Mapping)
+        else {}
+    )
+    gate = copy.deepcopy(
+        dict(
+            matrix_payload.get("contract_quality_gate")
+            if isinstance(matrix_payload.get("contract_quality_gate"), Mapping)
+            else {}
+        )
+    )
+    gate.setdefault("kind", "agent-learning.framework-adapter-contract.v1")
+    gate.setdefault("required_frameworks", _unique_strings(matrix_payload.get("frameworks")))
+    gate.setdefault("require_trace_runtime", True)
+    gate.setdefault("require_local_executable_fixture", True)
+    gate.setdefault("require_no_external_service", True)
+    gate.setdefault("require_target", True)
+    gate.setdefault("forbidden_target_schemes", ["http", "https"])
+    gate.setdefault("required_schema_sections", ["input", "output"])
+    gate.setdefault("required_lifecycle_hooks", ["setup", "teardown"])
+    gate.setdefault("required_capabilities", ["messages", "tool_calls", "runtime_trace"])
+    gate.setdefault(
+        "required_evidence_requirements",
+        [
+            "framework_runtime",
+            "framework_trace",
+            "tool_calls",
+            "adapter_conformance",
+            "metric_evidence",
+        ],
+    )
+    modalities = _unique_strings(summary.get("modalities"))
+    transports = _unique_strings(summary.get("transports"))
+    if modalities:
+        gate.setdefault("required_modalities", modalities)
+    if transports:
+        gate.setdefault("required_transports", transports)
+    return {
+        "task_description": "Certify the native framework adapter matrix.",
+        "expected_result": "Native framework adapter matrix certified.",
+        "success_criteria": ["native framework adapter matrix certified"],
+        "framework_adapter_contract_quality": gate,
+        "metric_weights": {
+            "framework_adapter_contract_quality": 10.0,
+            "task_completion": 1.0,
+        },
+    }
 
 
 def _default_framework_scenario(
@@ -7097,6 +7304,7 @@ __all__ = [
     "build_external_agent_run_manifest",
     "build_browser_cua_run_manifest",
     "build_framework_certification_run_manifest",
+    "build_framework_adapter_matrix_run_manifest",
     "build_framework_import_run_manifest",
     "build_framework_run_manifest",
     "build_manifest_agent_callback",

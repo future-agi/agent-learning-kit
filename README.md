@@ -444,6 +444,15 @@ HTTP/HTTPS targets by default, and carries a `contract_quality_gate` that
 `required_frameworks`. The default matrix covers LangChain, LangGraph,
 LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, and Pipecat without
 importing or calling those packages.
+`simulate.build_framework_adapter_matrix_run_manifest()` turns the same matrix
+into a normal local run artifact. `optimize.optimize_framework_adapter_matrix()`
+then searches weak versus verified matrix candidates through AgentOptimizer,
+selects the matrix from simulation evidence, and emits
+`agent-learning.optimization.framework-adapter-matrix-proof.v1` with local
+fixture, no-external-target, coverage, metric, and report-state checks.
+The attached 2026 paper references are provenance for the design direction,
+not runtime integrations; this cookbook runs through local simulation,
+Future AGI-native eval evidence, and the SDK optimizer.
 
 For arbitrary task/world simulation, build a normal run manifest from an agent
 spec, task description, environment bundle, and optional agent-report eval
