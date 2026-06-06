@@ -191,7 +191,11 @@ def _run_download_action(
     if not artifact_ref:
         raise ValueError(f"download action {action_id!r} is missing artifact_ref")
 
-    value = _resolve_artifact_ref(artifact, artifact_ref)
+    value = _resolve_artifact_ref(
+        artifact,
+        artifact_ref,
+        source_path=source_path,
+    )
     if value is _MISSING:
         raise ValueError(
             f"download action {action_id!r} artifact_ref not found: {artifact_ref}"
@@ -576,17 +580,36 @@ def _output_arg_path(value: str, cwd: Path) -> Path:
     return (cwd / path).resolve()
 
 
-def _resolve_artifact_ref(artifact: Mapping[str, Any], artifact_ref: str) -> Any:
+def _resolve_artifact_ref(
+    artifact: Mapping[str, Any],
+    artifact_ref: str,
+    *,
+    source_path: str | Path = ".",
+) -> Any:
     normalized = normalize_public_payload(artifact)
     if not isinstance(normalized, Mapping):
         return _MISSING
     candidates = [artifact_ref]
     if artifact_ref.startswith("report."):
         candidates.append(artifact_ref.removeprefix("report."))
-    for candidate in candidates:
-        value = _resolve_path(normalized, candidate.split("."))
-        if value is not _MISSING:
-            return value
+    artifact_candidates: list[Mapping[str, Any] | None] = [normalized]
+    if artifact_ref.startswith("report."):
+        artifact_candidates.append(
+            _synthesized_report_artifact(
+                artifact,
+                source_path=source_path,
+            )
+        )
+    for artifact_candidate in artifact_candidates:
+        if not isinstance(artifact_candidate, Mapping):
+            continue
+        resolved = normalize_public_payload(artifact_candidate)
+        if not isinstance(resolved, Mapping):
+            continue
+        for candidate in candidates:
+            value = _resolve_path(resolved, candidate.split("."))
+            if value is not _MISSING:
+                return value
     return _MISSING
 
 

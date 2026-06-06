@@ -12795,3 +12795,86 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_env["data"]["world_hooks_contract"]["runtime"] == "in_process"
     assert best_env["data"]["world_hooks_contract"]["requires_external_service"] is False
+
+    report_path = tmp_path / "sdk-world-hooks-report.json"
+    report_markdown_path = tmp_path / "sdk-world-hooks-report.md"
+    exit_code = main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+        "--markdown",
+        str(report_markdown_path),
+    ])
+    assert exit_code == 0
+    report_serialized = report_path.read_text(encoding="utf-8")
+    assert key not in report_serialized
+    report = json.loads(report_serialized)
+    assert "world_hooks" in report["summary"]["sections"]
+    world_card = report["report"]["world_hooks"]
+    assert world_card["kind"] == "world_hooks_evidence"
+    assert world_card["taxonomy"] == "native_world_state_hooks_contract_replay"
+    assert world_card["status"] == "verified"
+    assert world_card["local_only"] is True
+    assert world_card["requires_external_service"] is False
+    assert world_card["task_kind"] == "world_hooks"
+    assert world_card["assurance_level"] == "l3_verified_native_world_hooks"
+    assert world_card["failed_check_ids"] == []
+    assert world_card["metrics"]["world_hook_contract_quality"] == pytest.approx(1.0)
+    assert world_card["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    assert world_card["artifacts"]["contract"]["mode"] == (
+        "native_world_state_hooks"
+    )
+    assert world_card["artifacts"]["contract"]["runtime"] == "in_process"
+    assert world_card["artifacts"]["contract"]["requires_external_service"] is False
+    assert world_card["artifacts"]["replay_lock"]["local_only"] is True
+    assert {
+        "report_world_hooks",
+        "rerun_world_hooks_optimization",
+        "export_world_hooks_proof",
+        "export_world_hooks_contract",
+        "export_world_hooks_replay_lock",
+    } <= {action["id"] for action in world_card["actions"]}
+    assert "https://arxiv.org/abs/2606.05558" in world_card["research_sources"]
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "## World Hooks" in report_markdown
+    assert "### Native Hook Contract" in report_markdown
+    assert "### World Hook Proof Checks" in report_markdown
+    assert key not in report_markdown
+
+    catalog = actions.action_catalog(result, source_path=output_path)
+    world_actions = {
+        action["id"]: action
+        for action in catalog["actions"]
+        if action.get("source_card_path") == "world_hooks"
+    }
+    assert {
+        "report_world_hooks",
+        "rerun_world_hooks_optimization",
+        "export_world_hooks_proof",
+        "export_world_hooks_contract",
+        "export_world_hooks_replay_lock",
+    } <= set(world_actions)
+    export_action = world_actions["export_world_hooks_contract"]
+    assert export_action["kind"] == "download"
+    assert export_action["artifact_ref"] == "report.world_hooks.artifacts.contract"
+
+    export_path = tmp_path / "world-hooks-contract.json"
+    export_run = actions.run_action(
+        result,
+        "export_world_hooks_contract",
+        source_path=output_path,
+        cwd=tmp_path,
+        artifact_output_path=export_path,
+    )
+    assert export_run["kind"] == "agent-learning.action-run.v1"
+    assert export_run["status"] == "passed"
+    assert export_run["summary"]["action_kind"] == "download"
+    assert export_run["summary"]["source_card_path"] == "world_hooks"
+    assert export_run["artifact_ref"] == "report.world_hooks.artifacts.contract"
+    assert export_path.exists()
+    exported_contract_serialized = export_path.read_text(encoding="utf-8")
+    assert key not in exported_contract_serialized
+    exported_contract = json.loads(exported_contract_serialized)
+    assert exported_contract["mode"] == "native_world_state_hooks"
+    assert exported_contract["requires_external_service"] is False

@@ -97,6 +97,20 @@ _ATTACK_EVOLUTION_RESEARCH_SOURCES = [
     "https://arxiv.org/abs/2606.03601",
     "https://arxiv.org/abs/2603.21357",
 ]
+_WORLD_HOOK_RESEARCH_SOURCES = [
+    "https://arxiv.org/abs/2605.30880",
+    "https://arxiv.org/abs/2606.02372",
+    "https://arxiv.org/abs/2606.03892",
+    "https://arxiv.org/abs/2606.05558",
+]
+_WORLD_HOOK_METRICS = {
+    "world_hook_contract_quality",
+    "world_contract_quality",
+    "state_goal_accuracy",
+    "environment_injection_resistance",
+    "task_completion",
+    "trajectory_score",
+}
 
 
 REDTEAM_ENV_TYPES = frozenset(
@@ -2535,6 +2549,9 @@ def _report_result(
     optimizer_replay = _optimizer_replay_card(source, source_path=source_path)
     if optimizer_replay is not None:
         report_payload["optimizer_replay"] = optimizer_replay
+    world_hooks = _world_hooks_card(source, source_path=source_path)
+    if world_hooks is not None:
+        report_payload["world_hooks"] = world_hooks
     attack_evolution = _attack_evolution_card(source, source_path=source_path)
     if attack_evolution is not None:
         report_payload["attack_evolution"] = attack_evolution
@@ -2754,6 +2771,398 @@ def _optimizer_trace_card(trace: Any) -> Dict[str, Any]:
         "final_score": summary.get("final_score") or trace.get("final_score"),
         "passed": summary.get("passed") if "passed" in summary else trace.get("passed"),
     }
+
+
+def _world_hooks_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    existing = report.get("world_hooks") if isinstance(report, Mapping) else None
+    if isinstance(existing, Mapping):
+        card = copy.deepcopy(dict(existing))
+        card["source_path"] = str(source_path)
+        if "actions" not in card:
+            card["actions"] = _world_hooks_actions(
+                result=result,
+                source_path=source_path,
+                card=card,
+            )
+        return card
+
+    proof = _world_hooks_proof(result)
+    if not proof:
+        return None
+
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    contract = _world_hooks_contract(result, proof)
+    metrics = _world_hooks_metrics(result, proof)
+    stateful_summary = copy.deepcopy(
+        dict(evidence.get("stateful_tool_world_summary") or {})
+    )
+    world_contract_summary = copy.deepcopy(
+        dict(evidence.get("world_contract_summary") or {})
+    )
+    requires_external_service = proof.get("requires_external_service")
+    failed_check_ids = _unique_strings(proof.get("failed_check_ids"))
+    local_only = requires_external_service is False
+    status = (
+        "verified"
+        if proof.get("status") == "passed" and local_only and not failed_check_ids
+        else "needs_attention"
+    )
+    replay_lock = {
+        "source_path": str(source_path),
+        "local_only": local_only,
+        "requires_external_service": bool(requires_external_service),
+        "assurance_level": proof.get("assurance_level"),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "metric_thresholds": {
+            "world_hook_contract_quality": 1.0,
+            "world_contract_quality": 1.0,
+            "state_goal_accuracy": 1.0,
+            "environment_injection_resistance": 1.0,
+        },
+        "failed_check_ids": failed_check_ids,
+        "warning_check_ids": _unique_strings(proof.get("warning_check_ids")),
+    }
+    artifacts = {
+        "proof": copy.deepcopy(dict(proof)),
+        "contract": copy.deepcopy(dict(contract)) if contract else None,
+        "selected_metrics": copy.deepcopy(metrics),
+        "stateful_tool_world_summary": stateful_summary,
+        "world_contract_summary": world_contract_summary,
+        "replay_lock": replay_lock,
+    }
+    card: Dict[str, Any] = {
+        "kind": "world_hooks_evidence",
+        "taxonomy": "native_world_state_hooks_contract_replay",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "task_kind": proof.get("task_kind"),
+        "assurance_level": proof.get("assurance_level"),
+        "local_only": local_only,
+        "requires_external_service": bool(requires_external_service),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "candidate_profile": proof.get("candidate_profile"),
+        "world_model_level": proof.get("world_model_level"),
+        "check_count": proof.get("check_count"),
+        "passed_check_count": proof.get("passed_check_count"),
+        "failed_check_ids": failed_check_ids,
+        "warning_check_ids": _unique_strings(proof.get("warning_check_ids")),
+        "environment_types": _unique_strings(evidence.get("environment_types")),
+        "metrics": metrics,
+        "contract_summary": _world_hooks_contract_summary(contract),
+        "stateful_summary": stateful_summary,
+        "world_contract_summary": world_contract_summary,
+        "research_sources": _world_hooks_research_sources(result),
+        "artifacts": artifacts,
+    }
+    card["actions"] = _world_hooks_actions(
+        result=result,
+        source_path=source_path,
+        card=card,
+    )
+    return card
+
+
+def _world_hooks_proof(result: Mapping[str, Any]) -> Dict[str, Any]:
+    proof = result.get("world_hook_proof")
+    if isinstance(proof, Mapping):
+        return copy.deepcopy(dict(proof))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        nested = optimization.get("world_hook_proof")
+        if isinstance(nested, Mapping):
+            return copy.deepcopy(dict(nested))
+    return {}
+
+
+def _world_hooks_contract(
+    result: Mapping[str, Any],
+    proof: Mapping[str, Any],
+) -> Dict[str, Any]:
+    for check in _coerce_list(proof.get("checks")):
+        if not isinstance(check, Mapping):
+            continue
+        if str(check.get("id") or "") != "world_hooks_contract_closed":
+            continue
+        evidence = check.get("evidence")
+        if not isinstance(evidence, Mapping):
+            continue
+        contract = evidence.get("world_hooks_contract")
+        if isinstance(contract, Mapping):
+            return copy.deepcopy(dict(contract))
+
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        best_config = optimization.get("best_config")
+        contract = _world_hooks_contract_from_config(best_config)
+        if contract:
+            return contract
+        selected = _best_optimization_history_item(optimization)
+        if isinstance(selected, Mapping):
+            contract = _world_hooks_contract_from_config(selected.get("patch"))
+            if contract:
+                return contract
+            contract = _world_hooks_contract_from_config(selected.get("candidate_patch"))
+            if contract:
+                return contract
+            report_state = _environment_state_from_report(selected.get("report"))
+            contract = _world_hooks_contract_from_environment_state(report_state)
+            if contract:
+                return contract
+    return {}
+
+
+def _world_hooks_contract_from_config(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    simulation = value.get("simulation")
+    environments = (
+        dict(simulation).get("environments") if isinstance(simulation, Mapping) else None
+    )
+    for environment in _coerce_list(environments):
+        if not isinstance(environment, Mapping):
+            continue
+        env_type = str(environment.get("type") or environment.get("kind") or "")
+        if env_type != "stateful_tool_world":
+            continue
+        data = environment.get("data")
+        if not isinstance(data, Mapping):
+            continue
+        contract = data.get("world_hooks_contract")
+        if isinstance(contract, Mapping):
+            return copy.deepcopy(dict(contract))
+        metadata = data.get("metadata")
+        if isinstance(metadata, Mapping) and isinstance(
+            metadata.get("world_hooks_contract"),
+            Mapping,
+        ):
+            return copy.deepcopy(dict(metadata["world_hooks_contract"]))
+    return {}
+
+
+def _world_hooks_contract_from_environment_state(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    stateful = value.get("stateful_tool_world")
+    if not isinstance(stateful, Mapping):
+        return {}
+    contract = stateful.get("world_hooks_contract")
+    if isinstance(contract, Mapping):
+        return copy.deepcopy(dict(contract))
+    metadata = stateful.get("metadata")
+    if isinstance(metadata, Mapping) and isinstance(
+        metadata.get("world_hooks_contract"),
+        Mapping,
+    ):
+        return copy.deepcopy(dict(metadata["world_hooks_contract"]))
+    return {}
+
+
+def _world_hooks_metrics(
+    result: Mapping[str, Any],
+    proof: Mapping[str, Any],
+) -> Dict[str, float]:
+    values: Dict[str, float] = {}
+    evidence = proof.get("evidence")
+    if isinstance(evidence, Mapping):
+        selected = evidence.get("selected_metrics")
+        if isinstance(selected, Mapping):
+            values.update(_filtered_float_metrics(selected, _WORLD_HOOK_METRICS))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        selected_history = _best_optimization_history_item(optimization)
+        if isinstance(selected_history, Mapping):
+            history_metrics = selected_history.get("metrics")
+            if isinstance(history_metrics, Mapping):
+                values.update(
+                    _filtered_float_metrics(history_metrics, _WORLD_HOOK_METRICS)
+                )
+    values.update(
+        _filtered_float_metrics(_result_metric_averages(result), _WORLD_HOOK_METRICS)
+    )
+    return values
+
+
+def _filtered_float_metrics(
+    metrics: Mapping[str, Any],
+    names: Iterable[str],
+) -> Dict[str, float]:
+    allowed = set(names)
+    result: Dict[str, float] = {}
+    for key, value in metrics.items():
+        name = str(key)
+        if name not in allowed:
+            continue
+        numeric = _float_or_none(value)
+        if numeric is not None:
+            result[name] = numeric
+    return result
+
+
+def _world_hooks_contract_summary(contract: Mapping[str, Any]) -> Dict[str, Any]:
+    if not contract:
+        return {}
+    return {
+        "kind": contract.get("kind"),
+        "mode": contract.get("mode"),
+        "runtime": contract.get("runtime"),
+        "requires_external_service": contract.get("requires_external_service"),
+        "hook_count": len(
+            [
+                hook
+                for hook in _coerce_list(contract.get("hooks"))
+                if isinstance(hook, Mapping)
+            ]
+        ),
+        "hooks": _unique_strings(
+            dict(hook).get("name")
+            for hook in _coerce_list(contract.get("hooks"))
+            if isinstance(hook, Mapping)
+        ),
+        "surfaces": _unique_strings(contract.get("surfaces")),
+        "replay_semantics": _unique_strings(contract.get("replay_semantics")),
+        "evidence_requirements": _unique_strings(
+            contract.get("evidence_requirements")
+        ),
+    }
+
+
+def _world_hooks_research_sources(result: Mapping[str, Any]) -> List[str]:
+    values: List[Any] = []
+    proof = _world_hooks_proof(result)
+    if proof:
+        evidence = proof.get("evidence")
+        if isinstance(evidence, Mapping):
+            values.extend(_coerce_list(evidence.get("research_sources")))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        source_manifest = optimization.get("source_manifest")
+        if isinstance(source_manifest, Mapping):
+            metadata = source_manifest.get("metadata")
+            if isinstance(metadata, Mapping):
+                values.extend(_coerce_list(metadata.get("research_sources")))
+                values.extend(_coerce_list(metadata.get("research_basis")))
+            target = dict(
+                dict(source_manifest.get("optimization") or {}).get("target") or {}
+            )
+            target_metadata = target.get("metadata")
+            if isinstance(target_metadata, Mapping):
+                values.extend(_coerce_list(target_metadata.get("research_sources")))
+                values.extend(_coerce_list(target_metadata.get("research_basis")))
+    values.extend(_WORLD_HOOK_RESEARCH_SOURCES)
+    return _unique_strings(_research_source_url(value) for value in values)
+
+
+def _world_hooks_actions(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    card: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_world_hooks",
+            "Report World Hooks",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/world-hooks-report.json",
+                "--markdown",
+                "artifacts/world-hooks-report.md",
+            ],
+        )
+    ]
+    optimization = result.get("optimization")
+    source_manifest_path = None
+    if isinstance(optimization, Mapping):
+        source_manifest_path = optimization.get("source_manifest_path")
+    if source_manifest_path:
+        actions.append(
+            _cli_action(
+                "rerun_world_hooks_optimization",
+                "Rerun World Hooks Optimization",
+                [
+                    "agent-learn",
+                    "optimize",
+                    str(source_manifest_path),
+                    "--output",
+                    "artifacts/world-hooks-optimization.json",
+                    "--junit",
+                    "artifacts/world-hooks-optimization.junit.xml",
+                    "--sarif",
+                    "artifacts/world-hooks-optimization.sarif.json",
+                    "--markdown",
+                    "artifacts/world-hooks-optimization.md",
+                ],
+            )
+        )
+    elif isinstance(optimization, Mapping):
+        actions.append(
+            _cli_action(
+                "rerun_world_hooks_optimization",
+                "Rerun World Hooks Optimization",
+                [
+                    "agent-learn",
+                    "optimize",
+                    "{{manifest_path}}",
+                    "--output",
+                    "artifacts/world-hooks-optimization.json",
+                    "--junit",
+                    "artifacts/world-hooks-optimization.junit.xml",
+                    "--sarif",
+                    "artifacts/world-hooks-optimization.sarif.json",
+                    "--markdown",
+                    "artifacts/world-hooks-optimization.md",
+                ],
+                inputs=[
+                    {
+                        "name": "manifest_path",
+                        "label": "World hooks optimization manifest",
+                        "default": "manifests/world-hooks-optimization.json",
+                    }
+                ],
+            )
+        )
+
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    if isinstance(artifacts.get("proof"), Mapping):
+        actions.append(
+            {
+                "id": "export_world_hooks_proof",
+                "label": "Export World Hooks Proof",
+                "kind": "download",
+                "artifact_ref": "report.world_hooks.artifacts.proof",
+                "default_filename": "world-hooks-proof.json",
+            }
+        )
+    if isinstance(artifacts.get("contract"), Mapping):
+        actions.append(
+            {
+                "id": "export_world_hooks_contract",
+                "label": "Export World Hooks Contract",
+                "kind": "download",
+                "artifact_ref": "report.world_hooks.artifacts.contract",
+                "default_filename": "world-hooks-contract.json",
+            }
+        )
+    if isinstance(artifacts.get("replay_lock"), Mapping):
+        actions.append(
+            {
+                "id": "export_world_hooks_replay_lock",
+                "label": "Export World Hooks Replay Lock",
+                "kind": "download",
+                "artifact_ref": "report.world_hooks.artifacts.replay_lock",
+                "default_filename": "world-hooks-replay.lock.json",
+            }
+        )
+    return actions
 
 
 def _attack_evolution_card(
@@ -5404,6 +5813,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("optimization")
     if _has_optimization_replay_card(result):
         sections.append("optimization_replay")
+    if _has_world_hooks_card(result, source_path=source_path):
+        sections.append("world_hooks")
     if _has_attack_evolution_card(result, source_path=source_path):
         sections.append("attack_evolution")
     if _has_artifact_action_plan_card(result):
@@ -5468,6 +5879,8 @@ def _result_markdown(
         lines.extend(_optimization_markdown(result))
     if "optimization_replay" in sections:
         lines.extend(_optimization_replay_markdown(result))
+    if "world_hooks" in sections:
+        lines.extend(_world_hooks_markdown(result, source_path=source_path))
     if "attack_evolution" in sections:
         lines.extend(_attack_evolution_markdown(result, source_path=source_path))
     if "artifact_action_plan" in sections:
@@ -8731,6 +9144,17 @@ def _has_attack_evolution_card(
     return _attack_evolution_card(result, source_path=source_path) is not None
 
 
+def _has_world_hooks_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("world_hooks"), Mapping):
+        return True
+    return _world_hooks_card(result, source_path=source_path) is not None
+
+
 def _artifact_action_plan_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     existing = result.get("artifact_action_plan")
     if isinstance(existing, Mapping):
@@ -9022,6 +9446,167 @@ def _harness_diagnosis_markdown(
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Target layers", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+def _world_hooks_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = report.get("world_hooks") if isinstance(report, Mapping) else None
+    if not isinstance(card, Mapping):
+        card = _world_hooks_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+
+    metrics = card.get("metrics") if isinstance(card.get("metrics"), Mapping) else {}
+    contract = (
+        card.get("contract_summary")
+        if isinstance(card.get("contract_summary"), Mapping)
+        else {}
+    )
+    stateful = (
+        card.get("stateful_summary")
+        if isinstance(card.get("stateful_summary"), Mapping)
+        else {}
+    )
+    world_contract = (
+        card.get("world_contract_summary")
+        if isinstance(card.get("world_contract_summary"), Mapping)
+        else {}
+    )
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    proof = artifacts.get("proof") if isinstance(artifacts.get("proof"), Mapping) else {}
+    rows = [
+        ("Status", card.get("status")),
+        ("Task kind", card.get("task_kind")),
+        ("Assurance", card.get("assurance_level")),
+        ("Local only", card.get("local_only")),
+        ("Requires external service", card.get("requires_external_service")),
+        ("Selected candidate", card.get("selected_candidate_id")),
+        ("Candidate profile", card.get("candidate_profile")),
+        ("World model level", card.get("world_model_level")),
+        ("Checks", f"{card.get('passed_check_count')}/{card.get('check_count')}"),
+        ("Failed checks", _join_values(card.get("failed_check_ids"))),
+        ("Warning checks", _join_values(card.get("warning_check_ids"))),
+        ("Environment types", _join_values(card.get("environment_types"))),
+        ("Research sources", _join_values(card.get("research_sources"))),
+    ]
+    contract_rows = [
+        ("Contract kind", contract.get("kind")),
+        ("Mode", contract.get("mode")),
+        ("Runtime", contract.get("runtime")),
+        ("Requires external service", contract.get("requires_external_service")),
+        ("Hook count", contract.get("hook_count")),
+        ("Hooks", _join_values(contract.get("hooks"))),
+        ("Surfaces", _join_values(contract.get("surfaces"))),
+        ("Replay semantics", _join_values(contract.get("replay_semantics"))),
+        ("Evidence requirements", _join_values(contract.get("evidence_requirements"))),
+    ]
+    state_rows = [
+        ("State terminal status", stateful.get("terminal_status")),
+        ("Required state deltas", stateful.get("required_state_delta_count")),
+        ("Completed state deltas", stateful.get("completed_state_delta_count")),
+        ("Blocked actions", stateful.get("blocked_action_count")),
+        ("Utility under attack", stateful.get("utility_under_attack_score")),
+        ("Localized takeover points", stateful.get("localized_takeover_point_count")),
+        ("Purified takeover points", stateful.get("purified_takeover_point_count")),
+        ("Persistent channels", stateful.get("persistent_channel_count")),
+        (
+            "Contained persistent channels",
+            stateful.get("contained_persistent_channel_count"),
+        ),
+        ("World contract terminal status", world_contract.get("terminal_status")),
+        ("World invariant violations", world_contract.get("invariant_violation_count")),
+        ("World violations", world_contract.get("violation_count")),
+        (
+            "Success conditions",
+            (
+                f"{world_contract.get('success_condition_pass_count')}/"
+                f"{world_contract.get('success_condition_count')}"
+            ),
+        ),
+    ]
+    metric_rows = [[name, value] for name, value in sorted(metrics.items())]
+    check_rows = [
+        [
+            item.get("id"),
+            item.get("passed"),
+            item.get("required"),
+            item.get("reason"),
+        ]
+        for item in _coerce_list(proof.get("checks"))
+        if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("kind"),
+            item.get("command") or item.get("artifact_ref"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## World Hooks",
+        "",
+        *_key_value_table(rows),
+        "",
+    ]
+    if contract:
+        lines.extend(
+            [
+                "### Native Hook Contract",
+                "",
+                *_key_value_table(contract_rows),
+                "",
+            ]
+        )
+    if stateful or world_contract:
+        lines.extend(
+            [
+                "### World Evidence",
+                "",
+                *_key_value_table(state_rows),
+                "",
+            ]
+        )
+    if metric_rows:
+        lines.extend(
+            [
+                "### World Hook Metrics",
+                "",
+                *_markdown_table(["Metric", "Value"], metric_rows),
+                "",
+            ]
+        )
+    if check_rows:
+        lines.extend(
+            [
+                "### World Hook Proof Checks",
+                "",
+                *_markdown_table(
+                    ["Check", "Passed", "Required", "Reason"],
+                    check_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### World Hook Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Kind", "Command or artifact"],
                     action_rows,
                 ),
                 "",

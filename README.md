@@ -1185,6 +1185,10 @@ candidates report `l3_verified_native_world_hooks` in both `world_hook_proof`
 and the artifact summary. `examples/sdk_world_hooks_optimization.py` is the
 dedicated cookbook for this native surface; it uses a local key only for SDK
 configuration and redaction checks, not for any external hook endpoint.
+`agent-learn report <world-hooks-result.json>` also emits a `world_hooks`
+action card with the native proof, hook contract, replay lock, selected
+metrics, research sources, Markdown proof-check tables, and CLI/download
+actions for Future AGI UI, SDK, and CI users.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized
