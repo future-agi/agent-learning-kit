@@ -174,6 +174,13 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_workspace_import_certification_environments is not None
     assert optimize.build_workspace_import_certification_optimization_manifest is not None
     assert optimize.optimize_workspace_import_certification is not None
+    assert simulate.build_redteam_readiness_certification_run_manifest is not None
+    assert simulate.build_redteam_readiness_certification_environments is not None
+    assert (
+        optimize.build_redteam_readiness_certification_optimization_manifest
+        is not None
+    )
+    assert optimize.optimize_redteam_readiness_certification is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -7814,6 +7821,137 @@ def test_sdk_workspace_import_certification_optimization_example_runs(
         config=manifest["optimization"]["scoring"],
     )
     assert evidence.score == pytest.approx(1.0)
+
+
+def test_sdk_redteam_readiness_certification_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY",
+        "real-local-sdk-redteam-readiness-certification-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_redteam_readiness_certification_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_redteam_readiness_certification_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY"
+    ]
+    metadata = manifest["optimization"]["target"]["metadata"]
+    assert metadata["task_kind"] == "redteam_readiness_certification"
+    assert {item["year"] for item in metadata["research_sources"]} == {2026}
+    assert {
+        item["url"] for item in metadata["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2605.04019",
+        "https://arxiv.org/abs/2605.09684",
+        "https://arxiv.org/abs/2605.13940",
+        "https://arxiv.org/abs/2605.04808",
+        "https://arxiv.org/abs/2601.13518",
+        "https://arxiv.org/abs/2606.04425",
+    }
+    assert manifest["optimization"]["scoring"]["layers"] == [
+        "red_team_readiness"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    expected_types = [
+        "workspace_run_manifest",
+        "framework_import",
+        "red_team_campaign",
+        "agent_trust_boundary",
+        "agent_control_plane",
+        "red_team_readiness",
+    ]
+    assert [env["type"] for env in candidates[0]] == expected_types
+    assert [env["type"] for env in candidates[1]] == expected_types
+    weak_summary = candidates[0][-1]["data"]["summary"]
+    verified_summary = candidates[1][-1]["data"]["summary"]
+    assert weak_summary["blocking_gap_count"] > 0
+    assert verified_summary["ready_components"] == [
+        "control_plane",
+        "framework_import",
+        "red_team_campaign",
+        "trust_boundary",
+        "workspace_run",
+    ]
+    assert verified_summary["blocking_gaps"] == []
+    assert verified_summary["blocking_gap_count"] == 0
+    assert verified_summary["artifact_count"] >= 1
+    assert verified_summary["observability_hook_count"] >= 1
+
+    output_path = tmp_path / "sdk-redteam-readiness-certification-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) in (set(), {"simulation.environments"})
+    assert min(item["score"] for item in result["optimization"]["history"]) < 1.0
+    for metric in (
+        "red_team_readiness_coverage",
+        "red_team_readiness_quality",
+        "tool_selection_accuracy",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert set(state) == {
+        "workspace_run_manifest",
+        "framework_import_manifest",
+        "red_team_campaign",
+        "agent_trust_boundary_model",
+        "agent_control_plane",
+        "red_team_readiness",
+    }
+    readiness_summary = state["red_team_readiness"]["summary"]
+    assert readiness_summary["blocking_gaps"] == []
+    assert readiness_summary["ready_component_count"] == 5
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        item["name"]: item["score"]
+        for item in evidence.metadata["simulation_evidence_score"]["components"]
+    } == {
+        "tool_coverage": 1.0,
+        "red_team_readiness": 1.0,
+    }
 
 
 def test_sdk_workspace_observability_simulation_example_runs(

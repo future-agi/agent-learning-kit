@@ -678,6 +678,10 @@ AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_import_certification_optimization.py \
   artifacts/sdk-workspace-import-certification-optimization.json
 
+AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_redteam_readiness_certification_optimization.py \
+  artifacts/sdk-redteam-readiness-certification-optimization.json
+
 AGENT_LEARNING_SDK_WORKSPACE_OBSERVABILITY_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_workspace_observability_simulation.py \
   artifacts/sdk-workspace-observability-simulation.json
@@ -884,6 +888,18 @@ agent benchmarks and eval-integrity work, then adds our own Future AGI
 certification contract so a UI/API workflow can checkout a user repo, certify
 that it is runnable, and then expose `agent-learn report`, `agent-learn
 actions`, and `agent-learn action-run` follow-ups from the saved artifact.
+
+`optimize.build_redteam_readiness_certification_optimization_manifest()` and
+`examples/sdk_redteam_readiness_certification_optimization.py` add the next
+preflight: a single optimized readiness gate that binds workspace-run evidence,
+live framework-import probes, a multi-turn red-team campaign matrix,
+trust-boundary controls, runtime control-plane controls, observability, and
+artifacts before adaptive adversarial search starts. The helper searches weak
+versus verified `simulation.environments` bundles with deterministic
+`simulation_evidence` scoring, using 2026 agentic red-team, monitor red-team,
+runtime trust, controllable environment, autonomous red-team, and stored prompt
+injection research as input, then adds our own zero-blocking-gap Future AGI
+certification contract.
 
 The `workspace_observability_optimization.json` example migrates the old
 workspace-run and observability-replay cookbooks into one CLI manifest. It
