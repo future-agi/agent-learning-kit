@@ -29,7 +29,21 @@ V1 is releasable when a user can:
 Each milestone has a small release gate. `agent-learn release-check --project-root .`
 is the V1 source of truth for these gates, including research-backed red-team
 coverage across required examples, canonical corpus rows, attack types,
-surfaces, and source lineage.
+surfaces, source lineage, UI/action/report readiness, and executable
+framework/provider contract readiness.
+
+## Release-Cut Breakdown
+
+| Milestone | Release promise | Executable gate |
+| --- | --- | --- |
+| M0 | One public SDK boundary | `single_public_boundary` |
+| M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
+| M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
+| M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
+| M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage` |
+| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness` |
+| M7 | Packaging and release proof | `release_docs_present`, `package_metadata` |
 
 ### M0: SDK Consolidation Boundary
 
@@ -163,7 +177,20 @@ Next implementation focus:
 
 ### M6: Framework/Provider Simulation Surface
 
-Status: in progress.
+Status: gated and passing for the local V1 contract.
+
+Current checkpoint:
+
+- `agent-learn release-check` now builds
+  `agent-learning.framework-adapter-contract-matrix.v1` for LangChain,
+  LangGraph, LiveKit, and Pipecat.
+- The gate requires local executable fixture targets, `trace_runtime`, text and
+  voice modality coverage, `in_process` transport, no external service
+  dependency, no external targets, and no HTTP/WebSocket values in
+  representative provider manifests.
+- Representative manifests are validated for LiveKit framework simulation,
+  Pipecat framework simulation, and LiveKit realtime voice/streaming trace
+  simulation.
 
 Acceptance gates:
 
@@ -180,6 +207,8 @@ Next implementation focus:
 
 - Keep new provider work behind local contracts/tests first.
 - Avoid adding hosted optimizer/eval dependencies.
+- Add real-key live-target checks only for explicitly selected user workloads
+  and keep those results out of release metadata.
 
 ### M7: Release Packaging And Proof
 

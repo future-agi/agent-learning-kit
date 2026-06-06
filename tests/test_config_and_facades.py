@@ -12473,6 +12473,21 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_examples"] == (
         trinity.V1_FRAMEWORK_PROVIDER_EXAMPLES
     )
+    assert payload["required_framework_provider_frameworks"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+    )
+    assert payload["required_framework_provider_modalities"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES
+    )
+    assert payload["required_framework_provider_transports"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS
+    )
+    assert payload["required_framework_provider_target_schemes"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES
+    )
+    assert payload["required_framework_provider_manifest_contracts"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+    )
     assert payload["required_evidence_components"] == (
         trinity.V1_REQUIRED_EVIDENCE_COMPONENTS
     )
@@ -12489,6 +12504,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "schema_kind_contract",
         "ui_action_report_readiness",
         "framework_provider_examples_present",
+        "framework_provider_contract_readiness",
         "package_metadata",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -12591,6 +12607,73 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert action_run_artifact["output_completion_rate"] == pytest.approx(1.0)
     assert "report_artifact" in action_run_artifact["action_ids"]
     assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
+    framework_provider = checks["framework_provider_contract_readiness"]["evidence"]
+    assert framework_provider["required_frameworks"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+    )
+    assert framework_provider["required_modalities"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES
+    )
+    assert framework_provider["required_transports"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS
+    )
+    assert framework_provider["required_target_schemes"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES
+    )
+    assert framework_provider["required_manifest_contracts"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+    )
+    assert framework_provider["missing_files"] == []
+    assert framework_provider["matrix_errors"] == []
+    assert framework_provider["contract_errors"] == []
+    assert framework_provider["manifest_errors"] == []
+    assert framework_provider["external_value_findings"] == []
+    assert framework_provider["errors"] == []
+    assert framework_provider["matrix_kind"] == (
+        "agent-learning.framework-adapter-contract-matrix.v1"
+    )
+    assert framework_provider["matrix_status"] == "passed"
+    assert framework_provider["observed_frameworks"] == [
+        "langchain",
+        "langgraph",
+        "livekit",
+        "pipecat",
+    ]
+    assert set(framework_provider["observed_modalities"]) == {"text", "voice"}
+    assert framework_provider["observed_transports"] == ["in_process"]
+    assert framework_provider["observed_target_schemes"] == (
+        ["agent-learning-fixture"]
+    )
+    matrix_summary = framework_provider["matrix_summary"]
+    assert matrix_summary["contract_count"] == 4
+    assert matrix_summary["local_executable_fixture_count"] == 4
+    assert matrix_summary["requires_external_service_count"] == 0
+    assert matrix_summary["external_target_count"] == 0
+    assert matrix_summary["trace_runtime_count"] == 4
+    manifest_contracts = {
+        item["path"]: item for item in framework_provider["manifest_contracts"]
+    }
+    livekit_manifest = manifest_contracts["examples/framework_livekit_manifest.json"]
+    assert livekit_manifest["kind"] == "agent-learning.run.v1"
+    assert livekit_manifest["agent_type"] == "framework"
+    assert livekit_manifest["frameworks"] == ["livekit"]
+    assert livekit_manifest["modality"] == "voice"
+    assert livekit_manifest["missing_environment_types"] == []
+    assert livekit_manifest["agent_target"] == (
+        "framework_shims.py:build_livekit_agent"
+    )
+    pipecat_manifest = manifest_contracts["examples/framework_pipecat_manifest.json"]
+    assert pipecat_manifest["kind"] == "agent-learning.run.v1"
+    assert pipecat_manifest["agent_type"] == "framework"
+    assert pipecat_manifest["frameworks"] == ["pipecat"]
+    assert pipecat_manifest["modality"] == "voice"
+    assert pipecat_manifest["missing_environment_types"] == []
+    realtime_manifest = manifest_contracts[
+        "examples/voice_streaming_realtime_manifest.json"
+    ]
+    assert realtime_manifest["agent_type"] == "scripted"
+    assert realtime_manifest["frameworks"] == ["livekit"]
+    assert realtime_manifest["missing_environment_types"] == []
     evidence = checks["native_optimizer_evidence_components"]["evidence"]
     assert evidence["missing"] == []
     assert "framework_lifecycle" in evidence["observed"]

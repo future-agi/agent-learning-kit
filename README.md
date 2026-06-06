@@ -51,7 +51,10 @@ coverage across required examples, attack types, surfaces, source lineage, and
 the canonical local corpus rows. It also gates representative Future AGI
 UI/action/report readiness: renderable report payloads, executable action
 catalogs, saved action-run output evidence, and key-like secret-marker
-redaction.
+redaction. Framework/provider readiness is executable too: release-check builds
+the native adapter matrix for LangChain, LangGraph, LiveKit, and Pipecat,
+requires local fixture targets with no external service dependency, and
+validates representative LiveKit, Pipecat, and realtime voice manifests.
 
 Python code can verify the same boundary without shelling out:
 

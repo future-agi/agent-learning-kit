@@ -252,6 +252,46 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_realtime_voice_optimization.py",
 ]
 
+V1_FRAMEWORK_PROVIDER_FRAMEWORKS = [
+    "langchain",
+    "langgraph",
+    "livekit",
+    "pipecat",
+]
+
+V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES = ["text", "voice"]
+
+V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS = ["in_process"]
+
+V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES = ["agent-learning-fixture"]
+
+V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
+    {
+        "path": "examples/framework_livekit_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "livekit",
+        "modality": "voice",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_pipecat_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "pipecat",
+        "modality": "voice",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/voice_streaming_realtime_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "livekit",
+        "modality": "voice",
+        "agent_type": "scripted",
+        "required_environment_types": ["voice", "streaming_trace"],
+    },
+]
+
 V1_REQUIRED_EVIDENCE_COMPONENTS = [
     "tool_coverage",
     "agent_integration",
@@ -526,6 +566,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "required": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         },
     )
+    framework_provider_contract = _release_framework_provider_contract_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_provider_contract_readiness",
+        passed=(
+            not framework_provider_contract["missing_files"]
+            and not framework_provider_contract["matrix_errors"]
+            and not framework_provider_contract["contract_errors"]
+            and not framework_provider_contract["manifest_errors"]
+            and not framework_provider_contract["external_value_findings"]
+            and not framework_provider_contract["errors"]
+        ),
+        milestone="M6",
+        evidence=framework_provider_contract,
+    )
     pyproject = _read_pyproject(root)
     _append_release_check(
         checks,
@@ -588,6 +643,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "forbidden_ui_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
+        "required_framework_provider_frameworks": list(
+            V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+        ),
+        "required_framework_provider_modalities": list(
+            V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES
+        ),
+        "required_framework_provider_transports": list(
+            V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS
+        ),
+        "required_framework_provider_target_schemes": list(
+            V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES
+        ),
+        "required_framework_provider_manifest_contracts": copy.deepcopy(
+            V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+        ),
         "required_docs": list(V1_REQUIRED_DOCS),
         "required_evidence_components": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "trinity": trinity,
@@ -1007,6 +1077,478 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
+    required_frameworks = list(V1_FRAMEWORK_PROVIDER_FRAMEWORKS)
+    required_framework_set = set(required_frameworks)
+    required_modalities = set(V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES)
+    required_transports = set(V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS)
+    required_target_schemes = set(V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES)
+    required_capabilities = {"messages", "tool_calls", "runtime_trace"}
+    required_evidence = {
+        "framework_runtime",
+        "framework_trace",
+        "tool_calls",
+        "adapter_conformance",
+        "metric_evidence",
+    }
+    missing_files = _missing_relative_paths(
+        root,
+        [spec["path"] for spec in V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS],
+    )
+    matrix_errors: list[dict[str, Any]] = []
+    contract_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    external_value_findings: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    manifest_contracts: list[dict[str, Any]] = []
+    matrix: Mapping[str, Any] = {}
+    matrix_summary: Mapping[str, Any] = {}
+
+    try:
+        from agent_learning import simulate
+
+        raw_matrix = simulate.framework_adapter_contract_matrix(required_frameworks)
+        if isinstance(raw_matrix, Mapping):
+            matrix = raw_matrix
+            matrix_summary = dict(raw_matrix.get("summary") or {})
+        else:
+            errors.append(
+                {
+                    "path": ".",
+                    "error": (
+                        "framework_adapter_contract_matrix returned "
+                        f"{type(raw_matrix).__name__}, expected mapping"
+                    ),
+                }
+            )
+    except Exception as exc:
+        errors.append({"path": ".", "error": str(exc)})
+
+    if matrix:
+        observed_frameworks = list(matrix.get("frameworks") or [])
+        observed_modalities = set(matrix_summary.get("modalities") or [])
+        observed_transports = set(matrix_summary.get("transports") or [])
+        observed_target_schemes = set(matrix_summary.get("target_schemes") or [])
+        if matrix.get("kind") != "agent-learning.framework-adapter-contract-matrix.v1":
+            matrix_errors.append(
+                {
+                    "field": "kind",
+                    "expected": "agent-learning.framework-adapter-contract-matrix.v1",
+                    "observed": matrix.get("kind"),
+                }
+            )
+        if matrix.get("status") != "passed":
+            matrix_errors.append(
+                {"field": "status", "expected": "passed", "observed": matrix.get("status")}
+            )
+        if matrix.get("requires_external_service") is not False:
+            matrix_errors.append(
+                {
+                    "field": "requires_external_service",
+                    "expected": False,
+                    "observed": matrix.get("requires_external_service"),
+                }
+            )
+        if matrix.get("allow_external_targets") is not False:
+            matrix_errors.append(
+                {
+                    "field": "allow_external_targets",
+                    "expected": False,
+                    "observed": matrix.get("allow_external_targets"),
+                }
+            )
+        if observed_frameworks != required_frameworks:
+            matrix_errors.append(
+                {
+                    "field": "frameworks",
+                    "expected": required_frameworks,
+                    "observed": observed_frameworks,
+                }
+            )
+        expected_count = len(required_frameworks)
+        expected_summary_counts = {
+            "contract_count": expected_count,
+            "local_executable_fixture_count": expected_count,
+            "requires_external_service_count": 0,
+            "external_target_count": 0,
+            "trace_runtime_count": expected_count,
+        }
+        for field, expected in expected_summary_counts.items():
+            observed = matrix_summary.get(field)
+            if observed != expected:
+                matrix_errors.append(
+                    {"field": f"summary.{field}", "expected": expected, "observed": observed}
+                )
+        if observed_modalities != required_modalities:
+            matrix_errors.append(
+                {
+                    "field": "summary.modalities",
+                    "expected": sorted(required_modalities),
+                    "observed": sorted(observed_modalities),
+                }
+            )
+        if observed_transports != required_transports:
+            matrix_errors.append(
+                {
+                    "field": "summary.transports",
+                    "expected": sorted(required_transports),
+                    "observed": sorted(observed_transports),
+                }
+            )
+        if observed_target_schemes != required_target_schemes:
+            matrix_errors.append(
+                {
+                    "field": "summary.target_schemes",
+                    "expected": sorted(required_target_schemes),
+                    "observed": sorted(observed_target_schemes),
+                }
+            )
+
+        contracts = list(matrix.get("contracts") or [])
+        observed_contract_frameworks: set[str] = set()
+        for contract in contracts:
+            if not isinstance(contract, Mapping):
+                contract_errors.append(
+                    {
+                        "framework": "<unknown>",
+                        "field": "contract",
+                        "error": f"contract is {type(contract).__name__}, expected mapping",
+                    }
+                )
+                continue
+            framework = str(contract.get("framework") or "")
+            observed_contract_frameworks.add(framework)
+            capabilities = set(contract.get("capabilities") or [])
+            evidence = set(contract.get("evidence_requirements") or [])
+            lifecycle_hooks = set(contract.get("lifecycle_hooks") or [])
+            schemas = contract.get("schemas")
+            target = str(contract.get("target") or "")
+            target_scheme = str(contract.get("target_scheme") or "")
+            contract_expectations = {
+                "kind": (
+                    contract.get("kind"),
+                    "agent-learning.framework-adapter-contract.v1",
+                ),
+                "requires_external_service": (
+                    contract.get("requires_external_service"),
+                    False,
+                ),
+                "local_executable_fixture": (
+                    contract.get("local_executable_fixture"),
+                    True,
+                ),
+                "trace_runtime": (contract.get("trace_runtime"), True),
+            }
+            for field, (observed, expected) in contract_expectations.items():
+                if observed != expected:
+                    contract_errors.append(
+                        {
+                            "framework": framework,
+                            "field": field,
+                            "expected": expected,
+                            "observed": observed,
+                        }
+                    )
+            if framework not in required_framework_set:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "framework",
+                        "expected": sorted(required_framework_set),
+                        "observed": framework,
+                    }
+                )
+            if contract.get("modality") not in required_modalities:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "modality",
+                        "expected": sorted(required_modalities),
+                        "observed": contract.get("modality"),
+                    }
+                )
+            if contract.get("transport") not in required_transports:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "transport",
+                        "expected": sorted(required_transports),
+                        "observed": contract.get("transport"),
+                    }
+                )
+            if not target:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "target",
+                        "expected": "non-empty local fixture target",
+                        "observed": target,
+                    }
+                )
+            if target_scheme not in required_target_schemes:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "target_scheme",
+                        "expected": sorted(required_target_schemes),
+                        "observed": target_scheme,
+                    }
+                )
+            missing_capabilities = sorted(required_capabilities - capabilities)
+            if missing_capabilities:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "capabilities",
+                        "missing": missing_capabilities,
+                    }
+                )
+            missing_evidence = sorted(required_evidence - evidence)
+            if missing_evidence:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "evidence_requirements",
+                        "missing": missing_evidence,
+                    }
+                )
+            if not {"setup", "teardown"} <= lifecycle_hooks:
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "lifecycle_hooks",
+                        "required": ["setup", "teardown"],
+                        "observed": sorted(lifecycle_hooks),
+                    }
+                )
+            if not isinstance(schemas, Mapping) or not {"input", "output"} <= set(schemas):
+                contract_errors.append(
+                    {
+                        "framework": framework,
+                        "field": "schemas",
+                        "required": ["input", "output"],
+                        "observed": sorted(schemas) if isinstance(schemas, Mapping) else [],
+                    }
+                )
+        missing_contract_frameworks = sorted(
+            required_framework_set - observed_contract_frameworks
+        )
+        if missing_contract_frameworks:
+            contract_errors.append(
+                {
+                    "framework": "<matrix>",
+                    "field": "contracts",
+                    "missing_frameworks": missing_contract_frameworks,
+                }
+            )
+
+    for spec in V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS:
+        relative_path = str(spec["path"])
+        path = root / relative_path
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append({"path": relative_path, "error": str(exc)})
+            continue
+        if not isinstance(payload, Mapping):
+            errors.append(
+                {
+                    "path": relative_path,
+                    "error": f"manifest is {type(payload).__name__}, expected mapping",
+                }
+            )
+            continue
+
+        external_value_findings.extend(
+            _release_external_value_findings(relative_path, payload)
+        )
+        agent = payload.get("agent") if isinstance(payload.get("agent"), Mapping) else {}
+        simulation = (
+            payload.get("simulation")
+            if isinstance(payload.get("simulation"), Mapping)
+            else {}
+        )
+        environments = [
+            env
+            for env in simulation.get("environments") or []
+            if isinstance(env, Mapping)
+        ]
+        environment_types = [
+            str(env.get("type") or "") for env in environments if env.get("type")
+        ]
+        framework_values = set()
+        if agent.get("framework"):
+            framework_values.add(str(agent.get("framework")))
+        environment_frameworks: dict[str, str] = {}
+        for env in environments:
+            env_type = str(env.get("type") or "")
+            data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
+            framework = str(data.get("framework") or "")
+            if framework:
+                framework_values.add(framework)
+                environment_frameworks[env_type] = framework
+
+        required_environment_types = [
+            str(item) for item in spec["required_environment_types"]
+        ]
+        missing_environment_types = sorted(
+            set(required_environment_types) - set(environment_types)
+        )
+        observed_kind = (
+            payload.get("version")
+            or payload.get("kind")
+            or payload.get("schema_version")
+        )
+        observed_agent_type = agent.get("type")
+        observed_modality = simulation.get("modality")
+        expected_framework = str(spec["framework"])
+        agent_target = str(agent.get("target") or "")
+        manifest_contracts.append(
+            {
+                "path": relative_path,
+                "kind": observed_kind,
+                "agent_type": observed_agent_type,
+                "frameworks": sorted(framework_values),
+                "modality": observed_modality,
+                "environment_types": environment_types,
+                "required_environment_types": required_environment_types,
+                "missing_environment_types": missing_environment_types,
+                "required_env": list(payload.get("required_env") or []),
+                "agent_target": agent_target,
+            }
+        )
+        manifest_expectations = {
+            "kind": (observed_kind, spec["kind"]),
+            "agent.type": (observed_agent_type, spec["agent_type"]),
+            "simulation.modality": (observed_modality, spec["modality"]),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                manifest_errors.append(
+                    {
+                        "path": relative_path,
+                        "field": field,
+                        "expected": expected,
+                        "observed": observed,
+                    }
+                )
+        if expected_framework not in framework_values:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "framework",
+                    "expected": expected_framework,
+                    "observed": sorted(framework_values),
+                }
+            )
+        if missing_environment_types:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "simulation.environments",
+                    "required": required_environment_types,
+                    "observed": environment_types,
+                    "missing": missing_environment_types,
+                }
+            )
+        if not payload.get("required_env"):
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "required_env",
+                    "expected": "at least one env-key name for real-key execution",
+                    "observed": [],
+                }
+            )
+        for env_type in required_environment_types:
+            framework = environment_frameworks.get(env_type)
+            if framework != expected_framework:
+                manifest_errors.append(
+                    {
+                        "path": relative_path,
+                        "field": f"environment.{env_type}.framework",
+                        "expected": expected_framework,
+                        "observed": framework,
+                    }
+                )
+        if spec["agent_type"] == "framework" and not agent_target:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "agent.target",
+                    "expected": "local framework shim target",
+                    "observed": agent_target,
+                }
+            )
+
+    return {
+        "required_frameworks": required_frameworks,
+        "required_modalities": list(V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES),
+        "required_transports": list(V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS),
+        "required_target_schemes": list(V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES),
+        "required_manifest_contracts": copy.deepcopy(
+            V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+        ),
+        "matrix_kind": matrix.get("kind"),
+        "matrix_status": matrix.get("status"),
+        "matrix_summary": dict(matrix_summary),
+        "matrix_quality_gate": dict(matrix.get("contract_quality_gate") or {}),
+        "observed_frameworks": list(matrix.get("frameworks") or []),
+        "observed_modalities": list(matrix_summary.get("modalities") or []),
+        "observed_transports": list(matrix_summary.get("transports") or []),
+        "observed_target_schemes": list(matrix_summary.get("target_schemes") or []),
+        "manifest_contracts": manifest_contracts,
+        "missing_files": missing_files,
+        "matrix_errors": matrix_errors,
+        "contract_errors": contract_errors,
+        "manifest_errors": manifest_errors,
+        "external_value_findings": external_value_findings,
+        "errors": errors,
+    }
+
+
+def _release_external_value_findings(
+    relative_path: str,
+    value: Any,
+    *,
+    breadcrumb: str = "$",
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    external_prefixes = ("http://", "https://", "ws://", "wss://")
+    if isinstance(value, str):
+        if value.strip().lower().startswith(external_prefixes):
+            findings.append(
+                {
+                    "path": relative_path,
+                    "field": breadcrumb,
+                    "value": value,
+                }
+            )
+        return findings
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            findings.extend(
+                _release_external_value_findings(
+                    relative_path,
+                    item,
+                    breadcrumb=f"{breadcrumb}.{key}",
+                )
+            )
+        return findings
+    if isinstance(value, list | tuple | set):
+        for index, item in enumerate(value):
+            findings.extend(
+                _release_external_value_findings(
+                    relative_path,
+                    item,
+                    breadcrumb=f"{breadcrumb}[{index}]",
+                )
+            )
+    return findings
+
+
 def _release_secret_marker_findings(
     relative_path: str,
     payloads: Mapping[str, Any],
@@ -1133,6 +1675,11 @@ __all__ = [
     "V1_REQUIRED_EXAMPLES",
     "V1_REQUIRED_SCHEMA_KINDS",
     "V1_FRAMEWORK_PROVIDER_EXAMPLES",
+    "V1_FRAMEWORK_PROVIDER_FRAMEWORKS",
+    "V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS",
+    "V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES",
+    "V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES",
+    "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
     "V1_REDTEAM_EXAMPLES",
     "V1_REDTEAM_RESEARCH_ATTACK_TYPES",
