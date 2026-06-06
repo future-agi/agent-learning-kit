@@ -10840,6 +10840,7 @@ def test_cli_redteam_corpus_imports_local_file_without_hook(monkeypatch, tmp_pat
     assert payload["summary"]["source"]["path"] == str(corpus_path.resolve())
     assert payload["summary"]["hook"] == {}
     campaign = payload["redteam_campaign"]
+    assert len(campaign["required_matrix_cells"]) == 2
     assert campaign["summary"]["coverage_cell_count"] == 2
     assert campaign["summary"]["covered_cell_count"] == 2
     assert campaign["metadata"]["corpus_source"]["row_count"] == 2
@@ -12448,6 +12449,21 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_LOCAL_SIM_EVAL_EXAMPLES
     )
     assert payload["required_redteam_examples"] == trinity.V1_REDTEAM_EXAMPLES
+    assert payload["required_redteam_research_corpus_file"] == (
+        trinity.V1_REDTEAM_RESEARCH_CORPUS_FILE
+    )
+    assert payload["required_redteam_research_files"] == (
+        trinity.V1_REDTEAM_RESEARCH_FILES
+    )
+    assert payload["required_redteam_research_attack_types"] == (
+        trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES
+    )
+    assert payload["required_redteam_research_surfaces"] == (
+        trinity.V1_REDTEAM_RESEARCH_SURFACES
+    )
+    assert payload["required_redteam_research_source_urls"] == (
+        trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
+    )
     assert payload["required_framework_provider_examples"] == (
         trinity.V1_FRAMEWORK_PROVIDER_EXAMPLES
     )
@@ -12463,6 +12479,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "local_sim_eval_examples_present",
         "native_optimizer_evidence_components",
         "redteam_core_examples_present",
+        "redteam_research_coverage",
         "schema_kind_contract",
         "framework_provider_examples_present",
         "package_metadata",
@@ -12472,6 +12489,58 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert checks["v1_examples_present"]["evidence"]["missing"] == []
     assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []
     assert checks["redteam_core_examples_present"]["evidence"]["missing"] == []
+    redteam_research = checks["redteam_research_coverage"]["evidence"]
+    assert redteam_research["missing_files"] == []
+    assert redteam_research["missing_attack_types"] == []
+    assert redteam_research["missing_surfaces"] == []
+    assert redteam_research["missing_source_urls"] == []
+    assert redteam_research["corpus_file"] == (
+        trinity.V1_REDTEAM_RESEARCH_CORPUS_FILE
+    )
+    assert redteam_research["corpus_missing_attack_types"] == []
+    assert redteam_research["corpus_missing_surfaces"] == []
+    assert redteam_research["corpus_missing_source_urls"] == []
+    assert redteam_research["parse_errors"] == {}
+    assert set(redteam_research["observed_attack_types"]) >= {
+        "adaptive_indirect_prompt_injection",
+        "credential_exfiltration",
+        "indirect_prompt_injection",
+        "knowledge_corruption",
+        "memory_poisoning",
+        "monitor_evasion",
+        "objective_drift",
+        "prompt_injection",
+        "sleeper_memory_poisoning",
+        "tool_chaining",
+    }
+    assert set(redteam_research["corpus_observed_attack_types"]) >= set(
+        trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES
+    )
+    assert set(redteam_research["observed_surfaces"]) >= {
+        "environment",
+        "instruction",
+        "long_context",
+        "memory",
+        "retrieval",
+        "tool",
+    }
+    assert set(redteam_research["corpus_observed_surfaces"]) >= set(
+        trinity.V1_REDTEAM_RESEARCH_SURFACES
+    )
+    assert set(redteam_research["observed_source_urls"]) >= {
+        "https://arxiv.org/abs/2601.03699",
+        "https://arxiv.org/abs/2601.13518",
+        "https://arxiv.org/abs/2602.09222",
+        "https://arxiv.org/abs/2604.28157",
+        "https://arxiv.org/abs/2605.04808",
+        "https://arxiv.org/abs/2605.09684",
+        "https://arxiv.org/abs/2605.15338",
+        "https://arxiv.org/abs/2605.17075",
+        "https://arxiv.org/abs/2606.04329",
+    }
+    assert set(redteam_research["corpus_observed_source_urls"]) >= set(
+        trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
+    )
     assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
     evidence = checks["native_optimizer_evidence_components"]["evidence"]
     assert evidence["missing"] == []

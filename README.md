@@ -46,7 +46,9 @@ Run `agent-learn release-check --project-root .` before cutting V1. It emits
 `agent-learning.release-check.v1` with the milestone gates from
 [`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md): SDK consolidation,
 promptfoo-style CLI, native optimizer evidence, required docs/examples, schema
-kinds, and packaging metadata.
+kinds, packaging metadata, and research-backed red-team corpus/campaign
+coverage across required examples, attack types, surfaces, source lineage, and
+the canonical local corpus rows.
 
 Python code can verify the same boundary without shelling out:
 
@@ -1313,6 +1315,12 @@ CLI users can import the same local corpus rows without a hook:
 artifacts/redteam-corpus.json`. The command accepts a top-level list or an
 object with `rows`, `corpus_rows`, `attacks`, or `cases`, then emits the same
 campaign evidence and report/action follow-ups used by SDK callers.
+Corpus imports require the exact benchmark cells represented by their rows by
+default; callers can still pass explicit campaign dimensions when they want an
+exhaustive attack/surface/channel/provider matrix.
+V1 release readiness also gates this evidence: `agent-learn release-check`
+expects the required red-team examples plus corpus-only and broader
+research-backed attack/surface/source coverage to remain present.
 
 `redteam.fetch_redteam_corpus_hook()` and
 `redteam.build_redteam_corpus_hook_campaign()` add an optional authenticated

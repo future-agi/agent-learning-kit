@@ -821,6 +821,14 @@ def build_redteam_corpus_campaign(
     surface_values = _unique_strings([*required_surfaces, *(row["surface"] for row in rows)])
     channel_values = _unique_strings([*required_channels, *(row["channel"] for row in rows)])
     provider_values = _unique_strings([*required_providers, *(row["provider"] for row in rows)])
+    explicit_matrix_dimensions = any(
+        (
+            required_attack_types,
+            required_surfaces,
+            required_channels,
+            required_providers,
+        )
+    )
 
     attack_pack = {
         "id": f"{_redteam_corpus_key(name)}_attack_pack",
@@ -881,6 +889,11 @@ def build_redteam_corpus_campaign(
         "required_surfaces": surface_values,
         "required_channels": channel_values,
         "required_providers": provider_values,
+        "required_matrix_cells": (
+            []
+            if explicit_matrix_dimensions
+            else [_redteam_corpus_required_cell(row) for row in rows]
+        ),
         "metadata": {
             "source": "agent_learning.redteam.build_redteam_corpus_campaign",
             "cookbook": "redteam-corpus-import",
@@ -1865,6 +1878,16 @@ def _redteam_corpus_cell_id(
     provider: str,
 ) -> str:
     return "|".join([attack_type, surface, channel, provider])
+
+
+def _redteam_corpus_required_cell(row: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "id": row["cell_id"],
+        "attack_type": row["attack_type"],
+        "surface": row["surface"],
+        "channel": row["channel"],
+        "provider": row["provider"],
+    }
 
 
 def _redteam_corpus_key(value: Any) -> str:

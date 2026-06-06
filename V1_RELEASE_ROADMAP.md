@@ -26,6 +26,11 @@ V1 is releasable when a user can:
 
 ## Milestones
 
+Each milestone has a small release gate. `agent-learn release-check --project-root .`
+is the V1 source of truth for these gates, including research-backed red-team
+coverage across required examples, canonical corpus rows, attack types,
+surfaces, and source lineage.
+
 ### M0: SDK Consolidation Boundary
 
 Status: mostly complete.
@@ -117,11 +122,18 @@ Acceptance gates:
   executed run artifacts, findings, mitigations, and regression promotion.
 - Red-team optimization can evolve attack packs and mitigation candidates with
   local replay evidence.
+- Corpus imports use exact required benchmark cells by default, while explicit
+  campaign dimensions can still request exhaustive cross-product coverage.
+- `agent-learn release-check` gates the required red-team corpus/campaign
+  examples plus corpus-only and broader research-backed attack types, attack
+  surfaces, and source URLs.
 
 Next implementation focus:
 
-- Add V1 release gate coverage for red-team campaign/corpus artifacts.
-- Add more native attack-evolution fixtures if release-check exposes gaps.
+- Keep the required local red-team corpus, campaign, attack-evolution,
+  long-horizon, persistent-state, society, causal-attribution, and autonomous
+  task-world examples present and passing.
+- Add native fixtures only when release-check exposes a concrete coverage gap.
 
 ### M5: Future AGI UI/UX Artifact Contract
 
@@ -186,7 +198,7 @@ Verification:
 
 1. Add `agent-learn release-check` and keep it passing.
 2. Use release-check failures to drive V1 work.
-3. Tighten red-team campaign/corpus proof coverage.
+3. Keep research-backed red-team campaign/corpus proof coverage gated.
 4. Tighten Future AGI UI/action/report artifact gates.
 5. Finish provider/framework simulation contracts that are local-first and
    verified with real user-provided target keys only where necessary.

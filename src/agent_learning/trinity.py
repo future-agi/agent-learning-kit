@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -140,6 +141,9 @@ V1_REDTEAM_EXAMPLES = [
     "examples/redteam_manifest.json",
     "examples/long_horizon_redteam_manifest.json",
     "examples/persistent_state_redteam_manifest.json",
+    "examples/long_horizon_redteam_optimization.json",
+    "examples/persistent_state_redteam_optimization.json",
+    "examples/redteam_autogen_optimization.json",
     "examples/redteam_corpus.json",
     "examples/redteam_campaign_optimization.json",
     "examples/redteam_society_optimization.json",
@@ -147,6 +151,55 @@ V1_REDTEAM_EXAMPLES = [
     "examples/autonomous_redteam_task_world_optimization.json",
     "examples/sdk_redteam_attack_evolution_optimization.py",
     "examples/sdk_redteam_adaptive_loop_optimization.py",
+]
+
+V1_REDTEAM_RESEARCH_FILES = [
+    "examples/redteam_corpus.json",
+    "examples/redteam_campaign_optimization.json",
+    "examples/redteam_autogen_optimization.json",
+    "examples/long_horizon_redteam_optimization.json",
+    "examples/persistent_state_redteam_optimization.json",
+    "examples/redteam_society_optimization.json",
+    "examples/redteam_causal_attribution_optimization.json",
+    "examples/autonomous_redteam_task_world_optimization.json",
+    "examples/sdk_redteam_attack_evolution_optimization.py",
+    "examples/sdk_redteam_adaptive_loop_optimization.py",
+]
+
+V1_REDTEAM_RESEARCH_CORPUS_FILE = "examples/redteam_corpus.json"
+
+V1_REDTEAM_RESEARCH_ATTACK_TYPES = [
+    "prompt_injection",
+    "indirect_prompt_injection",
+    "adaptive_indirect_prompt_injection",
+    "credential_exfiltration",
+    "monitor_evasion",
+    "memory_poisoning",
+    "sleeper_memory_poisoning",
+    "knowledge_corruption",
+    "tool_chaining",
+    "objective_drift",
+]
+
+V1_REDTEAM_RESEARCH_SURFACES = [
+    "instruction",
+    "tool",
+    "memory",
+    "retrieval",
+    "environment",
+    "long_context",
+]
+
+V1_REDTEAM_RESEARCH_SOURCE_URLS = [
+    "https://arxiv.org/abs/2601.03699",
+    "https://arxiv.org/abs/2601.13518",
+    "https://arxiv.org/abs/2602.09222",
+    "https://arxiv.org/abs/2604.28157",
+    "https://arxiv.org/abs/2605.04808",
+    "https://arxiv.org/abs/2605.09684",
+    "https://arxiv.org/abs/2605.15338",
+    "https://arxiv.org/abs/2605.17075",
+    "https://arxiv.org/abs/2606.04329",
 ]
 
 V1_FRAMEWORK_PROVIDER_EXAMPLES = [
@@ -382,6 +435,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "required": list(V1_REDTEAM_EXAMPLES),
         },
     )
+    redteam_research = _release_redteam_research_status(root)
+    _append_release_check(
+        checks,
+        check_id="redteam_research_coverage",
+        passed=(
+            not redteam_research["missing_attack_types"]
+            and not redteam_research["missing_surfaces"]
+            and not redteam_research["missing_source_urls"]
+            and not redteam_research["missing_files"]
+            and not redteam_research["corpus_missing_attack_types"]
+            and not redteam_research["corpus_missing_surfaces"]
+            and not redteam_research["corpus_missing_source_urls"]
+        ),
+        milestone="M4",
+        evidence=redteam_research,
+    )
     _append_release_check(
         checks,
         check_id="schema_kind_contract",
@@ -456,6 +525,11 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
         "required_redteam_examples": list(V1_REDTEAM_EXAMPLES),
+        "required_redteam_research_corpus_file": V1_REDTEAM_RESEARCH_CORPUS_FILE,
+        "required_redteam_research_files": list(V1_REDTEAM_RESEARCH_FILES),
+        "required_redteam_research_attack_types": list(V1_REDTEAM_RESEARCH_ATTACK_TYPES),
+        "required_redteam_research_surfaces": list(V1_REDTEAM_RESEARCH_SURFACES),
+        "required_redteam_research_source_urls": list(V1_REDTEAM_RESEARCH_SOURCE_URLS),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_docs": list(V1_REQUIRED_DOCS),
         "required_evidence_components": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
@@ -548,6 +622,128 @@ def _release_evidence_component_status() -> dict[str, Any]:
         "required": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "missing": missing,
     }
+
+
+def _release_redteam_research_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_REDTEAM_RESEARCH_FILES)
+    tokens: set[str] = set()
+    corpus_tokens: set[str] = set()
+    observed_source_urls: set[str] = set()
+    corpus_source_urls: set[str] = set()
+    scanned_files: list[str] = []
+    parse_errors: dict[str, str] = {}
+
+    for relative_path in V1_REDTEAM_RESEARCH_FILES:
+        path = root / relative_path
+        if not path.exists():
+            continue
+        scanned_files.append(relative_path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            parse_errors[relative_path] = str(exc)
+            continue
+        file_tokens: set[str] = set()
+        file_source_urls = {
+            source_url
+            for source_url in V1_REDTEAM_RESEARCH_SOURCE_URLS
+            if source_url in text
+        }
+        observed_source_urls.update(file_source_urls)
+        if path.suffix == ".json":
+            try:
+                payload = json.loads(text)
+            except Exception as exc:
+                parse_errors[relative_path] = str(exc)
+                continue
+            _collect_release_redteam_tokens(payload, file_tokens)
+        else:
+            _collect_release_text_tokens(text, file_tokens)
+        tokens.update(file_tokens)
+        if relative_path == V1_REDTEAM_RESEARCH_CORPUS_FILE:
+            corpus_tokens.update(file_tokens)
+            corpus_source_urls.update(file_source_urls)
+
+    required_attacks = {_release_norm(item) for item in V1_REDTEAM_RESEARCH_ATTACK_TYPES}
+    required_surfaces = {_release_norm(item) for item in V1_REDTEAM_RESEARCH_SURFACES}
+    required_sources = set(V1_REDTEAM_RESEARCH_SOURCE_URLS)
+    observed_attack_types = sorted(required_attacks & tokens)
+    observed_surfaces = sorted(required_surfaces & tokens)
+    corpus_observed_attack_types = sorted(required_attacks & corpus_tokens)
+    corpus_observed_surfaces = sorted(required_surfaces & corpus_tokens)
+    return {
+        "scanned_files": scanned_files,
+        "missing_files": missing_files,
+        "parse_errors": parse_errors,
+        "corpus_file": V1_REDTEAM_RESEARCH_CORPUS_FILE,
+        "required_attack_types": list(V1_REDTEAM_RESEARCH_ATTACK_TYPES),
+        "observed_attack_types": observed_attack_types,
+        "missing_attack_types": sorted(required_attacks - set(observed_attack_types)),
+        "corpus_observed_attack_types": corpus_observed_attack_types,
+        "corpus_missing_attack_types": sorted(
+            required_attacks - set(corpus_observed_attack_types)
+        ),
+        "required_surfaces": list(V1_REDTEAM_RESEARCH_SURFACES),
+        "observed_surfaces": observed_surfaces,
+        "missing_surfaces": sorted(required_surfaces - set(observed_surfaces)),
+        "corpus_observed_surfaces": corpus_observed_surfaces,
+        "corpus_missing_surfaces": sorted(
+            required_surfaces - set(corpus_observed_surfaces)
+        ),
+        "required_source_urls": list(V1_REDTEAM_RESEARCH_SOURCE_URLS),
+        "observed_source_urls": sorted(observed_source_urls),
+        "missing_source_urls": sorted(required_sources - observed_source_urls),
+        "corpus_observed_source_urls": sorted(corpus_source_urls),
+        "corpus_missing_source_urls": sorted(required_sources - corpus_source_urls),
+    }
+
+
+def _collect_release_redteam_tokens(value: Any, tokens: set[str]) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _collect_release_text_tokens(str(key), tokens)
+            _collect_release_redteam_tokens(item, tokens)
+        return
+    if isinstance(value, list | tuple | set):
+        for item in value:
+            _collect_release_redteam_tokens(item, tokens)
+        return
+    if isinstance(value, str | int | float | bool):
+        _collect_release_text_tokens(str(value), tokens)
+
+
+def _collect_release_text_tokens(text: str, tokens: set[str]) -> None:
+    normalized = _release_norm(text)
+    if normalized:
+        tokens.add(normalized)
+    split_text = text
+    for delimiter in (
+        "|",
+        "/",
+        ":",
+        ",",
+        ";",
+        ".",
+        "(",
+        ")",
+        "[",
+        "]",
+        "{",
+        "}",
+        "\"",
+        "'",
+        "\n",
+        "\t",
+    ):
+        split_text = split_text.replace(delimiter, " ")
+    for part in split_text.split():
+        normalized_part = _release_norm(part)
+        if normalized_part:
+            tokens.add(normalized_part)
+
+
+def _release_norm(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _read_pyproject(root: Path) -> dict[str, Any]:
@@ -655,6 +851,11 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_EXAMPLES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
     "V1_REDTEAM_EXAMPLES",
+    "V1_REDTEAM_RESEARCH_ATTACK_TYPES",
+    "V1_REDTEAM_RESEARCH_CORPUS_FILE",
+    "V1_REDTEAM_RESEARCH_FILES",
+    "V1_REDTEAM_RESEARCH_SOURCE_URLS",
+    "V1_REDTEAM_RESEARCH_SURFACES",
     "assert_release_ready",
     "assert_trinity_ready",
     "consolidation_metadata",

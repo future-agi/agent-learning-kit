@@ -4232,6 +4232,7 @@ def normalize_red_team_campaign_manifest(
     required_surfaces: Optional[Iterable[str]] = None,
     required_channels: Optional[Iterable[str]] = None,
     required_providers: Optional[Iterable[str]] = None,
+    required_matrix_cells: Optional[Iterable[Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Normalize campaign-level red-team evidence across tools and providers."""
@@ -4294,6 +4295,11 @@ def normalize_red_team_campaign_manifest(
         if required_providers is not None
         else payload_dict.get("required_providers")
     )
+    required_matrix_cell_records = _normalize_red_team_required_matrix_cells(
+        required_matrix_cells
+        if required_matrix_cells is not None
+        else payload_dict.get("required_matrix_cells")
+    )
     summary = _red_team_campaign_summary(
         target=target_record,
         taxonomies=taxonomy_records,
@@ -4309,6 +4315,7 @@ def normalize_red_team_campaign_manifest(
         required_surfaces=required_surface_keys,
         required_channels=required_channel_keys,
         required_providers=required_provider_keys,
+        required_matrix_cells=required_matrix_cell_records,
     )
     signals = _red_team_campaign_signals(
         target=target_record,
@@ -4339,6 +4346,7 @@ def normalize_red_team_campaign_manifest(
         "required_surfaces": sorted(set(required_surface_keys)),
         "required_channels": sorted(set(required_channel_keys)),
         "required_providers": sorted(set(required_provider_keys)),
+        "required_matrix_cells": required_matrix_cell_records,
         "summary": summary,
         "signals": signals,
         "metadata": {
@@ -5062,7 +5070,19 @@ def _red_team_required_matrix_cells(
     required_surfaces: Sequence[str],
     required_channels: Sequence[str],
     required_providers: Sequence[str],
+    required_matrix_cells: Sequence[Mapping[str, Any]] = (),
 ) -> List[Dict[str, str]]:
+    if required_matrix_cells:
+        return [
+            {
+                "id": str(cell.get("id") or ""),
+                "attack_type": str(cell.get("attack_type") or ""),
+                "surface": str(cell.get("surface") or ""),
+                "channel": str(cell.get("channel") or ""),
+                "provider": str(cell.get("provider") or ""),
+            }
+            for cell in required_matrix_cells
+        ]
     dimensions = [
         sorted({_red_team_key(item) for item in required_attack_types if _red_team_key(item)}),
         sorted({_red_team_key(item) for item in required_surfaces if _red_team_key(item)}),
@@ -5090,6 +5110,44 @@ def _red_team_required_matrix_cells(
                             "provider": provider,
                         }
                     )
+    return cells
+
+
+def _normalize_red_team_required_matrix_cells(value: Any) -> List[Dict[str, str]]:
+    cells: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in _as_iterable(value):
+        if not isinstance(item, Mapping):
+            continue
+        attack_type = _red_team_key(
+            item.get("attack_type") or item.get("attack") or item.get("category")
+        )
+        surface = _red_team_key(item.get("surface") or item.get("attack_surface"))
+        channel = _red_team_key(item.get("channel") or item.get("modality")) or "chat"
+        provider = _red_team_key(item.get("provider")) or "local_cli"
+        if not attack_type or not surface:
+            continue
+        cell_id = _red_team_key(
+            item.get("id")
+            or _red_team_cell_id(
+                attack_type=attack_type,
+                surface=surface,
+                channel=channel,
+                provider=provider,
+            )
+        )
+        if not cell_id or cell_id in seen:
+            continue
+        seen.add(cell_id)
+        cells.append(
+            {
+                "id": cell_id,
+                "attack_type": attack_type,
+                "surface": surface,
+                "channel": channel,
+                "provider": provider,
+            }
+        )
     return cells
 
 
@@ -5156,12 +5214,14 @@ def _red_team_campaign_matrix_summary(
     required_surfaces: Sequence[str],
     required_channels: Sequence[str],
     required_providers: Sequence[str],
+    required_matrix_cells: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     required_cells = _red_team_required_matrix_cells(
         required_attack_types=required_attack_types,
         required_surfaces=required_surfaces,
         required_channels=required_channels,
         required_providers=required_providers,
+        required_matrix_cells=required_matrix_cells,
     )
     coverage_matrix: List[Dict[str, Any]] = []
     missing_coverage_cells: List[Dict[str, Any]] = []
@@ -5273,6 +5333,7 @@ def _red_team_campaign_summary(
     required_surfaces: Sequence[str],
     required_channels: Sequence[str],
     required_providers: Sequence[str],
+    required_matrix_cells: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     observed_taxonomies = {
         _red_team_key(item.get("key") or item.get("id") or item.get("name")) for item in taxonomies
@@ -5330,6 +5391,7 @@ def _red_team_campaign_summary(
         required_surfaces=required_surfaces,
         required_channels=required_channels,
         required_providers=required_providers,
+        required_matrix_cells=required_matrix_cells,
     )
     return {
         "has_target": bool(target),
