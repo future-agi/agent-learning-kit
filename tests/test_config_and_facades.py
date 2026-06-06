@@ -3725,6 +3725,8 @@ def test_sdk_optimizer_governance_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    from agent_learning import optimize
+
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY",
         "real-local-sdk-optimizer-governance-key",
@@ -3828,6 +3830,37 @@ def test_sdk_optimizer_governance_optimization_example_runs(
         assert trace_summary[flag] is True
     assert trace_summary["governance_check_count"] == 6
     assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
+
+    target = manifest["optimization"]["target"]
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        target_name=target["name"],
+        metadata=target["metadata"],
+        layers=target["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["evaluation"]["agent_report"]["config"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    components = {
+        component["name"]: component
+        for component in evidence.metadata["simulation_evidence_score"]["components"]
+    }
+    assert set(components) == {"tool_coverage", "optimizer_governance"}
+    governance_component = components["optimizer_governance"]
+    assert governance_component["score"] == pytest.approx(1.0)
+    assert governance_component["details"]["missing"] == []
+    assert governance_component["details"]["best_role"] == "dharma_steward"
+    assert governance_component["details"]["summary"]["governance_check_count"] == 6
+    assert governance_component["details"]["summary"]["governance_pass_rate"] == (
+        pytest.approx(1.0)
+    )
+    assert [
+        check for check in governance_component["details"]["checks"] if not check["match"]
+    ] == []
 
 
 def test_sdk_optimizer_governance_simulation_example_runs(monkeypatch, tmp_path):
@@ -8831,6 +8864,8 @@ def test_sdk_optimizer_portfolio_optimization_example_runs(
     monkeypatch,
     tmp_path,
 ):
+    from agent_learning import optimize
+
     key = "real-local-sdk-optimizer-portfolio-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY", key)
     example_path = PROJECT_ROOT / "examples" / (
@@ -8947,6 +8982,36 @@ def test_sdk_optimizer_portfolio_optimization_example_runs(
     assert {"endpoint", "auth", "api_key", "secret", "token"} & _nested_keys(
         result["optimization"]["best_config"]
     ) == set()
+
+    target = manifest["optimization"]["target"]
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        target_name=target["name"],
+        metadata=target["metadata"],
+        layers=target["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["evaluation"]["agent_report"]["config"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    components = {
+        component["name"]: component
+        for component in evidence.metadata["simulation_evidence_score"]["components"]
+    }
+    assert set(components) == {"tool_coverage", "optimizer_portfolio"}
+    portfolio_component = components["optimizer_portfolio"]
+    assert portfolio_component["score"] == pytest.approx(1.0)
+    assert portfolio_component["details"]["missing"] == []
+    assert portfolio_component["details"]["selected_optimizer"] == "bandit"
+    assert portfolio_component["details"]["summary"]["completed_backend_count"] == 3
+    assert portfolio_component["details"]["metadata"]["external_dependency_count"] == 0
+    assert portfolio_component["details"]["metadata"]["local_only"] is True
+    assert [
+        check for check in portfolio_component["details"]["checks"] if not check["match"]
+    ] == []
 
 
 def test_sdk_framework_certification_simulation_example_runs(

@@ -1454,6 +1454,14 @@ are `simulate.optimizer_backend_portfolio_artifact()`,
 dependency, and closed `optimizer_portfolio_quality` plus
 `optimizer_portfolio_coverage` metrics. The generated manifest is also runnable
 from the promptfoo-style CLI with `agent-learn optimize <manifest>`.
+`optimize.score_simulation_evidence()` now emits native `optimizer_governance`
+and `optimizer_portfolio` components from those same local environment-state
+artifacts. This lets AgentOptimizer diagnose the optimizer itself from role
+credit, governance gates, backend lineage, consensus, rollback, and local-only
+dependency evidence instead of delegating optimizer selection to a hosted
+service. The design tracks the 2026 direction from trace-guided harness repair,
+validation-gated multi-agent governance, social agent evolution, and
+evidence-calibrated credit assignment while keeping the SDK contract portable.
 
 The `agent_learning.optimize` SDK facade exposes the advanced optimizer,
 deployment, replay, research, and governance APIs from the vendored engine:

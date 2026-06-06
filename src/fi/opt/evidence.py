@@ -20,6 +20,8 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "world_orchestration_replay": 3.0,
     "agent_memory_lineage": 2.0,
     "harness_trajectory_replay": 4.0,
+    "optimizer_governance": 3.0,
+    "optimizer_portfolio": 3.0,
 }
 
 
@@ -160,6 +162,24 @@ def score_simulation_evidence(
             )
         )
 
+    if _should_score("optimizer_governance", layers, env_states, cfg):
+        components.append(
+            _score_optimizer_governance(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
+    if _should_score("optimizer_portfolio", layers, env_states, cfg):
+        components.append(
+            _score_optimizer_portfolio(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
     if not components:
         components.append(
             {
@@ -205,6 +225,9 @@ def score_simulation_evidence(
                     "Agent observability 2026: integration readiness needs framework-neutral traces, sessions, and evaluation hooks.",
                     "AgentSentry/EnterpriseOps 2026: stateful tool worlds need temporal takeover, utility-under-attack, and executable state-delta evidence.",
                     "RHO 2026: harness updates should be optimized from prior trajectory rollouts without external grading.",
+                    "HarnessFix 2026: optimizer updates should be attributed to responsible trace and harness layers before repair.",
+                    "SAGE/constitutional multi-agent governance 2026: optimizer societies need role-separated, validation-gated promotion evidence.",
+                    "ECPO/RREDCoT 2026: long-horizon optimizer credit should be evidence-calibrated instead of final-score-only.",
                 ],
             }
         },
@@ -1236,6 +1259,324 @@ def _score_harness_trajectory_replay(
     }
 
 
+def _score_optimizer_governance(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "optimizer_society_trace") or _first_payload(
+        env_states,
+        "optimizer_trace",
+    )
+    if not payload:
+        return _missing_component(
+            "optimizer_governance",
+            "No optimizer_society_trace environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("optimizer_trace_quality"),
+        manifest_config.get("optimizer_trace_quality"),
+        cfg.get("optimizer_governance_quality"),
+        manifest_config.get("optimizer_governance_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    observed = _optimizer_governance_observed(payload, summary)
+    required = _configured_norm_set(
+        "required_optimizer_trace",
+        cfg,
+        manifest_config,
+        nested_keys=("optimizer_trace_quality", "required_signals"),
+    )
+    required.update(
+        _norm(item)
+        for key in ("required_signals", "required_governance_signals")
+        for item in _as_list(quality.get(key))
+        if _norm(item)
+    )
+    matched = sorted(required & observed)
+    missing = sorted(required - observed)
+    coverage_score = _coverage_score(required, observed, default=bool(payload))
+
+    checks: list[dict[str, Any]] = []
+    _append_numeric_floor_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("min_role_count", "role_count"),
+            ("min_proposal_count", "proposal_count"),
+            ("min_round_count", "round_count"),
+            ("min_diagnostics", "diagnostic_count"),
+            ("min_credit_entries", "role_credit_count"),
+            ("min_role_credit_count", "role_credit_count"),
+            ("min_governance_checks", "governance_check_count"),
+            ("min_governance_pass_rate", "governance_pass_rate"),
+            ("min_best_score", "final_score"),
+            ("min_final_score", "final_score"),
+        ),
+    )
+    _append_numeric_ceiling_checks(
+        checks,
+        summary,
+        quality,
+        (("max_duplicate_candidate_count", "duplicate_candidate_count"),),
+    )
+    _append_boolean_summary_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("require_role_graph", "has_role_graph"),
+            ("require_critique", "has_critique"),
+            ("require_synthesis", "has_synthesis"),
+            ("require_steward", "has_steward"),
+            ("require_governance", "has_governance"),
+            ("require_role_diversity", "has_role_diversity"),
+            ("require_mediator", "has_mediator"),
+            ("require_contract_gate", "has_contract_gate"),
+            ("require_rollback", "has_rollback"),
+            ("require_locality", "has_locality"),
+            ("require_dependency_audit", "has_dependency_audit"),
+        ),
+    )
+    if quality.get("require_diagnostics") is not None:
+        actual = int(summary.get("diagnostic_count", 0) or 0) > 0
+        checks.append(
+            {
+                "check": "require_diagnostics",
+                "expected": bool(quality.get("require_diagnostics")),
+                "actual": actual,
+                "match": actual is bool(quality.get("require_diagnostics")),
+            }
+        )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_roles",
+        _optimizer_trace_values(payload, "roles"),
+        "required_role",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_archetypes",
+        _optimizer_trace_values(payload, "archetypes"),
+        "required_archetype",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_search_paths",
+        _optimizer_trace_values(payload, "search_paths"),
+        "required_search_path",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_governance_signals",
+        _optimizer_trace_values(payload, "governance_signals"),
+        "required_governance_signal",
+    )
+    required_best_role = _norm(quality.get("required_best_role"))
+    best_role = _optimizer_best_role(payload)
+    if required_best_role:
+        checks.append(
+            {
+                "check": "required_best_role",
+                "expected": required_best_role,
+                "actual": best_role,
+                "match": best_role == required_best_role,
+            }
+        )
+
+    quality_score = _checks_score(checks)
+    score = round(0.35 * coverage_score + 0.65 * quality_score, 4)
+    return {
+        "name": "optimizer_governance",
+        "score": score,
+        "reason": (
+            "optimizer governance trace closes role, credit, and promotion gates"
+            if score >= 0.99
+            else "optimizer governance trace evidence incomplete"
+        ),
+        "details": {
+            "matched": matched,
+            "missing": missing,
+            "checks": checks,
+            "best_role": best_role,
+            "summary": copy.deepcopy(summary),
+        },
+    }
+
+
+def _score_optimizer_portfolio(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "optimizer_backend_portfolio") or _first_payload(
+        env_states,
+        "optimizer_portfolio",
+    )
+    if not payload:
+        return _missing_component(
+            "optimizer_portfolio",
+            "No optimizer_backend_portfolio environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("optimizer_portfolio_quality"),
+        manifest_config.get("optimizer_portfolio_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    metadata = _as_mapping(payload.get("metadata"))
+    observed = _optimizer_portfolio_observed(payload, summary)
+    required = _configured_norm_set(
+        "required_optimizer_portfolio",
+        cfg,
+        manifest_config,
+    )
+    matched = sorted(required & observed)
+    missing = sorted(required - observed)
+    coverage_score = _coverage_score(required, observed, default=bool(payload))
+
+    checks: list[dict[str, Any]] = []
+    _append_numeric_floor_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("min_backend_plan_count", "backend_plan_count"),
+            ("min_backend_run_count", "backend_run_count"),
+            ("min_completed_backends", "completed_backend_count"),
+            ("min_lineage_count", "lineage_count"),
+            ("min_consensus_backends", "consensus_backend_count"),
+            ("min_feedback_cases", "feedback_case_count"),
+            ("min_diagnostics", "diagnostic_count"),
+            ("min_search_paths", "search_path_count"),
+            ("min_improved_backends", "improved_backend_count"),
+            ("min_final_score", "final_score"),
+        ),
+    )
+    _append_numeric_ceiling_checks(
+        checks,
+        summary,
+        quality,
+        (("max_failed_backends", "failed_backend_count"),),
+    )
+    _append_boolean_summary_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("require_selected_optimizer", "has_selected_optimizer"),
+            ("require_backend_plan", "has_backend_plan"),
+            ("require_backend_runs", "has_backend_runs"),
+            ("require_backend_lineage", "has_backend_lineage"),
+            ("require_completed_backend", "has_completed_backend"),
+            ("require_ablation", "has_ablation"),
+            ("require_consensus", "has_consensus"),
+            ("require_selected_relation", "has_selected_relation"),
+            ("require_diagnostics", "has_diagnostics"),
+            ("require_feedback", "has_feedback"),
+            ("require_search_paths", "has_search_paths"),
+            ("require_improvement", "has_improvement"),
+            ("require_rollback_decision", "has_rollback_decision"),
+        ),
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_backends",
+        _optimizer_portfolio_values(summary, "backends"),
+        "required_backend",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_completed_backends",
+        _optimizer_portfolio_values(summary, "completed_backends"),
+        "required_completed_backend",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_consensus_backends",
+        _optimizer_portfolio_values(summary, "consensus_backends"),
+        "required_consensus_backend",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_dependencies",
+        _optimizer_portfolio_values(summary, "dependencies"),
+        "required_dependency",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_search_paths",
+        _optimizer_portfolio_values(summary, "search_paths"),
+        "required_search_path",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_selection_relations",
+        _optimizer_portfolio_values(summary, "selection_relations"),
+        "required_selection_relation",
+    )
+
+    external_count = _int_or_none(metadata.get("external_dependency_count"))
+    if external_count is not None or "max_external_dependency_count" in quality:
+        maximum = _int_or_none(quality.get("max_external_dependency_count"))
+        if maximum is None:
+            maximum = 0
+        actual = int(external_count or 0)
+        checks.append(
+            {
+                "check": "max_external_dependency_count",
+                "expected": maximum,
+                "actual": actual,
+                "match": actual <= maximum,
+            }
+        )
+    if "local_only" in metadata or quality.get("require_local_only") is not None:
+        expected = bool(quality.get("require_local_only", True))
+        actual = bool(metadata.get("local_only"))
+        checks.append(
+            {
+                "check": "require_local_only",
+                "expected": expected,
+                "actual": actual,
+                "match": actual is expected,
+            }
+        )
+
+    quality_score = _checks_score(checks)
+    score = round(0.35 * coverage_score + 0.65 * quality_score, 4)
+    return {
+        "name": "optimizer_portfolio",
+        "score": score,
+        "reason": (
+            "optimizer backend portfolio closes local selection and evidence gates"
+            if score >= 0.99
+            else "optimizer backend portfolio evidence incomplete"
+        ),
+        "details": {
+            "matched": matched,
+            "missing": missing,
+            "checks": checks,
+            "selected_optimizer": _norm(summary.get("selected_optimizer")),
+            "summary": copy.deepcopy(summary),
+            "metadata": copy.deepcopy(metadata),
+        },
+    }
+
+
 def _should_score(
     layer: str,
     layers: set[str],
@@ -1299,13 +1640,35 @@ def _should_score(
             "harness_trajectory_replay",
             "optimization",
         },
+        "optimizer_governance": {
+            "optimizer_governance",
+            "optimizer_trace",
+            "optimizer_society_trace",
+            "society_trace",
+            "governance",
+        },
+        "optimizer_portfolio": {
+            "optimizer_portfolio",
+            "optimizer_backend_portfolio",
+            "backend_portfolio",
+            "algorithm_selection",
+            "optimizer_selection",
+        },
     }
     scoring_layers = {_norm(item) for item in _as_list(cfg.get("layers"))}
     if scoring_layers:
         return bool(scoring_layers & aliases.get(layer, {layer}))
-    if layers & aliases.get(layer, {layer}):
-        return True
     keys = _environment_keys(env_states)
+    evidence_bound_layers = {
+        "red_team_campaign",
+        "red_team_readiness",
+        "orchestration",
+        "harness_trajectory_replay",
+        "optimizer_governance",
+        "optimizer_portfolio",
+    }
+    if layers & aliases.get(layer, {layer}) and layer not in evidence_bound_layers:
+        return True
     if layer == "agent_integration":
         return (
             "agent_integration_manifest" in keys
@@ -1351,7 +1714,239 @@ def _should_score(
             or bool(cfg.get("harness_trajectory_replay_quality"))
             or bool(cfg.get("required_harness_trajectory_replay"))
         )
+    if layer == "optimizer_governance":
+        return (
+            "optimizer_society_trace" in keys
+            or "optimizer_trace" in keys
+            or bool(cfg.get("optimizer_trace_quality"))
+            or bool(cfg.get("optimizer_governance_quality"))
+            or bool(cfg.get("required_optimizer_trace"))
+        )
+    if layer == "optimizer_portfolio":
+        return (
+            "optimizer_backend_portfolio" in keys
+            or "optimizer_portfolio" in keys
+            or bool(cfg.get("optimizer_portfolio_quality"))
+            or bool(cfg.get("required_optimizer_portfolio"))
+        )
     return False
+
+
+def _optimizer_governance_observed(
+    payload: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> set[str]:
+    observed = _token_set(payload)
+    observed.update({"optimizer_governance", "optimizer_trace"})
+    kind = _norm(payload.get("kind"))
+    if kind == "optimizer_society_trace":
+        observed.update({"optimizer_society_trace", "society_trace"})
+    for key in ("signals", "required_signals", "observed_signals"):
+        observed.update(_norm(item) for item in _as_list(payload.get(key)) if _norm(item))
+        observed.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+    for category in ("roles", "archetypes", "search_paths", "governance_signals"):
+        observed.update(_optimizer_trace_values(payload, category))
+    return {item for item in observed if item}
+
+
+def _optimizer_trace_values(
+    payload: Mapping[str, Any],
+    category: str,
+) -> set[str]:
+    values: set[str] = set()
+    roles = [_as_mapping(item) for item in _as_list(payload.get("roles"))]
+    proposals = [_as_mapping(item) for item in _as_list(payload.get("proposals"))]
+    role_credit = [_as_mapping(item) for item in _as_list(payload.get("role_credit"))]
+    governance = _as_mapping(payload.get("governance"))
+    summary = _as_mapping(payload.get("summary"))
+    if category == "roles":
+        for role in roles:
+            values.add(_norm(role.get("name") or role.get("role")))
+            values.add(_norm(role.get("proposal_kind")))
+        for proposal in proposals:
+            values.add(_norm(proposal.get("role")))
+            values.add(_norm(proposal.get("role_kind")))
+        for credit in role_credit:
+            values.add(_norm(credit.get("role")))
+    elif category == "archetypes":
+        for role in roles:
+            values.add(_norm(role.get("archetype")))
+        for proposal in proposals:
+            values.add(_norm(proposal.get("role_archetype")))
+    elif category == "search_paths":
+        values.update(_norm(item) for item in _as_list(payload.get("search_paths")) if _norm(item))
+        values.update(_norm(item) for item in _as_list(summary.get("search_paths")) if _norm(item))
+        for proposal in proposals:
+            values.update(
+                _norm(item)
+                for item in _as_list(proposal.get("search_paths"))
+                if _norm(item)
+            )
+        for credit in role_credit:
+            values.update(
+                _norm(item)
+                for item in _as_list(credit.get("search_paths"))
+                if _norm(item)
+            )
+    elif category == "governance_signals":
+        values.update(_norm(item) for item in _as_list(governance.get("signals")) if _norm(item))
+        for check in _as_list(governance.get("checks")):
+            item = _as_mapping(check)
+            if item.get("passed", True):
+                values.add(_norm(item.get("name") or item.get("check") or item.get("signal")))
+    return {item for item in values if item}
+
+
+def _optimizer_best_role(payload: Mapping[str, Any]) -> str:
+    summary = _as_mapping(payload.get("summary"))
+    best_id = _norm(payload.get("best_candidate_id") or summary.get("best_candidate_id"))
+    proposals = [_as_mapping(item) for item in _as_list(payload.get("proposals"))]
+    if best_id:
+        for proposal in proposals:
+            candidate_id = _norm(proposal.get("candidate_id") or proposal.get("id"))
+            if candidate_id == best_id:
+                return _norm(proposal.get("role") or proposal.get("role_kind"))
+    scored: list[tuple[float, str]] = []
+    for proposal in proposals:
+        score = _float_or_none(proposal.get("score"))
+        role = _norm(proposal.get("role") or proposal.get("role_kind"))
+        if score is not None and role:
+            scored.append((score, role))
+    if scored:
+        return max(scored, key=lambda item: (item[0], item[1]))[1]
+    return _norm(payload.get("best_role") or summary.get("best_role"))
+
+
+def _optimizer_portfolio_observed(
+    payload: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> set[str]:
+    observed = _token_set(payload)
+    observed.update({"optimizer_portfolio", "backend_portfolio", "optimizer_backend_portfolio"})
+    for key in ("signals", "required_signals", "observed_signals", "observed_evidence"):
+        observed.update(_norm(item) for item in _as_list(payload.get(key)) if _norm(item))
+        observed.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+    for category in (
+        "backends",
+        "completed_backends",
+        "consensus_backends",
+        "dependencies",
+        "search_paths",
+        "selection_relations",
+    ):
+        observed.update(_optimizer_portfolio_values(summary, category))
+    return {item for item in observed if item}
+
+
+def _optimizer_portfolio_values(
+    summary: Mapping[str, Any],
+    category: str,
+) -> set[str]:
+    values: set[str] = set()
+    if category == "backends":
+        for key in (
+            "planned_backends",
+            "completed_backends",
+            "lineage_backends",
+            "consensus_backends",
+        ):
+            values.update(_norm(item) for item in _as_list(summary.get(key)) if _norm(item))
+        values.add(_norm(summary.get("selected_optimizer")))
+    elif category == "dependencies":
+        values.add(_norm(summary.get("dependency")))
+    else:
+        values.update(_norm(item) for item in _as_list(summary.get(category)) if _norm(item))
+    return {item for item in values if item}
+
+
+def _append_numeric_floor_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+    specs: Sequence[tuple[str, str]],
+) -> None:
+    for requirement, summary_key in specs:
+        expected = _float_or_none(quality.get(requirement))
+        if expected is None:
+            continue
+        actual = _float_or_none(summary.get(summary_key)) or 0.0
+        checks.append(
+            {
+                "check": requirement,
+                "expected": _clean_number(expected),
+                "actual": _clean_number(actual),
+                "match": actual >= expected,
+            }
+        )
+
+
+def _append_numeric_ceiling_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+    specs: Sequence[tuple[str, str]],
+) -> None:
+    for requirement, summary_key in specs:
+        expected = _float_or_none(quality.get(requirement))
+        if expected is None:
+            continue
+        actual = _float_or_none(summary.get(summary_key)) or 0.0
+        checks.append(
+            {
+                "check": requirement,
+                "expected": _clean_number(expected),
+                "actual": _clean_number(actual),
+                "match": actual <= expected,
+            }
+        )
+
+
+def _append_boolean_summary_checks(
+    checks: list[dict[str, Any]],
+    summary: Mapping[str, Any],
+    quality: Mapping[str, Any],
+    specs: Sequence[tuple[str, str]],
+) -> None:
+    for requirement, summary_key in specs:
+        if requirement not in quality:
+            continue
+        expected = bool(quality.get(requirement))
+        actual = bool(summary.get(summary_key))
+        checks.append(
+            {
+                "check": requirement,
+                "expected": expected,
+                "actual": actual,
+                "match": actual is expected,
+            }
+        )
+
+
+def _append_required_value_checks(
+    checks: list[dict[str, Any]],
+    quality: Mapping[str, Any],
+    requirement: str,
+    observed: set[str],
+    check_name: str,
+) -> None:
+    required = {_norm(item) for item in _as_list(quality.get(requirement)) if _norm(item)}
+    if not required:
+        return
+    for item in sorted(required):
+        checks.append(
+            {
+                "check": check_name,
+                "expected": item,
+                "actual": sorted(observed),
+                "match": item in observed,
+            }
+        )
+
+
+def _checks_score(checks: Sequence[Mapping[str, Any]]) -> float:
+    if not checks:
+        return 1.0
+    return sum(1 for item in checks if bool(item.get("match"))) / len(checks)
 
 
 def _stateful_required_ids(value: Any, *, fallback: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -2693,6 +3288,21 @@ def _float_mapping(value: Any) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_number(value: float) -> int | float:
+    if float(value).is_integer():
+        return int(value)
+    return round(float(value), 4)
 
 
 def _int_or_none(value: Any) -> Optional[int]:
