@@ -93,6 +93,94 @@ def _score_agent_report(strategy: str):
     return evaluation, metric_scores
 
 
+def test_framework_adapter_contract_quality_flags_external_contract():
+    external_contract = {
+        "kind": "agent-learning.framework-adapter-contract.v1",
+        "framework": "custom_refund_orchestrator",
+        "adapter": "custom",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "modality": "text",
+        "transport": "in_process",
+        "lifecycle_hooks": ["setup", "invoke", "observe", "teardown"],
+        "capabilities": ["messages", "tool_calls", "runtime_trace"],
+        "schemas": {"input": {"type": "object"}, "output": {"type": "object"}},
+        "trace_runtime": True,
+        "requires_external_service": True,
+        "local_executable_fixture": False,
+        "target": "https://example.invalid/agent",
+        "target_scheme": "https",
+        "evidence_requirements": [
+            "framework_runtime",
+            "framework_trace",
+            "tool_calls",
+            "adapter_conformance",
+            "metric_evidence",
+        ],
+    }
+    evaluation = agent_evals.evaluate_agent_report(
+        {
+            "results": [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Run framework adapter."},
+                        {"role": "assistant", "content": "Adapter ran."},
+                    ],
+                    "metadata": {
+                        "environment_state": {
+                            "framework_runtime": {
+                                "metadata": {
+                                    "framework_adapter_contract": external_contract,
+                                }
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        config={
+            "framework_adapter_contract_quality": {
+                "framework": "custom_refund_orchestrator",
+                "method": "execute_task",
+                "input_mode": "dict",
+                "require_trace_runtime": True,
+                "require_local_executable_fixture": True,
+                "require_no_external_service": True,
+                "require_target": True,
+                "required_capabilities": [
+                    "messages",
+                    "tool_calls",
+                    "runtime_trace",
+                    "structured_input",
+                ],
+                "required_evidence_requirements": [
+                    "framework_runtime",
+                    "framework_trace",
+                    "tool_calls",
+                    "adapter_conformance",
+                    "metric_evidence",
+                ],
+                "required_schema_sections": ["input", "output"],
+            },
+            "metric_weights": {"framework_adapter_contract_quality": 1.0},
+        },
+        threshold=1.0,
+    )
+    metric = next(
+        item
+        for item in evaluation.cases[0].metrics
+        if item.name == "framework_adapter_contract_quality"
+    )
+    assert metric.score < 1.0
+    finding_types = {finding["type"] for finding in metric.details["findings"]}
+    assert {
+        "framework_adapter_contract_local_fixture_missing",
+        "framework_adapter_contract_external_service_required",
+        "framework_adapter_contract_external_target_scheme",
+        "framework_adapter_contract_capability_missing",
+    } <= finding_types
+
+
 def _manifest() -> dict:
     return {
         "name": "agent-learning-kit-vendored-manifest",

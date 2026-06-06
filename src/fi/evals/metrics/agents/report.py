@@ -196,6 +196,7 @@ class AgentReportEvalConfig(BaseModel):
     framework_import_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_runtime: List[str] = Field(default_factory=list)
     framework_runtime_contract: Dict[str, Any] = Field(default_factory=dict)
+    framework_adapter_contract_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_lifecycle: List[str] = Field(default_factory=list)
     framework_lifecycle_quality: Dict[str, Any] = Field(default_factory=dict)
     framework_adapter_conformance: Dict[str, Any] = Field(default_factory=dict)
@@ -427,6 +428,7 @@ class AgentReportEvaluator:
                 *_framework_import_quality_metrics(report_context, config),
                 *_framework_runtime_coverage_metrics(report_context, config),
                 *_framework_runtime_contract_metrics(report_context, config),
+                *_framework_adapter_contract_quality_metrics(report_context, config),
                 *_framework_lifecycle_coverage_metrics(report_context, config),
                 *_framework_lifecycle_quality_metrics(report_context, config),
                 *_framework_adapter_conformance_metrics(report_context, config),
@@ -7737,6 +7739,208 @@ def _framework_runtime_contract_metric(
         name="framework_runtime_contract",
         score=round(matched / len(checks), 4),
         reason=f"{matched}/{len(checks)} framework runtime contract check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _framework_adapter_contract_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_adapter_contract_quality:
+        return []
+    return [
+        _framework_adapter_contract_quality_metric(
+            context,
+            config.framework_adapter_contract_quality,
+        )
+    ]
+
+
+def _framework_adapter_contract_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    contracts = _framework_adapter_contracts_from_context(context)
+    observed = _framework_adapter_contract_summary(contracts)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    _append_framework_adapter_contract_check(
+        checks,
+        findings,
+        check="contract_present",
+        expected={">=": 1},
+        actual=observed["contract_count"],
+        match=observed["contract_count"] >= 1,
+        finding_type="framework_adapter_contract_missing",
+    )
+
+    expected_kind = requirements.get("kind") or "agent-learning.framework-adapter-contract.v1"
+    _append_framework_adapter_contract_check(
+        checks,
+        findings,
+        check="kind",
+        expected=str(expected_kind),
+        actual=observed["kinds"],
+        match=str(expected_kind).lower() in observed["kinds"],
+        finding_type="framework_adapter_contract_kind_missing",
+    )
+
+    scalar_checks = (
+        ("framework", "frameworks", "framework_adapter_contract_framework_mismatch"),
+        ("method", "methods", "framework_adapter_contract_method_missing"),
+        ("input_mode", "input_modes", "framework_adapter_contract_input_mode_mismatch"),
+        ("modality", "modalities", "framework_adapter_contract_modality_mismatch"),
+        ("transport", "transports", "framework_adapter_contract_transport_mismatch"),
+        ("adapter", "adapters", "framework_adapter_contract_adapter_mismatch"),
+    )
+    for requirement_key, observed_key, finding_type in scalar_checks:
+        expected = requirements.get(requirement_key) or requirements.get(
+            f"required_{requirement_key}"
+        )
+        if expected in (None, "", [], {}):
+            continue
+        normalized = _normalize_framework_adapter_contract_key(expected)
+        _append_framework_adapter_contract_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=normalized,
+            actual=observed[observed_key],
+            match=normalized in observed[observed_key],
+            finding_type=finding_type,
+        )
+
+    bool_checks = (
+        (
+            "require_trace_runtime",
+            "trace_runtime_values",
+            True,
+            "framework_adapter_contract_trace_runtime_missing",
+        ),
+        (
+            "require_local_executable_fixture",
+            "local_executable_fixture_values",
+            True,
+            "framework_adapter_contract_local_fixture_missing",
+        ),
+    )
+    for requirement_key, observed_key, expected, finding_type in bool_checks:
+        if requirements.get(requirement_key) is None:
+            continue
+        required = bool(requirements.get(requirement_key))
+        _append_framework_adapter_contract_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=required,
+            actual=observed[observed_key],
+            match=(required in observed[observed_key]) if required else True,
+            finding_type=finding_type,
+        )
+
+    if requirements.get("require_no_external_service") is not None:
+        required = bool(requirements.get("require_no_external_service"))
+        actual_values = observed["requires_external_service_values"]
+        external_present = True in actual_values
+        local_declared = False in actual_values
+        _append_framework_adapter_contract_check(
+            checks,
+            findings,
+            check="require_no_external_service",
+            expected=required,
+            actual=actual_values,
+            match=(local_declared and not external_present) if required else True,
+            finding_type="framework_adapter_contract_external_service_required",
+        )
+
+    if requirements.get("require_target") is not None:
+        required = bool(requirements.get("require_target"))
+        _append_framework_adapter_contract_check(
+            checks,
+            findings,
+            check="require_target",
+            expected=required,
+            actual=observed["target_count"],
+            match=(observed["target_count"] >= 1) if required else True,
+            finding_type="framework_adapter_contract_target_missing",
+        )
+
+    forbidden_schemes = {
+        _normalize_framework_adapter_contract_key(value)
+        for value in _string_list(
+            requirements.get("forbidden_target_schemes")
+            or (["http", "https"] if requirements.get("require_no_external_service") else [])
+        )
+    }
+    if forbidden_schemes:
+        present = sorted(forbidden_schemes & set(observed["target_schemes"]))
+        _append_framework_adapter_contract_check(
+            checks,
+            findings,
+            check="forbidden_target_schemes",
+            expected={"absent": sorted(forbidden_schemes)},
+            actual=observed["target_schemes"],
+            match=not present,
+            finding_type="framework_adapter_contract_external_target_scheme",
+        )
+
+    list_checks = (
+        (
+            "required_capabilities",
+            "capabilities",
+            "framework_adapter_contract_capability_missing",
+        ),
+        (
+            "required_evidence_requirements",
+            "evidence_requirements",
+            "framework_adapter_contract_evidence_requirement_missing",
+        ),
+        (
+            "required_lifecycle_hooks",
+            "lifecycle_hooks",
+            "framework_adapter_contract_lifecycle_hook_missing",
+        ),
+        (
+            "required_schema_sections",
+            "schema_sections",
+            "framework_adapter_contract_schema_section_missing",
+        ),
+    )
+    for requirement_key, observed_key, finding_type in list_checks:
+        for expected in _string_list(requirements.get(requirement_key)):
+            normalized = _normalize_framework_adapter_contract_key(expected)
+            _append_framework_adapter_contract_check(
+                checks,
+                findings,
+                check=requirement_key,
+                expected=normalized,
+                actual=observed[observed_key],
+                match=normalized in observed[observed_key],
+                finding_type=finding_type,
+            )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_adapter_contract_quality",
+            score=1.0,
+            reason="No framework adapter contract quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_adapter_contract_quality",
+        score=round(matched / len(checks), 4),
+        reason=(
+            f"{matched}/{len(checks)} framework adapter contract "
+            "quality check(s) matched."
+        ),
         details={
             "checks": checks,
             "findings": findings,
@@ -17256,6 +17460,183 @@ def _append_framework_runtime_check(
 
 def _normalize_framework_runtime_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _framework_adapter_contracts_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    contracts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_contract(value: Any) -> None:
+        contract = _as_dict(value)
+        if not contract:
+            return
+        kind = str(contract.get("kind") or "").lower()
+        if kind != "agent-learning.framework-adapter-contract.v1":
+            return
+        signature = json.dumps(contract, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        contracts.append(contract)
+
+    metadata = _as_dict(context.get("metadata", {}))
+    append_contract(metadata.get("framework_adapter_contract"))
+
+    agent = _as_dict(metadata.get("agent") or context.get("agent"))
+    append_contract(_as_dict(agent.get("metadata")).get("framework_adapter_contract"))
+    append_contract(
+        _as_dict(agent.get("runtime_metadata")).get("framework_adapter_contract")
+    )
+
+    state = _as_dict(metadata.get("environment_state"))
+    for state_key in ("framework_runtime", "framework_trace"):
+        payload = _as_dict(state.get(state_key))
+        append_contract(payload.get("framework_adapter_contract"))
+        append_contract(_as_dict(payload.get("metadata")).get("framework_adapter_contract"))
+
+    for payload in _framework_runtime_payloads_from_context(context):
+        payload_dict = _as_dict(payload)
+        append_contract(payload_dict.get("framework_adapter_contract"))
+        append_contract(_as_dict(payload_dict.get("metadata")).get("framework_adapter_contract"))
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        data = _as_dict(_get(artifact, "data", {}))
+        artifact_metadata = _as_dict(_get(artifact, "metadata", {}))
+        append_contract(data.get("framework_adapter_contract"))
+        append_contract(artifact_metadata.get("framework_adapter_contract"))
+
+    for event in _as_list(context.get("events", [])):
+        payload = _as_dict(_get(event, "payload", {}))
+        event_metadata = _as_dict(_get(event, "metadata", {}))
+        append_contract(payload.get("framework_adapter_contract"))
+        append_contract(event_metadata.get("framework_adapter_contract"))
+
+    return contracts
+
+
+def _framework_adapter_contract_summary(
+    contracts: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    kinds: set[str] = set()
+    frameworks: set[str] = set()
+    methods: set[str] = set()
+    input_modes: set[str] = set()
+    modalities: set[str] = set()
+    transports: set[str] = set()
+    adapters: set[str] = set()
+    target_schemes: set[str] = set()
+    capabilities: set[str] = set()
+    evidence_requirements: set[str] = set()
+    lifecycle_hooks: set[str] = set()
+    schema_sections: set[str] = set()
+    trace_runtime_values: set[bool] = set()
+    local_fixture_values: set[bool] = set()
+    external_service_values: set[bool] = set()
+    target_count = 0
+
+    for raw_contract in contracts:
+        contract = _as_dict(raw_contract)
+        kind = str(contract.get("kind") or "").strip().lower()
+        if kind:
+            kinds.add(kind)
+        for source, sink in (
+            (contract.get("framework"), frameworks),
+            (contract.get("method"), methods),
+            (contract.get("input_mode"), input_modes),
+            (contract.get("modality"), modalities),
+            (contract.get("transport"), transports),
+            (contract.get("adapter"), adapters),
+            (contract.get("target_scheme"), target_schemes),
+        ):
+            normalized = _normalize_framework_adapter_contract_key(source)
+            if normalized:
+                sink.add(normalized)
+        target = str(contract.get("target") or "")
+        if target:
+            target_count += 1
+        if contract.get("trace_runtime") is not None:
+            trace_runtime_values.add(bool(contract.get("trace_runtime")))
+        if contract.get("local_executable_fixture") is not None:
+            local_fixture_values.add(bool(contract.get("local_executable_fixture")))
+        if contract.get("requires_external_service") is not None:
+            external_service_values.add(bool(contract.get("requires_external_service")))
+        capabilities.update(
+            _normalize_framework_adapter_contract_key(value)
+            for value in _as_list(contract.get("capabilities", []))
+            if _normalize_framework_adapter_contract_key(value)
+        )
+        evidence_requirements.update(
+            _normalize_framework_adapter_contract_key(value)
+            for value in _as_list(contract.get("evidence_requirements", []))
+            if _normalize_framework_adapter_contract_key(value)
+        )
+        lifecycle_hooks.update(
+            _normalize_framework_adapter_contract_key(value)
+            for value in _as_list(contract.get("lifecycle_hooks", []))
+            if _normalize_framework_adapter_contract_key(value)
+        )
+        schemas = _as_dict(contract.get("schemas"))
+        schema_sections.update(
+            _normalize_framework_adapter_contract_key(key)
+            for key in schemas
+            if _normalize_framework_adapter_contract_key(key)
+        )
+
+    return {
+        "contract_count": len(contracts),
+        "kinds": sorted(kinds),
+        "frameworks": sorted(frameworks),
+        "methods": sorted(methods),
+        "input_modes": sorted(input_modes),
+        "modalities": sorted(modalities),
+        "transports": sorted(transports),
+        "adapters": sorted(adapters),
+        "target_schemes": sorted(target_schemes),
+        "target_count": target_count,
+        "trace_runtime_values": sorted(trace_runtime_values),
+        "local_executable_fixture_values": sorted(local_fixture_values),
+        "requires_external_service_values": sorted(external_service_values),
+        "capabilities": sorted(capabilities),
+        "evidence_requirements": sorted(evidence_requirements),
+        "lifecycle_hooks": sorted(lifecycle_hooks),
+        "schema_sections": sorted(schema_sections),
+    }
+
+
+def _append_framework_adapter_contract_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "framework_adapter_contract_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_adapter_contract_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _framework_lifecycle_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:

@@ -430,6 +430,11 @@ CLI manifests. Use `simulate.framework_adapter_contract("langgraph", ...)` to
 inspect the local adapter method, input mode, modality, transport, lifecycle
 hooks, capabilities, schemas, trace requirements, and executable-fixture status
 without importing the target framework.
+Agent-report evaluation can now score that same metadata with
+`framework_adapter_contract_quality`; framework optimization weights it as a
+native gate alongside runtime and trace metrics, so an HTTP target or
+external-service contract is diagnosed locally instead of delegated to an
+external optimizer/eval platform.
 
 For arbitrary task/world simulation, build a normal run manifest from an agent
 spec, task description, environment bundle, and optional agent-report eval
@@ -474,9 +479,9 @@ Framework-runtime optimization artifacts also emit
 attached at the top level and under `optimization.framework_runtime_proof`.
 The proof is derived from the selected candidate and selected report state:
 local adapter target, runtime summary, framework trace conformance, normalized
-trace/tool bridge, patch surface, optimizer lineage, optional social-memory
-governance, and closed framework runtime metrics. It does not require an
-external observability, eval, or optimizer service.
+adapter contract quality, trace/tool bridge, patch surface, optimizer lineage,
+optional social-memory governance, and closed framework runtime metrics. It
+does not require an external observability, eval, or optimizer service.
 
 The `social_memory_framework_optimization.json` example selects
 `optimization.optimizer.algorithm: "social_memory"`, a multi-round optimizer

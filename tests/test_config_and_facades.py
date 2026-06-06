@@ -670,7 +670,33 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
             "max_error_count": 0,
             "min_invocation_count": 1,
         },
+        "framework_adapter_contract_quality": {
+            "kind": "agent-learning.framework-adapter-contract.v1",
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "require_trace_runtime": True,
+            "require_local_executable_fixture": True,
+            "require_no_external_service": True,
+            "require_target": True,
+            "required_schema_sections": ["input", "output"],
+            "required_lifecycle_hooks": ["setup", "invoke", "observe", "teardown"],
+            "required_capabilities": [
+                "messages",
+                "tool_calls",
+                "runtime_trace",
+                "structured_input",
+            ],
+            "required_evidence_requirements": [
+                "framework_runtime",
+                "framework_trace",
+                "tool_calls",
+                "adapter_conformance",
+                "metric_evidence",
+            ],
+        },
         "metric_weights": {
+            "framework_adapter_contract_quality": 8.0,
             "framework_runtime_contract": 10.0,
             "framework_runtime_coverage": 4.0,
             "framework_trace_coverage": 2.0,
@@ -751,6 +777,7 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert lineage["candidate_count"] == len(result["optimization"]["history"])
     assert lineage["selected_candidate_id"] == result["summary"]["best_candidate_id"]
     assert "framework_runtime_contract" in lineage["metric_names"]
+    assert "framework_adapter_contract_quality" in lineage["metric_names"]
     assert "agent.method" in lineage["patch_paths"]
     selected_lineage = next(row for row in lineage["rows"] if row["selected"])
     assert selected_lineage["candidate_id"] == result["summary"]["best_candidate_id"]
@@ -803,6 +830,7 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
         "framework_adapter_target_local_closed",
         "framework_runtime_evidence_present",
         "runtime_contract_matches_selected_adapter",
+        "framework_adapter_contract_quality_closed",
         "framework_trace_conformance_closed",
         "framework_trace_runtime_bridge_closed",
         "framework_patch_surface_present",
@@ -814,6 +842,7 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert proof["evidence"]["adapter_conformance"]["passed"] is True
     assert set(proof["evidence"]["selected_metrics"]) >= {
         "framework_runtime_contract",
+        "framework_adapter_contract_quality",
         "framework_runtime_coverage",
         "framework_trace_coverage",
         "tool_selection_accuracy",
@@ -845,6 +874,9 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_adapter_contract_quality"] == (
+        pytest.approx(1.0)
+    )
     assert best_history["report"]["results"][0]["metadata"]["environment_state"][
         "framework_runtime"
     ]["summary"]["tool_call_count"] == 1
@@ -1007,6 +1039,9 @@ def test_sdk_social_memory_framework_optimization_example_runs(
     )
     assert best_history["proposal_role"] == "sangha"
     assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_adapter_contract_quality"] == (
+        pytest.approx(1.0)
+    )
     assert best_history["metrics"]["framework_runtime_coverage"] == pytest.approx(1.0)
     assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
 
@@ -1043,6 +1078,7 @@ def test_sdk_social_memory_framework_optimization_example_runs(
         "framework_adapter_target_local_closed",
         "framework_runtime_evidence_present",
         "runtime_contract_matches_selected_adapter",
+        "framework_adapter_contract_quality_closed",
         "framework_trace_conformance_closed",
         "framework_trace_runtime_bridge_closed",
         "framework_patch_surface_present",
@@ -1123,6 +1159,12 @@ def test_sdk_social_memory_framework_simulation_example_runs(
     assert eval_config["framework_runtime_contract"]["required_tools"] == [
         "framework_trace_status"
     ]
+    assert eval_config["framework_adapter_contract_quality"]["framework"] == (
+        "custom_refund_orchestrator"
+    )
+    assert eval_config["framework_adapter_contract_quality"][
+        "require_no_external_service"
+    ] is True
     assert eval_config["required_tools"] == ["framework_trace_status"]
 
     from agent_learning import simulate
@@ -1190,6 +1232,7 @@ def test_sdk_social_memory_framework_simulation_example_runs(
     assert result["summary"]["evaluation_passed"] is True
     assert result["summary"]["evaluation_score"] >= 0.97
     for metric in (
+        "framework_adapter_contract_quality",
         "framework_runtime_contract",
         "framework_runtime_coverage",
         "framework_trace_coverage",

@@ -2913,6 +2913,9 @@ def _framework_runtime_proof(
 
     runtime_state = _plain_mapping(report_state.get("framework_runtime"))
     runtime_summary = _plain_mapping(runtime_state.get("summary"))
+    runtime_contract = _plain_mapping(
+        _plain_mapping(runtime_state.get("metadata")).get("framework_adapter_contract")
+    )
     framework_trace = _plain_mapping(report_state.get("framework_trace"))
     adapter_conformance = _plain_mapping(framework_trace.get("adapter_conformance"))
     spans = [
@@ -2948,6 +2951,7 @@ def _framework_runtime_proof(
     tool_mapping_closed = "tool_name" in required_tool_mapping or bool(span_tool_calls)
 
     metric_thresholds = {
+        "framework_adapter_contract_quality": 1.0,
         "framework_runtime_contract": 1.0,
         "framework_runtime_coverage": 1.0,
         "framework_trace_coverage": 1.0,
@@ -3074,6 +3078,32 @@ def _framework_runtime_proof(
             },
         ),
         _proof_check(
+            "framework_adapter_contract_quality_closed",
+            passed=runtime_contract.get("kind")
+            == "agent-learning.framework-adapter-contract.v1"
+            and str(runtime_contract.get("framework") or "") == framework
+            and str(runtime_contract.get("method") or "") == method
+            and str(runtime_contract.get("input_mode") or "") == input_mode
+            and runtime_contract.get("trace_runtime") is True
+            and runtime_contract.get("local_executable_fixture") is True
+            and runtime_contract.get("requires_external_service") is False
+            and "framework_runtime"
+            in _unique_strings(runtime_contract.get("evidence_requirements"))
+            and "framework_trace"
+            in _unique_strings(runtime_contract.get("evidence_requirements"))
+            and "metric_evidence"
+            in _unique_strings(runtime_contract.get("evidence_requirements"))
+            and {"input", "output"}.issubset(
+                set(_plain_mapping(runtime_contract.get("schemas")).keys())
+            ),
+            required=True,
+            reason=(
+                "selected adapter carries a native local contract with trace, "
+                "schema, evidence, and no-external-service requirements closed"
+            ),
+            evidence={"framework_adapter_contract": copy.deepcopy(runtime_contract)},
+        ),
+        _proof_check(
             "framework_trace_conformance_closed",
             passed=bool(framework_trace)
             and bool(spans)
@@ -3150,8 +3180,9 @@ def _framework_runtime_proof(
             ),
             required=True,
             reason=(
-                "selected report closes framework runtime, trace, and tool "
-                "metrics required for runnable adapter optimization"
+                "selected report closes framework adapter contract, runtime, "
+                "trace, and tool metrics required for runnable adapter "
+                "optimization"
             ),
             evidence=selected_metric_evidence,
         ),
@@ -3198,6 +3229,7 @@ def _framework_runtime_proof(
         "evidence": {
             "environment_types": environment_types,
             "runtime_summary": copy.deepcopy(runtime_summary),
+            "framework_adapter_contract": copy.deepcopy(runtime_contract),
             "adapter_conformance": copy.deepcopy(adapter_conformance),
             "span_tool_names": span_tool_names,
             "selected_metrics": selected_metric_evidence,
@@ -10912,7 +10944,33 @@ def _default_social_memory_framework_evaluation_config(
             "max_error_count": 0,
             "min_invocation_count": 1,
         },
+        "framework_adapter_contract_quality": {
+            "kind": "agent-learning.framework-adapter-contract.v1",
+            "framework": framework,
+            "method": "execute_task",
+            "input_mode": "dict",
+            "require_trace_runtime": True,
+            "require_local_executable_fixture": True,
+            "require_no_external_service": True,
+            "require_target": True,
+            "required_schema_sections": ["input", "output"],
+            "required_lifecycle_hooks": ["setup", "invoke", "observe", "teardown"],
+            "required_capabilities": [
+                "messages",
+                "tool_calls",
+                "runtime_trace",
+                "structured_input",
+            ],
+            "required_evidence_requirements": [
+                "framework_runtime",
+                "framework_trace",
+                "tool_calls",
+                "adapter_conformance",
+                "metric_evidence",
+            ],
+        },
         "metric_weights": {
+            "framework_adapter_contract_quality": 8.0,
             "framework_runtime_contract": 10.0,
             "framework_runtime_coverage": 5.0,
             "framework_trace_coverage": 5.0,
