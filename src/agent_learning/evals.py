@@ -14,6 +14,7 @@ AGENT_LEARNING_EVAL_KIND = "agent-learning.eval.v1"
 AGENT_LEARNING_EVAL_OPTIMIZATION_KIND = "agent-learning.eval-optimization.v1"
 AGENT_LEARNING_ARTIFACT_EVALUATION_KIND = "agent-learning.artifact-evaluation.v1"
 AGENT_LEARNING_TASK_EVIDENCE_KIND = "agent-learning.task-evidence.v1"
+AGENT_LEARNING_BEHAVIOR_ENTROPY_KIND = "agent-learning.eval.behavior-entropy.v1"
 
 _FI_EVAL_EXPORT_NAMES = (
     "ASRAccuracy",
@@ -421,6 +422,84 @@ def evaluate_agent_report(
         config=config,
         threshold=threshold,
     )
+
+
+def behavior_entropy_report(
+    report: Any,
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    threshold: float = 0.7,
+    min_score: float = 0.9,
+) -> dict[str, Any]:
+    """Return a local behavior-entropy artifact for agent trajectories."""
+
+    eval_config = dict(config or {})
+    weights = dict(eval_config.get("metric_weights") or {})
+    weights.setdefault("behavior_entropy_quality", 1.0)
+    eval_config["metric_weights"] = weights
+    evaluation = _plain(
+        evaluate_agent_report(report, config=eval_config, threshold=threshold)
+    )
+    cases = _as_list(evaluation.get("cases"))
+    case_metrics: list[dict[str, Any]] = []
+    for case in cases:
+        metrics = _as_list(_as_mapping(case).get("metrics"))
+        metric = next(
+            (
+                _as_mapping(item)
+                for item in metrics
+                if _as_mapping(item).get("name") == "behavior_entropy_quality"
+            ),
+            {},
+        )
+        if metric:
+            case_metrics.append(
+                {
+                    "case_index": _as_mapping(case).get("index"),
+                    "score": float(metric.get("score") or 0.0),
+                    "reason": metric.get("reason", ""),
+                    "details": _as_mapping(metric.get("details")),
+                }
+            )
+    score = (
+        sum(item["score"] for item in case_metrics) / len(case_metrics)
+        if case_metrics
+        else 0.0
+    )
+    failed = [item for item in case_metrics if item["score"] < min_score]
+    payload = {
+        "kind": AGENT_LEARNING_BEHAVIOR_ENTROPY_KIND,
+        "status": "passed" if not failed and score >= min_score else "failed",
+        "score": round(score, 4),
+        "threshold": float(min_score),
+        "case_count": len(case_metrics),
+        "failed_case_count": len(failed),
+        "cases": case_metrics,
+        "summary": {
+            "evaluation_score": evaluation.get("score"),
+            "evaluation_passed": evaluation.get("passed"),
+            "metric": "behavior_entropy_quality",
+        },
+        "research_sources": [
+            {
+                "id": "2606.05872",
+                "title": "Entropy-Based Evaluation of AI Agents: A Lightweight Framework for Measuring Behavioral Patterns",
+                "source": "arxiv:2606.05872",
+                "url": "https://arxiv.org/abs/2606.05872",
+                "used_for": (
+                    "local behavior-pattern scoring across actions, tools, "
+                    "trajectory entropy, information gain, and loop rate"
+                ),
+            }
+        ],
+        "metadata": {
+            "source": "agent_learning.evals.behavior_entropy_report",
+            "local_only": True,
+            "requires_external_service": False,
+        },
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    return public_payload(payload, kind=AGENT_LEARNING_BEHAVIOR_ENTROPY_KIND)
 
 
 def build_task_evaluation_config(
@@ -1112,7 +1191,9 @@ def _unique_strings(values: Sequence[Any]) -> list[str]:
 __all__ = [
     *_EVAL_EXPORTS,
     "AGENT_LEARNING_ARTIFACT_EVALUATION_KIND",
+    "AGENT_LEARNING_BEHAVIOR_ENTROPY_KIND",
     "AGENT_LEARNING_TASK_EVIDENCE_KIND",
+    "behavior_entropy_report",
     "build_evaluation_hook_config",
     "build_task_evaluation_config",
     "build_task_evidence_artifact",

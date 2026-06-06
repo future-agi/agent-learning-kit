@@ -688,6 +688,16 @@ The same path is available from the CLI and suite runner with
 `agent-learn eval-task`, so CI can score arbitrary task transcripts or tool
 run exports without writing Python glue.
 
+Behavior entropy is a native local agent-report metric for loop detection and
+action-pattern quality. `behavior_entropy_quality` measures action entropy,
+tool entropy, trajectory entropy, information gain, exploration efficiency,
+repetition rate, and adjacent loop rate. Use
+`evals.behavior_entropy_report()` or `simulate.behavior_entropy_artifact()` for
+direct artifacts, or add `behavior_entropy_quality` to `metric_weights` so
+AgentOptimizer can select candidates that solve the task without repeatedly
+calling the same tool. The metric is inspired by 2026 behavior-entropy research
+and runs without external eval, observability, or optimizer services.
+
 For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
@@ -716,6 +726,10 @@ Runnable SDK cookbook:
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY=... \
+  PYTHONPATH=src python examples/sdk_behavior_entropy_optimization.py \
+  artifacts/sdk-behavior-entropy-optimization.json
 
 AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_component_optimization.py \

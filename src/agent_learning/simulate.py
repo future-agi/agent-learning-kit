@@ -4668,6 +4668,25 @@ def public_result(result: Mapping[str, Any]) -> dict[str, Any]:
     return public_payload(_manifest().public_result(result))
 
 
+def behavior_entropy_artifact(
+    report: Any,
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    threshold: float = 0.7,
+    min_score: float = 0.9,
+) -> dict[str, Any]:
+    """Return a local behavior-entropy artifact from a simulation report."""
+
+    from . import evals as _agent_evals
+
+    return _agent_evals.behavior_entropy_report(
+        report,
+        config=config,
+        threshold=threshold,
+        min_score=min_score,
+    )
+
+
 def wrap_agent(*args: Any, **kwargs: Any) -> Any:
     return _simulate().wrap_agent(*args, **kwargs)
 
@@ -8273,6 +8292,7 @@ __all__ = [
     "AGENT_LEARNING_RUN_KIND",
     "AGENT_LEARNING_SUITE_KIND",
     "apply_manifest_env",
+    "behavior_entropy_artifact",
     "build_agent_control_plane_run_manifest",
     "build_agent_integration_run_manifest",
     "build_autonomous_redteam_task_world_run_manifest",

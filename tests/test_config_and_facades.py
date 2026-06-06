@@ -171,6 +171,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
     assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
     assert simulate.run_eval_suite_file is not None
+    assert evals.behavior_entropy_report is not None
+    assert simulate.behavior_entropy_artifact is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
@@ -1531,6 +1533,103 @@ def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+
+
+def test_sdk_behavior_entropy_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import evals, simulate
+
+    key = "real-local-sdk-behavior-entropy-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / "sdk_behavior_entropy_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_behavior_entropy_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    weak_report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Approve refund."},
+                    module.weak_agent()["responses"][0] | {"role": "assistant"},
+                    module.weak_agent()["responses"][1] | {"role": "assistant"},
+                    module.weak_agent()["responses"][2] | {"role": "assistant"},
+                ],
+                "metadata": {
+                    "task_description": "Approve refund without looping.",
+                    "expected_result": "The refund decision is approved.",
+                },
+            }
+        ]
+    }
+    strong_report = {
+        "results": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Approve refund."},
+                    module.balanced_agent()["responses"][0] | {"role": "assistant"},
+                    module.balanced_agent()["responses"][1] | {"role": "assistant"},
+                    module.balanced_agent()["responses"][2] | {"role": "assistant"},
+                ],
+                "metadata": {
+                    "task_description": "Approve refund without looping.",
+                    "expected_result": "The refund decision is approved.",
+                },
+            }
+        ]
+    }
+    weak_entropy = evals.behavior_entropy_report(
+        weak_report,
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    strong_entropy = simulate.behavior_entropy_artifact(
+        strong_report,
+        config=module.evaluation_config(),
+        min_score=0.9,
+    )
+    assert weak_entropy["kind"] == "agent-learning.eval.behavior-entropy.v1"
+    assert weak_entropy["status"] == "failed"
+    assert weak_entropy["score"] < 0.9
+    assert strong_entropy["status"] == "passed"
+    assert strong_entropy["score"] == pytest.approx(1.0)
+    assert strong_entropy["metadata"]["requires_external_service"] is False
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY"]
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == (
+        "behavior_entropy_optimization"
+    )
+    assert manifest["evaluation"]["agent_report"]["config"]["metric_weights"][
+        "behavior_entropy_quality"
+    ] == 8.0
+
+    output_path = tmp_path / "sdk-behavior-entropy-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    best_config = result["optimization"]["best_config"]
+    assert best_config["agent"]["name"] == "balanced-behavior-entropy-agent"
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["metrics"]["behavior_entropy_quality"] == pytest.approx(1.0)
+    assert best_history["metrics"]["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert "behavior_entropy_quality" in {
+        metric["name"]
+        for metric in best_history["report"]["results"][0]["evaluation"][
+            "agent_report"
+        ]["metrics"]
+    }
 
 
 def test_component_optimization_manifest_routes_diagnosed_search_paths():

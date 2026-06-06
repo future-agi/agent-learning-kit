@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import copy
+import math
 import os
 import re
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
@@ -225,6 +227,7 @@ class AgentReportEvalConfig(BaseModel):
     manifest_optimization_quality: Dict[str, Any] = Field(default_factory=dict)
     required_harness_trajectory_replay: List[str] = Field(default_factory=list)
     harness_trajectory_replay_quality: Dict[str, Any] = Field(default_factory=dict)
+    behavior_entropy_quality: Dict[str, Any] = Field(default_factory=dict)
     required_agent_memory_lineage: List[str] = Field(default_factory=list)
     agent_memory_lineage_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
@@ -406,6 +409,11 @@ class AgentReportEvaluator:
                 )
             )
 
+        if (
+            config.behavior_entropy_quality
+            or "behavior_entropy_quality" in config.metric_weights
+        ):
+            results.append(_behavior_entropy_quality_metric(trajectory_input, config))
         report_context = _report_context_from_trajectory(trajectory_input)
         results.extend(
             [
@@ -681,6 +689,242 @@ def _tool_call_from_any(raw: Any, tool_results: Mapping[str, Any]) -> Optional[T
         success=success,
         error=str(error) if error else None,
     )
+
+
+def _behavior_entropy_quality_metric(
+    trajectory_input: AgentTrajectoryInput,
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    steps = list(trajectory_input.trajectory or [])
+    if not steps:
+        return AgentReportMetricResult(
+            name="behavior_entropy_quality",
+            score=1.0,
+            reason="No trajectory steps provided.",
+            details={
+                "kind": "agent-learning.eval.behavior-entropy.v1",
+                "action_entropy": 0.0,
+                "tool_entropy": 0.0,
+            },
+        )
+
+    action_tokens = [_behavior_step_token(step) for step in steps]
+    tool_tokens = [
+        _normalize_token(call.name)
+        for step in steps
+        for call in step.tool_calls
+        if _normalize_token(call.name)
+    ]
+    action_entropy = _normalized_entropy(action_tokens)
+    tool_entropy = _normalized_entropy(tool_tokens)
+    trajectory_entropy = _normalized_entropy(
+        [
+            *action_tokens,
+            *[f"tool:{token}" for token in tool_tokens],
+        ]
+    )
+    repetition_rate = _repetition_rate(action_tokens)
+    loop_rate = _adjacent_loop_rate(action_tokens)
+    tool_repetition_rate = _repetition_rate(tool_tokens)
+    information_gain = _information_gain(action_tokens, tool_tokens)
+    exploration_efficiency = max(
+        0.0,
+        min(
+            1.0,
+            0.5 * (1.0 - repetition_rate)
+            + 0.3 * trajectory_entropy
+            + 0.2 * information_gain,
+        ),
+    )
+
+    quality = dict(config.behavior_entropy_quality or {})
+    min_action_entropy = _float_config(
+        quality,
+        "min_action_entropy",
+        0.10 if len(action_tokens) >= 3 else 0.0,
+    )
+    max_action_entropy = _float_config(quality, "max_action_entropy", 1.0)
+    min_tool_entropy = _float_config(
+        quality,
+        "min_tool_entropy",
+        0.10 if len(tool_tokens) >= 3 else 0.0,
+    )
+    max_repetition_rate = _float_config(quality, "max_repetition_rate", 0.70)
+    max_loop_rate = _float_config(quality, "max_loop_rate", 0.50)
+    min_information_gain = _float_config(
+        quality,
+        "min_information_gain",
+        0.10 if len(action_tokens) + len(tool_tokens) >= 3 else 0.0,
+    )
+    min_exploration_efficiency = _float_config(
+        quality,
+        "min_exploration_efficiency",
+        0.25 if len(action_tokens) >= 3 else 0.0,
+    )
+
+    checks = [
+        {
+            "check": "action_entropy_floor",
+            "actual": action_entropy,
+            "expected": min_action_entropy,
+            "match": action_entropy >= min_action_entropy,
+        },
+        {
+            "check": "action_entropy_ceiling",
+            "actual": action_entropy,
+            "expected": max_action_entropy,
+            "match": action_entropy <= max_action_entropy,
+        },
+        {
+            "check": "tool_entropy_floor",
+            "actual": tool_entropy,
+            "expected": min_tool_entropy,
+            "match": tool_entropy >= min_tool_entropy,
+        },
+        {
+            "check": "repetition_rate_ceiling",
+            "actual": repetition_rate,
+            "expected": max_repetition_rate,
+            "match": repetition_rate <= max_repetition_rate,
+        },
+        {
+            "check": "loop_rate_ceiling",
+            "actual": loop_rate,
+            "expected": max_loop_rate,
+            "match": loop_rate <= max_loop_rate,
+        },
+        {
+            "check": "information_gain_floor",
+            "actual": information_gain,
+            "expected": min_information_gain,
+            "match": information_gain >= min_information_gain,
+        },
+        {
+            "check": "exploration_efficiency_floor",
+            "actual": exploration_efficiency,
+            "expected": min_exploration_efficiency,
+            "match": exploration_efficiency >= min_exploration_efficiency,
+        },
+    ]
+    passed = sum(1 for check in checks if check["match"])
+    score = passed / len(checks)
+    return AgentReportMetricResult(
+        name="behavior_entropy_quality",
+        score=round(score, 4),
+        reason=(
+            f"Behavior entropy checks: {passed}/{len(checks)} passed; "
+            f"action_entropy={action_entropy:.2f}, tool_entropy={tool_entropy:.2f}, "
+            f"loop_rate={loop_rate:.2f}"
+        ),
+        details={
+            "kind": "agent-learning.eval.behavior-entropy.v1",
+            "action_entropy": round(action_entropy, 4),
+            "tool_entropy": round(tool_entropy, 4),
+            "trajectory_entropy": round(trajectory_entropy, 4),
+            "repetition_rate": round(repetition_rate, 4),
+            "tool_repetition_rate": round(tool_repetition_rate, 4),
+            "loop_rate": round(loop_rate, 4),
+            "information_gain": round(information_gain, 4),
+            "exploration_efficiency": round(exploration_efficiency, 4),
+            "action_count": len(action_tokens),
+            "tool_call_count": len(tool_tokens),
+            "unique_action_count": len(set(action_tokens)),
+            "unique_tool_count": len(set(tool_tokens)),
+            "checks": checks,
+            "research_sources": [
+                {
+                    "id": "2606.05872",
+                    "source": "arxiv:2606.05872",
+                    "url": "https://arxiv.org/abs/2606.05872",
+                    "used_for": (
+                        "local action, tool, trajectory, information-gain, "
+                        "and loop-pattern entropy checks"
+                    ),
+                }
+            ],
+        },
+    )
+
+
+def _behavior_step_token(step: AgentStep) -> str:
+    tool_names = [
+        _normalize_token(call.name)
+        for call in step.tool_calls
+        if _normalize_token(call.name)
+    ]
+    if tool_names:
+        return "tools:" + "+".join(tool_names)
+    text = _normalize_token(step.action) or _normalize_token(step.thought)
+    if text and text != "assistant_response":
+        return text
+    thought = _normalize_token(step.thought)
+    if thought:
+        return "thought:" + thought
+    return text or "step"
+
+
+def _normalized_entropy(values: Sequence[str]) -> float:
+    tokens = [value for value in values if value]
+    if len(tokens) <= 1:
+        return 0.0
+    counts = Counter(tokens)
+    entropy = 0.0
+    total = float(len(tokens))
+    for count in counts.values():
+        probability = count / total
+        entropy -= probability * math.log(probability)
+    max_entropy = math.log(len(tokens))
+    if max_entropy <= 0:
+        return 0.0
+    return max(0.0, min(1.0, entropy / max_entropy))
+
+
+def _repetition_rate(values: Sequence[str]) -> float:
+    tokens = [value for value in values if value]
+    if not tokens:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - (len(set(tokens)) / len(tokens))))
+
+
+def _adjacent_loop_rate(values: Sequence[str]) -> float:
+    tokens = [value for value in values if value]
+    if len(tokens) <= 1:
+        return 0.0
+    repeated = sum(
+        1
+        for previous, current in zip(tokens, tokens[1:])
+        if previous == current
+    )
+    return repeated / (len(tokens) - 1)
+
+
+def _information_gain(action_tokens: Sequence[str], tool_tokens: Sequence[str]) -> float:
+    tokens = [token for token in [*action_tokens, *tool_tokens] if token]
+    if not tokens:
+        return 0.0
+    seen: set[str] = set()
+    gains = 0
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        gains += 1
+    return max(0.0, min(1.0, gains / len(tokens)))
+
+
+def _float_config(config: Mapping[str, Any], key: str, default: float) -> float:
+    try:
+        return float(config.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalize_token(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    normalized = re.sub(r"[^a-z0-9_./:-]+", "_", text).strip("_")
+    return normalized[:80]
 
 
 def _trajectory_template_metrics(
