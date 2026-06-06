@@ -778,6 +778,10 @@ AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_optimizer_governance_optimization.py \
   artifacts/sdk-optimizer-governance-optimization.json
 
+AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY=... \
+  PYTHONPATH=src python examples/sdk_optimizer_portfolio_optimization.py \
+  artifacts/sdk-optimizer-portfolio-optimization.json
+
 AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_optimizer_governance_simulation.py \
   artifacts/sdk-optimizer-governance-simulation.json
@@ -1276,6 +1280,24 @@ They can also select the social-memory optimizer with
 `beam_width`, `max_proposals_per_round`, `target_score`, `include_seed`, and
 `auto_diagnose` for multi-round role/credit-ledger search over framework,
 world, memory, and evaluator patches.
+
+The `sdk_optimizer_portfolio_optimization.py` example makes optimizer selection
+itself a native SDK evidence object. It builds on 2026 client-side agent
+optimization, retrospective harness, black-box test-time control, causal tool
+frontier, and Pareto archive research, but does not call AgentOpt, Foundry, or
+any hosted optimizer. The SDK searches weak versus verified
+`optimizer_backend_portfolio` candidates, then gates the selected portfolio on
+backend plan/run breadth, lineage, consensus ablation, diagnoses, feedback
+cases, search paths, rollback evidence, and metric closure. Public entry points
+are `simulate.optimizer_backend_portfolio_artifact()`,
+`simulate.build_optimizer_backend_portfolio_run_manifest()`,
+`optimize.build_optimizer_portfolio_optimization_manifest()`, and
+`optimize.optimize_optimizer_portfolio()`. Passing runs emit
+`agent-learning.optimization.optimizer-portfolio-proof.v1` with
+`l3_native_optimizer_portfolio_verified`, no `endpoint`/`auth`/API-key
+dependency, and closed `optimizer_portfolio_quality` plus
+`optimizer_portfolio_coverage` metrics. The generated manifest is also runnable
+from the promptfoo-style CLI with `agent-learn optimize <manifest>`.
 
 The `agent_learning.optimize` SDK facade exposes the advanced optimizer,
 deployment, replay, research, and governance APIs from the vendored engine:

@@ -272,6 +272,22 @@ def test_facades_expose_unified_agent_learning_modules():
     )
     assert optimize.build_retrospective_harness_optimization_manifest is not None
     assert optimize.optimize_retrospective_harness is not None
+    assert simulate.optimizer_backend_portfolio_artifact is not None
+    assert simulate.build_optimizer_backend_portfolio_run_manifest is not None
+    assert simulate.build_optimizer_portfolio_run_manifest is (
+        simulate.build_optimizer_backend_portfolio_run_manifest
+    )
+    assert optimize.AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND == (
+        "agent-learning.optimization.optimizer-portfolio-proof.v1"
+    )
+    assert optimize.build_optimizer_portfolio_optimization_manifest is not None
+    assert optimize.build_optimizer_backend_portfolio_optimization_manifest is (
+        optimize.build_optimizer_portfolio_optimization_manifest
+    )
+    assert optimize.optimize_optimizer_portfolio is not None
+    assert optimize.optimize_optimizer_backend_portfolio is (
+        optimize.optimize_optimizer_portfolio
+    )
     assert optimize.AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND == (
         "agent-learning.optimization.framework-certification-proof.v1"
     )
@@ -7517,6 +7533,128 @@ def test_sdk_retrospective_harness_optimization_example_runs(
         "trajectory_replay_metric_evidence_closed",
         "trajectory_replay_report_evidence_closed",
     }
+
+
+def test_sdk_optimizer_portfolio_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    key = "real-local-sdk-optimizer-portfolio-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_optimizer_portfolio_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_optimizer_portfolio_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "simulation.environments"
+    }
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == (
+        "optimizer_backend_portfolio"
+    )
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 2
+    weak_portfolio = candidates[0][0]["data"]
+    verified_portfolio = candidates[1][0]["data"]
+    assert weak_portfolio["summary"]["backend_run_count"] == 1
+    assert weak_portfolio["summary"]["consensus_backend_count"] == 0
+    assert weak_portfolio["summary"]["has_diagnostics"] is False
+    assert verified_portfolio["summary"]["backend_run_count"] == 3
+    assert verified_portfolio["summary"]["completed_backend_count"] == 3
+    assert verified_portfolio["summary"]["consensus_backend_count"] == 2
+    assert verified_portfolio["summary"]["has_diagnostics"] is True
+    assert verified_portfolio["metadata"]["requires_external_service"] is False
+    gate = manifest["evaluation"]["agent_report"]["config"][
+        "optimizer_portfolio_quality"
+    ]
+    assert gate["required_completed_backends"] == ["agent", "tpe", "bandit"]
+    assert gate["required_dependencies"] == ["backend_consensus"]
+    assert gate["max_failed_backends"] == 0
+
+    output_path = tmp_path / "sdk-optimizer-portfolio-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= (
+        manifest["optimization"]["threshold"]
+    )
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["optimizer_portfolio_proof_status"] == "passed"
+    assert result["summary"]["optimizer_portfolio_proof_passed"] is True
+    assert result["summary"]["optimizer_portfolio_proof_assurance_level"] == (
+        "l3_native_optimizer_portfolio_verified"
+    )
+    assert result["summary"]["optimizer_portfolio_proof_failed_check_count"] == 0
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    assert best_history["metrics"]["optimizer_portfolio_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["optimizer_portfolio_coverage"] == (
+        pytest.approx(1.0)
+    )
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    portfolio = state["optimizer_backend_portfolio"]
+    assert portfolio["kind"] == "optimizer_backend_portfolio"
+    assert portfolio["selected_optimizer"] == "bandit"
+    assert portfolio["summary"]["backend_run_count"] == 3
+    assert portfolio["summary"]["completed_backend_count"] == 3
+    assert portfolio["summary"]["failed_backend_count"] == 0
+    assert portfolio["summary"]["consensus_backend_count"] == 2
+    assert portfolio["metadata"]["external_dependency_count"] == 0
+    assert portfolio["metadata"]["local_only"] is True
+
+    proof = result["optimizer_portfolio_proof"]
+    assert saved["optimizer_portfolio_proof"] == proof
+    assert result["optimization"]["optimizer_portfolio_proof"] == proof
+    assert proof["kind"] == (
+        "agent-learning.optimization.optimizer-portfolio-proof.v1"
+    )
+    assert proof["status"] == "passed"
+    assert proof["requires_external_service"] is False
+    assert proof["selected_optimizer"] == "bandit"
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_optimizer_portfolio_dependency",
+        "optimizer_portfolio_environment_present",
+        "optimizer_backend_search_breadth_closed",
+        "optimizer_backend_lineage_closed",
+        "optimizer_ablation_consensus_closed",
+        "optimizer_diagnosis_feedback_search_closed",
+        "optimizer_portfolio_metric_evidence_closed",
+        "optimizer_portfolio_report_evidence_closed",
+    }
+    assert {"endpoint", "auth", "api_key", "secret", "token"} & _nested_keys(
+        result["optimization"]["best_config"]
+    ) == set()
 
 
 def test_sdk_framework_certification_simulation_example_runs(

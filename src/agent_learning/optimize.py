@@ -44,6 +44,9 @@ AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND = (
 AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND = (
     "agent-learning.optimization.retrospective-harness-proof.v1"
 )
+AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND = (
+    "agent-learning.optimization.optimizer-portfolio-proof.v1"
+)
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -363,6 +366,7 @@ def optimize_manifest_file(
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
     payload = with_retrospective_harness_proof(payload)
+    payload = with_optimizer_portfolio_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
@@ -396,6 +400,7 @@ def optimize_manifest(
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
     payload = with_retrospective_harness_proof(payload)
+    payload = with_optimizer_portfolio_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
@@ -577,6 +582,36 @@ def with_retrospective_harness_proof(payload: Mapping[str, Any]) -> dict[str, An
         proof["failed_check_ids"]
     )
     summary["retrospective_harness_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_optimizer_portfolio_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for optimizer-backend portfolios."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_optimizer_portfolio_optimization(result, optimization):
+        return result
+
+    proof = _optimizer_portfolio_proof(result, optimization)
+    result["optimizer_portfolio_proof"] = proof
+    optimization["optimizer_portfolio_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["optimizer_portfolio_proof_status"] = proof["status"]
+    summary["optimizer_portfolio_proof_passed"] = proof["passed"]
+    summary["optimizer_portfolio_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["optimizer_portfolio_proof_check_count"] = proof["check_count"]
+    summary["optimizer_portfolio_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["optimizer_portfolio_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -2705,6 +2740,189 @@ def optimize_retrospective_harness(
     )
 
 
+def build_optimizer_portfolio_optimization_manifest(
+    *,
+    name: str = "optimizer-portfolio-optimization",
+    portfolio: Optional[Mapping[str, Any]] = None,
+    portfolio_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over local optimizer-backend portfolios."""
+
+    if not name:
+        raise ValueError("name is required")
+
+    from . import simulate as _agent_simulate
+
+    verified_portfolio = (
+        copy.deepcopy(dict(portfolio))
+        if portfolio is not None
+        else _agent_simulate.build_optimizer_backend_portfolio_run_manifest(
+            name=name
+        )["metadata"]["optimizer_backend_portfolio"]
+    )
+    candidates = (
+        [copy.deepcopy(dict(item)) for item in portfolio_candidates]
+        if portfolio_candidates is not None
+        else [
+            _weak_optimizer_backend_portfolio_artifact(name),
+            verified_portfolio,
+        ]
+    )
+    if not candidates:
+        raise ValueError("portfolio_candidates must contain at least one candidate")
+
+    verified_run = _agent_simulate.build_optimizer_backend_portfolio_run_manifest(
+        name=name,
+        portfolio=verified_portfolio,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+    )
+    environment_candidates = [
+        _agent_simulate.build_optimizer_backend_portfolio_run_manifest(
+            name=name,
+            portfolio=candidate,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            metadata=target_metadata,
+        )["simulation"]["environments"]
+        for candidate in candidates
+    ]
+    search_space = {"simulation.environments": copy.deepcopy(environment_candidates)}
+    eval_config = copy.deepcopy(
+        verified_run["evaluation"]["agent_report"]["config"]
+    )
+    max_turns_value = int(verified_run["simulation"]["max_turns"])
+    return {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": str(name),
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(verified_run["scenario"]),
+        "agent": copy.deepcopy(verified_run["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": str(name),
+                "layers": [
+                    "harness",
+                    "planner",
+                    "multi_agent",
+                    "evaluator",
+                    "policy",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_optimizer_portfolio_optimization_manifest"
+                    ),
+                    "cookbook": "optimizer-backend-portfolio",
+                    "task_kind": "optimizer_backend_portfolio",
+                    "candidate_search_paths": ["simulation.environments"],
+                    "research_sources": _unique_research_sources(
+                        [
+                            *_optimizer_portfolio_research_sources(),
+                            *[dict(item) for item in research_sources],
+                        ]
+                    ),
+                    "original_synthesis": (
+                        "Client-side agent optimization should be modeled as a "
+                        "local evidence portfolio, not a hosted integration: "
+                        "diagnoses identify search paths, deterministic "
+                        "candidates run through multiple backend strategies, "
+                        "and lineage/ablation/rollback evidence decides which "
+                        "candidate can be applied."
+                    ),
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(
+                    optimizer
+                    or {
+                        **_default_task_optimizer(search_space),
+                        "algorithm": "agent",
+                        "include_seed": True,
+                        "auto_diagnose": True,
+                        "diagnostic_score_threshold": 0.9,
+                    }
+                )
+            ),
+        },
+    }
+
+
+build_optimizer_backend_portfolio_optimization_manifest = (
+    build_optimizer_portfolio_optimization_manifest
+)
+
+
+def optimize_optimizer_portfolio(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute local optimizer-backend portfolio optimization."""
+
+    manifest = build_optimizer_portfolio_optimization_manifest(
+        **manifest_kwargs
+    )
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
+optimize_optimizer_backend_portfolio = optimize_optimizer_portfolio
+
+
 def build_stateful_tool_world_optimization_manifest(
     *,
     name: str = "stateful-tool-world-optimization",
@@ -4456,6 +4674,265 @@ def _retrospective_harness_proof(
                 )
             },
             "report_replay_status": report_replay.get("status"),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _optimizer_portfolio_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    report_state = _selected_report_environment_state(selected_history)
+    portfolio = _optimizer_portfolio_from_environments(environments)
+    report_portfolio = _plain_mapping(
+        report_state.get("optimizer_backend_portfolio")
+    )
+    summary = _plain_mapping(portfolio.get("summary"))
+    report_summary = _plain_mapping(report_portfolio.get("summary"))
+    metadata = _plain_mapping(portfolio.get("metadata"))
+    selected_optimizer = _scope_key(
+        portfolio.get("selected_optimizer") or summary.get("selected_optimizer")
+    )
+    completed_backends = _unique_strings(summary.get("completed_backends"))
+    consensus_backends = _unique_strings(summary.get("consensus_backends"))
+    selection_relations = _unique_strings(summary.get("selection_relations"))
+    search_paths = _unique_strings(summary.get("search_paths"))
+
+    forbidden_keys = {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+    checks = [
+        _proof_check(
+            "native_no_external_optimizer_portfolio_dependency",
+            passed=not _contains_nested_keys(portfolio, forbidden_keys)
+            and not _contains_nested_keys(best_config, forbidden_keys)
+            and metadata.get("requires_external_service") is False
+            and bool(metadata.get("local_only", True))
+            and _as_int(metadata.get("external_dependency_count")) == 0,
+            required=True,
+            reason=(
+                "selected optimizer portfolio is local-only and has no "
+                "endpoint/auth/key dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(portfolio, forbidden_keys)
+                    | _present_nested_keys(best_config, forbidden_keys)
+                ),
+                "requires_external_service": metadata.get(
+                    "requires_external_service"
+                ),
+                "local_only": metadata.get("local_only"),
+                "external_dependency_count": metadata.get(
+                    "external_dependency_count"
+                ),
+            },
+        ),
+        _proof_check(
+            "optimizer_portfolio_environment_present",
+            passed="optimizer_backend_portfolio" in environment_types
+            and portfolio.get("kind") == "optimizer_backend_portfolio",
+            required=True,
+            reason=(
+                "selected candidate carries an optimizer_backend_portfolio "
+                "simulation environment"
+            ),
+            evidence={
+                "environment_types": environment_types,
+                "portfolio_kind": portfolio.get("kind"),
+            },
+        ),
+        _proof_check(
+            "optimizer_backend_search_breadth_closed",
+            passed=_as_int(summary.get("backend_plan_count")) >= 3
+            and _as_int(summary.get("backend_run_count")) >= 3
+            and _as_int(summary.get("completed_backend_count")) >= 3
+            and _as_int(summary.get("failed_backend_count")) == 0
+            and {"agent", "tpe", "bandit"}.issubset(set(completed_backends)),
+            required=True,
+            reason=(
+                "selected portfolio compares multiple completed local "
+                "optimizer backends with no failed backend"
+            ),
+            evidence={
+                "backend_plan_count": summary.get("backend_plan_count"),
+                "backend_run_count": summary.get("backend_run_count"),
+                "completed_backend_count": summary.get(
+                    "completed_backend_count"
+                ),
+                "failed_backend_count": summary.get("failed_backend_count"),
+                "completed_backends": completed_backends,
+            },
+        ),
+        _proof_check(
+            "optimizer_backend_lineage_closed",
+            passed=selected_optimizer == "bandit"
+            and _as_int(summary.get("lineage_count")) >= 3
+            and _as_int(summary.get("selected_lineage_count")) >= 1
+            and {"selected", "equivalent", "supporting"}.issubset(
+                set(selection_relations)
+            ),
+            required=True,
+            reason=(
+                "selected backend has explicit lineage and non-selected "
+                "backends carry equivalent/supporting relations"
+            ),
+            evidence={
+                "selected_optimizer": selected_optimizer,
+                "lineage_count": summary.get("lineage_count"),
+                "selected_lineage_count": summary.get(
+                    "selected_lineage_count"
+                ),
+                "selection_relations": selection_relations,
+            },
+        ),
+        _proof_check(
+            "optimizer_ablation_consensus_closed",
+            passed=_scope_key(summary.get("dependency")) == "backend_consensus"
+            and _as_int(summary.get("consensus_backend_count")) >= 2
+            and {"agent", "tpe"}.issubset(set(consensus_backends))
+            and summary.get("selected_backend_required") is False,
+            required=True,
+            reason=(
+                "selected backend is supported by portfolio consensus rather "
+                "than a single-backend dependency"
+            ),
+            evidence={
+                "dependency": summary.get("dependency"),
+                "consensus_backend_count": summary.get(
+                    "consensus_backend_count"
+                ),
+                "consensus_backends": consensus_backends,
+                "selected_backend_required": summary.get(
+                    "selected_backend_required"
+                ),
+            },
+        ),
+        _proof_check(
+            "optimizer_diagnosis_feedback_search_closed",
+            passed=_as_int(summary.get("feedback_case_count")) >= 1
+            and _as_int(summary.get("diagnostic_count")) >= 1
+            and _as_int(summary.get("search_path_count")) >= 2
+            and {
+                "optimizer.backend_portfolio.backends",
+                "optimizer.backend_selector.policy",
+            }.issubset(set(search_paths))
+            and summary.get("has_rollback_decision") is True
+            and summary.get("has_improvement") is True,
+            required=True,
+            reason=(
+                "selected portfolio links failed feedback to diagnoses, "
+                "search paths, improvement, and rollback evidence"
+            ),
+            evidence={
+                "feedback_case_count": summary.get("feedback_case_count"),
+                "diagnostic_count": summary.get("diagnostic_count"),
+                "search_path_count": summary.get("search_path_count"),
+                "search_paths": search_paths,
+                "has_rollback_decision": summary.get(
+                    "has_rollback_decision"
+                ),
+                "has_improvement": summary.get("has_improvement"),
+            },
+        ),
+        _proof_check(
+            "optimizer_portfolio_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("optimizer_portfolio_quality"))
+            >= 1.0
+            and _as_float(selected_metrics.get("optimizer_portfolio_coverage"))
+            >= 1.0,
+            required=True,
+            reason=(
+                "selected report closes optimizer portfolio quality and "
+                "coverage metrics"
+            ),
+            evidence={
+                "optimizer_portfolio_quality": selected_metrics.get(
+                    "optimizer_portfolio_quality"
+                ),
+                "optimizer_portfolio_coverage": selected_metrics.get(
+                    "optimizer_portfolio_coverage"
+                ),
+            },
+        ),
+        _proof_check(
+            "optimizer_portfolio_report_evidence_closed",
+            passed=report_portfolio.get("kind") == "optimizer_backend_portfolio"
+            and _scope_key(
+                report_portfolio.get("selected_optimizer")
+                or report_summary.get("selected_optimizer")
+            )
+            == selected_optimizer
+            and _as_int(report_summary.get("completed_backend_count"))
+            == _as_int(summary.get("completed_backend_count"))
+            and _as_int(report_summary.get("consensus_backend_count"))
+            >= 2,
+            required=True,
+            reason=(
+                "selected report state contains the same optimizer portfolio "
+                "artifact that the optimizer selected"
+            ),
+            evidence={
+                "report_portfolio_kind": report_portfolio.get("kind"),
+                "report_selected_optimizer": report_portfolio.get(
+                    "selected_optimizer"
+                ),
+                "report_completed_backend_count": report_summary.get(
+                    "completed_backend_count"
+                ),
+                "report_consensus_backend_count": report_summary.get(
+                    "consensus_backend_count"
+                ),
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_optimizer_portfolio_verified"
+            if passed
+            else "optimizer_portfolio_proof_failed"
+        ),
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "selected_optimizer": selected_optimizer or None,
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "portfolio_summary": copy.deepcopy(summary),
+            "selected_metrics": {
+                "optimizer_portfolio_quality": selected_metrics.get(
+                    "optimizer_portfolio_quality"
+                ),
+                "optimizer_portfolio_coverage": selected_metrics.get(
+                    "optimizer_portfolio_coverage"
+                ),
+            },
+            "report_portfolio_selected_optimizer": report_portfolio.get(
+                "selected_optimizer"
+            ),
         },
         "check_count": len(checks),
         "passed_check_count": sum(1 for check in checks if check["passed"]),
@@ -15725,6 +16202,47 @@ def _retrospective_harness_research_sources() -> list[dict[str, str]]:
     ]
 
 
+def _optimizer_portfolio_research_sources() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "agentopt_client_side_optimization",
+            "title": "AgentOpt v0.1 Technical Report",
+            "source": "arxiv:2604.06296",
+            "url": "https://arxiv.org/abs/2604.06296",
+        },
+        {
+            "id": "retrospective_harness_optimization",
+            "title": "Retrospective Harness Optimization",
+            "source": "arxiv:2606.05922",
+            "url": "https://arxiv.org/abs/2606.05922",
+        },
+        {
+            "id": "code_as_agent_harness",
+            "title": "Code as Agent Harness",
+            "source": "arxiv:2605.18747",
+            "url": "https://arxiv.org/abs/2605.18747",
+        },
+        {
+            "id": "agentic_monte_carlo",
+            "title": "Agentic Monte Carlo",
+            "source": "arxiv:2606.05296",
+            "url": "https://arxiv.org/abs/2606.05296",
+        },
+        {
+            "id": "pareto_safety_scenario_evolution",
+            "title": "EvoDrive",
+            "source": "arxiv:2606.03678",
+            "url": "https://arxiv.org/abs/2606.03678",
+        },
+        {
+            "id": "causal_minimal_tool_filtering",
+            "title": "ToolChoiceConfusion",
+            "source": "arxiv:2606.06284",
+            "url": "https://arxiv.org/abs/2606.06284",
+        },
+    ]
+
+
 def _weak_harness_trajectory_replay_artifact(name: str) -> dict[str, Any]:
     from . import simulate as _agent_simulate
 
@@ -15796,6 +16314,53 @@ def _weak_harness_trajectory_replay_artifact(name: str) -> dict[str, Any]:
         metadata={
             "source": "agent_learning.optimize.weak_harness_trajectory_replay",
             "candidate_profile": "weak_missing_attribution_and_repair",
+        },
+    )
+
+
+def _weak_optimizer_backend_portfolio_artifact(name: str) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    return _agent_simulate.optimizer_backend_portfolio_artifact(
+        name=f"{name}-weak-portfolio",
+        selected_optimizer="agent",
+        final_score=0.2,
+        improved=False,
+        feedback_source="local_simulation_evidence",
+        rollback_decision={},
+        feedback_cases=[],
+        diagnoses=[],
+        search_paths=[],
+        backend_plan=[
+            {
+                "optimizer": "agent",
+                "rank": 1,
+                "allocation_kind": "single_backend",
+            }
+        ],
+        backend_runs=[
+            {
+                "optimizer": "agent",
+                "status": "completed",
+                "final_score": 0.2,
+                "improved": False,
+                "candidate_id": "candidate_agent",
+            }
+        ],
+        backend_lineage=[],
+        ablation_report={
+            "selected_optimizer": "agent",
+            "selected_candidate_id": "candidate_agent",
+            "dependency": "single_backend",
+            "consensus_backends": [],
+            "selected_backend_required": True,
+        },
+        metadata={
+            "source": "agent_learning.optimize.weak_optimizer_portfolio",
+            "candidate_profile": "weak_single_backend_no_consensus",
+            "requires_external_service": False,
+            "local_only": True,
+            "external_dependency_count": 0,
         },
     )
 
@@ -20534,6 +21099,62 @@ def _harness_trajectory_replay_from_environments(
     return {}
 
 
+def _is_optimizer_portfolio_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) in {
+        "optimizer_backend_portfolio",
+        "optimizer_portfolio",
+    }:
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    portfolio = _optimizer_portfolio_from_environments(environments)
+    return portfolio.get("kind") == "optimizer_backend_portfolio"
+
+
+def _optimizer_portfolio_from_environments(
+    environments: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    for environment in environments:
+        env = _plain_mapping(environment)
+        if _scope_key(env.get("type")) not in {
+            "optimizer_backend_portfolio",
+            "optimizer_portfolio",
+        }:
+            continue
+        data = _plain_mapping(env.get("data"))
+        for candidate in (
+            data,
+            data.get("optimizer_backend_portfolio"),
+            _plain_mapping(data.get("metadata")).get(
+                "optimizer_backend_portfolio"
+            ),
+            _plain_mapping(data.get("state")).get(
+                "optimizer_backend_portfolio"
+            ),
+        ):
+            portfolio = _plain_mapping(candidate)
+            if portfolio.get("kind") == "optimizer_backend_portfolio":
+                return portfolio
+    return {}
+
+
 def _is_memory_lineage_optimization(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -20977,6 +21598,7 @@ __all__ = [
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
+    "AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND",
     "AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
@@ -21003,7 +21625,9 @@ __all__ = [
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_multimodal_image_optimization_manifest",
+    "build_optimizer_backend_portfolio_optimization_manifest",
     "build_optimizer_governance_optimization_manifest",
+    "build_optimizer_portfolio_optimization_manifest",
     "build_orchestration_optimization_manifest",
     "build_persistent_state_redteam_optimization_manifest",
     "build_realtime_optimization_manifest",
@@ -21051,7 +21675,9 @@ __all__ = [
     "optimize_multi_agent_framework_handoff",
     "optimize_multi_agent_coordination",
     "optimize_multimodal_image",
+    "optimize_optimizer_backend_portfolio",
     "optimize_optimizer_governance",
+    "optimize_optimizer_portfolio",
     "optimize_orchestration_stack",
     "optimize_persistent_state_redteam",
     "optimize_realtime_stack",
@@ -21084,6 +21710,7 @@ __all__ = [
     "with_framework_runtime_proof",
     "with_memory_lineage_proof",
     "with_multi_agent_coordination_proof",
+    "with_optimizer_portfolio_proof",
     "with_orchestration_stack_proof",
     "with_redteam_campaign_proof",
     "with_retrospective_harness_proof",
