@@ -619,6 +619,14 @@ For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
 reconciliation, and shared room-state behavior together.
+Multi-agent coordination optimization artifacts also emit
+`agent-learning.optimization.multi-agent-coordination-proof.v1`, a native proof
+derived from the selected candidate and selected report. It checks that the
+selected room is local, roles are explicit, unknown roles are blocked, handoff
+contracts match, expected handoffs/reviews/reconciliation close, critic review
+and accepted-source reconciliation are conflict-free, shared room state reaches a
+terminal case status, temporal agent trace and structural room patches are both
+covered, and multi-agent metrics pass.
 For direct, non-optimizer simulation,
 `simulate.build_multi_agent_coordination_run_manifest()` and
 `examples/sdk_multi_agent_simulation.py` run one selected agent trace plus room

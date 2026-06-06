@@ -26,6 +26,9 @@ AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
 AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND = (
     "agent-learning.optimization.memory-lineage-proof.v1"
 )
+AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND = (
+    "agent-learning.optimization.multi-agent-coordination-proof.v1"
+)
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -342,6 +345,7 @@ def optimize_manifest_file(
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_memory_lineage_proof(payload)
+    payload = with_multi_agent_coordination_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -369,6 +373,7 @@ def optimize_manifest(
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_memory_lineage_proof(payload)
+    payload = with_multi_agent_coordination_proof(payload)
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
@@ -459,6 +464,36 @@ def with_memory_lineage_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
         proof["failed_check_ids"]
     )
     summary["memory_lineage_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_multi_agent_coordination_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for multi-agent coordination optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_multi_agent_coordination_optimization(result, optimization):
+        return result
+
+    proof = _multi_agent_coordination_proof(result, optimization)
+    result["multi_agent_coordination_proof"] = proof
+    optimization["multi_agent_coordination_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["multi_agent_coordination_proof_status"] = proof["status"]
+    summary["multi_agent_coordination_proof_passed"] = proof["passed"]
+    summary["multi_agent_coordination_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["multi_agent_coordination_proof_check_count"] = proof["check_count"]
+    summary["multi_agent_coordination_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["multi_agent_coordination_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -3376,6 +3411,308 @@ def _memory_lineage_proof(
             "retrieval_current_doc_ids": sorted(current_doc_ids),
             "retrieval_cited_doc_ids": sorted(cited_doc_ids),
             "agent_memory_lineage_summary": copy.deepcopy(lineage_summary),
+            "selected_metrics": selected_metric_evidence,
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _multi_agent_coordination_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    room_env = next(
+        (
+            env
+            for env in environments
+            if _scope_key(env.get("type")) == "multi_agent_room"
+        ),
+        {},
+    )
+    room_config = _plain_mapping(_plain_mapping(room_env).get("data"))
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    report_state = _selected_report_environment_state(selected_history)
+    room_state = _plain_mapping(report_state.get("multi_agent"))
+
+    participants = _unique_strings(room_state.get("participants"))
+    participant_set = set(participants)
+    config_participants = _plain_mapping(room_config.get("participants"))
+    config_participant_set = set(config_participants) or participant_set
+    handoffs = [
+        _plain_mapping(item)
+        for item in _plain_list(room_state.get("handoffs"))
+        if _plain_mapping(item)
+    ]
+    reviews = [
+        _plain_mapping(item)
+        for item in _plain_list(room_state.get("reviews"))
+        if _plain_mapping(item)
+    ]
+    reconciliations = [
+        _plain_mapping(item)
+        for item in _plain_list(room_state.get("reconciliations"))
+        if _plain_mapping(item)
+    ]
+    coordination_checks = [
+        _plain_mapping(item)
+        for item in _plain_list(room_state.get("coordination_checks"))
+        if _plain_mapping(item)
+    ]
+    handoff_contracts = _plain_mapping(room_state.get("handoff_contracts"))
+    expected_handoffs = _plain_list(room_state.get("expected_handoffs"))
+    expected_reviews = _plain_list(room_state.get("expected_reviews"))
+    expected_reconciliation = _plain_mapping(room_state.get("expected_reconciliation"))
+    unmatched_checks = [
+        check
+        for check in coordination_checks
+        if check.get("match") is not True
+    ]
+    expected_check_names = {
+        _scope_key(check.get("check"))
+        for check in coordination_checks
+        if check.get("match") is True
+    }
+    contract_statuses = [
+        _plain_mapping(handoff.get("contract_status")) for handoff in handoffs
+    ]
+    contract_subchecks = [
+        _plain_mapping(item)
+        for contract in contract_statuses
+        for item in _plain_list(contract.get("checks"))
+        if _plain_mapping(item)
+    ]
+    metric_thresholds = {
+        "multi_agent_coordination_quality": 1.0,
+        "multi_agent_trace_coverage": 1.0,
+        "tool_selection_accuracy": 1.0,
+        "task_completion": 1.0,
+    }
+    selected_metric_evidence = {
+        key: selected_metrics.get(key)
+        for key in metric_thresholds
+        if key in selected_metrics
+    }
+
+    checks = [
+        _proof_check(
+            "native_no_external_multi_agent_dependency",
+            passed=not _contains_nested_keys(
+                best_config,
+                {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+            ),
+            required=True,
+            reason=(
+                "selected multi-agent candidate is local and has no "
+                "endpoint/auth/key dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(
+                        best_config,
+                        {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+                    )
+                ),
+            },
+        ),
+        _proof_check(
+            "multi_agent_room_environment_present",
+            passed=environment_types == ["multi_agent_room"],
+            required=True,
+            reason="selected candidate is a dedicated multi_agent_room bundle",
+            evidence={"environment_types": environment_types},
+        ),
+        _proof_check(
+            "role_boundary_closed",
+            passed=len(participant_set) >= 2
+            and config_participant_set.issubset(participant_set)
+            and room_config.get("allow_unknown_roles") is False
+            and all(handoff.get("known_role") is True for handoff in handoffs)
+            and all(review.get("known_role") is True for review in reviews),
+            required=True,
+            reason=(
+                "multi-agent participants are explicit, unknown roles are blocked, "
+                "and observed handoffs/reviews target known roles"
+            ),
+            evidence={
+                "participants": participants,
+                "configured_participants": sorted(config_participant_set),
+                "allow_unknown_roles": room_config.get("allow_unknown_roles"),
+                "handoff_known_role_count": sum(
+                    1 for handoff in handoffs if handoff.get("known_role") is True
+                ),
+                "review_known_role_count": sum(
+                    1 for review in reviews if review.get("known_role") is True
+                ),
+            },
+        ),
+        _proof_check(
+            "handoff_contracts_closed",
+            passed=bool(handoffs)
+            and bool(handoff_contracts)
+            and all(contract.get("matched") is True for contract in contract_statuses)
+            and all(subcheck.get("match") is True for subcheck in contract_subchecks),
+            required=True,
+            reason=(
+                "handoff contracts are present and every observed contract check matches"
+            ),
+            evidence={
+                "handoff_count": len(handoffs),
+                "handoff_contract_targets": sorted(handoff_contracts),
+                "contract_matched_count": sum(
+                    1 for contract in contract_statuses if contract.get("matched") is True
+                ),
+                "contract_subcheck_count": len(contract_subchecks),
+            },
+        ),
+        _proof_check(
+            "expected_handoffs_reviews_reconciliation_closed",
+            passed=bool(expected_handoffs)
+            and bool(expected_reviews)
+            and bool(expected_reconciliation)
+            and not unmatched_checks
+            and {
+                "expected_handoff",
+                "expected_review",
+                "expected_reconciliation",
+            }.issubset(expected_check_names),
+            required=True,
+            reason=(
+                "configured expected handoffs, reviews, and reconciliation all "
+                "match observed room evidence"
+            ),
+            evidence={
+                "expected_handoff_count": len(expected_handoffs),
+                "expected_review_count": len(expected_reviews),
+                "expected_reconciliation_present": bool(expected_reconciliation),
+                "matched_check_names": sorted(expected_check_names),
+                "unmatched_check_count": len(unmatched_checks),
+            },
+        ),
+        _proof_check(
+            "review_reconciliation_closed",
+            passed=bool(reviews)
+            and bool(reconciliations)
+            and all(
+                str(review.get("reviewer") or "") in participant_set
+                for review in reviews
+            )
+            and all(
+                str(reconciliation.get("accepted_source") or "") in participant_set
+                for reconciliation in reconciliations
+            )
+            and all(
+                not _plain_list(reconciliation.get("conflicts"))
+                for reconciliation in reconciliations
+            ),
+            required=True,
+            reason=(
+                "critic review and final reconciliation are present, sourced from "
+                "known participants, and conflict-free"
+            ),
+            evidence={
+                "review_count": len(reviews),
+                "reconciliation_count": len(reconciliations),
+                "reviewers": sorted(
+                    {
+                        str(review.get("reviewer") or "")
+                        for review in reviews
+                        if str(review.get("reviewer") or "")
+                    }
+                ),
+                "accepted_sources": sorted(
+                    {
+                        str(reconciliation.get("accepted_source") or "")
+                        for reconciliation in reconciliations
+                        if str(reconciliation.get("accepted_source") or "")
+                    }
+                ),
+                "conflict_counts": [
+                    len(_plain_list(reconciliation.get("conflicts")))
+                    for reconciliation in reconciliations
+                ],
+            },
+        ),
+        _proof_check(
+            "room_state_closed",
+            passed=bool(_plain_mapping(room_state.get("state")))
+            and _scope_key(
+                _plain_mapping(_plain_mapping(room_state.get("state")).get("case")).get(
+                    "status"
+                )
+            )
+            not in {"", "triage", "open", "pending"},
+            required=True,
+            reason="shared room state reaches a non-open terminal case status",
+            evidence={"state": room_state.get("state")},
+        ),
+        _proof_check(
+            "temporal_structural_credit_surface_present",
+            passed={"agent", "simulation.environments"}.issubset(set(selected_patch)),
+            required=False,
+            reason=(
+                "selected patch covers both temporal agent trace and structural "
+                "room contract surfaces"
+            ),
+            evidence={"selected_patch_paths": sorted(selected_patch)},
+        ),
+        _proof_check(
+            "multi_agent_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(key)) >= threshold
+                for key, threshold in metric_thresholds.items()
+            ),
+            required=True,
+            reason=(
+                "selected report carries closed multi-agent coordination, trace, "
+                "tool, and task metrics"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_multi_agent_coordination_verified"
+            if passed
+            else "multi_agent_coordination_proof_failed"
+        ),
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "participants": participants,
+            "handoff_count": len(handoffs),
+            "review_count": len(reviews),
+            "reconciliation_count": len(reconciliations),
+            "coordination_check_count": len(coordination_checks),
+            "matched_coordination_check_count": sum(
+                1 for check in coordination_checks if check.get("match") is True
+            ),
+            "room_state": copy.deepcopy(room_state.get("state")),
             "selected_metrics": selected_metric_evidence,
         },
         "check_count": len(checks),
@@ -17552,6 +17889,36 @@ def _is_memory_lineage_optimization(
     return state_keys == {"retrieval_memory", "agent_memory_lineage"}
 
 
+def _is_multi_agent_coordination_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    task_kind = _scope_key(metadata.get("task_kind"))
+    if task_kind == "multi_agent_coordination":
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environment_types = [
+        _scope_key(_plain_mapping(item).get("type"))
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    if environment_types == ["multi_agent_room"]:
+        return True
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    return set(_selected_report_environment_state(selected_history)) == {"multi_agent"}
+
+
 def _proof_check(
     check_id: str,
     *,
@@ -17837,6 +18204,7 @@ __all__ = [
     *_OPTIMIZE_EXPORTS,
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
+    "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
     "diagnose_text",
@@ -17935,5 +18303,6 @@ __all__ = [
     "relevant_search_paths",
     "with_framework_certification_proof",
     "with_memory_lineage_proof",
+    "with_multi_agent_coordination_proof",
     "with_world_hook_proof",
 ]

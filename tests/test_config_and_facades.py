@@ -231,6 +231,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND == (
         "agent-learning.optimization.memory-lineage-proof.v1"
     )
+    assert optimize.AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND == (
+        "agent-learning.optimization.multi-agent-coordination-proof.v1"
+    )
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -2277,9 +2280,10 @@ def test_optimize_facade_builds_and_runs_multi_agent_coordination_manifest(
 
 
 def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-multi-agent-example-key"
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY",
-        "real-local-sdk-multi-agent-example-key",
+        key,
     )
     example_path = PROJECT_ROOT / "examples" / "sdk_multi_agent_optimization.py"
     spec = importlib.util.spec_from_file_location(
@@ -2302,8 +2306,27 @@ def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
     result = module.run(output_path)
 
     assert output_path.exists()
-    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
     assert result["summary"]["optimization_score"] >= 0.9
+    assert result["summary"]["multi_agent_coordination_proof_status"] == "passed"
+    assert result["summary"]["multi_agent_coordination_proof_passed"] is True
+    assert result["summary"]["multi_agent_coordination_proof_assurance_level"] == (
+        "l3_native_multi_agent_coordination_verified"
+    )
+    assert result["summary"][
+        "multi_agent_coordination_proof_failed_check_count"
+    ] == 0
     best_history = max(
         result["optimization"]["history"],
         key=lambda item: item["score"],
@@ -2311,6 +2334,39 @@ def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
     assert best_history["metrics"]["multi_agent_coordination_quality"] == (
         pytest.approx(1.0)
     )
+    proof = result["multi_agent_coordination_proof"]
+    assert saved["multi_agent_coordination_proof"] == proof
+    assert result["optimization"]["multi_agent_coordination_proof"] == proof
+    assert proof["kind"] == (
+        "agent-learning.optimization.multi-agent-coordination-proof.v1"
+    )
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == (
+        "l3_native_multi_agent_coordination_verified"
+    )
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["evidence"]["environment_types"] == ["multi_agent_room"]
+    assert proof["evidence"]["participants"] == ["planner", "retriever", "critic"]
+    assert proof["evidence"]["handoff_count"] == 1
+    assert proof["evidence"]["review_count"] == 1
+    assert proof["evidence"]["reconciliation_count"] == 1
+    assert {
+        check["id"]
+        for check in proof["checks"]
+        if check["passed"]
+    } == {
+        "native_no_external_multi_agent_dependency",
+        "multi_agent_room_environment_present",
+        "role_boundary_closed",
+        "handoff_contracts_closed",
+        "expected_handoffs_reviews_reconciliation_closed",
+        "review_reconciliation_closed",
+        "room_state_closed",
+        "temporal_structural_credit_surface_present",
+        "multi_agent_metric_evidence_closed",
+    }
 
 
 def test_sdk_multi_agent_simulation_example_runs(monkeypatch, tmp_path):
