@@ -3530,6 +3530,13 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert result["summary"]["job_count"] == 10
     assert result["summary"]["passed_count"] == 10
     assert result["summary"]["capability_gate_passed"] is True
+    assert result["summary"]["evidence_gate_passed"] is True
+    assert result["summary"]["admitted_evidence_count"] == 8
+    assert result["summary"]["non_admitted_evidence_count"] == 2
+    assert result["evidence_admission"]["by_status"] == {
+        "admitted": 8,
+        "fixture": 2,
+    }
     assert {
         child["kind"]
         for child in result["children"]
@@ -8926,6 +8933,176 @@ def test_agent_learn_suite_fails_missing_required_capability(tmp_path):
     )
     assert "agent-learning-kit-capability-gate" in markdown_path.read_text(
         encoding="utf-8"
+    )
+
+
+def test_agent_learn_suite_records_evidence_admission_contract(tmp_path):
+    eval_path = tmp_path / "suite-eval.json"
+    suite_path = tmp_path / "suite.json"
+    output_path = tmp_path / "suite-result.json"
+    markdown_path = tmp_path / "suite-result.md"
+    eval_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-learning.eval.v1",
+                "name": "agent-learning-kit-evidence-eval",
+                "providers": [{"id": "echo", "type": "echo"}],
+                "prompts": [{"id": "support", "template": "{{question}}"}],
+                "tests": [
+                    {
+                        "id": "policy",
+                        "vars": {"question": "Where is the policy?"},
+                        "assert": [{"type": "contains", "value": "policy"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-learning.suite.v1",
+                "name": "agent-learning-kit-evidence-gate",
+                "evidence_policy": {"min_admitted": 1},
+                "required_capabilities": {
+                    "evidence_statuses": [
+                        "admitted",
+                        "diagnostic",
+                        "fixture",
+                    ]
+                },
+                "jobs": [
+                    {
+                        "id": "paper-facing-eval",
+                        "command": "eval",
+                        "path": str(eval_path),
+                        "evidence_role": "admitted",
+                        "claim_scope": "paper_facing",
+                    },
+                    {
+                        "id": "diagnostic-eval",
+                        "command": "eval",
+                        "path": str(eval_path),
+                        "evidence_role": "diagnostic",
+                    },
+                    {
+                        "id": "fixture-eval",
+                        "command": "eval",
+                        "path": str(eval_path),
+                        "evidence_role": "fixture",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "suite",
+        str(suite_path),
+        "--output",
+        str(output_path),
+        "--markdown",
+        str(markdown_path),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "passed"
+    assert payload["summary"]["evidence_gate_passed"] is True
+    assert payload["summary"]["admitted_evidence_count"] == 1
+    assert payload["summary"]["non_admitted_evidence_count"] == 2
+    assert payload["summary"]["capabilities"]["evidence_statuses"] == [
+        "admitted",
+        "diagnostic",
+        "fixture",
+    ]
+    admission = payload["evidence_admission"]
+    assert admission["by_status"] == {
+        "admitted": 1,
+        "diagnostic": 1,
+        "fixture": 1,
+    }
+    assert admission["admitted_row_ids"] == ["paper-facing-eval"]
+    assert [
+        child["evidence"]["status"]
+        for child in payload["children"]
+    ] == [
+        "admitted",
+        "diagnostic",
+        "fixture",
+    ]
+    assert "| paper-facing-eval | eval | passed | admitted | 0 |" in (
+        markdown_path.read_text(encoding="utf-8")
+    )
+
+
+def test_agent_learn_suite_fails_evidence_gate_without_admitted_rows(tmp_path):
+    eval_path = tmp_path / "suite-eval.json"
+    suite_path = tmp_path / "suite.json"
+    output_path = tmp_path / "suite-result.json"
+    junit_path = tmp_path / "suite-result.junit.xml"
+    sarif_path = tmp_path / "suite-result.sarif.json"
+    eval_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-learning.eval.v1",
+                "name": "agent-learning-kit-fixture-only-eval",
+                "providers": [{"id": "echo", "type": "echo"}],
+                "prompts": [{"id": "support", "template": "{{question}}"}],
+                "tests": [
+                    {
+                        "id": "policy",
+                        "vars": {"question": "Where is the policy?"},
+                        "assert": [{"type": "contains", "value": "policy"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite_path.write_text(
+        json.dumps(
+            {
+                "version": "agent-learning.suite.v1",
+                "name": "agent-learning-kit-fixture-only-gate",
+                "evidence_policy": {"min_admitted": 1},
+                "jobs": [
+                    {
+                        "id": "fixture-eval",
+                        "command": "eval",
+                        "path": str(eval_path),
+                        "evidence_role": "fixture",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "suite",
+        str(suite_path),
+        "--output",
+        str(output_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+    ])
+
+    assert exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["summary"]["evidence_gate_passed"] is False
+    assert payload["summary"]["admitted_evidence_count"] == 0
+    assert payload["summary"]["non_admitted_evidence_count"] == 1
+    assert payload["findings"][0]["type"] == "suite_evidence_admission_missing"
+    assert 'failures="1"' in junit_path.read_text(encoding="utf-8")
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif["runs"][0]["results"][0]["ruleId"] == (
+        "suite_evidence_admission_missing"
     )
 
 

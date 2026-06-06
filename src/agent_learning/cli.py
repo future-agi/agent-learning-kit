@@ -2279,18 +2279,21 @@ def _agent_learning_suite_manifest(
                 "command": "run",
                 "path": "run.json",
                 "name": f"{suite_name}-run",
+                "evidence_role": "admitted",
             },
             {
                 "id": "promptfoo-style-eval",
                 "command": "eval",
                 "path": "eval.json",
                 "name": f"{suite_name}-eval",
+                "evidence_role": "admitted",
             },
             {
                 "id": "artifact-task-eval",
                 "command": "eval",
                 "path": "artifact_task_eval_suite.json",
                 "name": f"{suite_name}-artifact-eval",
+                "evidence_role": "fixture",
             },
             {
                 "id": "direct-artifact-report-eval",
@@ -2298,6 +2301,7 @@ def _agent_learning_suite_manifest(
                 "path": "../fixtures/task_artifacts/refund_task_run.json",
                 "config": "artifact_task_eval_config.json",
                 "name": f"{suite_name}-direct-artifact",
+                "evidence_role": "fixture",
             },
             {
                 "id": "artifact-action-report",
@@ -2306,6 +2310,7 @@ def _agent_learning_suite_manifest(
                 "action_id": "report_orchestration_strategy",
                 "cwd": "../artifacts/action-loop/workspace",
                 "name": f"{suite_name}-artifact-action-report",
+                "evidence_role": "fixture",
                 "output": "../../artifacts/action-loop/action-run.json",
                 "outputs": {
                     "junit": "../../artifacts/action-loop/action-run.junit.xml",
@@ -2318,6 +2323,7 @@ def _agent_learning_suite_manifest(
                 "command": "redteam",
                 "path": "redteam.json",
                 "name": f"{suite_name}-redteam",
+                "evidence_role": "admitted",
             },
             {
                 "id": "eval-suite-optimizer",
@@ -2325,6 +2331,7 @@ def _agent_learning_suite_manifest(
                 "path": "eval_suite_optimization.json",
                 "name": f"{suite_name}-eval-optimizer",
                 "max_candidates": 2,
+                "evidence_role": "admitted",
             },
             {
                 "id": "task-world-optimizer",
@@ -2332,6 +2339,7 @@ def _agent_learning_suite_manifest(
                 "path": "optimize.json",
                 "name": f"{suite_name}-optimizer",
                 "max_candidates": 5,
+                "evidence_role": "admitted",
             },
             {
                 "id": "world-model-optimizer",
@@ -2339,6 +2347,7 @@ def _agent_learning_suite_manifest(
                 "path": "world_model_optimization.json",
                 "name": f"{suite_name}-world-model-optimizer",
                 "max_candidates": 4,
+                "evidence_role": "admitted",
             },
         ],
     }

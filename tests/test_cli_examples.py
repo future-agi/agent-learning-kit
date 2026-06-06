@@ -976,6 +976,13 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert suite["summary"]["passed_count"] == 9
     assert suite["summary"]["failed_count"] == 0
     assert suite["summary"]["capability_gate_passed"] is True
+    assert suite["summary"]["evidence_gate_passed"] is True
+    assert suite["summary"]["admitted_evidence_count"] == 6
+    assert suite["summary"]["non_admitted_evidence_count"] == 3
+    assert suite["evidence_admission"]["by_status"] == {
+        "admitted": 6,
+        "fixture": 3,
+    }
     assert {
         child["kind"]
         for child in suite["children"]
@@ -1001,6 +1008,7 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert action_child["result"]["summary"]["output_completion_rate"] == pytest.approx(
         1.0,
     )
+    assert action_child["evidence"]["status"] == "fixture"
     assert any(
         path.endswith("artifacts/action-loop/action-run.json")
         for path in action_child["outputs_written"]

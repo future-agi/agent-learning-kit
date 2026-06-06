@@ -314,6 +314,14 @@ such as framework adapter runtime evidence. Suites can also declare
 environment-state key, provider, framework, channel, or metric is absent from
 the executed child artifacts, `agent-learn suite` fails the run and records the
 missing capability in JSON, JUnit, SARIF, and Markdown outputs.
+Suites also emit an `evidence_admission` contract. Each job can set
+`evidence_role` to `admitted`, `fixture`, `smoke`, `diagnostic`, `preflight`,
+or `calibration`; fixture paths are detected automatically. The suite summary
+records admitted, non-admitted, and rejected row counts plus per-row provenance,
+so CI and Future AGI UI cards can separate claim-supporting evidence from
+fixture and diagnostic support artifacts. Add
+`"evidence_policy": {"min_admitted": 1}` when a suite must fail unless at least
+one child row is admitted.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 `agent-learn optimize-suite` and `suite.optimize_suite()` search over the suite

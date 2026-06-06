@@ -38,6 +38,23 @@ _CHILD_COMMANDS = {
     "optimize_suite",
 }
 
+_ADMITTED_EVIDENCE_ROLES = {
+    "admitted",
+    "claim",
+    "primary",
+    "paper_facing",
+    "paper_facing_evidence",
+}
+
+_NON_ADMITTED_EVIDENCE_ROLES = {
+    "calibration",
+    "diagnostic",
+    "fixture",
+    "preflight",
+    "smoke",
+    "support",
+}
+
 
 class SuiteError(ValueError):
     """Raised when an Agent Learning suite manifest cannot run."""
@@ -928,7 +945,11 @@ def render_junit(result: Mapping[str, Any]) -> str:
     finding_failures = [
         finding
         for finding in list(result.get("findings") or [])
-        if str(_as_mapping(finding).get("type")) == "suite_required_capability_missing"
+        if str(_as_mapping(finding).get("type"))
+        in {
+            "suite_required_capability_missing",
+            "suite_evidence_admission_missing",
+        }
     ]
     failures = (
         sum(1 for child in children if int(child.get("exit_code", 1)) != 0)
@@ -1023,16 +1044,27 @@ def render_markdown(
         f"- Status: `{result.get('status')}`",
         f"- Jobs: {summary.get('passed_count', 0)}/{summary.get('job_count', 0)} passed",
         f"- Score: {summary.get('score', 0.0)}",
+        (
+            "- Evidence: "
+            f"{summary.get('admitted_evidence_count', 0)} admitted, "
+            f"{summary.get('non_admitted_evidence_count', 0)} non-admitted, "
+            f"{summary.get('rejected_evidence_count', 0)} rejected"
+        ),
         "",
-        "| Job | Command | Status | Exit |",
-        "| --- | --- | --- | --- |",
+        "| Job | Command | Status | Evidence | Exit |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for child in list(result.get("children") or result.get("jobs") or []):
+        evidence = _as_mapping(child.get("evidence"))
+        evidence_cell = evidence.get("status") or ""
+        if evidence.get("role") and evidence.get("role") != evidence_cell:
+            evidence_cell = f"{evidence_cell} ({evidence.get('role')})"
         lines.append(
             "| "
             f"{_md_cell(child.get('id') or child.get('name') or '')} | "
             f"{_md_cell(child.get('command') or '')} | "
             f"{_md_cell(child.get('status') or '')} | "
+            f"{_md_cell(evidence_cell)} | "
             f"{int(child.get('exit_code', 1))} |"
         )
     return "\n".join(lines) + "\n"
@@ -1086,7 +1118,7 @@ def _execute_job(
             path=path,
         )
         payload["outputs_written"] = outputs_written
-        return {
+        result = {
             "id": job_id,
             "command": command,
             "path": str(path),
@@ -1100,8 +1132,10 @@ def _execute_job(
             "duration_seconds": round(time.time() - started, 4),
             "result": payload,
         }
+        result["evidence"] = _suite_child_evidence(job, result)
+        return result
     except Exception as exc:
-        return {
+        result = {
             "id": job_id,
             "command": command,
             "path": str(path),
@@ -1124,6 +1158,8 @@ def _execute_job(
             "duration_seconds": round(time.time() - started, 4),
             "error": str(exc),
         }
+        result["evidence"] = _suite_child_evidence(job, result)
+        return result
 
 
 def _execute_child_payload(
@@ -1399,6 +1435,159 @@ def _child_renderers(command: str) -> tuple[Any, Any, Any]:
     return simulate.render_junit, simulate.render_sarif, simulate.render_markdown
 
 
+def _suite_child_evidence(
+    job: Mapping[str, Any],
+    child: Mapping[str, Any],
+) -> dict[str, Any]:
+    role = _suite_evidence_role(job, child)
+    exit_code = int(child.get("exit_code", 1))
+    reasons: list[str] = []
+    if exit_code != 0:
+        status = "rejected"
+        admitted = False
+        reasons.append("child_failed")
+    elif role in _ADMITTED_EVIDENCE_ROLES:
+        status = "admitted"
+        admitted = True
+    else:
+        status = role if role in _NON_ADMITTED_EVIDENCE_ROLES else "diagnostic"
+        admitted = False
+        reasons.append(f"evidence_role_{status}")
+    if _suite_path_is_fixture(child.get("path")) and status != "rejected":
+        role = "fixture"
+        status = "fixture"
+        admitted = False
+        if "fixture_path" not in reasons:
+            reasons.append("fixture_path")
+    metadata = _as_mapping(job.get("metadata"))
+    claim_scope = (
+        job.get("claim_scope")
+        or job.get("claim")
+        or metadata.get("claim_scope")
+        or ("paper_facing" if admitted else "audit")
+    )
+    return {
+        "kind": "agent-learning.suite.evidence-row.v1",
+        "row_id": str(child.get("id") or job.get("id") or ""),
+        "status": status,
+        "role": role,
+        "admitted": admitted,
+        "reason": reasons,
+        "claim_scope": str(claim_scope),
+        "workload": str(job.get("workload") or job.get("id") or child.get("id") or ""),
+        "driver": str(job.get("driver") or child.get("command") or ""),
+        "command": child.get("command"),
+        "path": child.get("path"),
+        "result_kind": child.get("kind"),
+        "exit_code": exit_code,
+        "provenance": {
+            "job_id": child.get("id") or job.get("id"),
+            "job_name": child.get("name") or job.get("name"),
+            "manifest_path": child.get("path"),
+            "outputs_written": list(child.get("outputs_written") or []),
+            "replay_class": str(
+                job.get("replay_class")
+                or job.get("replay")
+                or metadata.get("replay_class")
+                or "r0"
+            ),
+        },
+    }
+
+
+def _suite_evidence_role(
+    job: Mapping[str, Any],
+    child: Mapping[str, Any],
+) -> str:
+    metadata = _as_mapping(job.get("metadata"))
+    raw = (
+        job.get("evidence_role")
+        or job.get("evidence_status")
+        or job.get("evidence")
+        or metadata.get("evidence_role")
+        or metadata.get("evidence_status")
+    )
+    role = _suite_key(raw) if raw is not None else ""
+    if role in _ADMITTED_EVIDENCE_ROLES or role in _NON_ADMITTED_EVIDENCE_ROLES:
+        return role
+    if _suite_path_is_fixture(child.get("path") or job.get("path")):
+        return "fixture"
+    return "admitted"
+
+
+def _suite_path_is_fixture(value: Any) -> bool:
+    text = str(value or "").replace("\\", "/").lower()
+    return "/fixtures/" in text or text.startswith("fixtures/")
+
+
+def _suite_evidence_admission(
+    children: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    rows = [copy.deepcopy(dict(_as_mapping(child.get("evidence")))) for child in children]
+    rows = [row for row in rows if row]
+    by_status: dict[str, int] = {}
+    by_role: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown")
+        role = str(row.get("role") or "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
+        by_role[role] = by_role.get(role, 0) + 1
+    admitted_rows = [row for row in rows if bool(row.get("admitted"))]
+    rejected_rows = [row for row in rows if str(row.get("status") or "") == "rejected"]
+    non_admitted_rows = [row for row in rows if not bool(row.get("admitted"))]
+    return {
+        "kind": "agent-learning.suite.evidence-admission.v1",
+        "admitted_count": len(admitted_rows),
+        "non_admitted_count": len(non_admitted_rows),
+        "rejected_count": len(rejected_rows),
+        "by_status": dict(sorted(by_status.items())),
+        "by_role": dict(sorted(by_role.items())),
+        "admitted_row_ids": [str(row.get("row_id")) for row in admitted_rows],
+        "non_admitted_row_ids": [str(row.get("row_id")) for row in non_admitted_rows],
+        "rows": rows,
+    }
+
+
+def _suite_evidence_policy(suite: Mapping[str, Any]) -> dict[str, Any]:
+    raw = (
+        suite.get("evidence_policy")
+        or suite.get("evidence_admission_policy")
+        or suite.get("admission_policy")
+        or {}
+    )
+    if isinstance(raw, Mapping):
+        policy = copy.deepcopy(dict(raw))
+    else:
+        policy = {}
+    min_admitted = policy.get("min_admitted")
+    if min_admitted is None and bool(policy.get("require_admitted")):
+        min_admitted = 1
+    policy["min_admitted"] = int(min_admitted or 0)
+    return policy
+
+
+def _suite_evidence_findings(
+    admission: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    min_admitted = int(policy.get("min_admitted") or 0)
+    admitted_count = int(admission.get("admitted_count") or 0)
+    if min_admitted <= admitted_count:
+        return []
+    return [
+        {
+            "type": "suite_evidence_admission_missing",
+            "level": "error",
+            "reason": (
+                f"Suite evidence gate requires at least {min_admitted} admitted "
+                f"row(s), but only {admitted_count} were admitted."
+            ),
+            "admitted_count": admitted_count,
+            "min_admitted": min_admitted,
+        }
+    ]
+
+
 def _suite_result(
     *,
     suite: Mapping[str, Any],
@@ -1424,11 +1613,22 @@ def _suite_result(
         capabilities,
     )
     capability_findings = _suite_capability_findings(missing_capabilities)
-    suite_findings = [*capability_findings, *_suite_findings(children)]
+    evidence_admission = _suite_evidence_admission(children)
+    evidence_policy = _suite_evidence_policy(suite)
+    evidence_findings = _suite_evidence_findings(
+        evidence_admission,
+        evidence_policy,
+    )
+    suite_findings = [
+        *capability_findings,
+        *evidence_findings,
+        *_suite_findings(children),
+    ]
     suite_passed = (
         len(failed) == 0
         and len(children) == job_count
         and not capability_findings
+        and not evidence_findings
     )
     return {
         "kind": AGENT_LEARNING_SUITE_KIND,
@@ -1450,7 +1650,19 @@ def _suite_result(
             "required_capabilities": required_capabilities,
             "missing_required_capabilities": missing_capabilities,
             "capability_gate_passed": not capability_findings,
+            "evidence_gate_passed": not evidence_findings,
+            "admitted_evidence_count": evidence_admission["admitted_count"],
+            "non_admitted_evidence_count": evidence_admission[
+                "non_admitted_count"
+            ],
+            "rejected_evidence_count": evidence_admission["rejected_count"],
+            "evidence_admission": {
+                key: value
+                for key, value in evidence_admission.items()
+                if key != "rows"
+            },
         },
+        "evidence_admission": evidence_admission,
         "children": list(children),
         "jobs": list(children),
         "findings": suite_findings,
@@ -1642,6 +1854,8 @@ def _suite_capability_summary(children: Sequence[Mapping[str, Any]]) -> dict[str
         "commands": set(),
         "environment_state_keys": set(),
         "environment_types": set(),
+        "evidence_roles": set(),
+        "evidence_statuses": set(),
         "frameworks": set(),
         "metrics": set(),
         "modalities": set(),
@@ -1653,6 +1867,9 @@ def _suite_capability_summary(children: Sequence[Mapping[str, Any]]) -> dict[str
         _add_capability(caps, "child_ids", child.get("id"))
         _add_capability(caps, "commands", child.get("command"))
         _add_capability(caps, "result_kinds", child.get("kind"))
+        evidence = _as_mapping(child.get("evidence"))
+        _add_capability(caps, "evidence_roles", evidence.get("role"))
+        _add_capability(caps, "evidence_statuses", evidence.get("status"))
         result = _as_mapping(child.get("result"))
         _collect_result_capabilities(result, caps)
     return {key: sorted(values) for key, values in caps.items()}
@@ -1806,6 +2023,9 @@ def _collect_summary_capabilities(summary: Mapping[str, Any], caps: dict[str, se
     _add_capabilities(caps, "frameworks", summary.get("required_trace_frameworks"))
     _add_capabilities(caps, "frameworks", summary.get("frameworks"))
     _add_capabilities(caps, "environment_state_keys", summary.get("environment_state_keys"))
+    evidence_admission = _as_mapping(summary.get("evidence_admission"))
+    _add_capabilities(caps, "evidence_statuses", evidence_admission.get("by_status"))
+    _add_capabilities(caps, "evidence_roles", evidence_admission.get("by_role"))
     _add_capabilities(caps, "metrics", summary.get("observed_metrics"))
     _add_capabilities(caps, "metrics", summary.get("required_metrics"))
     _add_capabilities(caps, "metrics", summary.get("eval_metrics"))
