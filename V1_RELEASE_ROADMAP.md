@@ -204,14 +204,15 @@ Current checkpoint:
 
 - `agent-learn release-check` now builds
   `agent-learning.framework-adapter-contract-matrix.v1` for LangChain,
-  LangGraph, LiveKit, and Pipecat.
+  LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI, LiveKit,
+  and Pipecat.
 - The gate requires local executable fixture targets, `trace_runtime`, text and
   voice modality coverage, `in_process` transport, no external service
   dependency, no external targets, and no HTTP/WebSocket values in
   representative provider manifests.
-- Representative manifests are validated for LiveKit framework simulation,
-  Pipecat framework simulation, and LiveKit realtime voice/streaming trace
-  simulation.
+- Representative manifests are validated for text framework simulation,
+  LiveKit/Pipecat voice framework simulation, and LiveKit realtime
+  voice/streaming trace simulation.
 
 Acceptance gates:
 

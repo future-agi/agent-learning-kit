@@ -316,11 +316,20 @@ V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat"]
 V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/framework_certification_optimization.json",
     "examples/framework_import_repair_optimization.json",
+    "examples/multi_framework_simulation_suite.json",
+    "examples/framework_langchain_manifest.json",
+    "examples/framework_langgraph_manifest.json",
+    "examples/framework_llamaindex_manifest.json",
+    "examples/framework_openai_agents_manifest.json",
+    "examples/framework_autogen_manifest.json",
+    "examples/framework_crewai_manifest.json",
+    "examples/framework_pydantic_ai_manifest.json",
     "examples/framework_livekit_manifest.json",
     "examples/framework_pipecat_manifest.json",
     "examples/voice_streaming_realtime_manifest.json",
     "examples/voice_streaming_realtime_optimization.json",
     "examples/agent_integration_optimization.json",
+    "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
     "examples/sdk_realtime_voice_optimization.py",
@@ -329,6 +338,11 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
 V1_FRAMEWORK_PROVIDER_FRAMEWORKS = [
     "langchain",
     "langgraph",
+    "llamaindex",
+    "openai_agents",
+    "autogen",
+    "crewai",
+    "pydantic_ai",
     "livekit",
     "pipecat",
 ]
@@ -340,6 +354,62 @@ V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS = ["in_process"]
 V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES = ["agent-learning-fixture"]
 
 V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
+    {
+        "path": "examples/framework_langchain_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "langchain",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_langgraph_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "langgraph",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_llamaindex_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "llamaindex",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_openai_agents_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "openai_agents",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_autogen_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "autogen",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_crewai_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "crewai",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_pydantic_ai_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "pydantic_ai",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": ["framework_trace"],
+    },
     {
         "path": "examples/framework_livekit_manifest.json",
         "kind": "agent-learning.run.v1",
@@ -1896,7 +1966,7 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
             or payload.get("schema_version")
         )
         observed_agent_type = agent.get("type")
-        observed_modality = simulation.get("modality")
+        observed_modality = str(simulation.get("modality") or "text")
         expected_framework = str(spec["framework"])
         agent_target = str(agent.get("target") or "")
         manifest_contracts.append(

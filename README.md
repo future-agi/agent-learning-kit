@@ -56,9 +56,10 @@ action catalogs, saved action-run output evidence, and key-like secret-marker
 redaction across representative run, action-run, optimization, red-team,
 red-team campaign, provider-integration, and suite artifacts.
 Framework/provider readiness is executable too: release-check builds the native
-adapter matrix for LangChain, LangGraph, LiveKit, and Pipecat, requires local
-fixture targets with no external service dependency, and validates
-representative LiveKit, Pipecat, and realtime voice manifests.
+adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
+CrewAI, PydanticAI, LiveKit, and Pipecat, requires local fixture targets with
+no external service dependency, and validates representative text, voice, and
+realtime manifests.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full

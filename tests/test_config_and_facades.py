@@ -12749,26 +12749,46 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "agent-learning.framework-adapter-contract-matrix.v1"
     )
     assert framework_provider["matrix_status"] == "passed"
-    assert framework_provider["observed_frameworks"] == [
-        "langchain",
-        "langgraph",
-        "livekit",
-        "pipecat",
-    ]
+    assert framework_provider["observed_frameworks"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+    )
     assert set(framework_provider["observed_modalities"]) == {"text", "voice"}
     assert framework_provider["observed_transports"] == ["in_process"]
     assert framework_provider["observed_target_schemes"] == (
         ["agent-learning-fixture"]
     )
     matrix_summary = framework_provider["matrix_summary"]
-    assert matrix_summary["contract_count"] == 4
-    assert matrix_summary["local_executable_fixture_count"] == 4
+    assert matrix_summary["contract_count"] == len(
+        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+    )
+    assert matrix_summary["local_executable_fixture_count"] == len(
+        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+    )
     assert matrix_summary["requires_external_service_count"] == 0
     assert matrix_summary["external_target_count"] == 0
-    assert matrix_summary["trace_runtime_count"] == 4
+    assert matrix_summary["trace_runtime_count"] == len(
+        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
+    )
     manifest_contracts = {
         item["path"]: item for item in framework_provider["manifest_contracts"]
     }
+    expected_text_manifests = {
+        "examples/framework_langchain_manifest.json": "langchain",
+        "examples/framework_langgraph_manifest.json": "langgraph",
+        "examples/framework_llamaindex_manifest.json": "llamaindex",
+        "examples/framework_openai_agents_manifest.json": "openai_agents",
+        "examples/framework_autogen_manifest.json": "autogen",
+        "examples/framework_crewai_manifest.json": "crewai",
+        "examples/framework_pydantic_ai_manifest.json": "pydantic_ai",
+    }
+    for path, framework in expected_text_manifests.items():
+        manifest = manifest_contracts[path]
+        assert manifest["kind"] == "agent-learning.run.v1"
+        assert manifest["agent_type"] == "framework"
+        assert manifest["frameworks"] == [framework]
+        assert manifest["modality"] == "text"
+        assert manifest["missing_environment_types"] == []
+        assert manifest["agent_target"].startswith("framework_shims.py:")
     livekit_manifest = manifest_contracts["examples/framework_livekit_manifest.json"]
     assert livekit_manifest["kind"] == "agent-learning.run.v1"
     assert livekit_manifest["agent_type"] == "framework"
