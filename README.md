@@ -1188,7 +1188,17 @@ configuration and redaction checks, not for any external hook endpoint.
 `agent-learn report <world-hooks-result.json>` also emits a `world_hooks`
 action card with the native proof, hook contract, replay lock, selected
 metrics, research sources, Markdown proof-check tables, and CLI/download
-actions for Future AGI UI, SDK, and CI users.
+actions for Future AGI UI, SDK, and CI users. The same result can now be
+promoted with `simulate.promote_to_regression()` or
+`agent-learn promote-to-regression` into a replayable
+`world_hooks_optimization` regression manifest; `agent-learn replay` then
+re-executes the frozen local `stateful_tool_world` + `world_contract` bundle
+and gates `world_hook_contract_quality=1.0` and
+`world_contract_quality=1.0` without any endpoint/auth hook. Promotion is
+fail-closed for world-hook results: if the frozen environments contain
+`endpoint`, `auth`, API-key/secret/token markers, or
+`requires_external_service=true`, the result is not admitted as a replayable
+world-hook regression.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized

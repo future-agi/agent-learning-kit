@@ -12,6 +12,7 @@ import pytest
 from agent_learning import actions, configure, current_config, get_api_key
 from agent_learning._facade import optional_module
 from agent_learning.cli import main
+from fi.simulate.manifest import ManifestError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -12736,6 +12737,8 @@ def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import simulate
+
     key = "real-local-sdk-world-hooks-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_HOOKS_KEY", key)
     example_path = PROJECT_ROOT / "examples" / "sdk_world_hooks_optimization.py"
@@ -12830,6 +12833,7 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
     assert world_card["artifacts"]["replay_lock"]["local_only"] is True
     assert {
         "report_world_hooks",
+        "promote_world_hooks_regression",
         "rerun_world_hooks_optimization",
         "export_world_hooks_proof",
         "export_world_hooks_contract",
@@ -12850,6 +12854,7 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
     }
     assert {
         "report_world_hooks",
+        "promote_world_hooks_regression",
         "rerun_world_hooks_optimization",
         "export_world_hooks_proof",
         "export_world_hooks_contract",
@@ -12878,3 +12883,124 @@ def test_sdk_world_hooks_optimization_example_runs(monkeypatch, tmp_path):
     exported_contract = json.loads(exported_contract_serialized)
     assert exported_contract["mode"] == "native_world_state_hooks"
     assert exported_contract["requires_external_service"] is False
+
+    promotion = simulate.promote_to_regression(
+        result,
+        source_path=output_path,
+        name="sdk-world-hooks-regression",
+        min_level="note",
+        max_findings=1,
+        required_env=["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"],
+    )
+    assert promotion["status"] == "passed"
+    assert promotion["summary"]["promotion_kind"] == "world_hooks_optimization"
+    assert promotion["summary"]["world_hook_proof_status"] == "passed"
+    assert promotion["summary"]["world_hook_proof_assurance_level"] == (
+        "l3_verified_native_world_hooks"
+    )
+    assert promotion["summary"]["requires_external_service"] is False
+    assert promotion["world_hook_proof"]["failed_check_ids"] == []
+    promoted_manifest = promotion["manifest"]
+    assert promoted_manifest["version"] == "agent-learning.run.v1"
+    assert promoted_manifest["required_env"] == ["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"]
+    assert promoted_manifest["metadata"]["regression"]["promotion_kind"] == (
+        "world_hooks_optimization"
+    )
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"]["local_only"] is True
+    assert promoted_manifest["metadata"]["regression"]["replay_lock"][
+        "requires_external_service"
+    ] is False
+    promoted_env_types = {
+        item["type"] for item in promoted_manifest["simulation"]["environments"]
+    }
+    assert {"stateful_tool_world", "world_contract"} <= promoted_env_types
+    promoted_config = promoted_manifest["evaluation"]["agent_report"]["config"]
+    assert promoted_config["world_hook_contract_quality"][
+        "require_no_external_service"
+    ] is True
+    assert promoted_config["world_hook_contract_quality"]["runtime"] == "in_process"
+    assert promoted_config["world_hook_contract_quality"]["mode"] == (
+        "native_world_state_hooks"
+    )
+    assert promoted_config["world_contract_quality"]["terminal_status"] == "success"
+    assert promoted_config["metric_weights"]["world_hook_contract_quality"] == 8.0
+    assert key not in json.dumps(promotion, sort_keys=True, default=str)
+
+    promotion_report = simulate.render_report(
+        promotion,
+        source_path=tmp_path / "sdk-world-hooks-promotion.json",
+    )
+    assert "world_hooks" in promotion_report["summary"]["sections"]
+    promotion_card = promotion_report["report"]["world_hooks"]
+    assert promotion_card["status"] == "verified"
+    assert {
+        "replay_world_hooks_regression",
+        "export_world_hooks_contract",
+        "export_world_hooks_replay_lock",
+    } <= {action["id"] for action in promotion_card["actions"]}
+
+    regression_manifest_path = tmp_path / "sdk-world-hooks-regression.json"
+    regression_manifest_path.write_text(
+        json.dumps(promoted_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    replay = simulate.replay_manifests(
+        [regression_manifest_path],
+        name="sdk-world-hooks-regression-replay",
+    )
+    assert replay["status"] == "passed"
+    assert replay["summary"]["passed_count"] == 1
+    assert replay["summary"]["failed_count"] == 0
+    replay_row = replay["replay"]["manifests"][0]
+    assert replay_row["summary"]["metric_averages"][
+        "world_hook_contract_quality"
+    ] == pytest.approx(1.0)
+    assert replay_row["summary"]["metric_averages"][
+        "world_contract_quality"
+    ] == pytest.approx(1.0)
+    assert key not in json.dumps(replay, sort_keys=True, default=str)
+
+    cli_promotion_path = tmp_path / "sdk-world-hooks-cli-promotion.json"
+    cli_regression_manifest_path = tmp_path / "sdk-world-hooks-cli-regression.json"
+    assert (
+        main(
+            [
+                "promote-to-regression",
+                str(output_path),
+                "--output",
+                str(cli_promotion_path),
+                "--manifest",
+                str(cli_regression_manifest_path),
+                "--min-level",
+                "note",
+                "--max-findings",
+                "1",
+                "--required-env",
+                "AGENT_LEARNING_SDK_WORLD_HOOKS_KEY",
+            ]
+        )
+        == 0
+    )
+    cli_promotion = json.loads(cli_promotion_path.read_text(encoding="utf-8"))
+    assert cli_promotion["summary"]["promotion_kind"] == "world_hooks_optimization"
+    cli_regression = json.loads(
+        cli_regression_manifest_path.read_text(encoding="utf-8")
+    )
+    assert cli_regression["metadata"]["regression"]["promotion_kind"] == (
+        "world_hooks_optimization"
+    )
+    assert key not in cli_promotion_path.read_text(encoding="utf-8")
+    assert key not in cli_regression_manifest_path.read_text(encoding="utf-8")
+
+    externalized = copy.deepcopy(result)
+    externalized["optimization"]["best_config"]["simulation"]["environments"][0]["data"][
+        "endpoint"
+    ] = "https://hooks.example.com/world-state"
+    with pytest.raises(ManifestError, match="world hooks regression promotion requires"):
+        simulate.promote_to_regression(
+            externalized,
+            source_path=output_path,
+            name="sdk-world-hooks-externalized-regression",
+            min_level="note",
+            max_findings=1,
+        )
