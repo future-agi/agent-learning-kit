@@ -322,6 +322,12 @@ hand-writing JSON.
 The `world_framework_memory_optimization.json` example optimizes a
 LangGraph-style world orchestration across framework trace, retrieval, memory
 lineage, and multi-agent review evidence.
+The SDK-native wrapper is
+`optimize.build_world_framework_memory_optimization_manifest()` /
+`optimize.optimize_world_framework_memory()`; it searches agent behavior and a
+coherent `simulation.environments` bundle, emits the same orchestration-stack
+proof, and stays local unless the caller explicitly supplies external
+environment wiring.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, the nested multi-framework adapter suite,
@@ -604,6 +610,10 @@ For direct, non-optimizer orchestration simulation,
 `simulate.build_orchestration_stack_run_manifest()` and
 `examples/sdk_orchestration_simulation.py` run a selected world/framework/
 retrieval/memory/multi-agent stack as a normal `agent-learning.run.v1` artifact.
+For the product-named whole architecture flow,
+`simulate.build_world_framework_memory_run_manifest()` derives a direct run
+from the same native defaults that power
+`optimize.optimize_world_framework_memory()`.
 Both simulation and optimization artifacts expose an `orchestration_strategy`
 report card for Future AGI UI, CLI, SDK, and CI surfaces; run artifacts rerun
 with `agent-learn run`, while optimization artifacts rerun with
@@ -714,6 +724,10 @@ AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY=... \
 AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_orchestration_optimization.py \
   artifacts/sdk-orchestration-optimization.json
+
+AGENT_LEARNING_SDK_WORLD_FRAMEWORK_MEMORY_KEY=... \
+  PYTHONPATH=src python examples/sdk_world_framework_memory_optimization.py \
+  artifacts/sdk-world-framework-memory-optimization.json
 
 AGENT_LEARNING_SDK_ORCHESTRATION_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_orchestration_simulation.py \

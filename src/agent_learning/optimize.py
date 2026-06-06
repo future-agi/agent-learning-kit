@@ -6683,6 +6683,120 @@ def optimize_orchestration_stack(
     )
 
 
+def build_world_framework_memory_optimization_manifest(
+    *,
+    name: str = "world-framework-memory-optimization",
+    stack_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    search_space: Optional[Mapping[str, Sequence[Any]]] = None,
+    target_base_config: Optional[Mapping[str, Any]] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a native optimization manifest for a whole agent architecture.
+
+    This is the product-named wrapper over orchestration-stack optimization:
+    world contract, framework trace, retrieval, memory lineage, and multi-agent
+    review evidence move as one candidate bundle.
+    """
+
+    metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_world_framework_memory_optimization_manifest"
+        ),
+        "cookbook": "world-framework-memory-architecture",
+        "task_kind": "orchestration_stack",
+        "task_variant": "world_framework_memory",
+        "candidate_search_paths": ["agent", "simulation.environments"],
+        "research_sources": _unique_research_sources(
+            [
+                *_world_framework_memory_research_sources(),
+                *[dict(item) for item in research_sources],
+            ]
+        ),
+        "original_synthesis": (
+            "A whole-agent architecture candidate must bundle framework "
+            "runtime trace, world contract replay, retrieval grounding, memory "
+            "lineage, and multi-agent review/reconciliation so the optimizer "
+            "cannot mix evidence from incompatible candidates."
+        ),
+        **copy.deepcopy(dict(target_metadata or {})),
+    }
+    return build_orchestration_optimization_manifest(
+        name=name,
+        stack_candidates=(
+            [copy.deepcopy(dict(item)) for item in stack_candidates]
+            if stack_candidates is not None
+            else [
+                _weak_world_framework_memory_stack(),
+                _verified_world_framework_memory_stack(),
+            ]
+        ),
+        evaluation_config=copy.deepcopy(
+            dict(evaluation_config or _world_framework_memory_evaluation_config())
+        ),
+        agent_candidates=(
+            [copy.deepcopy(dict(item)) for item in agent_candidates]
+            if agent_candidates is not None
+            else [
+                _weak_world_framework_memory_agent(),
+                _verified_world_framework_memory_agent(),
+            ]
+        ),
+        scenario=scenario or _world_framework_memory_scenario(name),
+        required_env=required_env,
+        optimizer=optimizer,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+        search_space=search_space,
+        target_base_config=target_base_config,
+        target_metadata=metadata,
+    )
+
+
+build_agent_architecture_optimization_manifest = (
+    build_world_framework_memory_optimization_manifest
+)
+
+
+def optimize_world_framework_memory(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute whole agent architecture optimization."""
+
+    manifest = build_world_framework_memory_optimization_manifest(
+        **manifest_kwargs
+    )
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
+optimize_agent_architecture = optimize_world_framework_memory
+
+
 def build_multi_agent_optimization_manifest(
     *,
     name: str,
@@ -17557,6 +17671,565 @@ def _default_orchestration_scenario(name: str) -> dict[str, Any]:
     }
 
 
+def _world_framework_memory_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "dataset": [
+            {
+                "persona": {
+                    "name": "Riya",
+                    "role": "agent-architecture-owner",
+                },
+                "situation": (
+                    "Riya needs a LangGraph-style refund workflow optimized "
+                    "across world state, framework trace, retrieval, memory "
+                    "lineage, and multi-agent review evidence."
+                ),
+                "outcome": (
+                    "The optimized agent architecture proves the refund "
+                    "workflow completed with current policy grounding, memory "
+                    "provenance, and critic-reviewed reconciliation."
+                ),
+            }
+        ],
+    }
+
+
+def _weak_world_framework_memory_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "weak-world-framework-memory-agent",
+        "responses": [
+            {
+                "content": (
+                    "I inspected the refund request but did not apply the "
+                    "world transition or collect framework, memory, retrieval, "
+                    "or review evidence."
+                ),
+                "tool_calls": [],
+            }
+        ],
+    }
+
+
+def _verified_world_framework_memory_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "verified-world-framework-memory-agent",
+        "responses": [
+            {
+                "content": (
+                    "I am optimizing the whole refund agent architecture across "
+                    "world, framework, retrieval, memory lineage, and "
+                    "multi-agent review evidence."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "approve_refund",
+                        "name": "apply_world_transition",
+                        "arguments": {"id": "approve_refund"},
+                    },
+                    {
+                        "id": "framework_status",
+                        "name": "framework_trace_status",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "I am checking current policy grounding and memory "
+                    "provenance before accepting the architecture candidate."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "retrieve_policy",
+                        "name": "retrieve_documents",
+                        "arguments": {"query": "current refund policy"},
+                    },
+                    {
+                        "id": "read_policy",
+                        "name": "read_document",
+                        "arguments": {"id": "doc_refund_2026"},
+                    },
+                    {
+                        "id": "cite_policy",
+                        "name": "cite_sources",
+                        "arguments": {
+                            "doc_ids": ["doc_refund_2026"],
+                            "claim": (
+                                "The current refund policy allows approved "
+                                "refunds when framework trace, source "
+                                "grounding, memory provenance, and critic "
+                                "review are recorded."
+                            ),
+                            "freshness_checked": True,
+                        },
+                    },
+                    {
+                        "id": "memory_lineage",
+                        "name": "agent_memory_lineage_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "retrieval_memory",
+                        "name": "retrieval_memory_status",
+                        "arguments": {},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "The optimized architecture approves refund, records "
+                    "framework trace, current policy cited, memory provenance "
+                    "recorded, memory lineage governed, critic-reviewed "
+                    "reconciliation completed, and critic review reconciled."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "room_status",
+                        "name": "room_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "critic_review",
+                        "name": "request_review",
+                        "arguments": {
+                            "reviewer": "critic",
+                            "target": "refund architecture decision",
+                            "criteria": ["policy", "memory", "world"],
+                        },
+                    },
+                    {
+                        "id": "reconcile",
+                        "name": "reconcile",
+                        "arguments": {
+                            "summary": "approved refund architecture accepted",
+                            "accepted_source": "critic",
+                            "conflicts": [],
+                            "participants": ["planner", "retriever", "critic"],
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _weak_world_framework_memory_stack() -> dict[str, Any]:
+    return {
+        "name": "weak-world-framework-memory-stack",
+        "world_contract": {
+            "name": "refund-world",
+            "actors": ["agent", "customer"],
+            "resources": ["refund"],
+            "initial_state": {"refund": {"status": "pending"}},
+            "transitions": [],
+            "success_conditions": [
+                {"id": "refund_approved", "must": {"refund.status": "approved"}}
+            ],
+        },
+        "framework_trace": {
+            "framework": "langgraph",
+            "spans": [],
+            "adapter_required_signals": ["planner", "tool", "policy"],
+        },
+        "retrieval_memory": {
+            "documents": [
+                {
+                    "id": "doc_refund_2025",
+                    "title": "Archived refund policy",
+                    "content": "Archived policy requires manual review.",
+                    "current": False,
+                }
+            ],
+            "require_current": True,
+        },
+        "agent_memory_lineage": {
+            "name": "weak-refund-lineage",
+            "target": {"agent": "refund-agent"},
+            "stores": [],
+            "memories": [],
+            "operations": [],
+            "lineage": [],
+        },
+        "multi_agent_room": {
+            "participants": {
+                "planner": {"name": "planner", "role": "planner"}
+            },
+            "allow_unknown_roles": True,
+            "state": {"case": {"status": "triage"}},
+        },
+    }
+
+
+def _verified_world_framework_memory_stack() -> dict[str, Any]:
+    return {
+        "name": "verified-world-framework-memory-stack",
+        "world_contract": {
+            "name": "refund-world",
+            "actors": ["agent", "customer"],
+            "resources": ["refund"],
+            "initial_state": {"refund": {"status": "pending"}},
+            "transitions": [
+                {
+                    "id": "approve_refund",
+                    "actor": "agent",
+                    "requires": {"refund.status": "pending"},
+                    "effects": {"refund.status": "approved"},
+                    "postconditions": [{"refund.status": "approved"}],
+                    "signals": ["refund_resolution"],
+                }
+            ],
+            "success_conditions": [
+                {"id": "refund_approved", "must": {"refund.status": "approved"}}
+            ],
+        },
+        "framework_trace": {
+            "framework": "langgraph",
+            "spans": [
+                {
+                    "id": "planner",
+                    "name": "planner.invoke",
+                    "input": "refund workflow",
+                    "output": "approved",
+                    "tool_calls": [{"name": "framework_trace_status"}],
+                    "signals": ["planner", "tool", "policy"],
+                    "metadata": {
+                        "tool_name": "framework_trace_status",
+                        "node": "refund-planner",
+                    },
+                }
+            ],
+            "adapter_required_signals": ["planner", "tool", "policy"],
+            "adapter_required_mappings": {"tool": ["tool_name"]},
+        },
+        "retrieval_memory": {
+            "documents": [
+                {
+                    "id": "doc_refund_2026",
+                    "title": "Current refund policy",
+                    "content": (
+                        "The current refund policy allows approved refunds "
+                        "when framework trace, source grounding, memory "
+                        "provenance, and critic review are recorded."
+                    ),
+                    "current": True,
+                }
+            ],
+            "memory": {"prior_case": "manual_review"},
+            "require_current": True,
+        },
+        "agent_memory_lineage": {
+            "name": "verified-refund-lineage",
+            "target": {"agent": "refund-agent", "tenant": "tenant_alpha"},
+            "stores": [
+                {
+                    "id": "refund_store",
+                    "tenant_id": "tenant_alpha",
+                    "retention_days": 30,
+                    "encrypted": True,
+                }
+            ],
+            "memories": [
+                {
+                    "id": "refund_decision",
+                    "store_id": "refund_store",
+                    "tenant_id": "tenant_alpha",
+                    "content": (
+                        "Refund approved from current policy evidence and "
+                        "critic review."
+                    ),
+                    "source_ids": ["doc_refund_2026"],
+                    "classification": "decision",
+                    "retention_days": 30,
+                    "redacted": True,
+                }
+            ],
+            "operations": [
+                {
+                    "id": "read_refund_memory",
+                    "operation": "read",
+                    "memory_id": "refund_decision",
+                    "actor": "retriever",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                    "trace_id": "memory_trace_read",
+                    "source_ids": ["doc_refund_2026"],
+                    "attribution": {"source": "doc_refund_2026"},
+                },
+                {
+                    "id": "write_refund_memory",
+                    "operation": "write",
+                    "memory_id": "refund_decision",
+                    "actor": "planner",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                    "trace_id": "memory_trace_write",
+                    "source_ids": ["doc_refund_2026"],
+                    "attribution": {"source": "doc_refund_2026"},
+                },
+                {
+                    "id": "recall_refund_memory",
+                    "operation": "recall",
+                    "memory_id": "refund_decision",
+                    "actor": "critic",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                    "trace_id": "memory_trace_recall",
+                    "source_ids": ["doc_refund_2026"],
+                    "attribution": {"source": "doc_refund_2026"},
+                },
+            ],
+            "lineage": [
+                {
+                    "from": "doc_refund_2026",
+                    "to": "refund_decision",
+                    "type": "source_attribution",
+                }
+            ],
+            "policies": {
+                "retention": {"status": "enforced"},
+                "deletion": {"status": "enforced"},
+                "redaction": {"status": "enforced"},
+                "tenant_isolation": {"status": "enforced"},
+                "audit": {"status": "enforced"},
+            },
+            "poison_tests": [
+                {
+                    "id": "untrusted_policy_write",
+                    "status": "blocked",
+                    "canary": "FA_WORLD_FRAMEWORK_MEMORY_CANARY",
+                }
+            ],
+            "isolation_tests": [
+                {"id": "tenant_cross_read", "status": "blocked"}
+            ],
+            "retention_tests": [
+                {"id": "expired_memory_delete", "status": "passed"}
+            ],
+            "observability": {
+                "traces": ["memory_lineage_refund_trace"],
+                "logs": ["architecture-memory-audit.jsonl"],
+            },
+            "artifacts": [
+                {
+                    "id": "architecture-memory-audit",
+                    "type": "memory_lineage_audit",
+                    "path": "artifacts/architecture-memory-audit.json",
+                }
+            ],
+            "required_evidence": [
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
+                "retention_policy",
+                "deletion_policy",
+                "redaction",
+                "canary",
+            ],
+            "required_signals": [
+                "memory_lineage",
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
+            ],
+        },
+        "multi_agent_room": {
+            "participants": {
+                "planner": {"name": "planner", "role": "planner"},
+                "retriever": {"name": "retriever", "role": "retriever"},
+                "critic": {"name": "critic", "role": "critic"},
+            },
+            "expected_reviews": [
+                {
+                    "reviewer": "critic",
+                    "target_contains": "refund architecture",
+                    "criteria": ["policy", "memory", "world"],
+                }
+            ],
+            "expected_reconciliation": {
+                "summary_contains": "approved refund architecture",
+                "accepted_source": "critic",
+                "conflicts_empty": True,
+            },
+            "allow_unknown_roles": False,
+            "state": {"case": {"status": "resolved"}},
+        },
+    }
+
+
+def _world_framework_memory_evaluation_config() -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Optimize a whole agent architecture across world contract, "
+            "framework trace, retrieval, memory lineage, and multi-agent "
+            "review without using external optimizer services."
+        ),
+        "expected_result": (
+            "The optimized architecture approves refund, records framework "
+            "trace, current policy cited, memory provenance recorded, memory "
+            "lineage governed, critic-reviewed reconciliation completed, and "
+            "critic review reconciled."
+        ),
+        "required_tools": [
+            "apply_world_transition",
+            "framework_trace_status",
+            "retrieve_documents",
+            "read_document",
+            "cite_sources",
+            "agent_memory_lineage_status",
+            "retrieval_memory_status",
+            "room_status",
+            "request_review",
+            "reconcile",
+        ],
+        "available_tools": [
+            "apply_world_transition",
+            "framework_trace_status",
+            "retrieve_documents",
+            "read_document",
+            "cite_sources",
+            "agent_memory_lineage_status",
+            "retrieval_memory_status",
+            "room_status",
+            "request_review",
+            "reconcile",
+        ],
+        "success_criteria": [
+            "refund approved",
+            "framework trace present",
+            "current policy cited",
+            "memory lineage governed",
+            "critic review reconciled",
+        ],
+        "allow_extra_tool_arguments": True,
+        "world_contract_quality": {
+            "required_transitions": ["approve_refund"],
+            "required_terminal_success": True,
+            "expected_state": {"refund.status": "approved"},
+        },
+        "required_framework_trace": [
+            "framework_trace",
+            "langgraph",
+            "planner",
+            "tool",
+            "policy",
+            "framework_trace_status",
+        ],
+        "retrieval_memory_quality": {
+            "require_current_sources": True,
+            "required_documents": ["doc_refund_2026"],
+            "required_citations": ["doc_refund_2026"],
+            "minimum_citations": 1,
+        },
+        "agent_memory_lineage_quality": {
+            "required_evidence": [
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
+                "retention_policy",
+                "deletion_policy",
+                "redaction",
+                "canary",
+            ],
+            "required_operation_types": ["read", "write", "recall"],
+            "max_blocking_gaps": 0,
+            "require_tenant_isolation": True,
+            "require_retention_policy": True,
+            "require_deletion_policy": True,
+            "require_redaction": True,
+            "require_poison_resistance": True,
+        },
+        "required_multi_agent_trace": [
+            "room_status",
+            "request_review",
+            "reconcile",
+        ],
+        "multi_agent_coordination_quality": {
+            "required_roles": ["planner", "retriever", "critic"],
+            "min_reviews": 1,
+            "expected_review": {
+                "reviewer": "critic",
+                "target_contains": "refund architecture",
+                "criteria": ["policy", "memory", "world"],
+            },
+            "expected_reconciliation": {
+                "summary_contains": "approved refund architecture",
+                "accepted_source": "critic",
+                "conflicts_empty": True,
+            },
+        },
+        "metric_weights": {
+            "world_contract_quality": 8.0,
+            "framework_trace_coverage": 6.0,
+            "retrieval_context_quality": 6.0,
+            "agent_memory_lineage_quality": 8.0,
+            "agent_memory_lineage_coverage": 4.0,
+            "multi_agent_coordination_quality": 6.0,
+            "multi_agent_trace_coverage": 4.0,
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 2.0,
+            "goal_progress": 1.0,
+        },
+    }
+
+
+def _world_framework_memory_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "2606.06324",
+            "title": "From Failed Trajectories to Reliable LLM Agents: Diagnosing and Repairing Harness Flaws",
+            "source": "arxiv:2606.06324",
+            "url": "https://arxiv.org/abs/2606.06324",
+            "used_for": (
+                "trace-guided diagnosis across harness, runtime, tool, "
+                "lifecycle, observability, verification, and governance layers"
+            ),
+        },
+        {
+            "id": "2606.05922",
+            "title": "Retrospective Harness Optimization: Improving LLM Agents via Self-Preference over Trajectory Rollouts",
+            "source": "arxiv:2606.05922",
+            "url": "https://arxiv.org/abs/2606.05922",
+            "used_for": (
+                "native optimization from past trajectories without external "
+                "labels or external optimizer services"
+            ),
+        },
+        {
+            "id": "2606.04990",
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "source": "arxiv:2606.04990",
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": (
+                "process-level provenance linking tools, retrieval, memory, "
+                "environment transitions, and final claims"
+            ),
+        },
+        {
+            "id": "2606.04329",
+            "title": "From Untrusted Input to Trusted Memory: A Systematic Study of Memory Poisoning Attacks in LLM Agents",
+            "source": "arxiv:2606.04329",
+            "url": "https://arxiv.org/abs/2606.04329",
+            "used_for": (
+                "memory poisoning resistance, tenant isolation, attribution, "
+                "and unsafe write-channel checks"
+            ),
+        },
+        {
+            "id": "2606.06387",
+            "title": "WebMCP Tool Surface Poisoning: Runtime Manipulation Attacks on LLM Agents",
+            "source": "arxiv:2606.06387",
+            "url": "https://arxiv.org/abs/2606.06387",
+            "used_for": (
+                "tool identity lifecycle, traceable tool registration, and "
+                "tool-surface provenance as architecture proof requirements"
+            ),
+        },
+    ]
+
+
 def _default_agent_integration_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -21629,6 +22302,8 @@ __all__ = [
     "build_optimizer_governance_optimization_manifest",
     "build_optimizer_portfolio_optimization_manifest",
     "build_orchestration_optimization_manifest",
+    "build_world_framework_memory_optimization_manifest",
+    "build_agent_architecture_optimization_manifest",
     "build_persistent_state_redteam_optimization_manifest",
     "build_realtime_optimization_manifest",
     "build_report_repair_optimization_manifest",
@@ -21679,6 +22354,8 @@ __all__ = [
     "optimize_optimizer_governance",
     "optimize_optimizer_portfolio",
     "optimize_orchestration_stack",
+    "optimize_world_framework_memory",
+    "optimize_agent_architecture",
     "optimize_persistent_state_redteam",
     "optimize_realtime_stack",
     "optimize_report_repair",

@@ -345,6 +345,13 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.build_orchestration_optimization_manifest is not None
     assert optimize.optimize_orchestration_stack is not None
     assert simulate.build_orchestration_stack_run_manifest is not None
+    assert optimize.build_world_framework_memory_optimization_manifest is not None
+    assert optimize.build_agent_architecture_optimization_manifest is (
+        optimize.build_world_framework_memory_optimization_manifest
+    )
+    assert optimize.optimize_world_framework_memory is not None
+    assert optimize.optimize_agent_architecture is optimize.optimize_world_framework_memory
+    assert simulate.build_world_framework_memory_run_manifest is not None
     assert optimize.build_realtime_optimization_manifest is not None
     assert optimize.optimize_realtime_stack is not None
     assert optimize.build_redteam_autogen_optimization_manifest is not None
@@ -2144,6 +2151,135 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
     assert "### Orchestration Candidate Lineage" in report_markdown
     assert "### Orchestration Rollout Steps" in report_markdown
     assert "structure_guided_counterfactual_rollout" in report_markdown
+
+
+def test_sdk_world_framework_memory_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import simulate
+
+    key = "real-local-sdk-world-framework-memory-key"
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_WORLD_FRAMEWORK_MEMORY_KEY",
+        key,
+    )
+    example_path = (
+        PROJECT_ROOT / "examples" / "sdk_world_framework_memory_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_world_framework_memory_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_WORLD_FRAMEWORK_MEMORY_KEY"
+    ]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == (
+        "orchestration_stack"
+    )
+    assert manifest["optimization"]["target"]["metadata"]["task_variant"] == (
+        "world_framework_memory"
+    )
+    assert {
+        source["id"]
+        for source in manifest["optimization"]["target"]["metadata"][
+            "research_sources"
+        ]
+    } >= {"2606.06324", "2606.05922", "2606.04990", "2606.04329", "2606.06387"}
+    environment_candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(environment_candidates) == 2
+    assert [environment["type"] for environment in environment_candidates[-1]] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+
+    run_manifest = simulate.build_world_framework_memory_run_manifest(
+        name="sdk-world-framework-memory-run",
+        required_env=["AGENT_LEARNING_SDK_WORLD_FRAMEWORK_MEMORY_KEY"],
+    )
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert run_manifest["metadata"]["task_variant"] == "world_framework_memory"
+    assert [
+        environment["type"]
+        for environment in run_manifest["simulation"]["environments"]
+    ] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+
+    output_path = tmp_path / "sdk-world-framework-memory-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    assert {
+        "endpoint",
+        "auth",
+        "api_key",
+        "apiKey",
+        "secret",
+        "token",
+    } & _nested_keys(result["optimization"]["best_config"]) == set()
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["orchestration_stack_proof_status"] == "passed"
+    assert result["summary"]["orchestration_stack_proof_passed"] is True
+    assert result["summary"]["orchestration_stack_proof_assurance_level"] == (
+        "l3_native_orchestration_stack_verified"
+    )
+    assert result["summary"]["orchestration_stack_proof_failed_check_count"] == 0
+    best_config = result["optimization"]["best_config"]
+    assert [
+        environment["type"]
+        for environment in best_config["simulation"]["environments"]
+    ] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"agent", "simulation.environments"}
+    for metric in (
+        "task_completion",
+        "tool_selection_accuracy",
+        "world_contract_quality",
+        "framework_trace_coverage",
+        "retrieval_context_quality",
+        "agent_memory_lineage_quality",
+        "multi_agent_coordination_quality",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["world_contract"]["state"]["refund"]["status"] == "approved"
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert state["agent_memory_lineage"]["summary"]["blocking_gap_count"] == 0
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+    assert result["orchestration_stack_proof"]["status"] == "passed"
 
 
 def test_sdk_orchestration_simulation_example_runs(monkeypatch, tmp_path):

@@ -1002,6 +1002,82 @@ def build_orchestration_stack_run_manifest(
     return manifest
 
 
+def build_world_framework_memory_run_manifest(
+    *,
+    name: str = "world-framework-memory-run",
+    stack: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct run manifest for a whole world/framework/memory stack."""
+
+    from . import optimize as _agent_optimize
+
+    optimization_manifest = (
+        _agent_optimize.build_world_framework_memory_optimization_manifest(
+            name=name,
+            stack_candidates=(
+                [copy.deepcopy(dict(stack))] if stack is not None else None
+            ),
+            evaluation_config=(
+                copy.deepcopy(dict(evaluation_config))
+                if evaluation_config is not None
+                else None
+            ),
+            agent_candidates=(
+                [copy.deepcopy(dict(agent))] if agent is not None else None
+            ),
+            scenario=scenario,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            auto_execute_tools=auto_execute_tools,
+            target_metadata=metadata,
+        )
+    )
+    search_space = optimization_manifest["optimization"]["target"]["search_space"]
+    agent_candidates = search_space.get("agent") or [optimization_manifest["agent"]]
+    environment_candidates = search_space.get("simulation.environments") or [
+        optimization_manifest["simulation"]["environments"]
+    ]
+    manifest: dict[str, Any] = {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(optimization_manifest["scenario"]),
+        "agent": copy.deepcopy(agent_candidates[-1]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(optimization_manifest["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": bool(auto_execute_tools),
+            "environments": copy.deepcopy(environment_candidates[-1]),
+        },
+        "evaluation": copy.deepcopy(optimization_manifest["evaluation"]),
+        "metadata": {
+            "source": (
+                "agent_learning.simulate."
+                "build_world_framework_memory_run_manifest"
+            ),
+            "task_kind": "orchestration_stack",
+            "task_variant": "world_framework_memory",
+            "cookbook": "world-framework-memory-architecture",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    return manifest
+
+
 def build_multi_agent_coordination_run_manifest(
     *,
     name: str,
@@ -8219,6 +8295,7 @@ __all__ = [
     "build_optimizer_governance_run_manifest",
     "build_optimizer_portfolio_run_manifest",
     "build_orchestration_stack_run_manifest",
+    "build_world_framework_memory_run_manifest",
     "build_realtime_run_manifest",
     "build_redteam_corpus_environments",
     "build_redteam_corpus_run_manifest",
