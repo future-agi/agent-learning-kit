@@ -702,6 +702,38 @@ def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch)
     assert result["schema_version"] == "agent-learning.cli.v1"
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["candidate_lineage_count"] == len(
+        result["optimization"]["history"]
+    )
+    assert result["summary"]["candidate_lineage_content_addressed_count"] == len(
+        result["optimization"]["history"]
+    )
+    assert result["summary"]["candidate_lineage_selected_score_delta"] > 0
+    lineage = result["optimization_candidate_lineage"]
+    assert lineage["kind"] == "agent-learning.optimization.candidate-lineage.v1"
+    assert lineage["candidate_count"] == len(result["optimization"]["history"])
+    assert lineage["selected_candidate_id"] == result["summary"]["best_candidate_id"]
+    assert "framework_runtime_contract" in lineage["metric_names"]
+    assert "agent.method" in lineage["patch_paths"]
+    selected_lineage = next(row for row in lineage["rows"] if row["selected"])
+    assert selected_lineage["candidate_id"] == result["summary"]["best_candidate_id"]
+    assert selected_lineage["content_addressed"] is True
+    assert selected_lineage["freeze"]["kind"] == (
+        "agent-learning.optimization.candidate-freeze.v1"
+    )
+    assert len(selected_lineage["freeze"]["patch_sha256"]) == 64
+    assert len(selected_lineage["freeze"]["metrics_sha256"]) == 64
+    assert "real-local-sdk-framework-opt-key" not in json.dumps(result)
+    simulate_result = simulate.optimize_manifest(
+        manifest,
+        manifest_path=PROJECT_ROOT / "examples" / "sdk-framework-optimization.json",
+    )
+    assert simulate_result["optimization_candidate_lineage"]["kind"] == (
+        "agent-learning.optimization.candidate-lineage.v1"
+    )
+    assert simulate_result["summary"]["candidate_lineage_content_addressed_count"] == (
+        len(simulate_result["optimization"]["history"])
+    )
     best_agent = result["optimization"]["best_config"]["agent"]
     assert best_agent["method"] == "execute_task"
     assert best_agent["input_mode"] == "dict"

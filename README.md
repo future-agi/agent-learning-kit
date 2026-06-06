@@ -177,6 +177,14 @@ Diagnosis reports also add
 `target_layers`, `candidate_lineage`, `repair_frontier`, and `rollout_steps`,
 and renders Markdown sections named `Retrospective Rollout Plan`,
 `Candidate Lineage`, `Repair Frontier`, and `Rollout Steps`.
+Optimization artifacts themselves also carry
+`agent-learning.optimization.candidate-lineage.v1`, a content-addressed
+candidate lineage contract with selected candidate ID, score delta from the
+seed, candidate count, patch/search paths, metric names, and per-candidate
+SHA-256 freezes for patch, metrics, config, and report-summary evidence. This
+lets SDK, CLI, CI, and Future AGI UI compare optimizer behavior across prompt,
+world, framework, memory, and multi-agent runs without relying on a separate
+report action.
 Red-team run artifacts and reports also include a `redteam_strategy` card plus
 `## Red Team Strategy` Markdown. The card maps attack types, surfaces,
 channels, providers, frameworks, campaign coverage, and risk focus into a
