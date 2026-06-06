@@ -20,6 +20,12 @@ AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND = (
     "agent-learning.optimization-lifecycle.v1"
 )
+AGENT_LEARNING_SUITE_TRUST_CERTIFICATE_KIND = (
+    "agent-learning.suite.trust-certificate.v1"
+)
+AGENT_LEARNING_SUITE_TRUST_VERIFICATION_KIND = (
+    "agent-learning.suite.trust-verification.v1"
+)
 
 _CHILD_COMMANDS = {
     "action_run",
@@ -87,6 +93,142 @@ def load_suite_file(path: str | Path) -> dict[str, Any]:
     if not isinstance(suite, Mapping):
         raise SuiteError("suite manifest root must be an object")
     return _prepare_suite(dict(suite), base_dir=suite_path.parent)
+
+
+def load_suite_artifact_file(path: str | Path) -> dict[str, Any]:
+    artifact_path = Path(path).expanduser().resolve()
+    if not artifact_path.exists():
+        raise SuiteError(f"suite artifact not found: {artifact_path}")
+    artifact = _load_json_or_yaml(artifact_path)
+    if not isinstance(artifact, Mapping):
+        raise SuiteError("suite artifact root must be an object")
+    return dict(artifact)
+
+
+def verify_trust_certificate_file(
+    path: str | Path,
+    *,
+    required_verdict: str = "approved",
+    require_promotion_ready: bool = True,
+) -> dict[str, Any]:
+    artifact_path = Path(path).expanduser().resolve()
+    artifact = load_suite_artifact_file(artifact_path)
+    return verify_trust_certificate(
+        artifact,
+        required_verdict=required_verdict,
+        require_promotion_ready=require_promotion_ready,
+        source_path=artifact_path,
+    )
+
+
+def verify_trust_certificate(
+    artifact: Mapping[str, Any],
+    *,
+    required_verdict: str = "approved",
+    require_promotion_ready: bool = True,
+    source_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Verify a saved suite trust certificate without re-running the suite."""
+    required = _suite_key(required_verdict)
+    if required not in _TRUST_VERDICT_RANK:
+        allowed = ", ".join(sorted(_TRUST_VERDICT_RANK))
+        raise SuiteError(f"required_verdict must be one of: {allowed}")
+
+    source = Path(source_path).expanduser().resolve() if source_path else None
+    result_kind = str(artifact.get("kind") or artifact.get("version") or "")
+    summary = _as_mapping(artifact.get("summary"))
+    certificate = _as_mapping(artifact.get("trust_certificate"))
+    if not certificate and result_kind == AGENT_LEARNING_SUITE_TRUST_CERTIFICATE_KIND:
+        certificate = dict(artifact)
+
+    findings: list[dict[str, Any]] = []
+    certificate_kind = str(certificate.get("kind") or "") if certificate else ""
+    if not certificate:
+        findings.append({
+            "type": "suite_trust_certificate_missing",
+            "level": "error",
+            "reason": "Suite artifact does not contain a trust_certificate block.",
+        })
+    elif certificate_kind != AGENT_LEARNING_SUITE_TRUST_CERTIFICATE_KIND:
+        findings.append({
+            "type": "suite_trust_certificate_kind_mismatch",
+            "level": "error",
+            "reason": (
+                "Suite trust certificate kind must be "
+                f"{AGENT_LEARNING_SUITE_TRUST_CERTIFICATE_KIND}."
+            ),
+            "observed_kind": certificate_kind,
+        })
+
+    observed = _suite_key(
+        certificate.get("verdict") if certificate else None
+    ) or _suite_key(summary.get("trust_certificate_verdict"))
+    verdict_rank_passed = False
+    if certificate:
+        if observed not in _TRUST_VERDICT_RANK:
+            findings.append({
+                "type": "suite_trust_certificate_verdict_unknown",
+                "level": "error",
+                "reason": "Suite trust certificate verdict is missing or unknown.",
+                "observed_verdict": observed or None,
+            })
+        else:
+            verdict_rank_passed = (
+                _TRUST_VERDICT_RANK[observed] >= _TRUST_VERDICT_RANK[required]
+            )
+            if not verdict_rank_passed:
+                findings.append({
+                    "type": "suite_trust_certificate_verdict_too_low",
+                    "level": "error",
+                    "reason": (
+                        f"Suite trust certificate verdict {observed} is below "
+                        f"required verdict {required}."
+                    ),
+                    "required_verdict": required,
+                    "observed_verdict": observed,
+                })
+
+    promotion_ready = _optional_bool(
+        certificate.get("promotion_ready") if certificate else None,
+        summary.get("trust_certificate_promotion_ready"),
+    )
+    promotion_gate_passed = not require_promotion_ready or promotion_ready is True
+    if certificate and not promotion_gate_passed:
+        findings.append({
+            "type": "suite_trust_certificate_not_promotion_ready",
+            "level": "error",
+            "reason": "Suite trust certificate is not marked promotion_ready.",
+            "promotion_ready": promotion_ready,
+        })
+
+    passed = not findings
+    return {
+        "kind": AGENT_LEARNING_SUITE_TRUST_VERIFICATION_KIND,
+        "version": AGENT_LEARNING_SUITE_TRUST_VERIFICATION_KIND,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "source_path": str(source) if source else None,
+        "result_kind": result_kind or None,
+        "required_verdict": required,
+        "require_promotion_ready": bool(require_promotion_ready),
+        "observed_verdict": observed or None,
+        "promotion_ready": promotion_ready,
+        "certificate_kind": certificate_kind or None,
+        "assurance_level": (
+            certificate.get("assurance_level") if certificate else None
+        ),
+        "summary": {
+            "certificate_present": bool(certificate),
+            "certificate_kind_passed": (
+                certificate_kind == AGENT_LEARNING_SUITE_TRUST_CERTIFICATE_KIND
+            ),
+            "verdict_rank_passed": verdict_rank_passed,
+            "promotion_gate_passed": promotion_gate_passed,
+            "finding_count": len(findings),
+        },
+        "trust_certificate": copy.deepcopy(certificate),
+        "findings": findings,
+    }
 
 
 load_suite = load_suite_file
@@ -3469,6 +3611,28 @@ def _suite_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
+_TRUST_VERDICT_RANK = {
+    "rejected": 0,
+    "conditional": 1,
+    "approved": 2,
+}
+
+
+def _optional_bool(value: Any, fallback: Any = None) -> bool | None:
+    candidate = value if value is not None else fallback
+    if candidate is None:
+        return None
+    if isinstance(candidate, bool):
+        return candidate
+    if isinstance(candidate, str):
+        normalized = candidate.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
+
+
 _KNOWN_ENVIRONMENT_TYPES = {
     "adversarial_attack_pack",
     "agent_control_plane",
@@ -3509,6 +3673,8 @@ __all__ = [
     "AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND",
     "AGENT_LEARNING_SUITE_KIND",
     "AGENT_LEARNING_SUITE_OPTIMIZATION_KIND",
+    "AGENT_LEARNING_SUITE_TRUST_CERTIFICATE_KIND",
+    "AGENT_LEARNING_SUITE_TRUST_VERIFICATION_KIND",
     "SuiteError",
     "SuiteOptimizationOptions",
     "SuiteRunOptions",
@@ -3517,6 +3683,7 @@ __all__ = [
     "build_suite_manifest",
     "build_trinity_suite_manifest",
     "load_suite",
+    "load_suite_artifact_file",
     "load_suite_file",
     "missing_suite_env",
     "optimize_suite",
@@ -3528,6 +3695,8 @@ __all__ = [
     "run_optimization_lifecycle_file",
     "run_suite",
     "run_suite_file",
+    "verify_trust_certificate",
+    "verify_trust_certificate_file",
     "validate_suite_env",
     "write_suite_file",
 ]

@@ -3531,6 +3531,8 @@ def test_sdk_realtime_voice_simulation_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
+    from agent_learning import suite as suite_api
+
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TRINITY_SUITE_KEY",
         "real-local-sdk-trinity-suite-key",
@@ -3628,6 +3630,22 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
         "admitted": 8,
         "fixture": 2,
     }
+    verification = suite_api.verify_trust_certificate(result)
+    assert verification["kind"] == "agent-learning.suite.trust-verification.v1"
+    assert verification["status"] == "passed"
+    assert verification["observed_verdict"] == "approved"
+    assert verification["promotion_ready"] is True
+    assert verification["findings"] == []
+
+    missing_certificate = suite_api.verify_trust_certificate({
+        "kind": "agent-learning.suite.v1",
+        "summary": {},
+    })
+    assert missing_certificate["status"] == "failed"
+    assert missing_certificate["exit_code"] == 1
+    assert missing_certificate["findings"][0]["type"] == (
+        "suite_trust_certificate_missing"
+    )
     assert {
         child["kind"]
         for child in result["children"]

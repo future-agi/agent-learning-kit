@@ -70,6 +70,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _optimize_suite(args[1:])
     if command == "suite":
         return _suite(args[1:])
+    if command in {
+        "trust",
+        "verify-trust",
+        "trust-cert",
+        "trust-certificate",
+        "certify",
+    }:
+        return _trust(args[1:])
     if command in {"eval-cli", "fi"}:
         return _eval_cli(args[1:])
     if command == "simulate":
@@ -1144,6 +1152,81 @@ def _suite(args: Sequence[str]) -> int:
         render_markdown=suite.render_markdown,
     )
     payload["outputs_written"] = written
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _trust(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn trust",
+        description=(
+            "Verify a saved Agent Learning suite trust certificate for CI "
+            "promotion without re-running the suite."
+        ),
+    )
+    parser.add_argument("artifact", help="Path to a saved suite JSON/YAML artifact.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help="Write compact JSON verification output to this path.",
+    )
+    parser.add_argument(
+        "--required-verdict",
+        choices=["approved", "conditional", "rejected"],
+        default="approved",
+        help="Minimum acceptable trust certificate verdict.",
+    )
+    parser.add_argument(
+        "--allow-conditional",
+        action="store_true",
+        help="Shortcut for --required-verdict conditional.",
+    )
+    parser.add_argument(
+        "--no-require-promotion-ready",
+        action="store_true",
+        help="Do not require promotion_ready=true.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON summary when no output path is configured.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import suite
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn trust", exc)
+
+    artifact_path = Path(parsed.artifact).expanduser().resolve()
+    required_verdict = (
+        "conditional" if parsed.allow_conditional else parsed.required_verdict
+    )
+    try:
+        payload = suite.verify_trust_certificate_file(
+            artifact_path,
+            required_verdict=required_verdict,
+            require_promotion_ready=not bool(parsed.no_require_promotion_ready),
+        )
+    except Exception as exc:
+        print(f"agent-learn trust: {exc}", file=sys.stderr)
+        return 1
+
+    output_paths = [
+        _resolve_output_path(str(path), artifact_path.parent)
+        for path in parsed.output
+    ]
+    payload["outputs_written"] = [str(path) for path in output_paths]
+    for path in output_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+    written = [str(path) for path in output_paths]
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
@@ -2956,7 +3039,7 @@ def _help(error: Optional[str] = None) -> int:
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
             "compare, baseline, promote-to-regression, optimize-eval, "
             "optimize-suite, suite, capabilities, actions, action-run, "
-            "action-optimize, redteam-corpus, eval-cli, init"
+            "action-optimize, trust, redteam-corpus, eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

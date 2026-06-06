@@ -891,6 +891,7 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     suite_junit = project_dir / "artifacts" / "suite.junit.xml"
     suite_sarif = project_dir / "artifacts" / "suite.sarif.json"
     suite_markdown = project_dir / "artifacts" / "suite.md"
+    trust_output = project_dir / "artifacts" / "suite-trust.json"
 
     exit_code = main([
         "init",
@@ -1018,6 +1019,29 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert suite["summary"]["frozen_evidence_count"] == 9
     assert suite["summary"]["unfrozen_evidence_count"] == 0
     assert suite["summary"]["admitted_frozen_evidence_count"] == 6
+
+    trust_exit_code = main([
+        "trust",
+        str(suite_output),
+        "--output",
+        str(trust_output),
+    ])
+
+    assert trust_exit_code == 0
+    trust = json.loads(trust_output.read_text(encoding="utf-8"))
+    assert trust["kind"] == "agent-learning.suite.trust-verification.v1"
+    assert trust["status"] == "passed"
+    assert trust["required_verdict"] == "approved"
+    assert trust["observed_verdict"] == "approved"
+    assert trust["promotion_ready"] is True
+    assert trust["summary"] == {
+        "certificate_present": True,
+        "certificate_kind_passed": True,
+        "verdict_rank_passed": True,
+        "promotion_gate_passed": True,
+        "finding_count": 0,
+    }
+    assert trust["findings"] == []
     assert suite["evidence_admission"]["by_status"] == {
         "admitted": 6,
         "fixture": 3,
@@ -1099,6 +1123,7 @@ def test_agent_learn_suite_can_require_optimizer_governance(
     }
     suite_path = tmp_path / "optimizer-governance-required-suite.json"
     output_path = tmp_path / "optimizer-governance-required-output.json"
+    trust_output = tmp_path / "optimizer-governance-required-trust.json"
     suite_path.write_text(
         json.dumps(suite_manifest, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -1137,6 +1162,26 @@ def test_agent_learn_suite_can_require_optimizer_governance(
     } >= {
         "suite_optimizer_governance_missing",
         "suite_optimizer_governance_failed",
+    }
+
+    trust_exit_code = main([
+        "trust",
+        str(output_path),
+        "--output",
+        str(trust_output),
+    ])
+
+    assert trust_exit_code == 1
+    trust = json.loads(trust_output.read_text(encoding="utf-8"))
+    assert trust["status"] == "failed"
+    assert trust["observed_verdict"] == "rejected"
+    assert trust["promotion_ready"] is False
+    assert {
+        finding["type"]
+        for finding in trust["findings"]
+    } == {
+        "suite_trust_certificate_verdict_too_low",
+        "suite_trust_certificate_not_promotion_ready",
     }
 
 

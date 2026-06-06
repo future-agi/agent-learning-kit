@@ -361,6 +361,12 @@ evidence, framework coverage, optimizer governance, and trinity coverage
 `promotion_ready` signal for CI and Future AGI UI. Trinity suites with governed
 optimizer children can become `approved`; narrower passing suites remain
 `conditional`; failed gates are `rejected`.
+Saved suite artifacts can be promoted without re-running the suite by using
+`agent-learn trust artifacts/suite.json`, or from Python with
+`suite.verify_trust_certificate_file("artifacts/suite.json")`. The verifier is
+strict by default and fails unless the certificate is `approved` and
+`promotion_ready=true`, giving promptfoo-style CLI/SDK users a local CI gate
+with no external observability or red-team platform dependency.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 `agent-learn optimize-suite` and `suite.optimize_suite()` search over the suite
