@@ -1614,6 +1614,65 @@ def build_stateful_tool_world_run_manifest(
     }
 
 
+def build_world_model_run_manifest(
+    *,
+    name: str = "world-model-run",
+    stateful_tool_world: Optional[Mapping[str, Any]] = None,
+    world_contract: Optional[Mapping[str, Any]] = None,
+    environments: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build an internal, executable world-model run manifest."""
+
+    manifest = build_stateful_tool_world_run_manifest(
+        name=name,
+        stateful_tool_world=stateful_tool_world,
+        world_contract=world_contract,
+        environments=environments,
+        evaluation_config=evaluation_config,
+        agent=agent,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata={
+            "source": "agent_learning.simulate.build_world_model_run_manifest",
+            "cookbook": "world-model-arena",
+            "task_kind": "world_model",
+            "world_model": {
+                "mode": "internal_executable_world",
+                "default_level": "l3_evolver",
+                "law_regimes": ["digital", "social"],
+                "requires_external_service": False,
+            },
+            "research_sources": _unique_research_sources(
+                [
+                    *_stateful_tool_world_research_sources(),
+                    *_world_model_research_sources(),
+                ]
+            ),
+            "original_synthesis": (
+                "World-model simulation should be an executable internal arena: "
+                "state transitions, verifier constraints, adversarial dynamics, "
+                "curriculum difficulty, and world-contract evidence are carried "
+                "as one reproducible environment bundle."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+    return manifest
+
+
 def build_stateful_tool_world_environments(
     *,
     name: str = "stateful-tool-world",
@@ -6752,6 +6811,59 @@ def _stateful_tool_world_research_sources() -> list[dict[str, Any]]:
     ]
 
 
+def _world_model_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "Agentic World Modeling: Foundations, Capabilities, Laws, and Beyond",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.22748",
+            "used_for": "levels-by-laws taxonomy for predictor, simulator, and evolver world models",
+        },
+        {
+            "title": "COMAP: Co-Evolving World Models and Agent Policies for LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.02372",
+            "used_for": "closed-loop co-evolution of policy and textual world model candidates",
+        },
+        {
+            "title": "Agent World Model: Infinity Synthetic Environments for Agentic Reinforcement Learning",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.10090",
+            "used_for": "code-driven internal environments backed by reliable state transitions",
+        },
+        {
+            "title": "EnvSimBench: A Benchmark for Evaluating and Improving LLM-Based Environment Simulation",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.07247",
+            "used_for": "constraint-driven simulation to reduce hallucination and state drift",
+        },
+        {
+            "title": "CUA-Gym: Scaling Verifiable Training Environments and Tasks for Computer-Use Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.25624",
+            "used_for": "co-generated task, initial state, golden state, and reward verifier tuples",
+        },
+        {
+            "title": "Controllable and Verifiable Tool-Use Data Synthesis for Agentic Reinforcement Learning",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.09813",
+            "used_for": "oracle-preserving environment augmentation under ambiguity and noisy tool feedback",
+        },
+        {
+            "title": "STT-Arena: A More Realistic Environment for Tool-Using with Spatio-Temporal Dynamics",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.18548",
+            "used_for": "dynamic triggers, replanning pressure, and post-adaptation verification",
+        },
+        {
+            "title": "MCP-Cosmos: World Model-Augmented Agents for Complex Task Execution in MCP Environments",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.09131",
+            "used_for": "predictive planning before execution in tool-connected environments",
+        },
+    ]
+
+
 def normalize_agent_integration_provider_name(value: Any) -> str:
     """Return the canonical provider key used by agent integration manifests."""
 
@@ -6808,6 +6920,7 @@ __all__ = [
     "build_workspace_observability_run_manifest",
     "build_workspace_import_certification_environments",
     "build_workspace_import_certification_run_manifest",
+    "build_world_model_run_manifest",
     "compare_result_files",
     "compare_results",
     "create_baseline",

@@ -16,6 +16,20 @@ from agent_learning.cli import main
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _nested_keys(value):
+    if isinstance(value, dict):
+        keys = set(value)
+        for item in value.values():
+            keys.update(_nested_keys(item))
+        return keys
+    if isinstance(value, list):
+        keys = set()
+        for item in value:
+            keys.update(_nested_keys(item))
+        return keys
+    return set()
+
+
 def test_configure_sets_unified_key_environment(monkeypatch):
     for key in (
         "AGENT_LEARNING_API_KEY",
@@ -204,8 +218,11 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.normalize_stateful_tool_world_manifest is not None
     assert simulate.build_stateful_tool_world_run_manifest is not None
     assert simulate.build_stateful_tool_world_environments is not None
+    assert simulate.build_world_model_run_manifest is not None
     assert optimize.build_stateful_tool_world_optimization_manifest is not None
     assert optimize.optimize_stateful_tool_world is not None
+    assert optimize.build_world_model_optimization_manifest is not None
+    assert optimize.optimize_world_model is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -9655,6 +9672,72 @@ def test_stateful_tool_world_manifest_builds_research_backed_candidates():
     assert "stateful_tool_world" in simulate.supported_manifest_environment_types()
 
 
+def test_world_model_manifest_builds_internal_research_backed_candidates():
+    from agent_learning import optimize, simulate
+
+    manifest = optimize.build_world_model_optimization_manifest(
+        name="sdk-world-model-optimization",
+        required_env=["AGENT_LEARNING_SDK_WORLD_MODEL_KEY"],
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_WORLD_MODEL_KEY"]
+    target = manifest["optimization"]["target"]
+    assert target["metadata"]["task_kind"] == "world_model"
+    assert target["metadata"]["world_model"]["requires_external_service"] is False
+    assert target["layers"] == [
+        "model",
+        "harness",
+        "world",
+        "tools",
+        "security",
+        "planner",
+        "evaluator",
+    ]
+    sources = target["metadata"]["research_sources"]
+    assert len(sources) >= 10
+    assert {source["year"] for source in sources} == {2026}
+    assert {
+        "https://arxiv.org/abs/2604.22748",
+        "https://arxiv.org/abs/2606.02372",
+        "https://arxiv.org/abs/2605.07247",
+        "https://arxiv.org/abs/2605.25624",
+        "https://arxiv.org/abs/2604.09813",
+    } <= {source["url"] for source in sources}
+
+    candidates = target["search_space"]["simulation.environments"]
+    assert len(candidates) == 3
+    assert [env["type"] for env in candidates[-1]] == [
+        "stateful_tool_world",
+        "world_contract",
+    ]
+    profiles = [
+        candidate[0]["data"]["metadata"]["candidate_profile"]
+        for candidate in candidates
+    ]
+    assert profiles == [
+        "l1_predictor_static_world_model",
+        "l2_simulator_executable_world_model",
+        "l3_evolver_verifiable_world_model",
+    ]
+    world_model = candidates[-1][0]["data"]["world_model"]
+    assert world_model["level"] == "l3_evolver"
+    assert world_model["requires_external_service"] is False
+    assert world_model["post_adaptation_verification"] is True
+    assert {"endpoint", "auth"} & _nested_keys(candidates) == set()
+
+    run_manifest = simulate.build_world_model_run_manifest(
+        name="sdk-world-model-run",
+        required_env=["AGENT_LEARNING_SDK_WORLD_MODEL_KEY"],
+    )
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert run_manifest["metadata"]["task_kind"] == "world_model"
+    assert run_manifest["metadata"]["world_model"]["requires_external_service"] is False
+    assert [env["type"] for env in run_manifest["simulation"]["environments"]] == [
+        "stateful_tool_world",
+        "world_contract",
+    ]
+
+
 def test_external_http_agent_manifest_builds_research_backed_adapter_candidates():
     from agent_learning import optimize, simulate
 
@@ -10303,3 +10386,88 @@ def test_sdk_stateful_tool_world_optimization_example_runs(monkeypatch, tmp_path
     action_payload = json.loads(action_run_path.read_text(encoding="utf-8"))
     assert action_payload["status"] == "passed"
     assert any(output["exists"] for output in action_payload["outputs"])
+
+
+def test_sdk_world_model_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-world-model-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_WORLD_MODEL_KEY", key)
+    example_path = PROJECT_ROOT / "examples" / "sdk_world_model_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_world_model_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_WORLD_MODEL_KEY"]
+    assert manifest["optimization"]["target"]["metadata"]["task_kind"] == "world_model"
+    output_path = tmp_path / "sdk-world-model-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] == pytest.approx(1.0)
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    best_env = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_env["data"]["metadata"]["candidate_profile"] == (
+        "l3_evolver_verifiable_world_model"
+    )
+    assert best_env["data"]["world_model"]["requires_external_service"] is False
+    assert best_env["data"]["world_model"]["level"] == "l3_evolver"
+
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert {"stateful_tool_world", "world_contract"} <= set(state)
+    assert state["stateful_tool_world"]["summary"]["terminal_status"] == "success"
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+    assert {"endpoint", "auth"} & _nested_keys(
+        result["optimization"]["best_config"]
+    ) == set()
+
+    report_path = tmp_path / "world-model-report.json"
+    assert main(["report", str(output_path), "--output", str(report_path)]) == 0
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report_payload["status"] == "passed"
+
+    actions_path = tmp_path / "world-model-actions.json"
+    assert main(["actions", str(output_path), "--output", str(actions_path)]) == 0
+    actions_payload = json.loads(actions_path.read_text(encoding="utf-8"))
+    assert any(
+        action["id"] == "report_artifact"
+        for action in actions_payload["actions"]
+    )
+
+    action_run_path = tmp_path / "world-model-action-run.json"
+    action_cwd = tmp_path / "world-model-action"
+    assert (
+        main(
+            [
+                "action-run",
+                str(output_path),
+                "--id",
+                "report_artifact",
+                "--cwd",
+                str(action_cwd),
+                "--output",
+                str(action_run_path),
+            ]
+        )
+        == 0
+    )
+    action_run_payload = json.loads(action_run_path.read_text(encoding="utf-8"))
+    assert action_run_payload["status"] == "passed"

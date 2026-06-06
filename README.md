@@ -886,6 +886,16 @@ SDK entry points are `simulate.build_stateful_tool_world_run_manifest()`,
 `optimize.build_stateful_tool_world_optimization_manifest()`, and
 `optimize.optimize_stateful_tool_world()`.
 
+The `sdk_world_model_optimization.py` example is the internal world-model arena:
+no external endpoint is required. It builds on 2026 world-model and environment
+synthesis work by searching L1 predictor, L2 simulator, and L3 evolver
+environment bundles, then selecting the candidate whose executable transitions,
+verifier contracts, adversarial dynamics, curriculum metadata, and
+world-contract evidence all close. SDK entry points are
+`simulate.build_world_model_run_manifest()`,
+`optimize.build_world_model_optimization_manifest()`, and
+`optimize.optimize_world_model()`.
+
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized
 simulation evidence directly, then selects the candidate whose framework trace,

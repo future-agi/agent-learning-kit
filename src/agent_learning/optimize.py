@@ -2205,6 +2205,141 @@ def optimize_stateful_tool_world(
     )
 
 
+def build_world_model_optimization_manifest(
+    *,
+    name: str = "world-model-optimization",
+    stateful_tool_world: Optional[Mapping[str, Any]] = None,
+    world_contract: Optional[Mapping[str, Any]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over internal executable world-model bundles."""
+
+    if not name:
+        raise ValueError("name is required")
+
+    from . import simulate as _agent_simulate
+
+    metadata = {
+        "world_model": {
+            "mode": "internal_executable_world",
+            "levels": ["l1_predictor", "l2_simulator", "l3_evolver"],
+            "law_regimes": ["digital", "social"],
+            "requires_external_service": False,
+        },
+        **copy.deepcopy(dict(target_metadata or {})),
+    }
+    candidates = (
+        [
+            [
+                _agent_simulate._stateful_tool_world_environment(item)
+                for item in candidate
+            ]
+            for candidate in environment_candidates
+        ]
+        if environment_candidates is not None
+        else _world_model_environment_candidates(
+            name,
+            stateful_tool_world=stateful_tool_world,
+            world_contract=world_contract,
+            metadata=metadata,
+        )
+    )
+    manifest = build_stateful_tool_world_optimization_manifest(
+        name=name,
+        stateful_tool_world=stateful_tool_world,
+        world_contract=world_contract,
+        environment_candidates=candidates,
+        evaluation_config=evaluation_config,
+        agent=agent,
+        scenario=scenario,
+        required_env=required_env,
+        optimizer=optimizer,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        target_metadata=metadata,
+        research_sources=[
+            *_agent_simulate._world_model_research_sources(),
+            *[dict(item) for item in research_sources],
+        ],
+    )
+    target = manifest["optimization"]["target"]
+    target["layers"] = [
+        "model",
+        "harness",
+        "world",
+        "tools",
+        "security",
+        "planner",
+        "evaluator",
+    ]
+    target["metadata"] = {
+        **copy.deepcopy(dict(target.get("metadata") or {})),
+        "source": (
+            "agent_learning.optimize."
+            "build_world_model_optimization_manifest"
+        ),
+        "cookbook": "world-model-arena",
+        "task_kind": "world_model",
+        "candidate_search_paths": ["simulation.environments"],
+        "research_sources": _unique_research_sources(
+            [
+                *_agent_simulate._stateful_tool_world_research_sources(),
+                *_agent_simulate._world_model_research_sources(),
+                *[dict(item) for item in research_sources],
+            ]
+        ),
+        "original_synthesis": (
+            "This searches internal world-model arenas, not external hooks: "
+            "predictor, simulator, and evolver candidates bundle executable "
+            "state transitions, verifier contracts, dynamic/adversarial pressure, "
+            "curriculum metadata, and world-contract evidence so the optimizer "
+            "selects the most reliable world model by simulation evidence."
+        ),
+        **metadata,
+    }
+    manifest["metadata"] = {
+        "source": "agent_learning.optimize.build_world_model_optimization_manifest",
+        "cookbook": "world-model-arena",
+        "task_kind": "world_model",
+        **copy.deepcopy(dict(manifest.get("metadata") or {})),
+        **metadata,
+    }
+    return manifest
+
+
+def optimize_world_model(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute internal world-model optimization."""
+
+    manifest = build_world_model_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_orchestration_optimization_manifest(
     *,
     name: str,
@@ -10265,6 +10400,68 @@ def _default_stateful_tool_world_environment_candidates(
     ]
 
 
+def _world_model_environment_candidates(
+    name: str,
+    *,
+    stateful_tool_world: Optional[Mapping[str, Any]],
+    world_contract: Optional[Mapping[str, Any]],
+    metadata: Optional[Mapping[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    candidates = _default_stateful_tool_world_environment_candidates(
+        name,
+        stateful_tool_world=stateful_tool_world,
+        world_contract=world_contract,
+        metadata=metadata,
+    )
+    profiles = [
+        {
+            "candidate_profile": "l1_predictor_static_world_model",
+            "level": "l1_predictor",
+            "transition_model": "single_step_state_delta",
+            "verifier": "schema_only",
+            "curriculum_stage": "static_observation",
+            "dynamic_triggers": False,
+            "adversarial_pressure": False,
+        },
+        {
+            "candidate_profile": "l2_simulator_executable_world_model",
+            "level": "l2_simulator",
+            "transition_model": "multi_step_executable_rollout",
+            "verifier": "partial_state_delta_verifier",
+            "curriculum_stage": "executable_rollout",
+            "dynamic_triggers": True,
+            "adversarial_pressure": True,
+        },
+        {
+            "candidate_profile": "l3_evolver_verifiable_world_model",
+            "level": "l3_evolver",
+            "transition_model": "closed_loop_state_transition_arena",
+            "verifier": "world_contract_and_stateful_tool_world",
+            "curriculum_stage": "co_evolving_verifier_frontier",
+            "dynamic_triggers": True,
+            "adversarial_pressure": True,
+            "post_adaptation_verification": True,
+        },
+    ]
+    for candidate, profile in zip(candidates, profiles):
+        for environment in candidate:
+            data = environment.setdefault("data", {})
+            env_metadata = data.setdefault("metadata", {})
+            env_metadata.update(
+                {
+                    "candidate_profile": profile["candidate_profile"],
+                    "world_model": {
+                        **copy.deepcopy(profile),
+                        "law_regimes": ["digital", "social"],
+                        "requires_external_service": False,
+                    },
+                }
+            )
+            if environment.get("type") == "stateful_tool_world":
+                data["world_model"] = copy.deepcopy(env_metadata["world_model"])
+    return candidates
+
+
 def _default_redteam_autogen_scenario(name: str) -> dict[str, Any]:
     return {
         "name": name,
@@ -16401,6 +16598,7 @@ __all__ = [
     "build_stateful_tool_world_optimization_manifest",
     "build_task_optimization_manifest",
     "build_workflow_hook_optimization_manifest",
+    "build_world_model_optimization_manifest",
     "build_workspace_observability_optimization_manifest",
     "build_workspace_import_certification_optimization_manifest",
     "optimize_eval_suite",
@@ -16445,6 +16643,7 @@ __all__ = [
     "optimize_stateful_tool_world",
     "optimize_task",
     "optimize_workflow_hooks",
+    "optimize_world_model",
     "optimize_suite",
     "optimize_suite_file",
     "optimize_workspace_observability",
