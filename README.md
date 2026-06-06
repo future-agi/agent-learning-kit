@@ -911,7 +911,11 @@ verifier contracts, adversarial dynamics, curriculum metadata, and
 world-contract evidence all close. SDK entry points are
 `simulate.build_world_model_run_manifest()`,
 `optimize.build_world_model_optimization_manifest()`, and
-`optimize.optimize_world_model()`.
+`optimize.optimize_world_model()`. Use
+`optimize.build_world_hooks_optimization_manifest()` or
+`optimize.optimize_world_hooks()` when the product surface should be named as
+world hooks: it still searches the same native executable world-state hooks and
+does not require an external endpoint.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized

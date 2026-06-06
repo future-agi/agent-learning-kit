@@ -223,6 +223,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_stateful_tool_world is not None
     assert optimize.build_world_model_optimization_manifest is not None
     assert optimize.optimize_world_model is not None
+    assert optimize.build_world_hooks_optimization_manifest is not None
+    assert optimize.optimize_world_hooks is not None
     assert optimize.build_framework_certification_optimization_manifest is not None
     assert optimize.optimize_framework_certification is not None
     assert simulate.build_framework_certification_run_manifest is not None
@@ -9951,6 +9953,44 @@ def test_world_model_manifest_builds_internal_research_backed_candidates():
         "stateful_tool_world",
         "world_contract",
     ]
+
+
+def test_world_hooks_alias_uses_native_world_model_arena():
+    from agent_learning import optimize
+
+    manifest = optimize.build_world_hooks_optimization_manifest(
+        name="sdk-world-hooks-optimization",
+        required_env=["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"],
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"]
+    assert manifest["metadata"]["task_kind"] == "world_hooks"
+    assert manifest["metadata"]["world_hooks"]["requires_external_service"] is False
+    target = manifest["optimization"]["target"]
+    assert target["metadata"]["source"] == (
+        "agent_learning.optimize.build_world_hooks_optimization_manifest"
+    )
+    assert target["metadata"]["cookbook"] == "native-world-hooks-arena"
+    assert target["metadata"]["task_kind"] == "world_hooks"
+    assert target["metadata"]["world_hooks"] == {
+        "mode": "native_world_state_hooks",
+        "requires_external_service": False,
+        "surfaces": [
+            "state_transitions",
+            "world_contracts",
+            "adversarial_pressure",
+            "memory_provenance",
+            "verifier_contracts",
+        ],
+    }
+    assert target["metadata"]["world_model"]["requires_external_service"] is False
+    candidates = target["search_space"]["simulation.environments"]
+    assert len(candidates) == 3
+    assert [env["type"] for env in candidates[-1]] == [
+        "stateful_tool_world",
+        "world_contract",
+    ]
+    assert {"endpoint", "auth"} & _nested_keys(manifest) == set()
 
 
 def test_external_http_agent_manifest_builds_research_backed_adapter_candidates():

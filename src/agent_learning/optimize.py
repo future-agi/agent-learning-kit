@@ -2340,6 +2340,65 @@ def optimize_world_model(
     )
 
 
+def build_world_hooks_optimization_manifest(
+    *,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build native world-hook optimization over internal executable worlds.
+
+    This is intentionally not an HTTP hook cookbook. It is the public
+    "optimize_world_hooks" naming for internal world-state hooks, executable
+    transitions, verifier contracts, adversarial pressure, and memory/world
+    provenance inside the SDK-native world-model arena.
+    """
+
+    metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_world_hooks_optimization_manifest"
+        ),
+        "cookbook": "native-world-hooks-arena",
+        "task_kind": "world_hooks",
+        "world_hooks": {
+            "mode": "native_world_state_hooks",
+            "requires_external_service": False,
+            "surfaces": [
+                "state_transitions",
+                "world_contracts",
+                "adversarial_pressure",
+                "memory_provenance",
+                "verifier_contracts",
+            ],
+        },
+        **copy.deepcopy(dict(target_metadata or {})),
+    }
+    return build_world_model_optimization_manifest(
+        target_metadata=metadata,
+        **manifest_kwargs,
+    )
+
+
+def optimize_world_hooks(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute native world-hook optimization."""
+
+    manifest = build_world_hooks_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_orchestration_optimization_manifest(
     *,
     name: str,
@@ -16599,6 +16658,7 @@ __all__ = [
     "build_task_optimization_manifest",
     "build_workflow_hook_optimization_manifest",
     "build_world_model_optimization_manifest",
+    "build_world_hooks_optimization_manifest",
     "build_workspace_observability_optimization_manifest",
     "build_workspace_import_certification_optimization_manifest",
     "optimize_eval_suite",
@@ -16644,6 +16704,7 @@ __all__ = [
     "optimize_task",
     "optimize_workflow_hooks",
     "optimize_world_model",
+    "optimize_world_hooks",
     "optimize_suite",
     "optimize_suite_file",
     "optimize_workspace_observability",
