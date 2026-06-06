@@ -344,6 +344,15 @@ one child row is admitted. Each row also carries an
 child manifest, child result payload, and declared child outputs; add
 `"require_freeze": true` to the same policy when admitted rows must be
 content-addressed.
+Suites can also require optimizer governance before CI trusts optimization
+children. Add
+`"optimizer_governance_policy": {"require_optimizer_governance": true, "min_governed": 1}`
+to a suite manifest, or pass `agent-learn suite ... --require-optimizer-governance`.
+The suite then emits `agent-learning.suite.optimizer-governance.v1` with
+per-child rows, governed/passed/failed/missing counts, and findings when an
+optimizer child lacks a passed `agent-learning.optimization.governance.v1`
+verdict. The trinity suite builder and `agent-learn init --preset all`
+scaffold enable this gate by default.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 `agent-learn optimize-suite` and `suite.optimize_suite()` search over the suite

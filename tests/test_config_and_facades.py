@@ -3548,6 +3548,10 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     suite_manifest = module.build_suite()
     assert suite_manifest["version"] == "agent-learning.suite.v1"
     assert suite_manifest["required_env"] == ["AGENT_LEARNING_SDK_TRINITY_SUITE_KEY"]
+    assert suite_manifest["optimizer_governance_policy"] == {
+        "require_optimizer_governance": True,
+        "min_governed": 1,
+    }
     assert [
         job["command"]
         for job in suite_manifest["jobs"]
@@ -3586,6 +3590,17 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert result["summary"]["passed_count"] == 10
     assert result["summary"]["capability_gate_passed"] is True
     assert result["summary"]["evidence_gate_passed"] is True
+    assert result["summary"]["optimizer_governance_gate_passed"] is True
+    assert result["summary"]["optimizer_governance_target_count"] == 2
+    assert result["summary"]["optimizer_governance_governed_count"] == 2
+    assert result["summary"]["optimizer_governance_passed_count"] == 2
+    assert result["summary"]["optimizer_governance_failed_count"] == 0
+    assert result["summary"]["optimizer_governance_missing_count"] == 0
+    assert result["optimizer_governance"]["status"] == "passed"
+    assert result["optimizer_governance"]["governed_child_ids"] == [
+        "agent-optimizer",
+        "world-model-optimizer",
+    ]
     assert result["summary"]["admitted_evidence_count"] == 8
     assert result["summary"]["non_admitted_evidence_count"] == 2
     assert result["summary"]["frozen_evidence_count"] == 10

@@ -1127,6 +1127,7 @@ def _suite(args: Sequence[str]) -> int:
             max_candidates=parsed.max_candidates,
             dry_run=bool(parsed.dry_run),
             fail_fast=bool(parsed.fail_fast),
+            require_optimizer_governance=bool(parsed.require_optimizer_governance),
         )
     except Exception as exc:
         print(f"agent-learn suite: {exc}", file=sys.stderr)
@@ -1667,6 +1668,14 @@ def _add_suite_args(parser: argparse.ArgumentParser) -> None:
         "--fail-fast",
         action="store_true",
         help="Stop after the first failing child job.",
+    )
+    parser.add_argument(
+        "--require-optimizer-governance",
+        action="store_true",
+        help=(
+            "Fail the suite unless optimizer child artifacts expose passed "
+            "agent-learning.optimization.governance.v1 verdicts."
+        ),
     )
     parser.add_argument(
         "--quiet",
@@ -2272,6 +2281,10 @@ def _agent_learning_suite_manifest(
                 "world_contract_coverage",
                 "tool_selection_accuracy",
             ],
+        },
+        "optimizer_governance_policy": {
+            "require_optimizer_governance": True,
+            "min_governed": 1,
         },
         "jobs": [
             {

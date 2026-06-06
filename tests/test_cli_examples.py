@@ -944,6 +944,13 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert world_model_manifest["optimization"]["target"]["metadata"][
         "world_model"
     ]["requires_external_service"] is False
+    scaffold_suite_manifest = json.loads(
+        (project_dir / "manifests" / "suite.json").read_text(encoding="utf-8")
+    )
+    assert scaffold_suite_manifest["optimizer_governance_policy"] == {
+        "require_optimizer_governance": True,
+        "min_governed": 1,
+    }
     artifact_suite = json.loads(
         (project_dir / "manifests" / "artifact_task_eval_suite.json").read_text(
             encoding="utf-8",
@@ -977,6 +984,17 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert suite["summary"]["failed_count"] == 0
     assert suite["summary"]["capability_gate_passed"] is True
     assert suite["summary"]["evidence_gate_passed"] is True
+    assert suite["summary"]["optimizer_governance_gate_passed"] is True
+    assert suite["summary"]["optimizer_governance_target_count"] == 2
+    assert suite["summary"]["optimizer_governance_governed_count"] == 2
+    assert suite["summary"]["optimizer_governance_passed_count"] == 2
+    assert suite["summary"]["optimizer_governance_failed_count"] == 0
+    assert suite["summary"]["optimizer_governance_missing_count"] == 0
+    assert suite["optimizer_governance"]["status"] == "passed"
+    assert suite["optimizer_governance"]["governed_child_ids"] == [
+        "task-world-optimizer",
+        "world-model-optimizer",
+    ]
     assert suite["summary"]["admitted_evidence_count"] == 6
     assert suite["summary"]["non_admitted_evidence_count"] == 3
     assert suite["summary"]["frozen_evidence_count"] == 9
@@ -1038,6 +1056,60 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert "refund-agent-trinity-suite" in suite_markdown.read_text(
         encoding="utf-8",
     )
+
+
+def test_agent_learn_suite_can_require_optimizer_governance(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_OPTIMIZE_EXAMPLE_KEY",
+        "real-local-suite-governance-gate-key",
+    )
+    suite_manifest = {
+        "version": "agent-learning.suite.v1",
+        "name": "optimizer-governance-required-suite",
+        "jobs": [
+            {
+                "id": "dry-run-optimizer",
+                "command": "optimize",
+                "path": str(EXAMPLES / "optimization_manifest.json"),
+            }
+        ],
+    }
+    suite_path = tmp_path / "optimizer-governance-required-suite.json"
+    output_path = tmp_path / "optimizer-governance-required-output.json"
+    suite_path.write_text(
+        json.dumps(suite_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "suite",
+        str(suite_path),
+        "--dry-run",
+        "--require-optimizer-governance",
+        "--output",
+        str(output_path),
+    ])
+
+    assert exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["summary"]["optimizer_governance_gate_passed"] is False
+    assert payload["summary"]["optimizer_governance_target_count"] == 1
+    assert payload["summary"]["optimizer_governance_governed_count"] == 0
+    assert payload["summary"]["optimizer_governance_missing_count"] == 1
+    assert payload["optimizer_governance"]["missing_child_ids"] == [
+        "dry-run-optimizer"
+    ]
+    assert {
+        finding["type"]
+        for finding in payload["findings"]
+    } >= {
+        "suite_optimizer_governance_missing",
+        "suite_optimizer_governance_failed",
+    }
 
 
 def test_sdk_built_eval_suite_runs_through_cli_and_suite(tmp_path, monkeypatch):

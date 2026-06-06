@@ -110,6 +110,10 @@
       "world_contract_quality"
     ]
   },
+  "optimizer_governance_policy": {
+    "require_optimizer_governance": true,
+    "min_governed": 1
+  },
   "jobs": [
     {
       "id": "local-simulation",

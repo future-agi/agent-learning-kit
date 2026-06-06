@@ -68,6 +68,7 @@ class SuiteRunOptions:
     max_candidates: Optional[int] = None
     dry_run: bool = False
     fail_fast: bool = False
+    require_optimizer_governance: bool = False
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,7 @@ def build_suite_manifest(
     required_capabilities: Optional[Mapping[str, Sequence[str]]] = None,
     outputs: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
+    optimizer_governance_policy: Optional[Mapping[str, Any]] = None,
     threshold: Optional[float] = None,
     fail_fast: Optional[bool] = None,
 ) -> dict[str, Any]:
@@ -181,6 +183,10 @@ def build_suite_manifest(
         manifest["outputs"] = copy.deepcopy(dict(outputs))
     if metadata:
         manifest["metadata"] = copy.deepcopy(dict(metadata))
+    if optimizer_governance_policy:
+        manifest["optimizer_governance_policy"] = copy.deepcopy(
+            dict(optimizer_governance_policy)
+        )
     if threshold is not None:
         manifest["threshold"] = float(threshold)
     if fail_fast is not None:
@@ -341,6 +347,10 @@ def build_trinity_suite_manifest(
         metadata={
             "source": "agent_learning.suite.build_trinity_suite_manifest",
             **copy.deepcopy(dict(metadata or {})),
+        },
+        optimizer_governance_policy={
+            "require_optimizer_governance": True,
+            "min_governed": 1,
         },
     )
 
@@ -753,6 +763,7 @@ def run_suite_file(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
     fail_fast: Optional[bool] = None,
+    require_optimizer_governance: Optional[bool] = None,
 ) -> dict[str, Any]:
     suite_path = Path(path).expanduser().resolve()
     suite = load_suite_file(suite_path)
@@ -766,6 +777,7 @@ def run_suite_file(
             max_candidates=max_candidates,
             dry_run=dry_run,
             fail_fast=fail_fast,
+            require_optimizer_governance=require_optimizer_governance,
         ),
     )
 
@@ -780,6 +792,7 @@ def run_suite(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
     fail_fast: Optional[bool] = None,
+    require_optimizer_governance: Optional[bool] = None,
 ) -> dict[str, Any]:
     started = time.time()
     opts = _merge_options(
@@ -789,10 +802,22 @@ def run_suite(
         max_candidates=max_candidates,
         dry_run=dry_run,
         fail_fast=fail_fast,
+        require_optimizer_governance=require_optimizer_governance,
     )
     suite_path = Path(suite_path).expanduser().resolve()
     base_dir = _suite_base_dir(suite_path)
     runtime_suite = _prepare_suite(copy.deepcopy(dict(suite)), base_dir=base_dir)
+    if opts.require_optimizer_governance:
+        optimizer_policy = _suite_optimizer_governance_policy(runtime_suite)
+        optimizer_policy["require_optimizer_governance"] = True
+        optimizer_policy["require_passed"] = True
+        optimizer_policy["min_governed"] = max(
+            int(optimizer_policy.get("min_governed") or 0),
+            1,
+        )
+        runtime_suite["optimizer_governance_policy"] = {
+            **optimizer_policy,
+        }
     validate_suite_env(runtime_suite, suite_path=suite_path)
 
     children: list[dict[str, Any]] = []
@@ -1217,6 +1242,7 @@ def _execute_child_payload(
                     or job.get("fail_fast")
                     or job.get("fail-fast")
                 ),
+                require_optimizer_governance=suite_options.require_optimizer_governance,
             ),
         )
         payload["kind"] = AGENT_LEARNING_SUITE_KIND
@@ -1673,6 +1699,184 @@ def _suite_evidence_policy(suite: Mapping[str, Any]) -> dict[str, Any]:
     return policy
 
 
+def _suite_optimizer_governance_policy(suite: Mapping[str, Any]) -> dict[str, Any]:
+    raw = (
+        suite.get("optimizer_governance_policy")
+        or suite.get("optimization_governance_policy")
+        or {}
+    )
+    policy = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {}
+    required = bool(
+        policy.get("require_optimizer_governance")
+        or policy.get("required")
+        or policy.get("require_passed")
+    )
+    min_governed = policy.get("min_governed")
+    if min_governed is None and required:
+        min_governed = 1
+    commands = _unique_strings(
+        policy.get("commands")
+        or policy.get("target_commands")
+        or ["optimize"]
+    )
+    policy["require_optimizer_governance"] = required
+    policy["require_passed"] = bool(policy.get("require_passed") or required)
+    policy["fail_on_warning"] = bool(policy.get("fail_on_warning"))
+    policy["min_governed"] = int(min_governed or 0)
+    policy["commands"] = commands or ["optimize"]
+    return policy
+
+
+def _suite_optimizer_governance(
+    children: Sequence[Mapping[str, Any]],
+    policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    target_commands = {
+        _normalize_command(command)
+        for command in _as_list(policy.get("commands"))
+        if command
+    }
+    rows = [
+        _suite_optimizer_governance_row(child)
+        for child in children
+        if _suite_optimizer_governance_targets_child(child, target_commands)
+    ]
+    governed_rows = [row for row in rows if bool(row.get("governance_present"))]
+    failed_rows = [
+        row
+        for row in governed_rows
+        if row.get("governance_status") != "passed" or row.get("passed") is False
+    ]
+    missing_rows = [row for row in rows if not bool(row.get("governance_present"))]
+    warning_rows = [
+        row
+        for row in governed_rows
+        if _as_list(row.get("warning_check_ids"))
+    ]
+    return {
+        "kind": "agent-learning.suite.optimizer-governance.v1",
+        "status": "failed" if failed_rows or missing_rows else "passed",
+        "policy": copy.deepcopy(dict(policy)),
+        "target_count": len(rows),
+        "governed_count": len(governed_rows),
+        "passed_count": len(governed_rows) - len(failed_rows),
+        "failed_count": len(failed_rows),
+        "missing_count": len(missing_rows),
+        "warning_count": len(warning_rows),
+        "target_child_ids": [str(row.get("child_id")) for row in rows],
+        "governed_child_ids": [str(row.get("child_id")) for row in governed_rows],
+        "failed_child_ids": [str(row.get("child_id")) for row in failed_rows],
+        "missing_child_ids": [str(row.get("child_id")) for row in missing_rows],
+        "warning_child_ids": [str(row.get("child_id")) for row in warning_rows],
+        "rows": rows,
+    }
+
+
+def _suite_optimizer_governance_targets_child(
+    child: Mapping[str, Any],
+    target_commands: set[str],
+) -> bool:
+    result = _as_mapping(child.get("result"))
+    if _as_mapping(result.get("optimization_governance")):
+        return True
+    command = _normalize_command(child.get("command") or "")
+    if command in target_commands:
+        return True
+    return False
+
+
+def _suite_optimizer_governance_row(child: Mapping[str, Any]) -> dict[str, Any]:
+    result = _as_mapping(child.get("result"))
+    governance = _as_mapping(result.get("optimization_governance"))
+    if not governance:
+        governance = _as_mapping(_as_mapping(result.get("optimization")).get("governance"))
+    evidence = _as_mapping(governance.get("evidence"))
+    return {
+        "kind": "agent-learning.suite.optimizer-governance-row.v1",
+        "child_id": child.get("id"),
+        "command": child.get("command"),
+        "path": child.get("path"),
+        "result_kind": child.get("kind"),
+        "child_status": child.get("status"),
+        "child_exit_code": int(child.get("exit_code", 1)),
+        "governance_present": bool(governance),
+        "governance_kind": governance.get("kind"),
+        "governance_status": governance.get("status") if governance else "missing",
+        "passed": bool(governance.get("passed")) if governance else False,
+        "selected_candidate_id": governance.get("selected_candidate_id"),
+        "selected_rank": governance.get("selected_rank"),
+        "check_count": int(governance.get("check_count") or 0),
+        "failed_check_ids": [
+            str(item) for item in _as_list(governance.get("failed_check_ids"))
+        ],
+        "warning_check_ids": [
+            str(item) for item in _as_list(governance.get("warning_check_ids"))
+        ],
+        "candidate_count": int(evidence.get("candidate_count") or 0),
+        "content_addressed_count": int(
+            evidence.get("content_addressed_count") or 0
+        ),
+        "metric_count": int(evidence.get("metric_count") or 0),
+        "patch_path_count": int(evidence.get("patch_path_count") or 0),
+    }
+
+
+def _suite_optimizer_governance_findings(
+    optimizer_governance: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    min_governed = int(policy.get("min_governed") or 0)
+    governed_count = int(optimizer_governance.get("governed_count") or 0)
+    if min_governed > governed_count:
+        findings.append({
+            "type": "suite_optimizer_governance_missing",
+            "level": "error",
+            "reason": (
+                f"Suite optimizer governance gate requires at least {min_governed} "
+                f"governed optimizer child row(s), but only {governed_count} "
+                "were found."
+            ),
+            "min_governed": min_governed,
+            "governed_count": governed_count,
+            "missing_child_ids": list(
+                optimizer_governance.get("missing_child_ids") or []
+            ),
+        })
+    if bool(policy.get("require_passed")):
+        failed_child_ids = list(optimizer_governance.get("failed_child_ids") or [])
+        missing_child_ids = list(optimizer_governance.get("missing_child_ids") or [])
+        blocked_child_ids = sorted(
+            {str(item) for item in [*failed_child_ids, *missing_child_ids]}
+        )
+        if blocked_child_ids:
+            findings.append({
+                "type": "suite_optimizer_governance_failed",
+                "level": "error",
+                "reason": (
+                    "Suite optimizer governance gate requires passed governance "
+                    f"for optimizer children, but {len(blocked_child_ids)} child "
+                    "row(s) are missing or failed."
+                ),
+                "failed_child_ids": failed_child_ids,
+                "missing_child_ids": missing_child_ids,
+            })
+    if bool(policy.get("fail_on_warning")):
+        warning_child_ids = list(optimizer_governance.get("warning_child_ids") or [])
+        if warning_child_ids:
+            findings.append({
+                "type": "suite_optimizer_governance_warning",
+                "level": "error",
+                "reason": (
+                    "Suite optimizer governance gate is configured to fail on "
+                    f"warnings, and {len(warning_child_ids)} child row(s) have "
+                    "governance warnings."
+                ),
+                "warning_child_ids": warning_child_ids,
+            })
+    return findings
+
+
 def _suite_evidence_findings(
     admission: Mapping[str, Any],
     policy: Mapping[str, Any],
@@ -1746,10 +1950,20 @@ def _suite_result(
         evidence_admission,
         evidence_policy,
     )
+    optimizer_governance_policy = _suite_optimizer_governance_policy(suite)
+    optimizer_governance = _suite_optimizer_governance(
+        children,
+        optimizer_governance_policy,
+    )
+    optimizer_governance_findings = _suite_optimizer_governance_findings(
+        optimizer_governance,
+        optimizer_governance_policy,
+    )
     suite_findings = [
         *capability_findings,
         *framework_findings,
         *evidence_findings,
+        *optimizer_governance_findings,
         *_suite_findings(children),
     ]
     suite_passed = (
@@ -1758,6 +1972,7 @@ def _suite_result(
         and not capability_findings
         and not framework_findings
         and not evidence_findings
+        and not optimizer_governance_findings
     )
     return {
         "kind": AGENT_LEARNING_SUITE_KIND,
@@ -1792,6 +2007,26 @@ def _suite_result(
                 if key != "rows"
             },
             "evidence_gate_passed": not evidence_findings,
+            "optimizer_governance_gate_passed": not optimizer_governance_findings,
+            "optimizer_governance_policy": optimizer_governance_policy,
+            "optimizer_governance_target_count": optimizer_governance[
+                "target_count"
+            ],
+            "optimizer_governance_governed_count": optimizer_governance[
+                "governed_count"
+            ],
+            "optimizer_governance_passed_count": optimizer_governance[
+                "passed_count"
+            ],
+            "optimizer_governance_failed_count": optimizer_governance[
+                "failed_count"
+            ],
+            "optimizer_governance_missing_count": optimizer_governance[
+                "missing_count"
+            ],
+            "optimizer_governance_warning_count": optimizer_governance[
+                "warning_count"
+            ],
             "admitted_evidence_count": evidence_admission["admitted_count"],
             "non_admitted_evidence_count": evidence_admission[
                 "non_admitted_count"
@@ -1810,6 +2045,7 @@ def _suite_result(
         },
         "framework_coverage": framework_coverage,
         "evidence_admission": evidence_admission,
+        "optimizer_governance": optimizer_governance,
         "children": list(children),
         "jobs": list(children),
         "findings": suite_findings,
@@ -2855,6 +3091,7 @@ def _merge_options(
     max_candidates: Optional[int] = None,
     dry_run: Optional[bool] = None,
     fail_fast: Optional[bool] = None,
+    require_optimizer_governance: Optional[bool] = None,
 ) -> SuiteRunOptions:
     base = options or SuiteRunOptions()
     return SuiteRunOptions(
@@ -2865,6 +3102,11 @@ def _merge_options(
         ),
         dry_run=dry_run if dry_run is not None else base.dry_run,
         fail_fast=fail_fast if fail_fast is not None else base.fail_fast,
+        require_optimizer_governance=(
+            require_optimizer_governance
+            if require_optimizer_governance is not None
+            else base.require_optimizer_governance
+        ),
     )
 
 
