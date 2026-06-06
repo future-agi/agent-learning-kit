@@ -184,6 +184,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_optimizer_governance_run_manifest is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
+    assert optimize.build_component_optimization_manifest is not None
+    assert optimize.optimize_component is not None
     assert optimize.build_memory_optimization_manifest is not None
     assert optimize.optimize_memory_layer is not None
     assert simulate.build_memory_layer_run_manifest is not None
@@ -1140,6 +1142,133 @@ def test_sdk_task_world_optimization_example_runs(monkeypatch, tmp_path):
         key=lambda item: item["score"],
     )
     assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+
+
+def test_component_optimization_manifest_routes_diagnosed_search_paths():
+    from agent_learning import optimize
+
+    manifest = optimize.build_component_optimization_manifest(
+        name="component-routing-test",
+        observed_report=(
+            "Missing tool evidence, framework trace gap, memory retrieval "
+            "failure, orchestration flow failure, and world contract violation."
+        ),
+        component_config_candidates={
+            "evaluation.agent_report.config": [
+                {"task_description": "weak evaluator"},
+                {"task_description": "component-aware evaluator"},
+            ],
+            "voice.vad.min_silence_duration": [0.1, 0.4],
+        },
+    )
+
+    target = manifest["optimization"]["target"]
+    metadata = target["metadata"]
+    assert metadata["task_kind"] == "component_optimization"
+    assert {
+        "tools",
+        "framework",
+        "memory",
+        "orchestration",
+        "world",
+    } <= set(metadata["diagnosed_components"])
+    assert set(target["search_space"]) == {
+        "agent",
+        "simulation.environments",
+        "evaluation.agent_report.config",
+    }
+    assert "voice.vad.min_silence_duration" in metadata["filtered_from_search_paths"]
+    assert "voice.vad.min_silence_duration" not in target["search_space"]
+    optimizer_config = manifest["optimization"]["optimizer"]
+    assert optimizer_config["auto_diagnose"] is True
+    assert optimizer_config["diagnoses"]
+    assert {
+        item["year"]
+        for item in metadata["research_sources"]
+    } == {2026}
+    assert {
+        item["url"]
+        for item in metadata["research_sources"]
+    } >= {
+        "https://arxiv.org/abs/2604.06296",
+        "https://arxiv.org/abs/2601.19583",
+        "https://arxiv.org/abs/2605.29268",
+    }
+
+
+def test_sdk_component_optimization_example_runs(monkeypatch, tmp_path):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY",
+        "real-local-sdk-component-optimization-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_component_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_component_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY"]
+    assert set(manifest["optimization"]["target"]["search_space"]) == {
+        "agent",
+        "simulation.environments",
+    }
+    assert manifest["optimization"]["optimizer"]["diagnoses"]
+
+    output_path = tmp_path / "sdk-component-optimization.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert {
+        "agent",
+        "simulation.environments",
+    } <= set(result["summary"]["search_paths"])
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    assert best_history["metrics"]["agent_memory_lineage_quality"] == pytest.approx(1.0)
+
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+
+    report_path = tmp_path / "sdk-component-optimization-report.json"
+    assert main([
+        "report",
+        str(output_path),
+        "--output",
+        str(report_path),
+    ]) == 0
+    diagnosis = json.loads(report_path.read_text(encoding="utf-8"))["report"][
+        "harness_diagnosis"
+    ]
+    assert diagnosis["kind"] == "harness_layer_diagnosis"
+    assert {
+        "report_harness_diagnosis",
+        "rerun_optimization_for_diagnosed_layers",
+        "promote_diagnosed_regression",
+    } <= {action["id"] for action in diagnosis["actions"]}
 
 
 def test_sdk_optimization_lifecycle_example_runs(monkeypatch, tmp_path):

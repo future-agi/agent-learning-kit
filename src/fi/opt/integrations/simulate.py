@@ -837,6 +837,7 @@ def _optimizer_kwargs(config: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         "max_proposals_per_round",
         "include_seed",
         "auto_diagnose",
+        "diagnoses",
         "diagnostic_score_threshold",
         "total_budget",
         "min_pulls_per_candidate",

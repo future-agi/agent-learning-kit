@@ -9745,6 +9745,7 @@ def _build_optimizer_inputs(optimization: Mapping[str, Any]) -> tuple[Any, Dict[
         "max_candidates",
         "include_seed",
         "auto_diagnose",
+        "diagnoses",
         "diagnostic_score_threshold",
     }
     kwargs = {key: optimizer_config[key] for key in allowed_kwargs if key in optimizer_config}

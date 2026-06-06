@@ -835,3 +835,33 @@ def test_manifest_optimization_diagnosis_routes_search_space_paths():
         "optimization.optimizer.max_candidates",
         "evaluation.manifest_optimization_quality.min_candidate_count",
     }
+
+
+def test_manifest_optimizer_preserves_component_diagnoses():
+    manifest = agent_optimize.build_component_optimization_manifest(
+        name="component-diagnosis-pass-through",
+        observed_report=(
+            "Missing tool evidence, framework trace gap, memory retrieval "
+            "failure, and world contract violation."
+        ),
+    )
+
+    problem = agent_optimize.SimulateManifestOptimizationProblem.from_manifest(
+        manifest,
+        evaluate_manifest=lambda candidate_manifest, candidate: {"status": "ok"},
+        score_manifest=lambda candidate_manifest, report, candidate: {
+            "score": 1.0,
+            "reason": "ok",
+        },
+    )
+
+    diagnoses = problem.optimizer_kwargs["diagnoses"]
+    assert diagnoses
+    assert {
+        "agent",
+        "simulation.environments",
+    } <= set(problem.target.search_space)
+    assert {
+        diagnosis["component"]
+        for diagnosis in diagnoses
+    } >= {"tools", "framework", "memory", "world"}

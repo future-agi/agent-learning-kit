@@ -453,6 +453,14 @@ result = optimize.optimize_task(
 )
 ```
 
+For component-diagnosed architecture/config repair, pass failed report text or
+metric evidence to `optimize.build_component_optimization_manifest()`. The SDK
+maps failure evidence to component diagnoses, filters the search space to
+relevant non-prompt paths, and runs AgentOptimizer over complete agent configs,
+world/framework/memory evidence bundles, and any explicit component config
+candidates you provide. The same flow is runnable through
+`examples/sdk_component_optimization.py`.
+
 For full orchestration-stack optimization, pass coherent stack candidates with
 world, framework, retrieval, memory-lineage, and multi-agent room evidence. The
 SDK searches each stack as one `simulation.environments` bundle so evidence
@@ -526,6 +534,10 @@ Runnable SDK cookbook:
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_component_optimization.py \
+  artifacts/sdk-component-optimization.json
 
 AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_orchestration_optimization.py \

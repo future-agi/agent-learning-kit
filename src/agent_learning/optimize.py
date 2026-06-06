@@ -476,6 +476,179 @@ def optimize_task(
     )
 
 
+def build_component_optimization_manifest(
+    *,
+    name: str = "component-optimization",
+    observed_report: Optional[Mapping[str, Any] | str] = None,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    component_config_candidates: Optional[Mapping[str, Sequence[Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    min_turns: int = 3,
+    max_turns: int = 3,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a component-diagnosed non-prompt optimization manifest.
+
+    The helper turns observed failure evidence into component diagnoses, uses
+    those diagnoses to keep relevant architecture/config search paths, then
+    delegates to the generic task/world optimizer. It is intentionally useful
+    for non-prompt patches: complete agent configs, simulation/world evidence
+    bundles, memory/tool/framework knobs, and user-supplied manifest paths.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    if max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    report_text = _component_optimization_observed_text(observed_report)
+    diagnosis_models = list(diagnose_text(report_text, confidence=0.82))
+    diagnosis_payloads = _component_diagnosis_payloads(diagnosis_models)
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else _default_component_agent_candidates()
+    )
+    env_candidates = (
+        [
+            [copy.deepcopy(dict(item)) for item in candidate]
+            for candidate in environment_candidates
+        ]
+        if environment_candidates is not None
+        else _default_component_environment_candidates()
+    )
+    eval_config = copy.deepcopy(
+        dict(evaluation_config or _default_component_evaluation_config())
+    )
+    search_space_probe = _task_search_space(
+        agent_candidates=agents,
+        environment_candidates=env_candidates,
+        search_space=component_config_candidates,
+    )
+    component_search_space = _component_diagnosed_search_space(
+        search_space_probe,
+        diagnosis_models,
+    )
+    optimizer_config = copy.deepcopy(
+        dict(
+            optimizer
+            or _default_component_optimizer(
+                component_search_space,
+                diagnoses=diagnosis_payloads,
+            )
+        )
+    )
+    optimizer_config.setdefault("algorithm", "agent")
+    optimizer_config.setdefault("include_seed", True)
+    optimizer_config.setdefault("auto_diagnose", True)
+    optimizer_config.setdefault("diagnoses", diagnosis_payloads)
+    optimizer_config.setdefault("diagnostic_score_threshold", 0.9)
+
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agents,
+        environment_candidates=env_candidates,
+        evaluation_config=eval_config,
+        scenario=copy.deepcopy(dict(scenario or _default_component_scenario(name))),
+        required_env=required_env,
+        optimizer=optimizer_config,
+        threshold=threshold,
+        layers=_component_layers(diagnosis_payloads),
+        min_turns=min_turns,
+        max_turns=max_turns,
+        base_agent=agents[0],
+        target_metadata={
+            "source": "agent_learning.optimize.build_component_optimization_manifest",
+            "cookbook": "component-optimization",
+            "task_kind": "component_optimization",
+            "observed_failure_report": report_text,
+            "diagnostics": diagnosis_payloads,
+            "diagnosed_components": _unique_strings(
+                item.get("component") for item in diagnosis_payloads
+            ),
+            "diagnosed_failure_modes": _unique_strings(
+                item.get("failure_mode") for item in diagnosis_payloads
+            ),
+            "candidate_search_paths": list(component_search_space),
+            "filtered_from_search_paths": list(search_space_probe),
+            "research_sources": _unique_research_sources(
+                [
+                    *_default_component_optimization_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Component optimization routes weak metric evidence to concrete "
+                "agent/world/framework/memory/tool/evaluator config paths, then "
+                "runs deterministic candidate search over only the diagnosed "
+                "architecture surface instead of treating every repair as a "
+                "prompt edit."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["target"]["search_space"] = copy.deepcopy(
+        component_search_space
+    )
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["framework", "world", "memory", "orchestration"],
+        "required_tools": eval_config.get("required_tools", []),
+        "required_framework_trace": eval_config.get("required_framework_trace", []),
+        "framework_runtime_contract": eval_config.get(
+            "framework_runtime_contract",
+            {},
+        ),
+        "world_contract_quality": eval_config.get("world_contract_quality", {}),
+        "required_agent_memory_lineage": eval_config.get(
+            "required_agent_memory_lineage",
+            [],
+        ),
+        "agent_memory_lineage_quality": eval_config.get(
+            "agent_memory_lineage_quality",
+            {},
+        ),
+        "weights": {
+            "world_contract": 4.0,
+            "framework_trace": 3.0,
+            "agent_memory_lineage": 3.0,
+            "runtime_semantics": 2.0,
+            "tool_coverage": 1.0,
+            "world_orchestration_replay": 1.0,
+        },
+    }
+    return manifest
+
+
+def optimize_component(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute component-diagnosed agent optimization."""
+
+    manifest = build_component_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_report_repair_optimization_manifest(
     *,
     name: str = "report-repair-optimization",
@@ -6823,6 +6996,217 @@ def _unique_strings(values: Any) -> list[str]:
     return result
 
 
+def _component_optimization_observed_text(
+    observed_report: Optional[Mapping[str, Any] | str],
+) -> str:
+    if observed_report is None:
+        return (
+            "Failed component evaluation: missing tool evidence, wrong tool "
+            "routing, framework trace gap, memory retrieval failure, memory "
+            "lineage source attribution missing, world contract violation, "
+            "orchestration flow failure, and evaluator coverage gap."
+        )
+    if isinstance(observed_report, str):
+        return observed_report
+    return " ".join(
+        [
+            str(observed_report.get("summary") or ""),
+            str(observed_report.get("findings") or ""),
+            str(observed_report.get("reason") or ""),
+            str(observed_report.get("text") or ""),
+            str(observed_report.get("metrics") or ""),
+        ]
+    ).strip() or str(observed_report)
+
+
+def _component_diagnosis_payloads(diagnoses: Sequence[Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for diagnosis in diagnoses:
+        payload = (
+            diagnosis.model_dump()
+            if hasattr(diagnosis, "model_dump")
+            else copy.deepcopy(dict(diagnosis))
+        )
+        key = (str(payload.get("component")), str(payload.get("failure_mode")))
+        if key in seen:
+            continue
+        seen.add(key)
+        payloads.append(
+            {
+                "component": payload.get("component"),
+                "failure_mode": payload.get("failure_mode"),
+                "confidence": payload.get("confidence"),
+                "evidence": payload.get("evidence"),
+                "patch_strategy": payload.get("patch_strategy"),
+                "suggested_paths": _unique_strings(
+                    ["agent", *(payload.get("suggested_paths") or [])]
+                ),
+                "suggested_metrics": list(payload.get("suggested_metrics") or []),
+            }
+        )
+    if payloads:
+        return payloads
+    return [
+        {
+            "component": "evaluator",
+            "failure_mode": "evaluation_gap",
+            "confidence": 0.3,
+            "evidence": "No known component keyword matched the observed report.",
+            "patch_strategy": "add component-specific eval coverage",
+            "suggested_paths": ["agent", "evaluation", "metrics"],
+            "suggested_metrics": ["eval_coverage"],
+        }
+    ]
+
+
+def _component_diagnosed_search_space(
+    search_space: Mapping[str, Sequence[Any]],
+    diagnoses: Sequence[Any],
+) -> dict[str, list[Any]]:
+    normalized = {
+        str(path): [copy.deepcopy(value) for value in choices]
+        for path, choices in search_space.items()
+    }
+    if not normalized:
+        raise ValueError("component search_space must not be empty")
+    selected = set(_opt().relevant_search_paths(normalized, diagnoses))
+    # Complete manifest-agent candidates are the broad architecture repair knob:
+    # keep them whenever present so planner/tool/router changes can affect runs.
+    if "agent" in normalized:
+        selected.add("agent")
+    filtered = {
+        path: values
+        for path, values in normalized.items()
+        if path in selected
+    }
+    return filtered or normalized
+
+
+def _default_component_agent_candidates() -> list[dict[str, Any]]:
+    report_agents = _default_report_repair_agent_candidates()
+    return [
+        copy.deepcopy(report_agents[0]),
+        copy.deepcopy(report_agents[-1]),
+    ]
+
+
+def _default_component_environment_candidates() -> list[list[dict[str, Any]]]:
+    report_envs = _default_report_repair_environment_candidates()
+    return [
+        [copy.deepcopy(dict(item)) for item in report_envs[0]],
+        [copy.deepcopy(dict(item)) for item in report_envs[-1]],
+    ]
+
+
+def _default_component_evaluation_config() -> dict[str, Any]:
+    return copy.deepcopy(_default_report_repair_evaluation_config())
+
+
+def _default_component_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {"name": "Devika", "role": "agent-architecture-owner"},
+                "situation": (
+                    "Devika needs failed component evidence routed to the right "
+                    "agent architecture and runtime config paths before changing "
+                    "the production agent."
+                ),
+                "outcome": (
+                    "The selected candidate repairs tool use, framework trace, "
+                    "memory lineage, orchestration replay, and world contract "
+                    "evidence without weakening the evaluator."
+                ),
+            }
+        ],
+    }
+
+
+def _component_layers(diagnostics: Sequence[Mapping[str, Any]]) -> list[str]:
+    allowed = {
+        "objective",
+        "harness",
+        "integration",
+        "framework",
+        "streaming",
+        "world",
+        "security",
+        "perception",
+        "prompt",
+        "planner",
+        "autonomy",
+        "policy",
+        "tools",
+        "memory",
+        "router",
+        "retrieval",
+        "model",
+        "voice",
+        "browser",
+        "cua",
+        "multi_agent",
+        "orchestration",
+        "action",
+        "environment",
+        "implementation",
+        "evaluator",
+        "custom",
+    }
+    layers = [
+        str(item.get("component"))
+        for item in diagnostics
+        if str(item.get("component")) in allowed
+    ]
+    return _unique_strings(layers or ["harness", "tools", "memory", "world", "evaluator"])
+
+
+def _default_component_optimizer(
+    search_space: Mapping[str, Sequence[Any]],
+    *,
+    diagnoses: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "algorithm": "agent",
+        "max_candidates": max(2, _search_space_cardinality(search_space) + 1),
+        "include_seed": True,
+        "auto_diagnose": True,
+        "diagnoses": [copy.deepcopy(dict(item)) for item in diagnoses],
+        "diagnostic_score_threshold": 0.9,
+    }
+
+
+def _default_component_optimization_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.06296",
+            "used_for": "client-side agent candidate search and metric diagnosis baseline",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2601.19583",
+            "used_for": "architecture-aware component metrics for agent behavior",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.20173",
+            "used_for": "runtime architecture pattern diagnosis at stochastic-deterministic boundaries",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.29268",
+            "used_for": "bandit-style compute allocation across parallel search trajectories",
+        },
+        {
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.24372",
+            "used_for": "persistent strategy-space state for evolutionary optimizer traces",
+        },
+    ]
+
+
 def _report_repair_observed_text(
     observed_report: Optional[Mapping[str, Any] | str],
 ) -> str:
@@ -13007,6 +13391,7 @@ __all__ = [
     "build_artifact_optimization_suite",
     "build_agent_integration_optimization_manifest",
     "build_browser_cua_optimization_manifest",
+    "build_component_optimization_manifest",
     "build_eval_suite_optimization_manifest",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",
@@ -13039,6 +13424,7 @@ __all__ = [
     "optimize_agent_integration",
     "optimize_autonomous_redteam_task_world",
     "optimize_browser_cua",
+    "optimize_component",
     "optimize_framework_certification",
     "optimize_framework_import_repair",
     "optimize_long_horizon_redteam",
