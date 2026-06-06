@@ -7,6 +7,7 @@ from .config import current_config
 
 
 PUBLIC_MODULES: Mapping[str, str] = {
+    "capabilities": "agent_learning.capabilities",
     "simulate": "agent_learning.simulate",
     "evaluation": "agent_learning.evals",
     "redteam": "agent_learning.redteam",

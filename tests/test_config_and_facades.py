@@ -69,7 +69,16 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 def test_facades_expose_unified_agent_learning_modules():
     import agent_learning
-    from agent_learning import actions, evals, optimize, redteam, simulate, suite, trinity
+    from agent_learning import (
+        actions,
+        capabilities,
+        evals,
+        optimize,
+        redteam,
+        simulate,
+        suite,
+        trinity,
+    )
 
     fi_simulate = importlib.import_module("fi.simulate")
     fi_engines = importlib.import_module("fi.simulate.simulation.engines")
@@ -79,6 +88,7 @@ def test_facades_expose_unified_agent_learning_modules():
 
     assert {
         "actions",
+        "capabilities",
         "evals",
         "optimize",
         "redteam",
@@ -88,6 +98,7 @@ def test_facades_expose_unified_agent_learning_modules():
     } <= set(agent_learning.__all__)
     assert {name for name in dir(agent_learning) if name in agent_learning.__all__} >= {
         "actions",
+        "capabilities",
         "evals",
         "optimize",
         "redteam",
@@ -96,6 +107,10 @@ def test_facades_expose_unified_agent_learning_modules():
         "trinity",
     }
     assert actions.extract_actions({"report": {}}) == []
+    assert capabilities.capability_catalog()["kind"] == (
+        "agent-learning.capabilities.v1"
+    )
+    assert trinity.trinity_status()["modules"]["capabilities"]["available"] is True
 
     assert set(fi_simulate.__all__) <= set(simulate.__all__)
     assert set(fi_guardrails.__all__) <= set(redteam.__all__)
@@ -7265,6 +7280,95 @@ def test_agent_learning_kit_does_not_depend_on_legacy_sdk_distributions():
         assert distribution not in normalized
 
 
+def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
+    from agent_learning import capabilities
+
+    catalog = capabilities.capability_catalog(
+        required_capabilities={
+            "providers": ["vapi", "retell", "elevenlabs", "deepgram"],
+            "frameworks": ["langgraph", "pipecat", "livekit"],
+            "environment_types": ["voice", "framework_trace", "agent_integration"],
+            "metrics": ["agent_integration_quality", "world_contract_quality"],
+            "commands": ["run", "optimize", "capabilities"],
+        }
+    )
+    assert catalog["kind"] == "agent-learning.capabilities.v1"
+    assert catalog["status"] == "passed"
+    assert catalog["summary"]["capability_gate_passed"] is True
+    assert catalog["summary"]["missing_required_capabilities"] == {}
+    assert {"vapi", "retell", "elevenlabs", "deepgram"} <= set(
+        catalog["capabilities"]["providers"]
+    )
+    assert {"voice", "webrtc", "sip", "websocket"} <= set(
+        catalog["capabilities"]["channels"]
+    )
+    assert catalog["provider_capabilities"]["vapi"] == [
+        "analysis",
+        "chat",
+        "phone",
+        "sip",
+        "voice",
+        "webhook",
+        "webrtc",
+        "websocket",
+    ]
+    assert {
+        "https://arxiv.org/abs/2601.14567",
+        "https://arxiv.org/abs/2605.20690",
+        "https://arxiv.org/abs/2604.11839",
+    } <= {item["url"] for item in catalog["research_sources"]}
+
+    output_path = tmp_path / "capabilities.json"
+    markdown_path = tmp_path / "capabilities.md"
+    junit_path = tmp_path / "capabilities.junit.xml"
+    sarif_path = tmp_path / "capabilities.sarif.json"
+    assert main([
+        "capabilities",
+        "--require",
+        "providers=vapi,retell,elevenlabs,deepgram",
+        "--require",
+        "frameworks=langgraph,pipecat,livekit",
+        "--require",
+        "environment_types=voice,framework_trace,agent_integration",
+        "--require",
+        "commands=run,optimize,capabilities",
+        "--output",
+        str(output_path),
+        "--markdown",
+        str(markdown_path),
+        "--junit",
+        str(junit_path),
+        "--sarif",
+        str(sarif_path),
+    ]) == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "passed"
+    assert payload["summary"]["capability_gate_passed"] is True
+    assert "Capability gate: True" in markdown_path.read_text(encoding="utf-8")
+    assert "failures=\"0\"" in junit_path.read_text(encoding="utf-8")
+    sarif_payload = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert sarif_payload["runs"][0]["results"] == []
+
+    failing_output_path = tmp_path / "capabilities-failing.json"
+    failing_exit = main([
+        "capabilities",
+        "--require",
+        "providers=nonexistent_provider",
+        "--output",
+        str(failing_output_path),
+        "--quiet",
+    ])
+    assert failing_exit == 1
+    failing_payload = json.loads(failing_output_path.read_text(encoding="utf-8"))
+    assert failing_payload["status"] == "failed"
+    assert failing_payload["summary"]["missing_required_capabilities"] == {
+        "providers": ["nonexistent_provider"]
+    }
+    assert failing_payload["findings"][0]["type"] == (
+        "agent_learning_capability_missing"
+    )
+
+
 def _portfolio_data() -> dict:
     return {
         "name": "agent-learning-portfolio",
@@ -8218,6 +8322,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
         "legacy_key_aliases": ["FUTURE_AGI_API_KEY", "FI_API_KEY"],
         "legacy_secret_aliases": ["FUTURE_AGI_SECRET_KEY", "FI_SECRET_KEY"],
         "unified_python_modules": [
+            "agent_learning.capabilities",
             "agent_learning.simulate",
             "agent_learning.evals",
             "agent_learning.redteam",
@@ -8241,6 +8346,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     assert ready["modules"]["evaluation"]["available"] is True
     assert ready["modules"]["optimize"]["available"] is True
     assert payload["modules"]["simulate"]["available"] is True
+    assert payload["modules"]["capabilities"]["available"] is True
     assert payload["modules"]["evaluation"]["available"] is True
     assert payload["modules"]["optimize"]["available"] is True
 

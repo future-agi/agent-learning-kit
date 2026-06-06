@@ -42,6 +42,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _doctor(args[1:])
     if command == "init":
         return _init(args[1:])
+    if command in {"capabilities", "capability-catalog", "caps"}:
+        return _capabilities(args[1:])
     if command in {"actions", "list-actions"}:
         return _actions(args[1:])
     if command in {"action-run", "run-action"}:
@@ -290,6 +292,105 @@ def _actions(args: Sequence[str]) -> int:
         render_junit=simulate.render_junit,
         render_sarif=simulate.render_sarif,
         render_markdown=lambda item, *, source_path: actions.render_markdown(item),
+    )
+    if not written and not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
+def _capabilities(args: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn capabilities",
+        description=(
+            "List Agent Learning Kit provider/framework/environment/eval "
+            "capabilities, optionally enriched from saved artifacts."
+        ),
+    )
+    parser.add_argument(
+        "artifact",
+        nargs="*",
+        help="Optional Agent Learning JSON/YAML artifact(s) to inspect.",
+    )
+    parser.add_argument(
+        "--require",
+        action="append",
+        default=[],
+        help=(
+            "Require a capability as key=value or key=value1,value2; repeatable. "
+            "Keys include providers, frameworks, channels, environment_types, "
+            "metrics, commands, and result_kinds."
+        ),
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        action="append",
+        default=[],
+        help="Write JSON capability catalog to this path.",
+    )
+    parser.add_argument(
+        "--markdown",
+        "--md",
+        action="append",
+        default=[],
+        help="Write Markdown capability catalog to this path.",
+    )
+    parser.add_argument(
+        "--junit",
+        action="append",
+        default=[],
+        help="Write JUnit XML capability status output.",
+    )
+    parser.add_argument(
+        "--sarif",
+        action="append",
+        default=[],
+        help="Write SARIF 2.1.0 capability findings output.",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Override the capability catalog artifact name.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print JSON catalog when no output path is configured.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    try:
+        from agent_learning import actions, capabilities, simulate
+    except Exception as exc:
+        return _vendored_import_failed("agent-learn capabilities", exc)
+
+    artifact_paths = [Path(path).expanduser().resolve() for path in parsed.artifact]
+    try:
+        artifacts = [actions.load_artifact_file(path) for path in artifact_paths]
+        payload = capabilities.capability_catalog(
+            artifacts,
+            source_paths=artifact_paths,
+            required_capabilities=_parse_capability_requirements(parsed.require),
+            name=parsed.name,
+        )
+    except Exception as exc:
+        print(f"agent-learn capabilities: {exc}", file=sys.stderr)
+        return 1
+
+    source_path = (
+        artifact_paths[0]
+        if artifact_paths
+        else (Path.cwd() / "agent-learning-capabilities.json").resolve()
+    )
+    written = _write_action_outputs(
+        payload,
+        parsed,
+        source_path,
+        render_junit=simulate.render_junit,
+        render_sarif=simulate.render_sarif,
+        render_markdown=lambda item, *, source_path: capabilities.render_markdown(
+            item
+        ),
     )
     if not written and not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
@@ -2543,6 +2644,17 @@ def _parse_key_value_items(values: Sequence[Any]) -> Dict[str, str]:
     return parsed
 
 
+def _parse_capability_requirements(values: Sequence[Any]) -> Dict[str, List[str]]:
+    parsed: Dict[str, List[str]] = {}
+    for key, raw_value in _parse_key_value_items(values).items():
+        parsed[key] = [
+            item.strip()
+            for item in str(raw_value).split(",")
+            if item.strip()
+        ]
+    return parsed
+
+
 def _parse_action_inputs(values: Sequence[Any]) -> Dict[str, Dict[str, str]]:
     parsed: Dict[str, Dict[str, str]] = {}
     for item in _as_list(values):
@@ -2635,8 +2747,8 @@ def _help(error: Optional[str] = None) -> int:
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
             "compare, baseline, promote-to-regression, optimize-eval, "
-            "optimize-suite, suite, actions, action-run, action-optimize, "
-            "eval-cli, init"
+            "optimize-suite, suite, capabilities, actions, action-run, "
+            "action-optimize, eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

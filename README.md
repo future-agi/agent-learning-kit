@@ -246,6 +246,14 @@ write Agent Learning Kit artifact kinds
 `agent-learning.actions.v1` / `agent-learning.action-run.v1` /
 `agent-learning.suite-optimization.v1`) plus
 optional JUnit, SARIF, and Markdown outputs for CI.
+`agent-learn capabilities` and `agent_learning.capabilities.capability_catalog()`
+emit an `agent-learning.capabilities.v1` preflight artifact covering supported
+commands, result kinds, providers, provider channels, frameworks, environment
+types, state keys, metrics, modalities, and search paths. Add `--require
+providers=vapi,retell --require frameworks=langgraph,pipecat` to fail fast
+before a suite or optimizer run when a required integration surface is missing.
+The catalog also records 2026 capability-discovery/governance research sources
+for Future AGI UI/API rendering.
 `agent-learn eval-cli ...` bridges the vendored ai-evaluation management CLI
 under the unified command for template listing, project scaffolding,
 configuration validation, history viewing, export, and config management.
@@ -851,6 +859,10 @@ TraceAI-supported frameworks. The optimizer uses deterministic
 channel, provider-channel, TraceAI/framework trace, credential, transcript,
 session, observability, and eval-metric evidence must all close before the
 candidate scores as integrated.
+Run `agent-learn capabilities --require
+providers=livekit,vapi,retell,elevenlabs,deepgram,agora,pipecat,twilio
+--require channels=voice,webrtc,phone,sip,websocket` to inspect the installed
+provider matrix before wiring a customer integration.
 The same workflow is available from Python through
 `optimize.build_agent_integration_optimization_manifest()` and
 `examples/sdk_agent_integration_optimization.py`, which generate the provider
