@@ -134,6 +134,25 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.OpenAICompatibleHTTPAgentWrapper is (
         fi_simulate.OpenAICompatibleHTTPAgentWrapper
     )
+    contract = simulate.framework_adapter_contract(
+        "langgraph",
+        target="framework_shims.py:build_langgraph_agent",
+        method="ainvoke",
+        input_mode="dict",
+    )
+    assert contract["kind"] == "agent-learning.framework-adapter-contract.v1"
+    assert contract["framework"] == "langgraph"
+    assert contract["method"] == "ainvoke"
+    assert contract["input_mode"] == "dict"
+    assert contract["local_executable_fixture"] is True
+    assert contract["requires_external_service"] is False
+    assert set(contract["capabilities"]) >= {
+        "messages",
+        "tool_calls",
+        "runtime_trace",
+        "structured_input",
+    }
+    assert simulate.framework_adapter_contract is not None
     assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
     assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
     assert simulate.run_eval_suite_file is not None
@@ -1072,6 +1091,24 @@ def test_sdk_social_memory_framework_simulation_example_runs(
     assert manifest["agent"]["method"] == "execute_task"
     assert manifest["agent"]["input_mode"] == "dict"
     assert manifest["agent"]["trace_runtime"] is True
+    contract = manifest["agent"]["metadata"]["framework_adapter_contract"]
+    assert contract["kind"] == "agent-learning.framework-adapter-contract.v1"
+    assert contract["framework"] == "custom_refund_orchestrator"
+    assert contract["method"] == "execute_task"
+    assert contract["input_mode"] == "dict"
+    assert contract["local_executable_fixture"] is True
+    assert contract["trace_runtime"] is True
+    assert set(contract["evidence_requirements"]) == {
+        "framework_runtime",
+        "framework_trace",
+        "tool_calls",
+        "adapter_conformance",
+        "metric_evidence",
+    }
+    assert manifest["agent"]["runtime_metadata"]["framework_adapter_contract"] == (
+        contract
+    )
+    assert manifest["metadata"]["framework_adapter_contract"] == contract
     assert manifest["simulation"]["min_turns"] == 1
     assert manifest["simulation"]["max_turns"] == 1
     assert [env["type"] for env in manifest["simulation"]["environments"]] == [
@@ -1164,6 +1201,19 @@ def test_sdk_social_memory_framework_simulation_example_runs(
     state = report_case["metadata"]["environment_state"]
     assert set(state) == {"framework_runtime", "framework_trace"}
     runtime = state["framework_runtime"]["summary"]
+    runtime_contract = state["framework_runtime"]["metadata"][
+        "framework_adapter_contract"
+    ]
+    assert runtime_contract["framework"] == "custom_refund_orchestrator"
+    assert runtime_contract["method"] == "execute_task"
+    assert runtime_contract["input_mode"] == "dict"
+    assert runtime_contract["local_executable_fixture"] is True
+    assert set(runtime_contract["capabilities"]) >= {
+        "messages",
+        "tool_calls",
+        "runtime_trace",
+        "structured_input",
+    }
     assert runtime["framework"] == "custom_refund_orchestrator"
     assert runtime["methods"] == ["execute_task"]
     assert runtime["input_modes"] == ["dict"]

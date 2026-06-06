@@ -30,6 +30,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "SimulationEvent",
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
+    "framework_adapter_contract",
     "supported_frameworks",
     "wrap_agent",
     "wrap_framework",
@@ -2661,6 +2662,33 @@ def build_social_memory_framework_run_manifest(
     )
     default_agents = list(search_space.get("agent") or [optimization_manifest["agent"]])
     selected_agent = copy.deepcopy(dict(agent)) if agent else copy.deepcopy(default_agents[-1])
+    contract = framework_adapter_contract(
+        framework,
+        target=str(target),
+        method=selected_agent.get("method"),
+        input_mode=selected_agent.get("input_mode"),
+        modality=selected_agent.get("modality"),
+        trace_runtime=bool(selected_agent.get("trace_runtime", True)),
+        metadata=copy.deepcopy(
+            dict(selected_agent.get("metadata"))
+            if isinstance(selected_agent.get("metadata"), Mapping)
+            else {}
+        ),
+    )
+    selected_metadata = (
+        dict(selected_agent.get("metadata"))
+        if isinstance(selected_agent.get("metadata"), Mapping)
+        else {}
+    )
+    selected_metadata["framework_adapter_contract"] = contract
+    selected_agent["metadata"] = selected_metadata
+    selected_runtime_metadata = (
+        dict(selected_agent.get("runtime_metadata"))
+        if isinstance(selected_agent.get("runtime_metadata"), Mapping)
+        else {}
+    )
+    selected_runtime_metadata["framework_adapter_contract"] = contract
+    selected_agent["runtime_metadata"] = selected_runtime_metadata
     default_environments = list(
         search_space.get("simulation.environments")
         or [optimization_manifest["simulation"]["environments"]]
@@ -2691,7 +2719,14 @@ def build_social_memory_framework_run_manifest(
         manifest["metadata"] = {
             "source": "agent_learning.simulate.build_social_memory_framework_run_manifest",
             "framework": str(framework),
+            "framework_adapter_contract": contract,
             **copy.deepcopy(dict(metadata)),
+        }
+    else:
+        manifest["metadata"] = {
+            "source": "agent_learning.simulate.build_social_memory_framework_run_manifest",
+            "framework": str(framework),
+            "framework_adapter_contract": contract,
         }
     return manifest
 
@@ -2914,6 +2949,15 @@ def build_framework_run_manifest(
 
     framework_key = _framework_key(framework)
     resolved_modality = str(modality or _framework_default_modality(framework_key))
+    contract = framework_adapter_contract(
+        framework_key,
+        target=str(target),
+        method=method,
+        input_mode=input_mode,
+        modality=resolved_modality,
+        trace_runtime=trace_runtime,
+        metadata=copy.deepcopy(dict(metadata or {})),
+    )
     agent: dict[str, Any] = {
         "type": "framework",
         "framework": framework_key,
@@ -2923,7 +2967,9 @@ def build_framework_run_manifest(
         "metadata": {
             "sdk": "agent_learning.simulate.build_framework_run_manifest",
             **copy.deepcopy(dict(metadata or {})),
+            "framework_adapter_contract": contract,
         },
+        "runtime_metadata": {"framework_adapter_contract": contract},
     }
     if method:
         agent["method"] = str(method)
@@ -2968,6 +3014,10 @@ def build_framework_run_manifest(
         "agent": agent,
         "simulation": simulation,
         "evaluation": {"enabled": bool(evaluation_enabled)},
+        "metadata": {
+            "source": "agent_learning.simulate.build_framework_run_manifest",
+            "framework_adapter_contract": contract,
+        },
     }
 
 
@@ -4196,6 +4246,10 @@ def wrap_agent(*args: Any, **kwargs: Any) -> Any:
 
 def wrap_framework(*args: Any, **kwargs: Any) -> Any:
     return _simulate().wrap_framework(*args, **kwargs)
+
+
+def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().framework_adapter_contract(*args, **kwargs)
 
 
 def _default_framework_scenario(
@@ -6941,6 +6995,7 @@ __all__ = [
     "create_baseline_file",
     "detect_manifest_command",
     "evaluate_manifest_report",
+    "framework_adapter_contract",
     "load_eval_suite_file",
     "load_manifest",
     "load_manifest_file",

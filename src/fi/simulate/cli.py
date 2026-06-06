@@ -750,6 +750,7 @@ def _build_framework_agent_callback(
     return wrap_framework(
         framework,
         framework_agent,
+        target=target,
         method=_optional_string(agent.get("method")),
         input_mode=_manifest_input_mode(agent.get("input_mode")),
         system_prompt=_optional_string(agent.get("system_prompt")),

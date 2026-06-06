@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from fi.simulate.agent.generic import GenericAgentWrapper, InputMode
 from fi.simulate.agent.wrapper import AgentWrapper
@@ -15,6 +16,9 @@ class FrameworkAdapterSpec:
     method: Optional[str]
     input_mode: InputMode
     modality: str = "text"
+    transport: str = "in_process"
+    lifecycle_hooks: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
     notes: str = ""
 
 
@@ -88,10 +92,83 @@ def supported_frameworks() -> list[str]:
     return sorted(FRAMEWORK_PRESETS)
 
 
+def framework_adapter_contract(
+    framework: str,
+    *,
+    target: str | None = None,
+    method: str | None = None,
+    input_mode: InputMode | None = None,
+    modality: str | None = None,
+    trace_runtime: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Return the native adapter contract used for framework simulation.
+
+    The contract is import-free and local: it describes the framework shim,
+    lifecycle, transport, capabilities, schemas, and replay requirements without
+    pulling in LangGraph, LiveKit, Pipecat, or any other framework package.
+    """
+
+    meta = dict(metadata or {})
+    key = _framework_key(framework)
+    spec = FRAMEWORK_PRESETS.get(key)
+    adapter_kind = "preset" if spec is not None else "custom"
+    resolved_method = str(method or (spec.method if spec else "") or "auto")
+    resolved_input_mode = str(input_mode or (spec.input_mode if spec else "") or "auto")
+    resolved_modality = str(modality or meta.get("modality") or (spec.modality if spec else "text"))
+    transport = str((spec.transport if spec else "") or _default_transport(resolved_modality))
+    lifecycle_hooks = list(
+        spec.lifecycle_hooks
+        if spec and spec.lifecycle_hooks
+        else _default_lifecycle_hooks(resolved_modality)
+    )
+    capabilities = list(
+        spec.capabilities
+        if spec and spec.capabilities
+        else _default_capabilities(resolved_modality, resolved_input_mode)
+    )
+    target_scheme = urlparse(str(target or "")).scheme.lower()
+    target_is_external = target_scheme in {"http", "https"}
+    local_fixture = not target_is_external
+
+    contract: dict[str, Any] = {
+        "kind": "agent-learning.framework-adapter-contract.v1",
+        "framework": key,
+        "adapter": adapter_kind,
+        "method": resolved_method,
+        "input_mode": resolved_input_mode,
+        "modality": resolved_modality,
+        "transport": transport,
+        "lifecycle_hooks": lifecycle_hooks,
+        "capabilities": capabilities,
+        "schemas": {
+            "input": _input_schema(resolved_input_mode),
+            "output": _output_schema(),
+        },
+        "trace_runtime": bool(trace_runtime),
+        "requires_external_service": False,
+        "local_executable_fixture": local_fixture,
+        "evidence_requirements": [
+            "framework_runtime",
+            "framework_trace",
+            "tool_calls",
+            "adapter_conformance",
+            "metric_evidence",
+        ],
+    }
+    if target:
+        contract["target"] = str(target)
+        contract["target_scheme"] = target_scheme
+    if spec and spec.notes:
+        contract["notes"] = spec.notes
+    return contract
+
+
 def wrap_framework(
     framework: str,
     agent: Any,
     *,
+    target: str | None = None,
     method: str | None = None,
     input_mode: InputMode | None = None,
     system_prompt: str | None = None,
@@ -110,6 +187,19 @@ def wrap_framework(
 
     key = framework.lower().replace("-", "_")
     spec = FRAMEWORK_PRESETS.get(key)
+    raw_metadata = dict(metadata or {})
+    contract = raw_metadata.get("framework_adapter_contract")
+    if not isinstance(contract, dict):
+        contract = framework_adapter_contract(
+            key,
+            target=target,
+            method=method,
+            input_mode=input_mode,
+            trace_runtime=trace_runtime,
+            metadata=raw_metadata,
+        )
+    runtime = dict(runtime_metadata or {})
+    runtime.setdefault("framework_adapter_contract", contract)
     if spec is None:
         return GenericAgentWrapper(
             agent,
@@ -119,12 +209,13 @@ def wrap_framework(
             system_prompt=system_prompt,
             metadata={
                 "framework": key,
-                "modality": str((metadata or {}).get("modality") or "text"),
+                "modality": str(raw_metadata.get("modality") or "text"),
                 "adapter": "custom",
-                **(metadata or {}),
+                "framework_adapter_contract": contract,
+                **raw_metadata,
             },
             trace_runtime=trace_runtime,
-            runtime_metadata=runtime_metadata,
+            runtime_metadata=runtime,
         )
 
     return GenericAgentWrapper(
@@ -133,7 +224,82 @@ def wrap_framework(
         input_mode=input_mode or spec.input_mode,
         output_key=output_key,
         system_prompt=system_prompt,
-        metadata={"framework": spec.name, "modality": spec.modality, **(metadata or {})},
+        metadata={
+            "framework": spec.name,
+            "modality": spec.modality,
+            "framework_adapter_contract": contract,
+            **raw_metadata,
+        },
         trace_runtime=trace_runtime,
-        runtime_metadata=runtime_metadata,
+        runtime_metadata=runtime,
     )
+
+
+def _framework_key(value: str) -> str:
+    return str(value or "custom").strip().lower().replace("-", "_") or "custom"
+
+
+def _default_transport(modality: str) -> str:
+    if modality == "voice":
+        return "realtime_adapter"
+    if modality == "cua":
+        return "browser_adapter"
+    if modality == "image":
+        return "multimodal_adapter"
+    return "in_process"
+
+
+def _default_lifecycle_hooks(modality: str) -> tuple[str, ...]:
+    if modality == "voice":
+        return ("setup", "connect", "stream", "respond", "teardown")
+    if modality == "cua":
+        return ("setup", "observe", "act", "verify", "teardown")
+    return ("setup", "invoke", "observe", "teardown")
+
+
+def _default_capabilities(modality: str, input_mode: str) -> tuple[str, ...]:
+    capabilities = [
+        "messages",
+        "tool_calls",
+        "runtime_trace",
+        "state",
+        "artifacts",
+    ]
+    if input_mode == "dict":
+        capabilities.append("structured_input")
+    if modality == "voice":
+        capabilities.extend(["voice_frames", "realtime_events"])
+    elif modality == "cua":
+        capabilities.extend(["browser_actions", "visual_grounding"])
+    elif modality == "image":
+        capabilities.extend(["image_context", "multimodal_grounding"])
+    return tuple(capabilities)
+
+
+def _input_schema(input_mode: str) -> dict[str, Any]:
+    if input_mode == "dict":
+        return {
+            "type": "object",
+            "required": ["messages", "scenario"],
+            "additionalProperties": True,
+        }
+    if input_mode == "messages":
+        return {
+            "type": "array",
+            "items": {"type": "object", "required": ["role", "content"]},
+        }
+    if input_mode == "agent_input":
+        return {"type": "object", "class": "AgentInput"}
+    if input_mode == "text":
+        return {"type": "string"}
+    return {"type": "any"}
+
+
+def _output_schema() -> dict[str, Any]:
+    return {
+        "oneOf": [
+            {"type": "string"},
+            {"type": "object", "class": "AgentResponse"},
+        ],
+        "required_trace_state": ["framework_runtime"],
+    }

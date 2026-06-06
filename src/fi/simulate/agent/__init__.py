@@ -1,7 +1,12 @@
 from .definition import AgentDefinition, LLMConfig, TTSConfig, STTConfig, VADConfig, SimulatorAgentDefinition
 from .wrapper import AgentInput, AgentResponse, AgentWrapper, SimulationArtifact, SimulationEvent
 from .generic import GenericAgentWrapper, wrap_agent
-from .frameworks import FrameworkAdapterSpec, supported_frameworks, wrap_framework
+from .frameworks import (
+    FrameworkAdapterSpec,
+    framework_adapter_contract,
+    supported_frameworks,
+    wrap_framework,
+)
 from .import_probe import probe_framework_imports
 from .mocks import EchoAgentWrapper, RuleBasedAgentWrapper, ScriptedAgentWrapper, make_tool_response
 from .wrappers import (
@@ -27,6 +32,7 @@ __all__ = [
     "SimulationEvent",
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
+    "framework_adapter_contract",
     "supported_frameworks",
     "probe_framework_imports",
     "wrap_agent",

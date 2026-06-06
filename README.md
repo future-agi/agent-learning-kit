@@ -421,6 +421,16 @@ manifest = simulate.build_framework_run_manifest(
 simulate.write_manifest_file(manifest, "manifests/langgraph.json")
 ```
 
+Framework simulation manifests now carry
+`agent-learning.framework-adapter-contract.v1` under
+`metadata.framework_adapter_contract`, `agent.metadata.framework_adapter_contract`,
+and `agent.runtime_metadata.framework_adapter_contract`. The same contract is
+attached to runtime traces emitted by `wrap_framework()`, including hand-written
+CLI manifests. Use `simulate.framework_adapter_contract("langgraph", ...)` to
+inspect the local adapter method, input mode, modality, transport, lifecycle
+hooks, capabilities, schemas, trace requirements, and executable-fixture status
+without importing the target framework.
+
 For arbitrary task/world simulation, build a normal run manifest from an agent
 spec, task description, environment bundle, and optional agent-report eval
 config:
