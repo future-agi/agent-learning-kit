@@ -104,8 +104,10 @@ def run_action(
     if not command_args:
         raise ValueError(f"action {action_id!r} does not include command_args")
     command_name = command_args[0]
-    if command_name not in {"agent-learn", "agent-simulate"}:
-        raise ValueError(f"unsupported action command: {command_name}")
+    if command_name != "agent-learn":
+        raise ValueError(
+            f"unsupported action command: {command_name}; use agent-learn"
+        )
     if len(command_args) < 2:
         raise ValueError(f"action {action_id!r} is missing a subcommand")
     subcommand = command_args[1]
@@ -471,10 +473,7 @@ def _dispatch_action_command(command_args: list[str], *, cwd: Path) -> dict[str,
     try:
         os.chdir(cwd)
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            if command_args[0] == "agent-learn":
-                cli = importlib.import_module("agent_learning.cli")
-            else:
-                cli = importlib.import_module("fi.simulate.cli")
+            cli = importlib.import_module("agent_learning.cli")
             exit_code = int(cli.main(command_args[1:]))
     finally:
         os.chdir(previous_cwd)

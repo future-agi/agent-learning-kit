@@ -214,7 +214,9 @@ shelling out or materialize one selected `kind: download` export action with
 resolved inside the requested `--cwd`, and the returned
 `agent-learning.action-run.v1` artifact records the action kind, command or
 artifact ref, exit code, captured stdout/stderr logs, declared outputs, and
-generated files.
+generated files. Public embedded CLI actions must use `agent-learn`; legacy
+`agent-simulate` action commands are intentionally rejected by the unified SDK
+runner and excluded from artifact-action optimization candidates.
 `actions` and `action-run` both write JSON/JUnit/SARIF/Markdown outputs for CI.
 Suites can include the same loop with `{"command": "action-run", "path":
 "...artifact.json", "action_id": "..."}` jobs, so CI can run a saved artifact,

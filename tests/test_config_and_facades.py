@@ -7369,6 +7369,52 @@ def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
     )
 
 
+def test_public_action_surfaces_reject_legacy_agent_simulate_commands(tmp_path):
+    from agent_learning import optimize
+
+    artifact = {
+        "kind": "agent-learning.test.v1",
+        "name": "legacy-action-artifact",
+        "report": {
+            "actions": [
+                {
+                    "id": "legacy_report",
+                    "kind": "cli",
+                    "label": "Legacy Report",
+                    "command_args": [
+                        "agent-simulate",
+                        "report",
+                        "result.json",
+                        "--output",
+                        "artifacts/report.json",
+                    ],
+                }
+            ]
+        },
+    }
+    artifact_path = tmp_path / "legacy-action-artifact.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    assert actions.extract_actions(artifact)[0]["id"] == "legacy_report"
+    with pytest.raises(ValueError, match="unsupported action command: .*use agent-learn"):
+        actions.run_action(
+            artifact,
+            "legacy_report",
+            source_path=artifact_path,
+            cwd=tmp_path,
+        )
+    with pytest.raises(
+        ValueError,
+        match="artifact does not contain any runnable action candidates",
+    ):
+        optimize.build_artifact_action_optimization_manifest(
+            name="legacy-action-optimization",
+            artifact_path=artifact_path,
+            artifact=artifact,
+            action_ids=["legacy_report"],
+        )
+
+
 def _portfolio_data() -> dict:
     return {
         "name": "agent-learning-portfolio",

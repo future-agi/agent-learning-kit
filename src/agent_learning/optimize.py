@@ -12697,7 +12697,7 @@ def _artifact_action_is_executable(
     if len(command_args) < 2:
         return False
     command_name = str(command_args[0])
-    if command_name not in {"agent-learn", "agent-simulate"}:
+    if command_name != "agent-learn":
         return False
     subcommand = str(command_args[1]).strip().lower().replace("_", "-")
     if subcommand in {"action-run", "run-action"}:
