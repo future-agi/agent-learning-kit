@@ -8425,6 +8425,47 @@ def test_sdk_framework_certification_optimization_example_runs(
     lifecycle = state["framework_lifecycle_trace"]["summary"]
     assert lifecycle["phase_count"] == 10
     assert lifecycle["recovered_error_count"] == 1
+
+    from agent_learning import optimize
+
+    target = manifest["optimization"]["target"]
+    candidate = optimize.AgentCandidate.from_config(
+        result["optimization"]["best_config"],
+        target_name=target["name"],
+        metadata=target.get("metadata"),
+        layers=target.get("layers"),
+    )
+    evidence = optimize.score_simulation_evidence(
+        best_history["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config={
+            **config,
+            "include_components": ["tool_coverage", "framework_lifecycle"],
+        },
+    )
+    evidence_payload = evidence.metadata["simulation_evidence_score"]
+    evidence_components = {
+        component["name"]: component
+        for component in evidence_payload["components"]
+    }
+    assert evidence.score == pytest.approx(1.0)
+    assert set(evidence_components) == {"tool_coverage", "framework_lifecycle"}
+    lifecycle_component = evidence_components["framework_lifecycle"]
+    assert lifecycle_component["score"] == pytest.approx(1.0)
+    assert lifecycle_component["details"]["missing"] == []
+    assert [
+        check
+        for check in lifecycle_component["details"]["checks"]
+        if not check["match"]
+    ] == []
+    lifecycle_summary = lifecycle_component["details"]["summary"]
+    assert lifecycle_summary["phase_count"] == 10
+    assert lifecycle_summary["checkpoint_count"] == 1
+    assert lifecycle_summary["session_count"] == 1
+    assert lifecycle_summary["terminal_status"] == "completed"
+    assert "thread_123" in lifecycle_summary["sessions"]
+
     capability = state["framework_capability_matrix"]["summary"]
     assert capability["supported_count"] == 9
     assert capability["missing_count"] == 0

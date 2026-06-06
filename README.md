@@ -1228,6 +1228,13 @@ ai-evaluation (`mode`, `runtime`, callable hooks, output channels, state scopes,
 surfaces, replay semantics, evidence requirements, and no external dependency).
 That gives AgentOptimizer metric-based diagnosis for executable world hooks
 without turning `optimize_world_hooks()` into an HTTP-hook integration.
+The same scorer now treats `framework_lifecycle_trace` as a native
+`framework_lifecycle` component. Framework certification and migration runs can
+diagnose setup, tool registration, sessions, invocation, streaming, checkpoints,
+retry/recovery, cancellation/resume, cleanup, terminal status, state persistence,
+and required lifecycle signals directly from local simulator evidence. This keeps
+framework optimization aligned with the 2026 harness direction while avoiding any
+hosted optimizer or external lifecycle service.
 
 The `report_repair_optimization.json` example turns a failed agent
 report/trace into a deterministic repair search. It scores normalized

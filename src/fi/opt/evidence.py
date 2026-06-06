@@ -11,6 +11,7 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "tool_coverage": 1.0,
     "agent_integration": 3.0,
     "framework_trace": 2.0,
+    "framework_lifecycle": 2.0,
     "framework_import": 2.0,
     "red_team_campaign": 3.0,
     "red_team_readiness": 3.0,
@@ -90,6 +91,15 @@ def score_simulation_evidence(
         )
         if runtime_component is not None:
             components.append(runtime_component)
+
+    if _should_score("framework_lifecycle", layers, env_states, cfg):
+        components.append(
+            _score_framework_lifecycle_trace(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
 
     if _should_score("framework_import", layers, env_states, cfg):
         components.append(
@@ -236,6 +246,7 @@ def score_simulation_evidence(
                     "AgentSentry/EnterpriseOps 2026: stateful tool worlds need temporal takeover, utility-under-attack, and executable state-delta evidence.",
                     "RHO 2026: harness updates should be optimized from prior trajectory rollouts without external grading.",
                     "HarnessFix 2026: optimizer updates should be attributed to responsible trace and harness layers before repair.",
+                    "HarnessFix/TokenMizer 2026: lifecycle, checkpoint, session, and repair provenance should be scored as local harness evidence.",
                     "SAGE/constitutional multi-agent governance 2026: optimizer societies need role-separated, validation-gated promotion evidence.",
                     "ECPO/RREDCoT 2026: long-horizon optimizer credit should be evidence-calibrated instead of final-score-only.",
                     "ADWM/WLA 2026: world evaluation needs action-conditioned local replay contracts before online deployment.",
@@ -403,6 +414,204 @@ def _score_runtime_semantics(
             "candidate_method": method,
             "expected_input_mode": contract.get("input_mode"),
             "candidate_input_mode": input_mode,
+        },
+    }
+
+
+def _score_framework_lifecycle_trace(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "framework_lifecycle_trace")
+    if not payload:
+        return _missing_component(
+            "framework_lifecycle",
+            "No framework_lifecycle_trace environment evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("framework_lifecycle_quality"),
+        manifest_config.get("framework_lifecycle_quality"),
+    )
+    summary = _framework_lifecycle_trace_summary(payload)
+    observed = _framework_lifecycle_observed(payload, summary)
+    required = _configured_norm_set(
+        "required_framework_lifecycle",
+        cfg,
+        manifest_config,
+        nested_keys=("framework_lifecycle_quality", "required_signals"),
+    )
+    for key in (
+        "required_stages",
+        "required_signals",
+        "required_sessions",
+        "required_tools",
+        "required_registered_tools",
+        "required_state_keys",
+        "required_frameworks",
+    ):
+        required.update(_norm(item) for item in _as_list(quality.get(key)) if _norm(item))
+    expected_framework = _norm(quality.get("framework") or quality.get("required_framework"))
+    if expected_framework:
+        required.add(expected_framework)
+    required.update({"framework_lifecycle", "lifecycle"})
+
+    matched = sorted(required & observed)
+    missing = sorted(required - observed)
+    coverage_score = _coverage_score(required, observed, default=bool(payload))
+
+    checks: list[dict[str, Any]] = [
+        {
+            "check": "trace_present",
+            "expected": {">=": 1},
+            "actual": 1,
+            "match": True,
+        }
+    ]
+    if expected_framework:
+        frameworks = _framework_lifecycle_values(summary, "frameworks")
+        checks.append(
+            {
+                "check": "framework",
+                "expected": expected_framework,
+                "actual": sorted(frameworks),
+                "match": expected_framework in frameworks,
+            }
+        )
+    _append_numeric_floor_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("min_phase_count", "phase_count"),
+            ("min_phases", "phase_count"),
+            ("min_session_count", "session_count"),
+            ("min_sessions", "session_count"),
+            ("min_tool_registrations", "tool_registration_count"),
+            ("min_tool_registration_count", "tool_registration_count"),
+            ("min_invocations", "invocation_count"),
+            ("min_invocation_count", "invocation_count"),
+            ("min_streaming_events", "streaming_event_count"),
+            ("min_checkpoint_count", "checkpoint_count"),
+            ("min_checkpoints", "checkpoint_count"),
+            ("min_retry_count", "retry_count"),
+            ("min_retries", "retry_count"),
+            ("min_cancellation_count", "cancellation_count"),
+            ("min_cancel_count", "cancellation_count"),
+            ("min_resume_count", "resume_count"),
+            ("min_cleanup_count", "cleanup_count"),
+            ("min_recovered_errors", "recovered_error_count"),
+            ("min_recovered_error_count", "recovered_error_count"),
+            ("min_recovery_count", "recovered_error_count"),
+        ),
+    )
+    _append_numeric_ceiling_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("max_error_count", "error_count"),
+            ("max_errors", "error_count"),
+            ("max_failed_phase_count", "error_count"),
+        ),
+    )
+    _append_boolean_summary_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("require_streaming", "has_streaming"),
+            ("require_checkpoint", "has_checkpoint"),
+            ("require_retry", "has_retry"),
+            ("require_cancellation", "has_cancellation"),
+            ("require_cancel", "has_cancellation"),
+            ("require_resume", "has_resume"),
+            ("require_cleanup", "has_cleanup"),
+            ("require_teardown", "has_cleanup"),
+            ("require_state_persistence", "state_persistence"),
+            ("require_no_errors", "no_errors"),
+        ),
+    )
+    terminal_status = _norm(
+        quality.get("terminal_status") or quality.get("required_terminal_status")
+    )
+    if terminal_status:
+        actual_terminal = _norm(summary.get("terminal_status"))
+        checks.append(
+            {
+                "check": "terminal_status",
+                "expected": terminal_status,
+                "actual": actual_terminal,
+                "match": actual_terminal == terminal_status,
+            }
+        )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_sessions",
+        _framework_lifecycle_values(summary, "sessions"),
+        "required_session",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_stages",
+        _framework_lifecycle_values(summary, "stages"),
+        "required_stage",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_signals",
+        _framework_lifecycle_values(summary, "signals"),
+        "required_signal",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_tools",
+        _framework_lifecycle_values(summary, "tool_names"),
+        "required_tool",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_registered_tools",
+        _framework_lifecycle_values(summary, "tool_names"),
+        "required_registered_tool",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_state_keys",
+        _framework_lifecycle_values(summary, "state_keys"),
+        "required_state_key",
+    )
+    _append_required_value_checks(
+        checks,
+        quality,
+        "required_frameworks",
+        _framework_lifecycle_values(summary, "frameworks"),
+        "required_framework",
+    )
+
+    quality_score = _checks_score(checks)
+    score = round(0.35 * coverage_score + 0.65 * quality_score, 4)
+    return {
+        "name": "framework_lifecycle",
+        "score": score,
+        "reason": (
+            "framework lifecycle evidence closes session, checkpoint, retry, and cleanup gates"
+            if score >= 0.99
+            else "framework lifecycle evidence incomplete"
+        ),
+        "details": {
+            "matched": matched,
+            "missing": missing,
+            "checks": checks,
+            "summary": copy.deepcopy(summary),
         },
     }
 
@@ -1771,6 +1980,14 @@ def _should_score(
             "futureagi_platform",
         },
         "framework": {"framework", "runtime", "integration"},
+        "framework_lifecycle": {
+            "framework_lifecycle",
+            "framework_lifecycle_trace",
+            "lifecycle",
+            "session",
+            "checkpoint",
+            "runtime_lifecycle",
+        },
         "framework_import": {
             "framework_import",
             "import",
@@ -1846,6 +2063,7 @@ def _should_score(
         "orchestration",
         "harness_trajectory_replay",
         "world_hooks",
+        "framework_lifecycle",
         "optimizer_governance",
         "optimizer_portfolio",
     }
@@ -1860,6 +2078,12 @@ def _should_score(
         )
     if layer == "framework":
         return "framework_trace" in keys
+    if layer == "framework_lifecycle":
+        return (
+            "framework_lifecycle_trace" in keys
+            or bool(cfg.get("framework_lifecycle_quality"))
+            or bool(cfg.get("required_framework_lifecycle"))
+        )
     if layer == "framework_import":
         return (
             "framework_import_manifest" in keys
@@ -2270,6 +2494,282 @@ def _coverage_score(required: set[str], observed: set[str], default: bool) -> fl
     if not required:
         return 1.0 if default else 0.0
     return len(required & observed) / len(required)
+
+
+def _framework_lifecycle_observed(
+    payload: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> set[str]:
+    observed = _token_set(payload)
+    observed.update({"framework_lifecycle", "lifecycle", "framework_lifecycle_trace"})
+    for category in (
+        "frameworks",
+        "sessions",
+        "stages",
+        "signals",
+        "tool_names",
+        "state_keys",
+    ):
+        observed.update(_framework_lifecycle_values(summary, category))
+    for boolean_key, signal in (
+        ("has_streaming", "streaming"),
+        ("has_checkpoint", "checkpoint"),
+        ("has_retry", "retry"),
+        ("has_cancellation", "cancellation"),
+        ("has_resume", "resume"),
+        ("has_cleanup", "cleanup"),
+        ("state_persistence", "state_persistence"),
+    ):
+        if summary.get(boolean_key):
+            observed.add(signal)
+    return {item for item in observed if item}
+
+
+def _framework_lifecycle_trace_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    existing = _as_mapping(payload.get("summary"))
+    phases = [_as_mapping(item) for item in _as_list(payload.get("phases"))]
+    phases = [item for item in phases if item]
+    sessions_payload = [_as_mapping(item) for item in _as_list(payload.get("sessions"))]
+    sessions_payload = [item for item in sessions_payload if item]
+    state = _as_mapping(payload.get("state"))
+
+    frameworks: set[str] = set()
+    sessions: set[str] = set()
+    stages: set[str] = set()
+    signals: set[str] = set()
+    tool_names: set[str] = set()
+    state_keys: set[str] = {_norm(item) for item in state.keys() if _norm(item)}
+    stage_counts: dict[str, int] = {}
+    counts = {
+        "tool_registration_count": 0,
+        "invocation_count": 0,
+        "streaming_event_count": 0,
+        "checkpoint_count": 0,
+        "retry_count": 0,
+        "cancellation_count": 0,
+        "resume_count": 0,
+        "cleanup_count": 0,
+        "error_count": 0,
+        "recovered_error_count": 0,
+    }
+
+    framework = _norm(payload.get("framework"))
+    if framework:
+        frameworks.add(framework)
+    session_id = _norm(payload.get("session_id"))
+    if session_id:
+        sessions.add(session_id)
+    for signal in _as_list(payload.get("signals")):
+        normalized = _norm(signal)
+        if normalized:
+            signals.add(normalized)
+
+    for session in sessions_payload:
+        session_key = _norm(session.get("id") or session.get("session_id"))
+        if session_key:
+            sessions.add(session_key)
+        stages.update(_norm(item) for item in _as_list(session.get("stages")) if _norm(item))
+        tool_names.update(_norm(item) for item in _as_list(session.get("tool_names")) if _norm(item))
+        state_keys.update(_norm(item) for item in _as_list(session.get("state_keys")) if _norm(item))
+
+    for phase in phases:
+        phase_framework = _norm(phase.get("framework"))
+        if phase_framework:
+            frameworks.add(phase_framework)
+        stage = _framework_lifecycle_stage(phase.get("stage") or phase.get("phase") or phase.get("name"))
+        if stage:
+            stages.add(stage)
+            stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        phase_session = _norm(phase.get("session_id") or phase.get("thread_id") or phase.get("run_id"))
+        if phase_session:
+            sessions.add(phase_session)
+        phase_tools = {
+            _norm(item)
+            for item in [
+                phase.get("tool_name"),
+                phase.get("tool"),
+                *_as_list(phase.get("tool_names")),
+                *_as_list(phase.get("tools")),
+                *_as_list(phase.get("registered_tools")),
+            ]
+            if _norm(item)
+        }
+        tool_names.update(phase_tools)
+        phase_state_keys = {
+            _norm(item)
+            for item in [
+                *_as_list(phase.get("state_keys")),
+                *_as_mapping(phase.get("state")).keys(),
+                *_as_mapping(phase.get("state_delta")).keys(),
+                *_as_mapping(phase.get("checkpoint")).keys(),
+            ]
+            if _norm(item)
+        }
+        state_keys.update(phase_state_keys)
+        phase_signals = _framework_lifecycle_phase_signals(phase, stage)
+        signals.update(phase_signals)
+        if "tool_registration" in phase_signals:
+            counts["tool_registration_count"] += 1
+        if "invocation" in phase_signals:
+            counts["invocation_count"] += 1
+        if "streaming" in phase_signals:
+            counts["streaming_event_count"] += 1
+        if "checkpoint" in phase_signals:
+            counts["checkpoint_count"] += 1
+        if "retry" in phase_signals:
+            counts["retry_count"] += 1
+        if "cancellation" in phase_signals:
+            counts["cancellation_count"] += 1
+        if "resume" in phase_signals:
+            counts["resume_count"] += 1
+        if "cleanup" in phase_signals:
+            counts["cleanup_count"] += 1
+        if "error" in phase_signals:
+            counts["error_count"] += 1
+        if "recovery" in phase_signals:
+            counts["recovered_error_count"] += 1
+
+    existing_stage_counts = _as_mapping(existing.get("stage_counts"))
+    for key, value in existing_stage_counts.items():
+        normalized = _framework_lifecycle_stage(key)
+        count = _int_or_none(value) or 0
+        if normalized and count:
+            stages.add(normalized)
+            stage_counts[normalized] = max(stage_counts.get(normalized, 0), count)
+    for key in list(counts):
+        counts[key] = max(counts[key], _int_or_none(existing.get(key)) or 0)
+
+    phase_count = max(len(phases), _int_or_none(existing.get("phase_count")) or 0)
+    session_count = max(len(sessions), _int_or_none(existing.get("session_count")) or 0)
+    state_persistence = bool(
+        existing.get("state_persistence")
+        or state
+        or "state_persistence" in signals
+        or counts["checkpoint_count"]
+        or counts["resume_count"]
+    )
+    terminal_status = _norm(existing.get("terminal_status"))
+    if not terminal_status:
+        terminal_status = (
+            "error"
+            if counts["error_count"] and not counts["recovered_error_count"]
+            else "completed"
+            if counts["cleanup_count"]
+            else "running"
+        )
+    result = {
+        **copy.deepcopy(existing),
+        "phase_count": phase_count,
+        "session_count": session_count,
+        "stage_counts": stage_counts,
+        "frameworks": sorted(frameworks),
+        "sessions": sorted(sessions),
+        "stages": sorted(stages),
+        "signals": sorted(signals),
+        "tool_names": sorted(tool_names),
+        "state_keys": sorted(state_keys),
+        **counts,
+        "state_persistence": state_persistence,
+        "has_streaming": counts["streaming_event_count"] > 0,
+        "has_checkpoint": counts["checkpoint_count"] > 0,
+        "has_retry": counts["retry_count"] > 0,
+        "has_cancellation": counts["cancellation_count"] > 0,
+        "has_resume": counts["resume_count"] > 0,
+        "has_cleanup": counts["cleanup_count"] > 0,
+        "no_errors": counts["error_count"] == 0,
+        "terminal_status": terminal_status,
+    }
+    return result
+
+
+def _framework_lifecycle_values(
+    summary: Mapping[str, Any],
+    category: str,
+) -> set[str]:
+    return {
+        _norm(item)
+        for item in _as_list(summary.get(category))
+        if _norm(item)
+    }
+
+
+def _framework_lifecycle_phase_signals(
+    phase: Mapping[str, Any],
+    stage: str,
+) -> set[str]:
+    signals = {_norm(item) for item in _as_list(phase.get("signals")) if _norm(item)}
+    raw = _as_mapping(phase.get("raw"))
+    status = _norm(phase.get("status") or raw.get("status"))
+    if stage:
+        signals.update({"lifecycle", stage})
+    if phase.get("session_id") or raw.get("session_id") or raw.get("thread_id"):
+        signals.add("session")
+    if (
+        _as_list(phase.get("tool_names"))
+        or phase.get("tool_name")
+        or phase.get("tool")
+        or _as_list(raw.get("registered_tools"))
+        or stage == "tool_registration"
+    ):
+        signals.update({"tool", "tool_registration"})
+    if (
+        _as_list(phase.get("state_keys"))
+        or _as_mapping(phase.get("state"))
+        or _as_mapping(raw.get("state"))
+        or _as_mapping(raw.get("state_delta"))
+    ):
+        signals.add("state")
+    if stage == "checkpoint" or phase.get("checkpoint") or raw.get("checkpoint"):
+        signals.add("checkpoint")
+    if stage in {"invoke", "model_call", "tool_call"}:
+        signals.add("invocation")
+    if stage == "stream":
+        signals.add("streaming")
+    if stage == "retry" or phase.get("retry_of") or raw.get("retry_of"):
+        signals.add("retry")
+    if stage == "cancel":
+        signals.add("cancellation")
+    if stage == "resume":
+        signals.add("resume")
+    if stage in {"shutdown", "teardown", "cleanup"}:
+        signals.update({"teardown", "cleanup"})
+    if phase.get("error") or raw.get("error") or raw.get("exception") or status in {"error", "failed"}:
+        signals.add("error")
+    if raw.get("recovered") or phase.get("recovered") or status == "recovered":
+        signals.add("recovery")
+    if (
+        raw.get("state_persisted")
+        or raw.get("persisted")
+        or phase.get("state_persisted")
+        or stage in {"checkpoint", "resume"}
+    ):
+        signals.add("state_persistence")
+    return {item for item in signals if item}
+
+
+def _framework_lifecycle_stage(value: Any) -> str:
+    normalized = _norm(value)
+    aliases = {
+        "init": "initialize",
+        "initialized": "initialize",
+        "startup": "initialize",
+        "setup": "initialize",
+        "register": "tool_registration",
+        "register_tool": "tool_registration",
+        "register_tools": "tool_registration",
+        "tools_list": "tool_registration",
+        "tools/list": "tool_registration",
+        "start": "start_session",
+        "session_start": "start_session",
+        "start_session": "start_session",
+        "ainvoke": "invoke",
+        "run": "invoke",
+        "call": "invoke",
+        "streaming": "stream",
+        "checkpoint_write": "checkpoint",
+        "cancellation": "cancel",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _framework_import_observed(
