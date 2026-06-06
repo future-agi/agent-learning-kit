@@ -224,12 +224,13 @@ inside one `agent-learning.suite.v1` artifact.
 `optimize.optimize_artifact_actions()` turn the same action catalog into an
 AgentOptimizer-backed suite search over `jobs.0`. `agent-learn action-optimize
 <artifact>` exposes the same loop from the CLI with action id, source-card,
-target-layer, and subcommand filters, optional generated suite output, and
+target-layer, and CLI subcommand filters, optional generated suite output, and
 normal JSON/JUnit/SARIF/Markdown result outputs. CLI or SDK users can let the
-optimizer choose between report, rerun, replay, repair, or follow-up
+optimizer choose between report, export, rerun, replay, repair, or follow-up
 optimization actions from a real artifact trajectory and still get child
-JSON/JUnit/SARIF/Markdown outputs plus captured logs for the selected
-`action-run`. Suite optimization artifacts and reports also include an
+JSON/JUnit/SARIF/Markdown outputs plus captured logs and download output
+records for the selected `action-run`. Suite optimization artifacts and reports
+also include an
 `artifact_action_plan` card with the selected action, candidate score lineage,
 output completion, evidence depth, generated files, and the selection reason for
 Future AGI UI/API rendering.

@@ -1418,6 +1418,9 @@ def build_artifact_action_optimization_manifest(
             "candidate_action_ids": [
                 str(action.get("id")) for action in action_candidates
             ],
+            "candidate_action_kinds": [
+                str(action.get("kind") or "cli") for action in action_candidates
+            ],
             "scope_filters": scope_filters,
             "research_sources": _unique_research_sources(
                 [
@@ -12659,6 +12662,7 @@ def _artifact_action_candidate_job(
         "command": "action-run",
         "path": artifact_path,
         "action_id": action_id,
+        "action_kind": str(action.get("kind") or "cli"),
         "name": f"{name}-{safe_action}",
         "cwd": _join_path_text(cwd_root, safe_action),
         "output": _join_path_text(outputs_root, safe_action, "action-run.json"),
@@ -12666,6 +12670,10 @@ def _artifact_action_candidate_job(
             "markdown": _join_path_text(outputs_root, safe_action, "action-run.md")
         },
     }
+    if str(action.get("kind") or "cli") == "download":
+        job["artifact_output"] = str(
+            action.get("default_filename") or f"{safe_action}.json"
+        )
     if inputs:
         job["inputs"] = copy.deepcopy(dict(inputs))
     return job
@@ -12677,6 +12685,12 @@ def _artifact_action_is_executable(
     inputs: Mapping[str, Any],
     include_requires_input: bool,
 ) -> bool:
+    action_kind = str(action.get("kind") or "cli")
+    if action_kind == "download":
+        return bool(action.get("artifact_ref"))
+    if action_kind != "cli":
+        return False
+
     command_args = action.get("command_args")
     if not isinstance(command_args, Sequence) or isinstance(command_args, (str, bytes)):
         return False
@@ -12721,6 +12735,8 @@ def _artifact_action_matches_scope(
         if not observed_layers.intersection(target_layers):
             return False
     if command_subcommands:
+        if str(action.get("kind") or "cli") != "cli":
+            return False
         args = list(action.get("command_args") or [])
         subcommand = _scope_key(args[1]) if len(args) > 1 else ""
         if subcommand not in command_subcommands:

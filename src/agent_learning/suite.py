@@ -1162,6 +1162,7 @@ def _execute_child_payload(
             cwd=_job_action_cwd(job, base_dir=base_dir),
             dry_run=_job_dry_run(job, suite_options),
             name=_job_name(job),
+            artifact_output_path=_job_action_artifact_output(job),
         )
     if command == "eval":
         from agent_learning import evals
@@ -1530,12 +1531,19 @@ def _artifact_action_candidate_records(
             output_count=output_count,
             outputs_written_count=outputs_written_count,
         )
-        evidence_depth = round(min(outputs_written_count / 4.0, 1.0), 4)
+        action_kind = str(action_summary.get("action_kind") or "cli")
+        evidence_denominator = 1.0 if action_kind == "download" else 4.0
+        evidence_depth = round(
+            min(outputs_written_count / evidence_denominator, 1.0),
+            4,
+        )
         records.append(
             {
                 "candidate_id": history_item.get("candidate_id"),
                 "action_id": action_id,
                 "action_label": action_summary.get("action_label"),
+                "action_kind": action_kind,
+                "artifact_ref": action_summary.get("artifact_ref"),
                 "source_card_path": action_summary.get("source_card_path"),
                 "score": history_item.get("score"),
                 "action_score": round((0.8 * completion) + (0.2 * evidence_depth), 4),
@@ -1945,6 +1953,18 @@ def _job_action_inputs(job: Mapping[str, Any]) -> dict[str, Any]:
             raise SuiteError(f"suite action-run input has empty name: {text!r}")
         parsed[key.strip()] = item
     return parsed
+
+
+def _job_action_artifact_output(job: Mapping[str, Any]) -> Optional[str]:
+    raw = (
+        job.get("artifact_output")
+        or job.get("artifact-output")
+        or job.get("artifact_output_path")
+        or job.get("artifact-output-path")
+    )
+    if raw in (None, ""):
+        return None
+    return str(raw)
 
 
 def _job_action_cwd(job: Mapping[str, Any], *, base_dir: Path) -> Path:

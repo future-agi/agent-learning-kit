@@ -1473,6 +1473,55 @@ def test_sdk_orchestration_optimization_example_runs(monkeypatch, tmp_path):
         and output["exists"] is True
         for output in replay_action_payload["outputs"]
     )
+
+    action_opt_dir = tmp_path / "orchestration-action-optimization"
+    action_opt_output_path = tmp_path / "orchestration-action-optimization.json"
+    action_opt_suite_path = tmp_path / "orchestration-action-optimization-suite.json"
+    action_opt_exit_code = main([
+        "action-optimize",
+        str(output_path),
+        "--id",
+        "export_selected_orchestration_manifest",
+        "--cwd-root",
+        str(action_opt_dir / "runs"),
+        "--outputs-root",
+        str(action_opt_dir / "children"),
+        "--suite-output",
+        str(action_opt_suite_path),
+        "--threshold",
+        "0.8",
+        "--output",
+        str(action_opt_output_path),
+    ])
+    assert action_opt_exit_code == 0
+    action_opt = json.loads(action_opt_output_path.read_text(encoding="utf-8"))
+    assert action_opt["status"] == "passed"
+    action_opt_metadata = action_opt["optimization"]["source_manifest"]["metadata"]
+    assert action_opt_metadata["candidate_action_ids"] == [
+        "export_selected_orchestration_manifest"
+    ]
+    assert action_opt_metadata["candidate_action_kinds"] == ["download"]
+    assert action_opt["artifact_action_plan"]["selected_action_id"] == (
+        "export_selected_orchestration_manifest"
+    )
+    export_score_lineage = action_opt["artifact_action_plan"][
+        "candidate_score_lineage"
+    ][0]
+    assert export_score_lineage["action_kind"] == "download"
+    assert export_score_lineage["action_score"] == pytest.approx(1.0)
+    action_opt_suite = json.loads(action_opt_suite_path.read_text(encoding="utf-8"))
+    action_opt_job = action_opt_suite["jobs"][0]
+    assert action_opt_job["action_kind"] == "download"
+    assert action_opt_job["artifact_output"] == (
+        "artifacts/selected-orchestration-manifest.json"
+    )
+    optimized_export_path = action_opt_dir / "runs" / (
+        "export-selected-orchestration-manifest"
+    ) / "artifacts" / "selected-orchestration-manifest.json"
+    assert optimized_export_path.exists()
+    optimized_export = json.loads(optimized_export_path.read_text(encoding="utf-8"))
+    assert optimized_export["scenario"] == exported_manifest["scenario"]
+    assert optimized_export["agent"] == best_config["agent"]
     report_exit_code = main([
         "report",
         str(output_path),
