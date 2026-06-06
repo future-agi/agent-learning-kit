@@ -63,6 +63,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "OptimizerTraceEnvironment",
     "OrchestrationTraceEnvironment",
     "PersistentStateRedTeamEnvironment",
+    "RetrievalHookEnvironment",
     "RetrievalMemoryEnvironment",
     "RedTeamCampaignEnvironment",
     "RedTeamReadinessEnvironment",
@@ -604,6 +605,98 @@ def build_workflow_hook_run_manifest(
                 "boundaries, not mocked labels: the simulator must prove "
                 "auth mediation, HTTP status, latency, tool result, redacted "
                 "trace state, and domain state updates together."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+
+def build_retrieval_hook_run_manifest(
+    *,
+    name: str = "retrieval-hook-run",
+    endpoint: str,
+    tool_name: str = "retrieve_documents",
+    api_key_env: str = "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY",
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 2,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a runnable manifest for authenticated HTTP retrieval/RAG hooks."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    env_required = [api_key_env] if api_key_env else []
+    return build_task_run_manifest(
+        name=name,
+        agent=copy.deepcopy(
+            dict(agent or _retrieval_hook_agent(tool_name=tool_name))
+        ),
+        task_description=(
+            "Call an authenticated HTTP retriever, collect ranked source "
+            "documents, cite current evidence, and preserve redacted "
+            "retrieval trace diagnostics."
+        ),
+        expected_result=(
+            "doc_refund_2026 states that the current 2026 refund policy "
+            "authorizes approval when the customer refund amount is within "
+            "support limits and the decision is source grounded."
+        ),
+        scenario=scenario,
+        environments=[
+            _retrieval_hook_environment(
+                endpoint=endpoint,
+                tool_name=tool_name,
+                api_key_env=api_key_env,
+                include_auth=True,
+                candidate_profile="verified_authenticated_retrieval_hook",
+            )
+        ],
+        required_env=_unique_strings([*required_env, *env_required]),
+        available_tools=[tool_name, "read_document", "cite_sources", "retrieval_memory_status"],
+        required_tools=[tool_name, "read_document", "cite_sources", "retrieval_memory_status"],
+        success_criteria=[
+            "current refund policy document retrieved",
+            "doc_refund_2026 cited",
+            "retrieval hook auth redacted",
+            "stale doc_refund_2025 absent",
+        ],
+        evaluation_config=copy.deepcopy(
+            dict(evaluation_config or _retrieval_hook_evaluation_config(tool_name))
+        ),
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=True,
+        metadata={
+            "source": "agent_learning.simulate.build_retrieval_hook_run_manifest",
+            "cookbook": "retrieval-hook-adapter",
+            "task_kind": "retrieval_hook",
+            "research_sources": _unique_research_sources(
+                [
+                    *_retrieval_hook_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Retrieval-hook evaluation should search executable retriever "
+                "contracts, not static labels: endpoint/auth/top-k/freshness "
+                "and ranked-document/citation traces move together so "
+                "retrieval, grounding, latency, and privacy failures stay "
+                "diagnosable."
             ),
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -3163,6 +3256,185 @@ def _workflow_hook_research_sources() -> list[dict[str, Any]]:
             "year": 2026,
             "url": "https://arxiv.org/abs/2603.30016",
             "used_for": "system-level monitoring and containment around workflow hooks",
+        },
+    ]
+
+
+def _retrieval_hook_agent(*, tool_name: str) -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "I will call the authenticated retriever for the current "
+                    "refund policy, then read and cite the returned source."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "retrieve_current_policy",
+                        "name": str(tool_name),
+                        "arguments": {
+                            "query": "current refund policy 2026 source grounding",
+                            "top_k": 1,
+                            "filters": {"policy_year": 2026},
+                        },
+                    },
+                    {
+                        "id": "read_current_policy",
+                        "name": "read_document",
+                        "arguments": {"id": "doc_refund_2026"},
+                    },
+                    {
+                        "id": "cite_current_policy",
+                        "name": "cite_sources",
+                        "arguments": {
+                            "doc_ids": ["doc_refund_2026"],
+                            "claim": (
+                                "Refund approval is grounded in the current "
+                                "2026 refund policy."
+                            ),
+                            "freshness_checked": True,
+                        },
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "doc_refund_2026 states that the current 2026 refund "
+                    "policy authorizes approval when the customer refund "
+                    "amount is within support limits and the decision is "
+                    "source grounded."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "retrieval_hook_status",
+                        "name": "retrieval_memory_status",
+                        "arguments": {},
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _retrieval_hook_environment(
+    *,
+    endpoint: str,
+    tool_name: str,
+    api_key_env: str,
+    include_auth: bool,
+    candidate_profile: str,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "endpoint": str(endpoint),
+        "tool_name": str(tool_name),
+        "top_k": 1,
+        "require_current": True,
+        "metadata": {"candidate_profile": candidate_profile},
+    }
+    if include_auth and api_key_env:
+        data["auth"] = {"type": "bearer", "token_env": str(api_key_env)}
+    return {"type": "retrieval_hook", "data": data}
+
+
+def _retrieval_hook_evaluation_config(tool_name: str) -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Call an authenticated retriever, verify current ranked context, "
+            "and cite the source document without leaking credentials."
+        ),
+        "expected_result": (
+            "doc_refund_2026 states that the current 2026 refund policy "
+            "authorizes approval when the customer refund amount is within "
+            "support limits and the decision is source grounded."
+        ),
+        "available_tools": [
+            str(tool_name),
+            "read_document",
+            "cite_sources",
+            "retrieval_memory_status",
+        ],
+        "required_tools": [
+            str(tool_name),
+            "read_document",
+            "cite_sources",
+            "retrieval_memory_status",
+        ],
+        "success_criteria": [
+            "doc_refund_2026",
+            "current refund policy",
+            "citation evidence",
+            "auth redacted",
+        ],
+        "required_retrieval_memory_trace": [
+            "trace",
+            "query",
+            "document",
+            "citation",
+            "freshness",
+            "retrieval_memory_status",
+        ],
+        "expected_retrieval_doc_ids": ["doc_refund_2026"],
+        "forbidden_retrieval_doc_ids": ["doc_refund_2025"],
+        "require_current_retrieval": True,
+        "require_source_grounding": True,
+        "source_grounding_min_overlap": 0.2,
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "retrieval_context_quality": 6.0,
+            "retrieval_memory_attribution": 4.0,
+            "source_grounding": 3.0,
+            "tool_selection_accuracy": 3.0,
+            "tool_outcome": 2.0,
+            "secret_leakage": 2.0,
+            "task_completion": 2.0,
+        },
+    }
+
+
+def _retrieval_hook_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "A-RAG: Scaling Agentic Retrieval-Augmented Generation via Hierarchical Retrieval Interfaces",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.03442",
+            "used_for": "agent-callable retrieval tools with ranked multi-granularity evidence",
+        },
+        {
+            "title": "RAGe: A Retrieval-Augmented Generation Evaluation Framework",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.27445",
+            "used_for": "component-level RAG evaluation and retriever setup comparison",
+        },
+        {
+            "title": "RAGVUE: A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2601.04196",
+            "used_for": "diagnostic separation of retrieval, answer quality, and grounding failures",
+        },
+        {
+            "title": "MedRAGChecker: Claim-Level Verification for Biomedical Retrieval-Augmented Generation",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2601.06519",
+            "used_for": "claim/citation-level verification and unsupported-claim diagnostics",
+        },
+        {
+            "title": "DynaRAG: Bridging Static and Dynamic Knowledge in Retrieval-Augmented Generation",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.18012",
+            "used_for": "freshness/currentness and dynamic-knowledge fallback signals",
+        },
+        {
+            "title": "LLM Readiness Harness: Evaluation, Observability, and CI Gates for LLM/RAG Applications",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.27355",
+            "used_for": "trace observability, latency, groundedness, and CI-style gating",
+        },
+        {
+            "title": "P2RAG: Efficient Privacy-Preserving RAG Service Supporting Arbitrary Top-k Retrieval",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.14778",
+            "used_for": "top-k as a first-class variable with privacy-preserving retrieval traces",
         },
     ]
 
@@ -6363,6 +6635,7 @@ __all__ = [
     "build_stateful_tool_world_environments",
     "build_stateful_tool_world_run_manifest",
     "build_task_run_manifest",
+    "build_retrieval_hook_run_manifest",
     "build_workflow_hook_run_manifest",
     "build_workspace_observability_run_manifest",
     "build_workspace_import_certification_environments",

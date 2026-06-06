@@ -711,6 +711,122 @@ def optimize_workflow_hooks(
     )
 
 
+def build_retrieval_hook_optimization_manifest(
+    *,
+    name: str = "retrieval-hook-optimization",
+    endpoint: str,
+    tool_name: str = "retrieve_documents",
+    api_key_env: str = "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 2,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over authenticated HTTP retrieval/RAG hooks."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    from . import simulate as _agent_simulate
+
+    verified_run = _agent_simulate.build_retrieval_hook_run_manifest(
+        name=name,
+        endpoint=endpoint,
+        tool_name=tool_name,
+        api_key_env=api_key_env,
+        agent=agent,
+        evaluation_config=evaluation_config,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+        research_sources=research_sources,
+    )
+    candidates = _retrieval_hook_environment_candidates(
+        endpoint=endpoint,
+        tool_name=tool_name,
+        api_key_env=api_key_env,
+    )
+    search_space = {"simulation.environments": candidates}
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=[copy.deepcopy(dict(verified_run["agent"]))],
+        environment_candidates=candidates,
+        evaluation_config=copy.deepcopy(
+            verified_run["evaluation"]["agent_report"]["config"]
+        ),
+        scenario=copy.deepcopy(verified_run["scenario"]),
+        required_env=verified_run["required_env"],
+        optimizer=optimizer or _default_task_optimizer(search_space),
+        threshold=threshold,
+        layers=["retrieval", "retriever", "security", "integration", "evaluator"],
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=verified_run["simulation"]["max_turns"],
+        auto_execute_tools=True,
+        base_agent=copy.deepcopy(dict(verified_run["agent"])),
+        target_metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_retrieval_hook_optimization_manifest"
+            ),
+            "cookbook": "retrieval-hook-optimization",
+            "task_kind": "retrieval_hook",
+            "candidate_search_paths": ["simulation.environments"],
+            "research_sources": _unique_research_sources(
+                [
+                    *verified_run.get("metadata", {}).get("research_sources", []),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Retrieval-hook optimization should search complete retriever "
+                "contracts: endpoint, auth mediation, top-k, freshness, "
+                "ranked documents, citations, latency, and redacted trace "
+                "evidence move together as one environment candidate."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["target"]["search_space"] = copy.deepcopy(search_space)
+    manifest["optimization"]["target"]["base_config"] = {
+        "simulation": {"environments": copy.deepcopy(candidates[0])}
+    }
+    manifest["optimization"]["optimizer"] = copy.deepcopy(
+        dict(optimizer or _default_task_optimizer(search_space))
+    )
+    return manifest
+
+
+def optimize_retrieval_hooks(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute HTTP retrieval-hook optimization."""
+
+    manifest = build_retrieval_hook_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_component_optimization_manifest(
     *,
     name: str = "component-optimization",
@@ -15676,6 +15792,65 @@ def _workflow_hook_environment_candidates(
     ]
 
 
+def _retrieval_hook_environment_candidates(
+    *,
+    endpoint: str,
+    tool_name: str,
+    api_key_env: str,
+) -> list[list[dict[str, Any]]]:
+    def hook_candidate(
+        *,
+        include_auth: bool,
+        profile: str,
+    ) -> list[dict[str, Any]]:
+        data: dict[str, Any] = {
+            "endpoint": str(endpoint),
+            "tool_name": str(tool_name),
+            "top_k": 1,
+            "require_current": True,
+            "metadata": {"candidate_profile": profile},
+        }
+        if include_auth and api_key_env:
+            data["auth"] = {"type": "bearer", "token_env": str(api_key_env)}
+        return [{"type": "retrieval_hook", "data": data}]
+
+    return [
+        [
+            {
+                "type": "retrieval_memory",
+                "data": {
+                    "documents": [
+                        {
+                            "id": "doc_refund_2025",
+                            "title": "Superseded refund policy",
+                            "content": (
+                                "The 2025 refund policy is superseded and "
+                                "does not authorize the current 2026 approval."
+                            ),
+                            "source": "kb://refund-policy/2025",
+                            "current": False,
+                            "version": "2025",
+                        }
+                    ],
+                    "top_k": 1,
+                    "require_current": False,
+                    "metadata": {
+                        "candidate_profile": "stale_static_retrieval_memory"
+                    },
+                },
+            }
+        ],
+        hook_candidate(
+            include_auth=False,
+            profile="http_retrieval_hook_missing_auth",
+        ),
+        hook_candidate(
+            include_auth=True,
+            profile="verified_authenticated_retrieval_hook",
+        ),
+    ]
+
+
 def _default_artifact_optimizer(
     field_candidates: Sequence[Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
@@ -16072,6 +16247,7 @@ __all__ = [
     "build_redteam_optimization_manifest",
     "build_redteam_readiness_certification_optimization_manifest",
     "build_redteam_society_optimization_manifest",
+    "build_retrieval_hook_optimization_manifest",
     "build_social_memory_framework_optimization_manifest",
     "build_stateful_tool_world_optimization_manifest",
     "build_task_optimization_manifest",
@@ -16114,6 +16290,7 @@ __all__ = [
     "optimize_redteam_campaign",
     "optimize_redteam_readiness_certification",
     "optimize_redteam_society",
+    "optimize_retrieval_hooks",
     "optimize_social_memory_framework",
     "optimize_stateful_tool_world",
     "optimize_task",

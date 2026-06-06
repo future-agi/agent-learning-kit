@@ -498,6 +498,18 @@ For direct, non-optimizer simulation,
 run a selected retrieval/memory-lineage bundle as a normal
 `agent-learning.run.v1` artifact.
 
+For live RAG/retrieval services, `retrieval_hook` environments call real HTTP
+retriever endpoints with bearer/API-key env auth, then normalize ranked
+documents, top-k, freshness, citations, latency, and redacted request metadata
+into the same `retrieval_memory_trace` evidence used by the evaluator. The
+`sdk_retrieval_hook_optimization.py` example searches stale static retrieval,
+missing-auth HTTP retrieval, and verified authenticated retrieval bundles with
+AgentOptimizer. SDK entry points are
+`simulate.build_retrieval_hook_run_manifest()`,
+`optimize.build_retrieval_hook_optimization_manifest()`, and
+`optimize.optimize_retrieval_hooks()`; generated artifacts work with
+`agent-learn report`, `agent-learn actions`, and `agent-learn action-run`.
+
 For saved task/run artifacts, pass artifact field-extraction candidates and
 fixed structured assertions. The SDK builds a promptfoo-style optimization
 suite that selects the artifact adapter fields needed to evaluate saved
@@ -990,6 +1002,14 @@ auth before selecting the verified authenticated hook. The SDK entry points are
 `simulate.build_workflow_hook_run_manifest()`,
 `optimize.build_workflow_hook_optimization_manifest()`, and
 `optimize.optimize_workflow_hooks()`.
+
+The `sdk_retrieval_hook_optimization.py` example adds executable HTTP
+retrieval/RAG hooks. A manifest can expose `retrieval_hook` tools backed by a
+real retriever endpoint, bearer/API-key env auth, ranked source documents,
+currentness/freshness flags, citations, status/latency traces, and redacted
+request metadata. The optimizer searches complete retrieval environment bundles
+so it can reject stale static context and missing auth before selecting the
+verified authenticated hook.
 
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,

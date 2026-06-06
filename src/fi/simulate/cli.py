@@ -42,6 +42,7 @@ from fi.simulate import (
     PersistentStateRedTeamEnvironment,
     RedTeamCampaignEnvironment,
     RedTeamReadinessEnvironment,
+    RetrievalHookEnvironment,
     RetrievalMemoryEnvironment,
     Scenario,
     StatefulToolWorldEnvironment,
@@ -325,6 +326,10 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "red_team_readiness",
         "redteam_campaign",
         "redteam_readiness",
+        "retrieval_hook",
+        "retrieval_hooks",
+        "http_retrieval_hook",
+        "http_rag_hook",
         "retrieval_memory",
         "stored_prompt_injection",
         "stateful_tool_world",
@@ -874,6 +879,13 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(_build_framework_portability_environment(payload))
         elif env_type == "retrieval_memory":
             environments.append(_build_retrieval_memory_environment(payload))
+        elif env_type in {
+            "retrieval_hook",
+            "retrieval_hooks",
+            "http_retrieval_hook",
+            "http_rag_hook",
+        }:
+            environments.append(_build_retrieval_hook_environment(payload))
         elif env_type == "multi_agent_room":
             environments.append(_build_multi_agent_room_environment(payload))
         elif env_type in {"voice", "voice_replay"}:
@@ -1314,6 +1326,26 @@ def _build_retrieval_memory_environment(
         memory=dict(source.get("memory") or {}),
         top_k=int(source.get("top_k") or 3),
         require_current=bool(source.get("require_current", True)),
+        metadata=dict(source.get("metadata") or {}),
+    )
+
+
+def _build_retrieval_hook_environment(
+    payload: Mapping[str, Any],
+) -> RetrievalHookEnvironment:
+    source = dict(payload)
+    endpoint = source.get("endpoint") or source.get("url")
+    if not endpoint:
+        raise ManifestError("retrieval_hook environment requires data.endpoint")
+    return RetrievalHookEnvironment(
+        str(endpoint),
+        tool_name=str(source.get("tool_name") or source.get("tool") or "retrieve_documents"),
+        headers=dict(source.get("headers") or {}),
+        auth=dict(source.get("auth") or {}),
+        timeout=float(source.get("timeout") or 30.0),
+        top_k=int(source.get("top_k") or 3),
+        require_current=bool(source.get("require_current", True)),
+        initial_state=dict(source.get("initial_state") or source.get("state") or {}),
         metadata=dict(source.get("metadata") or {}),
     )
 

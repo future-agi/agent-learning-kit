@@ -121,6 +121,7 @@ def test_facades_expose_unified_agent_learning_modules():
         fi_simulate.OpenAICompatibleHTTPAgentWrapper
     )
     assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
+    assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
     assert simulate.run_eval_suite_file is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
@@ -225,6 +226,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_external_agent_adapter is not None
     assert optimize.build_workflow_hook_optimization_manifest is not None
     assert optimize.optimize_workflow_hooks is not None
+    assert optimize.build_retrieval_hook_optimization_manifest is not None
+    assert optimize.optimize_retrieval_hooks is not None
     assert optimize.build_component_optimization_manifest is not None
     assert optimize.optimize_component is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -9678,6 +9681,65 @@ def test_workflow_hook_manifest_builds_research_backed_environment_candidates():
     assert environments[0].name == "workflow_hook"
 
 
+def test_retrieval_hook_manifest_builds_research_backed_environment_candidates():
+    from agent_learning import optimize, simulate
+
+    endpoint = "http://127.0.0.1:8767/retrieval/query"
+    manifest = optimize.build_retrieval_hook_optimization_manifest(
+        name="sdk-retrieval-hook-optimization",
+        endpoint=endpoint,
+        required_env=["AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"],
+        api_key_env="AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY",
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"]
+    assert manifest["optimization"]["target"]["layers"] == [
+        "retrieval",
+        "retriever",
+        "security",
+        "integration",
+        "evaluator",
+    ]
+    sources = manifest["optimization"]["target"]["metadata"]["research_sources"]
+    assert len(sources) >= 6
+    assert {source["year"] for source in sources} == {2026}
+    assert {
+        "https://arxiv.org/abs/2602.03442",
+        "https://arxiv.org/abs/2605.27445",
+        "https://arxiv.org/abs/2601.04196",
+        "https://arxiv.org/abs/2601.06519",
+    } <= {source["url"] for source in sources}
+
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    assert candidates[0][0]["type"] == "retrieval_memory"
+    assert candidates[0][0]["data"]["documents"][0]["id"] == "doc_refund_2025"
+    assert candidates[1][0]["type"] == "retrieval_hook"
+    assert candidates[1][0]["data"].get("auth") is None
+    assert candidates[-1][0]["data"]["auth"] == {
+        "type": "bearer",
+        "token_env": "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY",
+    }
+    assert candidates[-1][0]["data"]["metadata"]["candidate_profile"] == (
+        "verified_authenticated_retrieval_hook"
+    )
+
+    run_manifest = simulate.build_retrieval_hook_run_manifest(endpoint=endpoint)
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert run_manifest["simulation"]["environments"][0]["type"] == "retrieval_hook"
+    eval_config = run_manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["expected_retrieval_doc_ids"] == ["doc_refund_2026"]
+    assert eval_config["forbidden_retrieval_doc_ids"] == ["doc_refund_2025"]
+    assert eval_config["require_current_retrieval"] is True
+    assert "retrieval_hook" in simulate.supported_manifest_environment_types()
+    environments = simulate.build_manifest_environments(
+        run_manifest["simulation"]["environments"]
+    )
+    assert environments[0].name == "retrieval_hook"
+
+
 def test_sdk_workflow_hook_optimization_example_runs(monkeypatch, tmp_path):
     key = "real-local-sdk-workflow-hook-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY", key)
@@ -9734,6 +9796,84 @@ def test_sdk_workflow_hook_optimization_example_runs(monkeypatch, tmp_path):
     assert key not in json.dumps(trace, sort_keys=True, default=str)
     assert [call["name"] for call in case["tool_calls"]] == [
         "execute_refund_workflow"
+    ]
+
+
+def test_sdk_retrieval_hook_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-retrieval-hook-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY", key)
+    monkeypatch.delenv("AGENT_LEARNING_SDK_RETRIEVAL_HOOK_ENDPOINT", raising=False)
+    example_path = PROJECT_ROOT / "examples" / "sdk_retrieval_hook_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_retrieval_hook_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"]
+    output_path = tmp_path / "sdk-retrieval-hook-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= result["summary"]["threshold"]
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] >= result["summary"]["threshold"]
+    assert set(best_history["patch"]) == {"simulation.environments"}
+    for metric in (
+        "tool_selection_accuracy",
+        "tool_outcome",
+        "retrieval_context_quality",
+        "retrieval_memory_attribution",
+        "secret_leakage",
+    ):
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+    best_env = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_env["type"] == "retrieval_hook"
+    assert best_env["data"]["metadata"]["candidate_profile"] == (
+        "verified_authenticated_retrieval_hook"
+    )
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    retrieval_state = state["retrieval_memory"]
+    assert [document["id"] for document in retrieval_state["documents"]] == [
+        "doc_refund_2026"
+    ]
+    assert retrieval_state["queries"][0]["documents"] == ["doc_refund_2026"]
+    assert retrieval_state["queries"][0]["ranked_documents"][0]["rank"] == 1
+    assert retrieval_state["citations"][0]["doc_ids"] == ["doc_refund_2026"]
+    assert retrieval_state["citations"][0]["freshness_checked"] is True
+    hook_state = state["retrieval_hooks"]
+    assert hook_state["summary"]["call_count"] == 1
+    assert hook_state["summary"]["success_count"] == 1
+    assert hook_state["summary"]["retrieved_document_count"] == 1
+    trace = hook_state["last_call"]
+    assert trace["tool"] == "retrieve_documents"
+    assert trace["status_code"] == 200
+    assert trace["success"] is True
+    assert trace["auth"]["redacted"] is True
+    assert trace["auth"]["token_env"] == "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+    assert trace["retrieved_doc_ids"] == ["doc_refund_2026"]
+    assert key not in json.dumps(trace, sort_keys=True, default=str)
+    assert [call["name"] for call in case["tool_calls"]] == [
+        "retrieve_documents",
+        "read_document",
+        "cite_sources",
+        "retrieval_memory_status",
     ]
 
 

@@ -555,6 +555,595 @@ class WorkflowHookEnvironment(EnvironmentAdapter):
         summary["failed_count"] = len([call for call in calls if not call.get("success")])
 
 
+class RetrievalHookEnvironment(EnvironmentAdapter):
+    """HTTP retrieval/RAG hooks normalized into retrieval-memory trace evidence."""
+
+    name = "retrieval_hook"
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        tool_name: str = "retrieve_documents",
+        headers: Optional[Mapping[str, str]] = None,
+        auth: Optional[Mapping[str, Any]] = None,
+        timeout: float = 30.0,
+        top_k: int = 3,
+        require_current: bool = True,
+        initial_state: Optional[Mapping[str, Any]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        if not endpoint:
+            raise ValueError("retrieval hook requires endpoint")
+        self.endpoint = str(endpoint)
+        self.tool_name = str(tool_name or "retrieve_documents")
+        self.headers = {str(k): str(v) for k, v in dict(headers or {}).items()}
+        self.auth = dict(auth or {})
+        self.timeout = float(timeout)
+        self.top_k = int(top_k)
+        self.require_current = bool(require_current)
+        self.initial_state = copy.deepcopy(dict(initial_state or {}))
+        self.metadata = copy.deepcopy(dict(metadata or {}))
+        self.documents: List[Dict[str, Any]] = []
+        self.queries: List[Dict[str, Any]] = []
+        self.document_reads: List[Dict[str, Any]] = []
+        self.citations: List[Dict[str, Any]] = []
+        self.hook_calls: List[Dict[str, Any]] = []
+        self.state: Dict[str, Any] = {}
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self.documents = []
+        self.queries = []
+        self.document_reads = []
+        self.citations = []
+        self.hook_calls = []
+        self.state = {
+            **copy.deepcopy(self.initial_state),
+            "retrieval_memory": self._state_payload(),
+            "retrieval_hooks": self._hook_state_payload(),
+        }
+        return EnvironmentSnapshot(
+            tools=self._tool_specs(),
+            artifacts=[self._trace_artifact()],
+            state=copy.deepcopy(self.state),
+            events=[
+                SimulationEvent(
+                    type="retrieval_memory",
+                    name="retrieval_hook_ready",
+                    payload={
+                        "tool": self.tool_name,
+                        "endpoint": _workflow_redacted_url(self.endpoint),
+                        "auth_enabled": bool(self.auth),
+                        "require_current": self.require_current,
+                    },
+                )
+            ],
+            metadata={
+                "retrieval_hook": {
+                    "tool": self.tool_name,
+                    "endpoint": _workflow_redacted_url(self.endpoint),
+                    "require_current": self.require_current,
+                    **copy.deepcopy(self.metadata),
+                }
+            },
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        name = _tool_name(tool_call)
+        if name not in {
+            self.tool_name,
+            "retrieve_documents",
+            "search_knowledge_base",
+            "query_knowledge",
+            "read_document",
+            "cite_sources",
+            "record_attribution",
+            "retrieval_memory_status",
+        }:
+            return None
+
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+        if name in {
+            self.tool_name,
+            "retrieve_documents",
+            "search_knowledge_base",
+            "query_knowledge",
+        }:
+            return self._handle_retrieve(
+                tool_name=str(name),
+                tool_call_id=call_id,
+                arguments=arguments,
+                context=context,
+            )
+        if name == "read_document":
+            doc_id = str(arguments.get("id") or arguments.get("doc_id") or "")
+            document = _find_retrieval_document(self.documents, doc_id)
+            success = document is not None
+            result = {"id": doc_id, "document": copy.deepcopy(document)}
+            if success:
+                self.document_reads.append(
+                    {"id": doc_id, "document": copy.deepcopy(dict(document))}
+                )
+            return self._tool_result(
+                tool_call_id=call_id,
+                tool_name="read_document",
+                content="Document read." if success else f"Document not found: {doc_id}",
+                result=result,
+                event_name="document_read" if success else "document_missing",
+                success=success,
+                error=None if success else "document_not_found",
+            )
+        if name in {"cite_sources", "record_attribution"}:
+            citation = self._citation_from_arguments(arguments)
+            self.citations.append(citation)
+            return self._tool_result(
+                tool_call_id=call_id,
+                tool_name=str(name),
+                content=json.dumps(citation, default=str),
+                result=citation,
+                event_name="attribution",
+            )
+        return self._tool_result(
+            tool_call_id=call_id,
+            tool_name="retrieval_memory_status",
+            content="Retrieval hook status recorded.",
+            result=self._trace_payload(),
+            event_name="retrieval_memory_status",
+        )
+
+    def _handle_retrieve(
+        self,
+        *,
+        tool_name: str,
+        tool_call_id: Optional[str],
+        arguments: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> ToolExecutionResult:
+        query = str(arguments.get("query") or arguments.get("input") or arguments.get("question") or "")
+        top_k = int(arguments.get("top_k", arguments.get("k", self.top_k)))
+        started = time.time()
+        status_code = 0
+        response_payload: Any = {}
+        error: Optional[str] = None
+        try:
+            status_code, response_payload = self._post_retrieval(
+                query=query,
+                top_k=top_k,
+                arguments=arguments,
+                context=context,
+            )
+        except Exception as exc:
+            error = str(exc)
+            response_payload = {
+                "content": f"Retrieval hook failed: {exc}",
+                "success": False,
+                "error": str(exc),
+            }
+        if status_code >= 400 and error is None:
+            error = _workflow_error_text(response_payload) or (
+                f"Retrieval hook returned status {status_code}"
+            )
+
+        normalized = self._normalize_retrieval_response(
+            response_payload,
+            query=query,
+            top_k=top_k,
+        )
+        latency_ms = round((time.time() - started) * 1000, 4)
+        success = error is None and 200 <= status_code < 300
+        trace = self._hook_trace(
+            status_code=status_code,
+            latency_ms=latency_ms,
+            success=success,
+            error=error,
+            argument_keys=sorted(arguments),
+            retrieved_doc_ids=[doc["id"] for doc in normalized["documents"]],
+            top_k=top_k,
+            query=query,
+        )
+        self._record_hook_trace(trace)
+        if success:
+            self._record_retrieval(query=query, top_k=top_k, normalized=normalized)
+
+        result_payload = {
+            "query": query,
+            "documents": copy.deepcopy(normalized["documents"]),
+            "citations": copy.deepcopy(normalized["citations"]),
+            "retrieval_hook_trace": copy.deepcopy(trace),
+        }
+        content = str(
+            _as_mapping(response_payload).get("content")
+            or _as_mapping(response_payload).get("answer")
+            or json.dumps(result_payload, default=str)
+        )
+        return self._tool_result(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            content=content,
+            result=result_payload,
+            event_name="query" if success else "retrieval_hook_failed",
+            success=success,
+            error=error,
+            hook_trace=trace,
+        )
+
+    def _post_retrieval(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        arguments: Mapping[str, Any],
+        context: Mapping[str, Any],
+    ) -> tuple[int, Any]:
+        payload = {
+            "query": query,
+            "top_k": top_k,
+            "filters": copy.deepcopy(arguments.get("filters") or {}),
+            "arguments": copy.deepcopy(dict(arguments)),
+            "thread_id": context.get("thread_id"),
+            "turn_index": context.get("turn_index"),
+        }
+        request = urllib.request.Request(
+            self.endpoint,
+            data=json.dumps(payload, default=str).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                status = int(getattr(response, "status", 200))
+                text = response.read().decode(
+                    response.headers.get_content_charset() or "utf-8"
+                )
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+            text = exc.read().decode("utf-8")
+        if not text:
+            return status, {}
+        try:
+            return status, json.loads(text)
+        except json.JSONDecodeError:
+            return status, {"content": text, "result": text}
+
+    def _headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json", **self.headers}
+        for key, value in _workflow_auth_headers(self.auth).items():
+            headers.setdefault(key, value)
+        return headers
+
+    def _normalize_retrieval_response(
+        self,
+        payload: Any,
+        *,
+        query: str,
+        top_k: int,
+    ) -> Dict[str, Any]:
+        data = _as_mapping(payload)
+        raw_docs = (
+            data.get("documents")
+            or data.get("docs")
+            or data.get("results")
+            or data.get("sources")
+            or data.get("contexts")
+            or []
+        )
+        if data.get("document"):
+            raw_docs = [data["document"], *_as_iterable(raw_docs)]
+        documents = _normalize_retrieval_documents(
+            raw_docs if isinstance(raw_docs, Mapping) else _as_iterable(raw_docs)
+        )
+        documents = documents[:top_k]
+        for index, document in enumerate(documents):
+            document.setdefault("retrieval_rank", index + 1)
+            document.setdefault(
+                "retrieval_score",
+                document.get("score", document.get("similarity", 0)),
+            )
+            if self.require_current and document.get("current") is None:
+                document["current"] = True
+
+        citations = [
+            self._normalize_citation(item, documents=documents)
+            for item in _as_iterable(data.get("citations") or data.get("attributions"))
+        ]
+        citations = [item for item in citations if item.get("doc_ids") or item.get("claim")]
+        if not citations and documents and data.get("answer"):
+            citations.append(
+                {
+                    "doc_ids": [str(doc["id"]) for doc in documents],
+                    "memory_keys": [],
+                    "claim": str(data.get("answer")),
+                    "reason": data.get("reason"),
+                    "freshness_checked": all(doc.get("current") is not False for doc in documents),
+                }
+            )
+        return {"query": query, "documents": documents, "citations": citations}
+
+    def _normalize_citation(
+        self,
+        raw: Any,
+        *,
+        documents: Sequence[Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        item = _as_mapping(raw)
+        doc_ids = [
+            str(value)
+            for value in _as_iterable(
+                item.get("doc_ids")
+                or item.get("document_ids")
+                or item.get("documents")
+                or item.get("sources")
+            )
+            if value not in (None, "")
+        ]
+        if item.get("doc_id") and str(item["doc_id"]) not in doc_ids:
+            doc_ids.append(str(item["doc_id"]))
+        if not doc_ids and documents:
+            doc_ids = [str(doc["id"]) for doc in documents]
+        return {
+            "doc_ids": doc_ids,
+            "memory_keys": [
+                str(value)
+                for value in _as_iterable(item.get("memory_keys"))
+                if value not in (None, "")
+            ],
+            "claim": item.get("claim") or item.get("answer") or item.get("text"),
+            "reason": item.get("reason"),
+            "freshness_checked": bool(
+                item.get(
+                    "freshness_checked",
+                    item.get(
+                        "current",
+                        all(doc.get("current") is not False for doc in documents),
+                    ),
+                )
+            ),
+        }
+
+    def _citation_from_arguments(self, arguments: Mapping[str, Any]) -> Dict[str, Any]:
+        return {
+            "doc_ids": [
+                str(item)
+                for item in _as_iterable(
+                    arguments.get("doc_ids", arguments.get("documents", []))
+                )
+                if item not in (None, "")
+            ],
+            "memory_keys": [
+                str(item)
+                for item in _as_iterable(arguments.get("memory_keys", []))
+                if item not in (None, "")
+            ],
+            "claim": arguments.get("claim") or arguments.get("answer") or arguments.get("text"),
+            "reason": arguments.get("reason"),
+            "freshness_checked": bool(arguments.get("freshness_checked", arguments.get("current", False))),
+        }
+
+    def _record_retrieval(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        normalized: Mapping[str, Any],
+    ) -> None:
+        documents = [copy.deepcopy(dict(doc)) for doc in _as_iterable(normalized.get("documents"))]
+        by_id = {str(doc.get("id")): doc for doc in self.documents}
+        for document in documents:
+            by_id[str(document.get("id"))] = document
+        self.documents = list(by_id.values())
+        self.queries.append(
+            {
+                "query": query,
+                "top_k": top_k,
+                "include_stale": not self.require_current,
+                "documents": [str(doc.get("id")) for doc in documents],
+                "ranked_documents": [
+                    {
+                        "id": str(doc.get("id")),
+                        "rank": doc.get("retrieval_rank", index + 1),
+                        "score": doc.get("retrieval_score", doc.get("score", 0)),
+                        "current": doc.get("current"),
+                        "source": doc.get("source"),
+                    }
+                    for index, doc in enumerate(documents)
+                ],
+            }
+        )
+        for citation in _as_iterable(normalized.get("citations")):
+            self.citations.append(copy.deepcopy(dict(citation)))
+
+    def _record_hook_trace(self, trace: Mapping[str, Any]) -> None:
+        self.hook_calls.append(copy.deepcopy(dict(trace)))
+        self.state["retrieval_hooks"] = self._hook_state_payload()
+        self.state["retrieval_memory"] = self._state_payload()
+
+    def _hook_trace(
+        self,
+        *,
+        status_code: int,
+        latency_ms: float,
+        success: bool,
+        error: Optional[str],
+        argument_keys: Sequence[str],
+        retrieved_doc_ids: Sequence[str],
+        top_k: int,
+        query: str,
+    ) -> Dict[str, Any]:
+        headers = self._headers()
+        parsed = urlparse(self.endpoint)
+        return {
+            "kind": "retrieval_hook_trace",
+            "tool": self.tool_name,
+            "endpoint": _workflow_redacted_url(self.endpoint),
+            "endpoint_host": parsed.netloc,
+            "method": "POST",
+            "status_code": int(status_code),
+            "latency_ms": latency_ms,
+            "success": bool(success),
+            "error": error,
+            "argument_keys": list(argument_keys),
+            "request_header_names": sorted(headers),
+            "auth": _workflow_auth_metadata(self.auth, headers),
+            "query_present": bool(query),
+            "query_length": len(query),
+            "top_k": int(top_k),
+            "retrieved_doc_ids": [str(doc_id) for doc_id in retrieved_doc_ids],
+            **copy.deepcopy(self.metadata),
+        }
+
+    def _tool_specs(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": self.tool_name,
+                "description": "Call the HTTP retriever and return ranked source documents with citations.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "top_k": {"type": "integer"},
+                        "filters": {"type": "object"},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "read_document",
+                "description": "Read one document returned by the retrieval hook.",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}},
+            },
+            {
+                "name": "cite_sources",
+                "description": "Record source attribution for retrieved documents.",
+                "parameters": {"type": "object", "properties": {"doc_ids": {"type": "array"}}},
+            },
+            {
+                "name": "retrieval_memory_status",
+                "description": "Inspect retrieval hook, citation, and trace state.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ]
+
+    def _tool_result(
+        self,
+        *,
+        tool_call_id: Optional[str],
+        tool_name: str,
+        content: str,
+        result: Any,
+        event_name: str,
+        success: bool = True,
+        error: Optional[str] = None,
+        hook_trace: Optional[Mapping[str, Any]] = None,
+    ) -> ToolExecutionResult:
+        self.state["retrieval_memory"] = self._state_payload()
+        self.state["retrieval_hooks"] = self._hook_state_payload()
+        state_updates = {
+            "retrieval_memory": self._state_payload(),
+            "retrieval_hooks": self._hook_state_payload(),
+        }
+        artifacts = [self._trace_artifact()]
+        if hook_trace is not None:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="tool",
+                    data=copy.deepcopy(dict(hook_trace)),
+                    metadata={"kind": "retrieval_hook_trace", "tool": self.tool_name},
+                )
+            )
+        events = [
+            SimulationEvent(
+                type="retrieval_memory",
+                name=event_name,
+                payload=result if isinstance(result, dict) else {"result": result},
+            ),
+            SimulationEvent(
+                type="tool_execution",
+                name=tool_name,
+                payload={
+                    "tool_name": tool_name,
+                    "result": copy.deepcopy(result),
+                    "success": success,
+                    "error": error,
+                    "state_updates": copy.deepcopy(state_updates),
+                },
+            ),
+        ]
+        if hook_trace is not None:
+            events.append(
+                SimulationEvent(
+                    type="retrieval_hook",
+                    name=self.tool_name,
+                    payload=copy.deepcopy(dict(hook_trace)),
+                )
+            )
+        return ToolExecutionResult(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            content=content,
+            result=result,
+            success=success,
+            error=error,
+            state_updates=state_updates,
+            artifacts=artifacts,
+            events=events,
+            metadata={
+                "retrieval_hook_trace": copy.deepcopy(dict(hook_trace))
+                if hook_trace is not None
+                else {}
+            },
+        )
+
+    def _trace_artifact(self) -> SimulationArtifact:
+        return SimulationArtifact(
+            type="trace",
+            role="environment",
+            data=self._trace_payload(),
+            metadata={"kind": "retrieval_memory_trace"},
+        )
+
+    def _trace_payload(self) -> Dict[str, Any]:
+        return {
+            "kind": "retrieval_memory_trace",
+            "documents": copy.deepcopy(self.documents),
+            "queries": copy.deepcopy(self.queries),
+            "document_reads": copy.deepcopy(self.document_reads),
+            "memory_reads": [],
+            "memory_writes": [],
+            "citations": copy.deepcopy(self.citations),
+            "memory": {},
+            "require_current": self.require_current,
+            "metadata": {
+                **copy.deepcopy(self.metadata),
+                "retrieval_hook": self._hook_state_payload(),
+            },
+        }
+
+    def _state_payload(self) -> Dict[str, Any]:
+        return self._trace_payload()
+
+    def _hook_state_payload(self) -> Dict[str, Any]:
+        successful = [call for call in self.hook_calls if call.get("success")]
+        return {
+            "configured_hooks": [self.tool_name],
+            "calls": copy.deepcopy(self.hook_calls),
+            "last_call": copy.deepcopy(self.hook_calls[-1]) if self.hook_calls else None,
+            "summary": {
+                "configured_hook_count": 1,
+                "call_count": len(self.hook_calls),
+                "success_count": len(successful),
+                "failed_count": len(self.hook_calls) - len(successful),
+                "retrieved_document_count": len(self.documents),
+                "citation_count": len(self.citations),
+            },
+        }
+
+
 class WorldContractEnvironment(EnvironmentAdapter):
     """
     Local state-machine world contract for arbitrary agent tasks.
