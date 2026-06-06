@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 from pathlib import Path
@@ -95,6 +96,42 @@ V1_REQUIRED_SCHEMA_KINDS = [
     "agent-learning.suite-optimization.v1",
     "agent-learning.actions.v1",
     "agent-learning.action-run.v1",
+]
+
+V1_UI_ACTION_REPORT_ARTIFACTS = [
+    {
+        "path": "examples/fixtures/task_artifacts/refund_task_run.json",
+        "source_kind": "agent-learning.run.v1",
+        "required_report_sections": ["summary", "orchestration_strategy"],
+        "required_action_ids": [
+            "report_artifact",
+            "report_orchestration_strategy",
+            "rerun_orchestration_simulation",
+            "optimize_orchestration_strategy",
+        ],
+        "requires_outputs_written": False,
+    },
+    {
+        "path": "examples/artifacts/action-loop/action-run.json",
+        "source_kind": "agent-learning.action-run.v1",
+        "required_report_sections": ["summary"],
+        "required_action_ids": ["report_artifact"],
+        "requires_outputs_written": True,
+    },
+]
+
+V1_UI_FORBIDDEN_SECRET_MARKERS = [
+    "real-local",
+    "AGENT_LEARNING_API_KEY",
+    "AGENT_LEARNING_SECRET_KEY",
+    "FUTURE_AGI_API_KEY",
+    "FUTURE_AGI_SECRET_KEY",
+    "FI_API_KEY",
+    "FI_SECRET_KEY",
+    "api_key",
+    "secret_key",
+    "authorization",
+    "bearer ",
 ]
 
 V1_REQUIRED_DOCS = [
@@ -458,6 +495,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M5",
         evidence={"required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS)},
     )
+    ui_action_report = _release_ui_action_report_status(root)
+    _append_release_check(
+        checks,
+        check_id="ui_action_report_readiness",
+        passed=(
+            not ui_action_report["missing_files"]
+            and not ui_action_report["failing_reports"]
+            and not ui_action_report["missing_report_sections"]
+            and not ui_action_report["missing_action_ids"]
+            and not ui_action_report["missing_output_evidence"]
+            and not ui_action_report["secret_marker_findings"]
+            and not ui_action_report["errors"]
+        ),
+        milestone="M5",
+        evidence=ui_action_report,
+    )
     missing_framework_provider = _missing_relative_paths(
         root,
         V1_FRAMEWORK_PROVIDER_EXAMPLES,
@@ -530,6 +583,10 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_redteam_research_attack_types": list(V1_REDTEAM_RESEARCH_ATTACK_TYPES),
         "required_redteam_research_surfaces": list(V1_REDTEAM_RESEARCH_SURFACES),
         "required_redteam_research_source_urls": list(V1_REDTEAM_RESEARCH_SOURCE_URLS),
+        "required_ui_action_report_artifacts": copy.deepcopy(
+            V1_UI_ACTION_REPORT_ARTIFACTS
+        ),
+        "forbidden_ui_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_docs": list(V1_REQUIRED_DOCS),
         "required_evidence_components": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
@@ -746,6 +803,233 @@ def _release_norm(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
+def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
+    missing_files: list[str] = []
+    failing_reports: list[dict[str, Any]] = []
+    missing_report_sections: list[dict[str, Any]] = []
+    missing_action_ids: list[dict[str, Any]] = []
+    missing_output_evidence: list[dict[str, Any]] = []
+    secret_marker_findings: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    artifacts: list[dict[str, Any]] = []
+
+    try:
+        from agent_learning import actions, simulate
+    except Exception as exc:
+        return {
+            "required_artifacts": copy.deepcopy(V1_UI_ACTION_REPORT_ARTIFACTS),
+            "forbidden_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
+            "artifacts": [],
+            "missing_files": [],
+            "failing_reports": [],
+            "missing_report_sections": [],
+            "missing_action_ids": [],
+            "missing_output_evidence": [],
+            "secret_marker_findings": [],
+            "errors": [{"path": ".", "error": str(exc)}],
+        }
+
+    for spec in V1_UI_ACTION_REPORT_ARTIFACTS:
+        relative_path = str(spec["path"])
+        path = root / relative_path
+        if not path.exists():
+            missing_files.append(relative_path)
+            continue
+        try:
+            artifact = actions.load_artifact_file(path)
+            report = simulate.render_report(artifact, source_path=path)
+            catalog = actions.action_catalog(artifact, source_path=path)
+        except Exception as exc:
+            errors.append({"path": relative_path, "error": str(exc)})
+            continue
+
+        source_kind = str(
+            artifact.get("kind")
+            or artifact.get("version")
+            or artifact.get("schema_version")
+            or ""
+        )
+        expected_source_kind = str(spec.get("source_kind") or "")
+        if expected_source_kind and source_kind != expected_source_kind:
+            errors.append(
+                {
+                    "path": relative_path,
+                    "error": (
+                        f"source kind {source_kind!r} != "
+                        f"{expected_source_kind!r}"
+                    ),
+                }
+            )
+
+        report_summary = dict(report.get("summary") or {})
+        report_body = dict(report.get("report") or {})
+        report_sections = list(
+            report_summary.get("sections") or report_body.get("sections") or []
+        )
+        report_markdown = str(report_body.get("markdown") or "")
+        report_card_keys = sorted(
+            key
+            for key in report_body
+            if key not in {"format", "markdown", "sections", "source_path"}
+        )
+        report_core_missing = [
+            field
+            for field in ("kind", "schema_version", "status", "summary", "report")
+            if field not in report or report.get(field) in (None, "", {}, [])
+        ]
+        if (
+            report.get("kind") != "agent-learning.report.v1"
+            or report.get("status") != "passed"
+            or not report_markdown.strip()
+            or report_core_missing
+        ):
+            failing_reports.append(
+                {
+                    "path": relative_path,
+                    "kind": report.get("kind"),
+                    "status": report.get("status"),
+                    "missing_core_fields": report_core_missing,
+                    "markdown_present": bool(report_markdown.strip()),
+                }
+            )
+
+        required_sections = [str(item) for item in spec["required_report_sections"]]
+        missing_sections = sorted(set(required_sections) - set(report_sections))
+        if missing_sections:
+            missing_report_sections.append(
+                {
+                    "path": relative_path,
+                    "required": required_sections,
+                    "observed": report_sections,
+                    "missing": missing_sections,
+                }
+            )
+
+        action_ids = [
+            str(action.get("id"))
+            for action in catalog.get("actions") or []
+            if isinstance(action, Mapping) and action.get("id")
+        ]
+        report_action_ids = [
+            str(action.get("id"))
+            for action in actions.extract_actions(report)
+            if action.get("id")
+        ]
+        catalog_core_missing = [
+            field
+            for field in ("kind", "schema_version", "status", "summary", "actions")
+            if field not in catalog or catalog.get(field) in (None, "", {})
+        ]
+        if (
+            catalog.get("kind") != "agent-learning.actions.v1"
+            or catalog.get("status") != "passed"
+            or catalog_core_missing
+        ):
+            missing_action_ids.append(
+                {
+                    "path": relative_path,
+                    "required": list(spec["required_action_ids"]),
+                    "observed": action_ids,
+                    "missing": [],
+                    "catalog_status": catalog.get("status"),
+                    "catalog_missing_core_fields": catalog_core_missing,
+                }
+            )
+        required_action_ids = [str(item) for item in spec["required_action_ids"]]
+        missing_actions = sorted(set(required_action_ids) - set(action_ids))
+        if missing_actions:
+            missing_action_ids.append(
+                {
+                    "path": relative_path,
+                    "required": required_action_ids,
+                    "observed": action_ids,
+                    "missing": missing_actions,
+                }
+            )
+
+        outputs_written = list(artifact.get("outputs_written") or [])
+        output_completion_rate = (
+            dict(artifact.get("summary") or {}).get("output_completion_rate")
+        )
+        if spec.get("requires_outputs_written") and (
+            not outputs_written or output_completion_rate != 1.0
+        ):
+            missing_output_evidence.append(
+                {
+                    "path": relative_path,
+                    "outputs_written_count": len(outputs_written),
+                    "output_completion_rate": output_completion_rate,
+                }
+            )
+
+        secret_marker_findings.extend(
+            _release_secret_marker_findings(
+                relative_path,
+                {
+                    "source": artifact,
+                    "report": report,
+                    "actions": catalog,
+                },
+            )
+        )
+        artifacts.append(
+            {
+                "path": relative_path,
+                "source_kind": source_kind,
+                "report_kind": report.get("kind"),
+                "report_status": report.get("status"),
+                "report_sections": report_sections,
+                "report_card_keys": report_card_keys,
+                "report_action_ids": report_action_ids,
+                "action_catalog_kind": catalog.get("kind"),
+                "action_catalog_status": catalog.get("status"),
+                "action_ids": action_ids,
+                "source_card_paths": list(
+                    dict(catalog.get("summary") or {}).get("source_card_paths")
+                    or []
+                ),
+                "outputs_written_count": len(outputs_written),
+                "output_completion_rate": output_completion_rate,
+            }
+        )
+
+    return {
+        "required_artifacts": copy.deepcopy(V1_UI_ACTION_REPORT_ARTIFACTS),
+        "forbidden_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
+        "artifacts": artifacts,
+        "missing_files": missing_files,
+        "failing_reports": failing_reports,
+        "missing_report_sections": missing_report_sections,
+        "missing_action_ids": missing_action_ids,
+        "missing_output_evidence": missing_output_evidence,
+        "secret_marker_findings": secret_marker_findings,
+        "errors": errors,
+    }
+
+
+def _release_secret_marker_findings(
+    relative_path: str,
+    payloads: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for surface, payload in payloads.items():
+        try:
+            text = json.dumps(payload, sort_keys=True, default=str)
+        except Exception:
+            text = str(payload)
+        lowered = text.lower()
+        for marker in V1_UI_FORBIDDEN_SECRET_MARKERS:
+            if marker.lower() in lowered:
+                findings.append(
+                    {
+                        "path": relative_path,
+                        "surface": str(surface),
+                        "marker": marker,
+                    }
+                )
+    return findings
+
+
 def _read_pyproject(root: Path) -> dict[str, Any]:
     pyproject = root / "pyproject.toml"
     if not pyproject.exists():
@@ -856,6 +1140,8 @@ __all__ = [
     "V1_REDTEAM_RESEARCH_FILES",
     "V1_REDTEAM_RESEARCH_SOURCE_URLS",
     "V1_REDTEAM_RESEARCH_SURFACES",
+    "V1_UI_ACTION_REPORT_ARTIFACTS",
+    "V1_UI_FORBIDDEN_SECRET_MARKERS",
     "assert_release_ready",
     "assert_trinity_ready",
     "consolidation_metadata",

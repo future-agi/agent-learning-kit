@@ -139,6 +139,13 @@ Next implementation focus:
 
 Status: in progress.
 
+Current checkpoint:
+
+- `agent-learn release-check` now gates representative UI/action/report
+  readiness. It renders reports, builds action catalogs, verifies required
+  report sections/action ids, checks saved `action-run` output evidence, and
+  scans generated UI payloads for key-like secret markers.
+
 Acceptance gates:
 
 - Every major artifact includes `kind`, `schema_version`, `status`, `summary`,
@@ -151,8 +158,8 @@ Acceptance gates:
 
 Next implementation focus:
 
-- Add release-check gates for report/action readiness across representative V1
-  artifacts.
+- Extend the same gate to additional representative optimization, red-team, and
+  suite artifacts as the V1 fixture set grows.
 
 ### M6: Framework/Provider Simulation Surface
 

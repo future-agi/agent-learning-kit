@@ -48,7 +48,10 @@ Run `agent-learn release-check --project-root .` before cutting V1. It emits
 promptfoo-style CLI, native optimizer evidence, required docs/examples, schema
 kinds, packaging metadata, and research-backed red-team corpus/campaign
 coverage across required examples, attack types, surfaces, source lineage, and
-the canonical local corpus rows.
+the canonical local corpus rows. It also gates representative Future AGI
+UI/action/report readiness: renderable report payloads, executable action
+catalogs, saved action-run output evidence, and key-like secret-marker
+redaction.
 
 Python code can verify the same boundary without shelling out:
 

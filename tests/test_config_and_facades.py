@@ -12464,6 +12464,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_research_source_urls"] == (
         trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
     )
+    assert payload["required_ui_action_report_artifacts"] == (
+        trinity.V1_UI_ACTION_REPORT_ARTIFACTS
+    )
+    assert payload["forbidden_ui_secret_markers"] == (
+        trinity.V1_UI_FORBIDDEN_SECRET_MARKERS
+    )
     assert payload["required_framework_provider_examples"] == (
         trinity.V1_FRAMEWORK_PROVIDER_EXAMPLES
     )
@@ -12481,6 +12487,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "redteam_core_examples_present",
         "redteam_research_coverage",
         "schema_kind_contract",
+        "ui_action_report_readiness",
         "framework_provider_examples_present",
         "package_metadata",
     }
@@ -12541,6 +12548,48 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(redteam_research["corpus_observed_source_urls"]) >= set(
         trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
     )
+    ui_readiness = checks["ui_action_report_readiness"]["evidence"]
+    assert ui_readiness["missing_files"] == []
+    assert ui_readiness["failing_reports"] == []
+    assert ui_readiness["missing_report_sections"] == []
+    assert ui_readiness["missing_action_ids"] == []
+    assert ui_readiness["missing_output_evidence"] == []
+    assert ui_readiness["secret_marker_findings"] == []
+    assert ui_readiness["errors"] == []
+    assert ui_readiness["required_artifacts"] == (
+        trinity.V1_UI_ACTION_REPORT_ARTIFACTS
+    )
+    assert ui_readiness["forbidden_secret_markers"] == (
+        trinity.V1_UI_FORBIDDEN_SECRET_MARKERS
+    )
+    artifacts = {item["path"]: item for item in ui_readiness["artifacts"]}
+    run_artifact = artifacts[
+        "examples/fixtures/task_artifacts/refund_task_run.json"
+    ]
+    assert run_artifact["source_kind"] == "agent-learning.run.v1"
+    assert run_artifact["report_kind"] == "agent-learning.report.v1"
+    assert run_artifact["report_status"] == "passed"
+    assert {"summary", "orchestration_strategy"} <= set(
+        run_artifact["report_sections"]
+    )
+    assert {"orchestration_strategy"} <= set(run_artifact["report_card_keys"])
+    assert {
+        "report_artifact",
+        "report_orchestration_strategy",
+        "rerun_orchestration_simulation",
+        "optimize_orchestration_strategy",
+    } <= set(run_artifact["action_ids"])
+    assert {
+        "report_orchestration_strategy",
+        "rerun_orchestration_simulation",
+        "optimize_orchestration_strategy",
+    } <= set(run_artifact["report_action_ids"])
+    action_run_artifact = artifacts["examples/artifacts/action-loop/action-run.json"]
+    assert action_run_artifact["source_kind"] == "agent-learning.action-run.v1"
+    assert action_run_artifact["report_sections"] == ["summary"]
+    assert action_run_artifact["outputs_written_count"] == 2
+    assert action_run_artifact["output_completion_rate"] == pytest.approx(1.0)
+    assert "report_artifact" in action_run_artifact["action_ids"]
     assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
     evidence = checks["native_optimizer_evidence_components"]["evidence"]
     assert evidence["missing"] == []
