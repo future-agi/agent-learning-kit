@@ -103,9 +103,17 @@ def _vendored_import_failed(command: str, exc: Exception) -> int:
     return 2
 
 
+def _simulate_cli_module() -> Any:
+    return importlib.import_module("agent_learning.simulate.cli")
+
+
+def _eval_cli_app() -> Any:
+    return importlib.import_module("agent_learning.evals.cli.main").app
+
+
 def _simulate(args: Sequence[str]) -> int:
     try:
-        cli = importlib.import_module("fi.simulate.cli")
+        cli = _simulate_cli_module()
     except Exception as exc:
         return _vendored_import_failed("agent-learn simulate", exc)
     exit_code = int(cli.main(list(args)))
@@ -162,7 +170,7 @@ def _init(args: Sequence[str]) -> int:
     parsed = parser.parse_args(list(args))
 
     try:
-        cli = importlib.import_module("fi.simulate.cli")
+        cli = _simulate_cli_module()
     except Exception as exc:
         return _vendored_import_failed("agent-learn init", exc)
 
@@ -685,7 +693,7 @@ def _eval_cli(args: Sequence[str]) -> int:
     try:
         from typer.main import get_command
 
-        app = importlib.import_module("fi.cli.main").app
+        app = _eval_cli_app()
     except Exception as exc:
         return _vendored_import_failed("agent-learn eval-cli", exc)
 
@@ -954,10 +962,15 @@ def _redteam(args: Sequence[str]) -> int:
 def _redteam_corpus(args: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="agent-learn redteam-corpus",
-        description="Fetch authenticated red-team corpus rows and write campaign evidence.",
+        description=(
+            "Import local or authenticated red-team corpus rows and write "
+            "campaign evidence."
+        ),
     )
     _add_redteam_corpus_args(parser)
     parsed = parser.parse_args(list(args))
+    if bool(parsed.corpus) == bool(parsed.hook):
+        parser.error("provide exactly one of --corpus/--corpus-file or --hook")
 
     try:
         from agent_learning import redteam
@@ -965,13 +978,49 @@ def _redteam_corpus(args: Sequence[str]) -> int:
         return _vendored_import_failed("agent-learn redteam-corpus", exc)
 
     try:
-        campaign = redteam.build_redteam_corpus_hook_campaign(
-            name=parsed.name,
-            endpoint=parsed.hook,
-            api_key_env=parsed.hook_api_key_env,
-            method=parsed.hook_method,
-            timeout=parsed.timeout,
-        )
+        corpus_trace: Dict[str, Any]
+        if parsed.corpus:
+            corpus_path = Path(parsed.corpus).expanduser().resolve()
+            corpus_rows = _load_redteam_corpus_rows(corpus_path)
+            campaign = redteam.build_redteam_corpus_campaign(
+                name=parsed.name,
+                corpus_rows=corpus_rows,
+                metadata={
+                    "source": "agent_learning.cli.redteam_corpus_file",
+                    "cookbook": "redteam-corpus-local-file",
+                    "corpus_source": {
+                        "path": str(corpus_path),
+                        "row_count": len(corpus_rows),
+                    },
+                    "original_synthesis": (
+                        "Local red-team corpora should enter the platform as "
+                        "offline benchmark evidence, then reuse the same "
+                        "campaign matrix, artifact, mitigation, and "
+                        "observability contract as live corpus hooks."
+                    ),
+                },
+            )
+            corpus_trace = {
+                "mode": "local_file",
+                "path": str(corpus_path),
+                "row_count": len(corpus_rows),
+                "success": True,
+            }
+        else:
+            campaign = redteam.build_redteam_corpus_hook_campaign(
+                name=parsed.name,
+                endpoint=parsed.hook,
+                api_key_env=parsed.hook_api_key_env,
+                method=parsed.hook_method,
+                timeout=parsed.timeout,
+            )
+            hook_trace = dict(campaign.get("metadata", {}).get("hook_trace") or {})
+            corpus_trace = {
+                "mode": "hook",
+                "row_count": hook_trace.get("row_count", 0),
+                "success": bool(hook_trace.get("success")),
+                "hook": hook_trace,
+            }
     except Exception as exc:
         print(f"agent-learn redteam-corpus: {exc}", file=sys.stderr)
         return 1
@@ -985,7 +1034,7 @@ def _redteam_corpus(args: Sequence[str]) -> int:
         *list(summary.get("missing_mitigation_cells") or []),
         *list(summary.get("unmapped_findings") or []),
     ]
-    status = "passed" if not blocking_gaps and hook_trace.get("success") else "failed"
+    status = "passed" if not blocking_gaps and corpus_trace.get("success") else "failed"
     payload: Dict[str, Any] = {
         "schema_version": "agent-learning.cli.v1",
         "kind": AGENT_LEARNING_REDTEAM_KIND,
@@ -994,7 +1043,7 @@ def _redteam_corpus(args: Sequence[str]) -> int:
         "redteam_campaign": campaign,
         "summary": {
             "name": campaign.get("name"),
-            "row_count": hook_trace.get("row_count", summary.get("run_count", 0)),
+            "row_count": corpus_trace.get("row_count", summary.get("run_count", 0)),
             "coverage_cell_count": summary.get("coverage_cell_count", 0),
             "covered_cell_count": summary.get("covered_cell_count", 0),
             "executed_cell_count": summary.get("executed_cell_count", 0),
@@ -1002,6 +1051,7 @@ def _redteam_corpus(args: Sequence[str]) -> int:
             "finding_count": summary.get("finding_count", 0),
             "mitigation_count": summary.get("mitigation_count", 0),
             "blocking_gap_count": len(blocking_gaps),
+            "source": corpus_trace,
             "hook": hook_trace,
         },
         "metadata": dict(campaign.get("metadata") or {}),
@@ -1456,8 +1506,17 @@ def _add_redteam_args(parser: argparse.ArgumentParser) -> None:
 def _add_redteam_corpus_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--hook",
-        required=True,
         help="Authenticated HTTP endpoint returning red-team corpus rows.",
+    )
+    parser.add_argument(
+        "--corpus",
+        "--corpus-file",
+        dest="corpus",
+        default=None,
+        help=(
+            "Local JSON/YAML corpus file. Accepts a top-level list or an object "
+            "with rows, corpus_rows, attacks, or cases."
+        ),
     )
     parser.add_argument(
         "-o",
@@ -1485,7 +1544,7 @@ def _add_redteam_corpus_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--name",
-        default="redteam-corpus-hook-campaign",
+        default="redteam-corpus-campaign",
         help="Campaign name for generated evidence.",
     )
     parser.add_argument(
@@ -2014,6 +2073,41 @@ def _write_json_file(path: Path, value: Mapping[str, Any]) -> None:
         json.dumps(value, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+
+
+def _load_redteam_corpus_rows(path: Path) -> List[Mapping[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(f"red-team corpus file not found: {path}")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        try:
+            import yaml  # type: ignore
+        except Exception as exc:  # pragma: no cover - optional dependency clarity
+            raise RuntimeError("YAML red-team corpus files require PyYAML.") from exc
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    else:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+
+    rows_payload: Any = payload
+    if isinstance(payload, Mapping):
+        for key in ("rows", "corpus_rows", "attacks", "cases"):
+            candidate = payload.get(key)
+            if candidate is not None:
+                rows_payload = candidate
+                break
+    rows = _as_list(rows_payload)
+    if not rows:
+        raise ValueError("red-team corpus file did not contain any rows")
+    invalid = [
+        index
+        for index, row in enumerate(rows, start=1)
+        if not isinstance(row, Mapping)
+    ]
+    if invalid:
+        raise ValueError(
+            "red-team corpus rows must be objects; invalid row index(es): "
+            + ", ".join(str(index) for index in invalid)
+        )
+    return [dict(row) for row in rows]
 
 
 def _agent_learning_eval_suite_manifest(name: str) -> Dict[str, Any]:

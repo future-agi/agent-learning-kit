@@ -1069,13 +1069,13 @@ def optimize_suite(
         }, kind=AGENT_LEARNING_SUITE_OPTIMIZATION_KIND)
 
     try:
-        from fi.opt import problem_from_agent_learning_suite
+        from agent_learning import optimize as agent_optimize
     except Exception as exc:  # pragma: no cover - optional dependency clarity
         raise SuiteError(
             "Agent Learning Kit optimizer engine is required for suite optimization."
         ) from exc
 
-    problem = problem_from_agent_learning_suite(
+    problem = agent_optimize.problem_from_agent_learning_suite(
         prepared,
         suite_path=suite_path,
         name=str(prepared.get("name") or suite_path.stem),
@@ -3571,7 +3571,7 @@ def _merge_optimization_options(
 def _optimization_cli() -> Any:
     import importlib
 
-    return importlib.import_module("fi.simulate.cli")
+    return importlib.import_module("agent_learning.simulate.cli")
 
 
 def _load_json_or_yaml(path: Path) -> Any:

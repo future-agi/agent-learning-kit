@@ -343,6 +343,8 @@ for _name in _HALLUCINATION_EXPORT_NAMES:
 
 _EVAL_SUBMODULE_ALIASES = {
     "autoeval": "fi.evals.autoeval",
+    "cli": "fi.cli",
+    "cli.main": "fi.cli.main",
     "core": "fi.evals.core",
     "core.prompt_generator": "fi.evals.core.prompt_generator",
     "feedback": "fi.evals.feedback",

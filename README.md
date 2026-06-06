@@ -75,6 +75,9 @@ agent-learn redteam examples/redteam_manifest.json --output artifacts/redteam.js
 agent-learn redteam examples/long_horizon_redteam_manifest.json \
   --output artifacts/long-horizon-redteam.json
 agent-learn redteam-corpus \
+  --corpus examples/redteam_corpus.json \
+  --output artifacts/redteam-corpus.json
+agent-learn redteam-corpus \
   --hook http://127.0.0.1:8080/redteam/corpus \
   --output artifacts/redteam-corpus-hook.json
 agent-learn optimize examples/optimization_manifest.json --output artifacts/optimization.json
@@ -1277,10 +1280,15 @@ optimizer searches weak/partial/verified corpus candidates as
 `simulation_evidence`, so missing taxonomy/source/matrix evidence becomes an
 optimizer diagnosis rather than a silent prompt-list gap. See
 `examples/sdk_redteam_corpus_optimization.py`.
+CLI users can import the same local corpus rows without a hook:
+`agent-learn redteam-corpus --corpus examples/redteam_corpus.json --output
+artifacts/redteam-corpus.json`. The command accepts a top-level list or an
+object with `rows`, `corpus_rows`, `attacks`, or `cases`, then emits the same
+campaign evidence and report/action follow-ups used by SDK callers.
 
 `redteam.fetch_redteam_corpus_hook()` and
-`redteam.build_redteam_corpus_hook_campaign()` add an authenticated external
-red-team corpus hook. A live HTTP endpoint can return RedBench/DTap/
+`redteam.build_redteam_corpus_hook_campaign()` add an optional authenticated
+external red-team corpus hook. A live HTTP endpoint can return RedBench/DTap/
 MonitoringBench/SOAR-style rows under `rows`, `corpus_rows`, `attacks`, or
 `cases`; the SDK fetches them with bearer env auth, records a redacted
 `redteam_corpus_hook_trace`, and normalizes them into the same

@@ -337,7 +337,7 @@ def _synthesized_report_artifact(
     source_path: str | Path,
 ) -> Optional[dict[str, Any]]:
     try:
-        cli = importlib.import_module("fi.simulate.cli")
+        cli = importlib.import_module("agent_learning.simulate.cli")
         report = cli._report_result(
             source=artifact,
             source_path=Path(source_path),
