@@ -951,6 +951,8 @@ def render_junit(result: Mapping[str, Any]) -> str:
             "suite_required_capability_missing",
             "suite_evidence_admission_missing",
             "suite_evidence_freeze_missing",
+            "suite_framework_adapter_conformance_failed",
+            "suite_framework_coverage_missing",
         }
     ]
     failures = (
@@ -1052,6 +1054,12 @@ def render_markdown(
             f"{summary.get('non_admitted_evidence_count', 0)} non-admitted, "
             f"{summary.get('rejected_evidence_count', 0)} rejected, "
             f"{summary.get('frozen_evidence_count', 0)} frozen"
+        ),
+        (
+            "- Frameworks: "
+            f"{summary.get('observed_framework_count', 0)} observed, "
+            f"{summary.get('missing_framework_count', 0)} missing, "
+            f"{summary.get('adapter_conformance_failed_count', 0)} adapter-failed"
         ),
         "",
         "| Job | Command | Status | Evidence | Exit |",
@@ -1727,6 +1735,11 @@ def _suite_result(
         capabilities,
     )
     capability_findings = _suite_capability_findings(missing_capabilities)
+    framework_coverage = _suite_framework_coverage(
+        children,
+        required_frameworks=required_capabilities.get("frameworks", []),
+    )
+    framework_findings = _suite_framework_findings(framework_coverage)
     evidence_admission = _suite_evidence_admission(children)
     evidence_policy = _suite_evidence_policy(suite)
     evidence_findings = _suite_evidence_findings(
@@ -1735,6 +1748,7 @@ def _suite_result(
     )
     suite_findings = [
         *capability_findings,
+        *framework_findings,
         *evidence_findings,
         *_suite_findings(children),
     ]
@@ -1742,6 +1756,7 @@ def _suite_result(
         len(failed) == 0
         and len(children) == job_count
         and not capability_findings
+        and not framework_findings
         and not evidence_findings
     )
     return {
@@ -1764,6 +1779,18 @@ def _suite_result(
             "required_capabilities": required_capabilities,
             "missing_required_capabilities": missing_capabilities,
             "capability_gate_passed": not capability_findings,
+            "framework_coverage_passed": not framework_findings,
+            "observed_framework_count": framework_coverage["observed_count"],
+            "required_framework_count": framework_coverage["required_count"],
+            "missing_framework_count": framework_coverage["missing_count"],
+            "adapter_conformance_failed_count": framework_coverage[
+                "adapter_conformance_failed_count"
+            ],
+            "framework_coverage": {
+                key: value
+                for key, value in framework_coverage.items()
+                if key != "rows"
+            },
             "evidence_gate_passed": not evidence_findings,
             "admitted_evidence_count": evidence_admission["admitted_count"],
             "non_admitted_evidence_count": evidence_admission[
@@ -1781,6 +1808,7 @@ def _suite_result(
                 if key != "rows"
             },
         },
+        "framework_coverage": framework_coverage,
         "evidence_admission": evidence_admission,
         "children": list(children),
         "jobs": list(children),
@@ -1803,6 +1831,212 @@ def _suite_descriptor(suite: Mapping[str, Any]) -> dict[str, Any]:
             for job in _suite_jobs(suite)
         ],
         "required_capabilities": _suite_required_capabilities(suite),
+    }
+
+
+def _suite_framework_coverage(
+    children: Sequence[Mapping[str, Any]],
+    *,
+    required_frameworks: Sequence[str],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for child in children:
+        rows.extend(_suite_framework_rows_for_child(_as_mapping(child)))
+    observed = sorted(
+        {
+            _suite_key(row.get("framework"))
+            for row in rows
+            if _suite_key(row.get("framework"))
+        }
+    )
+    required = sorted(
+        {
+            _suite_key(item)
+            for item in _as_list(required_frameworks)
+            if _suite_key(item)
+        }
+    )
+    missing = sorted(set(required) - set(observed))
+    adapter_failures = [
+        row
+        for row in rows
+        if row.get("adapter_conformance_passed") is False
+    ]
+    methods: dict[str, set[str]] = {}
+    input_modes: dict[str, set[str]] = {}
+    modalities: dict[str, set[str]] = {}
+    for row in rows:
+        framework = _suite_key(row.get("framework"))
+        if not framework:
+            continue
+        methods.setdefault(framework, set()).update(
+            _suite_key(item)
+            for item in _as_list(row.get("methods"))
+            if _suite_key(item)
+        )
+        input_modes.setdefault(framework, set()).update(
+            _suite_key(item)
+            for item in _as_list(row.get("input_modes"))
+            if _suite_key(item)
+        )
+        modality = _suite_key(row.get("modality"))
+        if modality:
+            modalities.setdefault(framework, set()).add(modality)
+    return {
+        "kind": "agent-learning.suite.framework-coverage.v1",
+        "observed_frameworks": observed,
+        "required_frameworks": required,
+        "missing_required_frameworks": missing,
+        "observed_count": len(observed),
+        "required_count": len(required),
+        "missing_count": len(missing),
+        "adapter_conformance_failed_count": len(adapter_failures),
+        "adapter_conformance_failed_child_ids": [
+            str(row.get("child_id")) for row in adapter_failures
+        ],
+        "methods_by_framework": {
+            key: sorted(values) for key, values in sorted(methods.items())
+        },
+        "input_modes_by_framework": {
+            key: sorted(values) for key, values in sorted(input_modes.items())
+        },
+        "modalities_by_framework": {
+            key: sorted(values) for key, values in sorted(modalities.items())
+        },
+        "rows": rows,
+    }
+
+
+def _suite_framework_findings(
+    coverage: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    missing = [
+        _suite_key(item)
+        for item in _as_list(coverage.get("missing_required_frameworks"))
+        if _suite_key(item)
+    ]
+    if missing:
+        findings.append(
+            {
+                "type": "suite_framework_coverage_missing",
+                "level": "error",
+                "reason": (
+                    "Suite framework coverage is missing required framework(s): "
+                    f"{', '.join(sorted(missing))}."
+                ),
+                "missing": sorted(missing),
+            }
+        )
+    failed = [
+        str(item)
+        for item in _as_list(coverage.get("adapter_conformance_failed_child_ids"))
+        if str(item)
+    ]
+    if failed:
+        findings.append(
+            {
+                "type": "suite_framework_adapter_conformance_failed",
+                "level": "error",
+                "reason": (
+                    "Suite framework coverage found adapter conformance failures "
+                    f"in {len(failed)} child row(s)."
+                ),
+                "failed_child_ids": failed,
+            }
+        )
+    return findings
+
+
+def _suite_framework_rows_for_child(child: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    result = _as_mapping(child.get("result"))
+    for nested in _as_list(result.get("children") or result.get("jobs")):
+        nested_child = _as_mapping(nested)
+        if nested_child:
+            rows.extend(_suite_framework_rows_for_child(nested_child))
+    for state in _suite_framework_environment_states(result):
+        row = _suite_framework_row_from_state(child, state)
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _suite_framework_environment_states(
+    result: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    states: list[dict[str, Any]] = []
+    for report in (
+        _as_mapping(result.get("report")),
+        _as_mapping(_as_mapping(result.get("evaluation")).get("report")),
+    ):
+        for case in _as_list(report.get("results")):
+            metadata = _as_mapping(_as_mapping(case).get("metadata"))
+            state = _as_mapping(metadata.get("environment_state"))
+            if state:
+                states.append(state)
+    return states
+
+
+def _suite_framework_row_from_state(
+    child: Mapping[str, Any],
+    state: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    runtime = _as_mapping(state.get("framework_runtime"))
+    trace = _as_mapping(state.get("framework_trace"))
+    capability = _as_mapping(state.get("framework_capability_matrix"))
+    framework = (
+        runtime.get("framework")
+        or trace.get("framework")
+        or capability.get("framework")
+    )
+    framework_key = _suite_key(framework)
+    if not framework_key:
+        return None
+    runtime_summary = _as_mapping(runtime.get("summary"))
+    trace_spans = [
+        _as_mapping(span)
+        for span in _as_list(trace.get("spans"))
+        if _as_mapping(span)
+    ]
+    trace_signals = sorted(
+        {
+            _suite_key(signal)
+            for span in trace_spans
+            for signal in _as_list(span.get("signals"))
+            if _suite_key(signal)
+        }
+    )
+    conformance = _as_mapping(trace.get("adapter_conformance"))
+    conformance_passed = (
+        bool(conformance.get("passed")) if conformance else None
+    )
+    return {
+        "kind": "agent-learning.suite.framework-coverage-row.v1",
+        "child_id": child.get("id"),
+        "child_name": child.get("name"),
+        "command": child.get("command"),
+        "result_kind": child.get("kind"),
+        "framework": framework_key,
+        "modality": _suite_key(runtime.get("modality") or trace.get("modality")),
+        "methods": sorted(
+            {
+                _suite_key(item)
+                for item in _as_list(runtime_summary.get("methods"))
+                if _suite_key(item)
+            }
+        ),
+        "input_modes": sorted(
+            {
+                _suite_key(item)
+                for item in _as_list(runtime_summary.get("input_modes"))
+                if _suite_key(item)
+            }
+        ),
+        "tool_call_count": int(runtime_summary.get("tool_call_count") or 0),
+        "trace_span_count": len(trace_spans),
+        "trace_signals": trace_signals,
+        "adapter_conformance_passed": conformance_passed,
     }
 
 

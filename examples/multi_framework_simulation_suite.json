@@ -4,6 +4,33 @@
   "required_env": [
     "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
   ],
+  "required_capabilities": {
+    "commands": [
+      "run"
+    ],
+    "result_kinds": [
+      "agent-learning.run.v1"
+    ],
+    "environment_types": [
+      "framework_trace"
+    ],
+    "environment_state_keys": [
+      "framework_runtime"
+    ],
+    "frameworks": [
+      "langchain",
+      "langgraph",
+      "llamaindex",
+      "openai_agents",
+      "autogen",
+      "crewai",
+      "pydantic_ai",
+      "pipecat",
+      "livekit",
+      "custom_refund_orchestrator"
+    ],
+    "metrics": []
+  },
   "jobs": [
     {
       "id": "langchain-runnable",

@@ -406,7 +406,12 @@ result = asyncio.run(
 
 For batches, `simulate.build_multi_framework_suite_manifest()` composes those
 generated run manifests into an `agent-learning.suite.v1` capability-gated
-suite.
+suite. Suite outputs now include
+`agent-learning.suite.framework-coverage.v1`, a per-child framework coverage
+contract with observed/required/missing frameworks, method/input-mode/modality
+maps, trace signals, and adapter-conformance failures. This lets CI and Future
+AGI UI prove that LangChain, LangGraph, LiveKit, Pipecat, custom adapters, or
+any other framework actually ran through the generic simulator path.
 
 The `custom_framework_optimization.json` example runs the same bring-your-own
 framework path through `agent-learn optimize`. It starts with a runnable but weak

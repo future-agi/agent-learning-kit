@@ -3891,6 +3891,25 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
         "AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY",
         "real-local-sdk-multi-framework-example-key",
     )
+    static_suite = json.loads(
+        (PROJECT_ROOT / "examples" / "multi_framework_simulation_suite.json")
+        .read_text(encoding="utf-8")
+    )
+    assert static_suite["required_capabilities"]["frameworks"] == [
+        "langchain",
+        "langgraph",
+        "llamaindex",
+        "openai_agents",
+        "autogen",
+        "crewai",
+        "pydantic_ai",
+        "pipecat",
+        "livekit",
+        "custom_refund_orchestrator",
+    ]
+    assert static_suite["required_capabilities"]["environment_state_keys"] == [
+        "framework_runtime"
+    ]
     example_path = PROJECT_ROOT / "examples" / "sdk_multi_framework_simulation.py"
     spec = importlib.util.spec_from_file_location(
         "sdk_multi_framework_simulation",
@@ -4032,6 +4051,11 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
     assert result["status"] == "passed"
     assert result["summary"]["commands"] == {"run": 10}
     assert result["summary"]["score"] == pytest.approx(1.0)
+    assert result["summary"]["framework_coverage_passed"] is True
+    assert result["summary"]["observed_framework_count"] == 10
+    assert result["summary"]["required_framework_count"] == 10
+    assert result["summary"]["missing_framework_count"] == 0
+    assert result["summary"]["adapter_conformance_failed_count"] == 0
     expected = {
         "langchain-runnable": ("langchain", "ainvoke", "dict", "text"),
         "langgraph-state-graph": ("langgraph", "ainvoke", "dict", "text"),
@@ -4049,6 +4073,25 @@ def test_sdk_multi_framework_simulation_example_runs(monkeypatch, tmp_path):
             "text",
         ),
     }
+    framework_coverage = result["framework_coverage"]
+    assert framework_coverage["kind"] == "agent-learning.suite.framework-coverage.v1"
+    assert framework_coverage["observed_frameworks"] == sorted(
+        framework for framework, *_ in expected.values()
+    )
+    assert framework_coverage["required_frameworks"] == sorted(
+        framework for framework, *_ in expected.values()
+    )
+    assert framework_coverage["missing_required_frameworks"] == []
+    assert len(framework_coverage["rows"]) == 10
+    assert framework_coverage["modalities_by_framework"]["livekit"] == ["voice"]
+    assert framework_coverage["modalities_by_framework"]["pipecat"] == ["voice"]
+    assert framework_coverage["methods_by_framework"]["langgraph"] == ["ainvoke"]
+    assert framework_coverage["input_modes_by_framework"]["crewai"] == ["dict"]
+    assert {
+        row["child_id"]
+        for row in framework_coverage["rows"]
+        if row["adapter_conformance_passed"] is True
+    } == set(expected)
     assert set(expected) == {child["id"] for child in result["children"]}
     for child in result["children"]:
         framework, method, input_mode, modality = expected[child["id"]]
