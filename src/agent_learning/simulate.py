@@ -37,6 +37,8 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "LangChainAgentWrapper",
     "GeminiAgentWrapper",
     "AnthropicAgentWrapper",
+    "HTTPAgentWrapper",
+    "OpenAICompatibleHTTPAgentWrapper",
     "AdversarialEnvironmentPack",
     "AgentControlPlaneEnvironment",
     "AgentIntegrationEnvironment",
@@ -226,6 +228,7 @@ _SIMULATE_SUBMODULE_ALIASES = {
     "agent.wrappers": "fi.simulate.agent.wrappers",
     "agent.wrappers.anthropic": "fi.simulate.agent.wrappers.anthropic",
     "agent.wrappers.gemini": "fi.simulate.agent.wrappers.gemini",
+    "agent.wrappers.http": "fi.simulate.agent.wrappers.http",
     "agent.wrappers.langchain": "fi.simulate.agent.wrappers.langchain",
     "agent.wrappers.openai": "fi.simulate.agent.wrappers.openai",
     "cli": "fi.simulate.cli",
@@ -411,6 +414,109 @@ def build_task_run_manifest(
             "source": "agent_learning.simulate.build_task_run_manifest",
             **copy.deepcopy(dict(metadata)),
         }
+    return manifest
+
+
+def build_external_agent_run_manifest(
+    *,
+    name: str = "external-http-agent-run",
+    endpoint: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model: str = "agent-learning-local-http-target",
+    protocol: str = "openai_chat",
+    api_key_env: str = "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    include_tools: bool = True,
+    metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a runnable manifest for external HTTP/OpenAI-compatible agents.
+
+    This is the SDK target-adapter cookbook path: it lets users point
+    Agent Learning Kit at an already-running agent endpoint, keep auth outside
+    the manifest via an env var, preserve native OpenAI tool calls, and collect
+    a redacted HTTP trace in the simulation report.
+    """
+
+    if not endpoint and not base_url:
+        raise ValueError("endpoint or base_url is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    agent_config = (
+        copy.deepcopy(dict(agent))
+        if agent is not None
+        else _external_agent_http_agent(
+            endpoint=endpoint,
+            base_url=base_url,
+            model=model,
+            protocol=protocol,
+            api_key_env=api_key_env,
+            include_tools=include_tools,
+        )
+    )
+    env_required = [api_key_env] if api_key_env else []
+    config = copy.deepcopy(
+        dict(evaluation_config or _external_agent_evaluation_config())
+    )
+    manifest = build_task_run_manifest(
+        name=name,
+        agent=agent_config,
+        task_description=(
+            "Call an external HTTP/OpenAI-compatible agent, preserve auth "
+            "boundaries, collect a redacted trace, and verify tool evidence."
+        ),
+        expected_result=(
+            "Policy answer: refund approved. No secrets exposed. "
+            "external_agent_status verifies the endpoint."
+        ),
+        scenario=scenario,
+        environments=[_external_agent_status_environment()],
+        required_env=_unique_strings([*required_env, *env_required]),
+        available_tools=["external_agent_status"],
+        required_tools=["external_agent_status"],
+        success_criteria=[
+            "external endpoint is called through the configured protocol",
+            "authorization is present but redacted from traces",
+            "OpenAI-compatible tool call is preserved and executed",
+            "policy answer is produced without secret exposure",
+        ],
+        evaluation_config=config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=True,
+        metadata={
+            "source": "agent_learning.simulate.build_external_agent_run_manifest",
+            "cookbook": "external-http-agent-adapter",
+            "task_kind": "external_agent_adapter",
+            "research_sources": _unique_research_sources(
+                [
+                    *_external_agent_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "External-agent evaluation should be protocol-first and "
+                "trace-backed: the adapter preserves native tool-call wire "
+                "format, separates auth from manifest content, and produces "
+                "redacted evidence that the optimizer can compare across "
+                "complete endpoint/protocol candidates."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
     return manifest
 
 
@@ -2656,6 +2762,168 @@ def _task_run_evaluation(
             "config": config,
         },
     }
+
+
+def _external_agent_http_agent(
+    *,
+    endpoint: Optional[str],
+    base_url: Optional[str],
+    model: str,
+    protocol: str,
+    api_key_env: str,
+    include_tools: bool,
+    candidate_profile: str = "verified_openai_compatible_tools",
+) -> dict[str, Any]:
+    protocol_key = str(protocol or "openai_chat").lower().replace("-", "_")
+    agent: dict[str, Any] = {
+        "type": "openai_compatible" if protocol_key == "openai_chat" else "http",
+        "protocol": protocol_key,
+        "model": str(model),
+        "api_key_env": str(api_key_env),
+        "include_tools": bool(include_tools),
+        "timeout": 5.0,
+        "metadata": {"candidate_profile": candidate_profile},
+    }
+    if endpoint:
+        agent["endpoint"] = str(endpoint)
+    if base_url:
+        agent["base_url"] = str(base_url)
+    return agent
+
+
+def _external_agent_status_environment() -> dict[str, Any]:
+    return {
+        "type": "tool_mock",
+        "data": {
+            "tools": {
+                "external_agent_status": {
+                    "schema": {
+                        "description": (
+                            "Record authenticated external-agent endpoint "
+                            "verification evidence."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "status": {"type": "string"},
+                                "protocol": {"type": "string"},
+                            },
+                        },
+                    },
+                    "response": {
+                        "content": "external agent status verified",
+                        "result": {
+                            "status": "verified",
+                            "auth_redacted": True,
+                            "trace_required": True,
+                        },
+                        "state_updates": {
+                            "external_agent_status": {
+                                "status": "verified",
+                                "auth_redacted": True,
+                                "tool_evidence": True,
+                            }
+                        },
+                    },
+                }
+            }
+        },
+    }
+
+
+def _external_agent_evaluation_config() -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Verify an external HTTP/OpenAI-compatible target agent with "
+            "redacted auth, trace evidence, and tool execution."
+        ),
+        "expected_result": (
+            "Policy answer: refund approved. No secrets exposed. "
+            "external_agent_status verified."
+        ),
+        "available_tools": ["external_agent_status"],
+        "required_tools": ["external_agent_status"],
+        "success_criteria": [
+            "policy answer",
+            "refund approved",
+            "no secrets exposed",
+            "external_agent_status verified",
+        ],
+        "allow_extra_tool_arguments": True,
+        "metric_weights": {
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 2.0,
+            "final_response_quality": 2.0,
+        },
+    }
+
+
+def _external_agent_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "EvalAgent: Towards Automatic Evaluation and Refinement Framework for Advanced AI Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.11378",
+            "used_for": "executable trace-backed agent evaluation artifacts",
+        },
+        {
+            "title": "A Unified Framework for AI Agent Evaluation",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.03238",
+            "used_for": "standardized prompts, tools, and environments for cross-agent comparison",
+        },
+        {
+            "title": "TED: Teaching User-Centric Evaluation to Large Language Models",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.15483",
+            "used_for": "automated error analysis for user-aware task outcomes",
+        },
+        {
+            "title": "WildClawBench: Benchmarking LLM Agents in Real-world Digital Native Environments",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.10912",
+            "used_for": "native-runtime long-horizon evaluation with real tools",
+        },
+        {
+            "title": "CapSeal: Capability-Sealed Secret Mediation for Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.16762",
+            "used_for": "secret and auth redaction boundaries for external agent calls",
+        },
+        {
+            "title": "ClawGuard: Runtime Boundary Enforcement for LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.11790",
+            "used_for": "runtime boundary evidence for external tool and endpoint access",
+        },
+        {
+            "title": "System-level Defenses for LLM Agent Security",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.30016",
+            "used_for": "system-level monitoring and containment around target adapters",
+        },
+        {
+            "title": "Protocol-first Agent Interaction",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.04820",
+            "used_for": "protocol-normalized external agent interaction contracts",
+        },
+    ]
+
+
+def _unique_research_sources(values: Sequence[Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, Mapping):
+            continue
+        item = copy.deepcopy(dict(value))
+        key = str(item.get("source") or item.get("id") or item.get("url") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def _default_realtime_scenario(name: str, framework: str) -> dict[str, Any]:
@@ -5816,6 +6084,7 @@ __all__ = [
     "build_agent_integration_run_manifest",
     "build_autonomous_redteam_task_world_run_manifest",
     "build_eval_suite_manifest",
+    "build_external_agent_run_manifest",
     "build_browser_cua_run_manifest",
     "build_framework_certification_run_manifest",
     "build_framework_import_run_manifest",

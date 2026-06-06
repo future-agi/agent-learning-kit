@@ -24,6 +24,8 @@ from .agent import (
     LangChainAgentWrapper,
     GeminiAgentWrapper,
     AnthropicAgentWrapper,
+    HTTPAgentWrapper,
+    OpenAICompatibleHTTPAgentWrapper,
 )
 from .environment import (
     AdversarialEnvironmentPack,
@@ -222,6 +224,8 @@ __all__ = [
     "LangChainAgentWrapper",
     "GeminiAgentWrapper",
     "AnthropicAgentWrapper",
+    "HTTPAgentWrapper",
+    "OpenAICompatibleHTTPAgentWrapper",
     "AdversarialEnvironmentPack",
     "AgentControlPlaneEnvironment",
     "AgentIntegrationEnvironment",

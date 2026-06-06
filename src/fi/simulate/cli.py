@@ -22,6 +22,7 @@ from fi.simulate import (
     AgentMemoryLineageEnvironment,
     AgentResponse,
     AgentTrustBoundaryEnvironment,
+    HTTPAgentWrapper,
     AutonomyLoopEnvironment,
     BrowserEnvironment,
     DomainPackageEnvironment,
@@ -665,7 +666,60 @@ def _build_agent_callback(agent: Mapping[str, Any], base_dir: Path) -> Callable[
         return _load_callable(target, base_dir)
     if agent_type in {"framework", "framework_adapter", "framework_callable"}:
         return _build_framework_agent_callback(agent, base_dir)
+    if agent_type in {
+        "http",
+        "http_agent",
+        "external_http",
+        "openai_compatible",
+        "openai_chat",
+        "chat_completions",
+    }:
+        return _build_http_agent_callback(agent, agent_type)
     raise ManifestError(f"unsupported agent.type: {agent_type}")
+
+
+def _build_http_agent_callback(
+    agent: Mapping[str, Any],
+    agent_type: str,
+) -> Callable[..., Any]:
+    endpoint = _optional_string(agent.get("endpoint") or agent.get("url"))
+    base_url = _optional_string(agent.get("base_url"))
+    protocol = _optional_string(agent.get("protocol"))
+    if protocol is None and agent_type in {
+        "openai_compatible",
+        "openai_chat",
+        "chat_completions",
+    }:
+        protocol = "openai_chat"
+    if endpoint is None and base_url:
+        endpoint = _openai_chat_completions_endpoint(base_url)
+    if endpoint is None:
+        raise ManifestError(
+            "agent.type=http/openai_compatible requires agent.endpoint, "
+            "agent.url, or agent.base_url"
+        )
+
+    wrapper = HTTPAgentWrapper(
+        endpoint=endpoint,
+        protocol=protocol or "agent_learning",
+        model=_optional_string(agent.get("model")),
+        api_key=_optional_string(agent.get("api_key")),
+        api_key_env=_optional_string(agent.get("api_key_env")),
+        headers=_optional_mapping(agent.get("headers"), "agent.headers"),
+        timeout=float(agent.get("timeout", 30.0)),
+        include_tools=_optional_bool(agent.get("include_tools"), default=True),
+        system_prompt=_optional_string(agent.get("system_prompt")),
+        metadata=_optional_mapping(agent.get("metadata"), "agent.metadata"),
+    )
+    return wrapper.call
+
+
+def _openai_chat_completions_endpoint(base_url: str) -> str:
+    value = str(base_url).rstrip("/")
+    parsed = urlparse(value)
+    if parsed.path.rstrip("/").endswith("/chat/completions"):
+        return value
+    return f"{value}/chat/completions"
 
 
 def _build_framework_agent_callback(
@@ -738,6 +792,20 @@ def _optional_string(value: Any) -> Optional[str]:
     if value in (None, ""):
         return None
     return str(value)
+
+
+def _optional_bool(value: Any, *, default: bool = False) -> bool:
+    if value in (None, ""):
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
 
 
 def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> List[Any]:

@@ -9,6 +9,8 @@ from .wrappers import (
     LangChainAgentWrapper,
     GeminiAgentWrapper,
     AnthropicAgentWrapper,
+    HTTPAgentWrapper,
+    OpenAICompatibleHTTPAgentWrapper,
 )
 
 __all__ = [
@@ -37,4 +39,6 @@ __all__ = [
     "LangChainAgentWrapper",
     "GeminiAgentWrapper",
     "AnthropicAgentWrapper",
+    "HTTPAgentWrapper",
+    "OpenAICompatibleHTTPAgentWrapper",
 ]

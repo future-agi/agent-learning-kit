@@ -969,6 +969,18 @@ the `agent_integration_readiness` card with provider/channel/framework gaps,
 credential/session/observability/eval counts, provider matrix rows, Markdown,
 and actions for report, rerun, and optimization.
 
+The `sdk_external_http_agent_optimization.py` example adds the first external
+target-agent adapter cookbook. It starts from a real HTTP/OpenAI-compatible
+endpoint, keeps auth in `AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY`, preserves
+OpenAI `tool_calls`, records a redacted HTTP trace in simulation state, and uses
+AgentOptimizer to select the complete adapter contract that actually supplies
+tool evidence. The SDK entry points are
+`simulate.build_external_agent_run_manifest()`,
+`optimize.build_external_agent_adapter_optimization_manifest()`, and
+`optimize.optimize_external_agent_adapter()`, and the artifact works with the
+same `agent-learn report`, `actions`, and `action-run` CLI flow as the other
+promptfoo-style cookbooks.
+
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,
 CrewAI, and LangGraph. It uses `AgentEvolutionOptimizer` through

@@ -476,6 +476,125 @@ def optimize_task(
     )
 
 
+def build_external_agent_adapter_optimization_manifest(
+    *,
+    name: str = "external-http-agent-adapter-optimization",
+    endpoint: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model: str = "agent-learning-local-http-target",
+    api_key_env: str = "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search for external HTTP/OpenAI target adapters."""
+
+    if not endpoint and not base_url:
+        raise ValueError("endpoint or base_url is required")
+    from . import simulate as _agent_simulate
+
+    verified_run = _agent_simulate.build_external_agent_run_manifest(
+        name=name,
+        endpoint=endpoint,
+        base_url=base_url,
+        model=model,
+        api_key_env=api_key_env,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        include_tools=True,
+        metadata=target_metadata,
+        research_sources=research_sources,
+    )
+    agent_candidates = _external_agent_adapter_candidates(
+        endpoint=endpoint,
+        base_url=base_url,
+        model=model,
+        api_key_env=api_key_env,
+    )
+    search_space = {"agent": agent_candidates}
+    manifest = build_task_optimization_manifest(
+        name=name,
+        agent_candidates=agent_candidates,
+        environments=copy.deepcopy(verified_run["simulation"]["environments"]),
+        evaluation_config=copy.deepcopy(
+            verified_run["evaluation"]["agent_report"]["config"]
+        ),
+        scenario=copy.deepcopy(verified_run["scenario"]),
+        required_env=verified_run["required_env"],
+        optimizer=optimizer or _default_task_optimizer(search_space),
+        threshold=threshold,
+        layers=[
+            "integration",
+            "tools",
+            "security",
+            "environment",
+            "evaluator",
+        ],
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=verified_run["simulation"]["max_turns"],
+        auto_execute_tools=True,
+        base_agent=agent_candidates[0],
+        target_metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_external_agent_adapter_optimization_manifest"
+            ),
+            "cookbook": "external-http-agent-adapter-optimization",
+            "task_kind": "external_agent_adapter",
+            "candidate_search_paths": ["agent"],
+            "research_sources": _unique_research_sources(
+                [
+                    *verified_run.get("metadata", {}).get("research_sources", []),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Target-adapter optimization should search complete endpoint "
+                "protocol contracts, not prompt fragments: payload schema, "
+                "tool-call preservation, auth mediation, and trace redaction "
+                "move together as one candidate and are judged by executable "
+                "simulation evidence."
+            ),
+            **copy.deepcopy(dict(target_metadata or {})),
+        },
+    )
+    manifest["optimization"]["target"]["search_space"] = copy.deepcopy(search_space)
+    return manifest
+
+
+def optimize_external_agent_adapter(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute external HTTP/OpenAI target-adapter optimization."""
+
+    manifest = build_external_agent_adapter_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_component_optimization_manifest(
     *,
     name: str = "component-optimization",
@@ -15296,6 +15415,57 @@ def _default_task_optimizer(
     }
 
 
+def _external_agent_adapter_candidates(
+    *,
+    endpoint: Optional[str],
+    base_url: Optional[str],
+    model: str,
+    api_key_env: str,
+) -> list[dict[str, Any]]:
+    def candidate(
+        *,
+        agent_type: str,
+        protocol: str,
+        include_tools: bool,
+        profile: str,
+    ) -> dict[str, Any]:
+        agent: dict[str, Any] = {
+            "type": agent_type,
+            "protocol": protocol,
+            "model": str(model),
+            "api_key_env": str(api_key_env),
+            "include_tools": bool(include_tools),
+            "timeout": 5.0,
+            "metadata": {"candidate_profile": profile},
+        }
+        if endpoint:
+            agent["endpoint"] = str(endpoint)
+        if base_url:
+            agent["base_url"] = str(base_url)
+        return agent
+
+    return [
+        candidate(
+            agent_type="http",
+            protocol="agent_learning",
+            include_tools=True,
+            profile="raw_http_agent_learning_payload",
+        ),
+        candidate(
+            agent_type="openai_compatible",
+            protocol="openai_chat",
+            include_tools=False,
+            profile="openai_compatible_without_tool_schema",
+        ),
+        candidate(
+            agent_type="openai_compatible",
+            protocol="openai_chat",
+            include_tools=True,
+            profile="verified_openai_compatible_tools",
+        ),
+    ]
+
+
 def _default_artifact_optimizer(
     field_candidates: Sequence[Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
@@ -15672,6 +15842,7 @@ __all__ = [
     "build_browser_cua_optimization_manifest",
     "build_component_optimization_manifest",
     "build_eval_suite_optimization_manifest",
+    "build_external_agent_adapter_optimization_manifest",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",
     "build_framework_optimization_manifest",
@@ -15710,6 +15881,7 @@ __all__ = [
     "optimize_autonomous_redteam_task_world",
     "optimize_browser_cua",
     "optimize_component",
+    "optimize_external_agent_adapter",
     "optimize_framework_certification",
     "optimize_framework_import_repair",
     "optimize_long_horizon_redteam",

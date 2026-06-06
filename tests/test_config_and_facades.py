@@ -116,11 +116,16 @@ def test_facades_expose_unified_agent_learning_modules():
     assert set(fi_guardrails.__all__) <= set(redteam.__all__)
     assert set(fi_scanners.__all__) <= set(redteam.__all__)
     assert set(fi_code_security.__all__) <= set(redteam.__all__)
+    assert simulate.HTTPAgentWrapper is fi_simulate.HTTPAgentWrapper
+    assert simulate.OpenAICompatibleHTTPAgentWrapper is (
+        fi_simulate.OpenAICompatibleHTTPAgentWrapper
+    )
     assert simulate.run_eval_suite_file is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
     assert simulate.build_task_run_manifest is not None
+    assert simulate.build_external_agent_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.build_realtime_run_manifest is not None
@@ -214,6 +219,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_optimizer_governance_run_manifest is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
+    assert optimize.build_external_agent_adapter_optimization_manifest is not None
+    assert optimize.optimize_external_agent_adapter is not None
     assert optimize.build_component_optimization_manifest is not None
     assert optimize.optimize_component is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -9501,6 +9508,116 @@ def test_stateful_tool_world_manifest_builds_research_backed_candidates():
         "world_contract",
     ]
     assert "stateful_tool_world" in simulate.supported_manifest_environment_types()
+
+
+def test_external_http_agent_manifest_builds_research_backed_adapter_candidates():
+    from agent_learning import optimize, simulate
+
+    endpoint = "http://127.0.0.1:8765/v1/chat/completions"
+    manifest = optimize.build_external_agent_adapter_optimization_manifest(
+        name="sdk-external-http-agent-optimization",
+        endpoint=endpoint,
+        required_env=["AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"],
+        api_key_env="AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"]
+    assert manifest["optimization"]["target"]["layers"] == [
+        "integration",
+        "tools",
+        "security",
+        "environment",
+        "evaluator",
+    ]
+    sources = manifest["optimization"]["target"]["metadata"]["research_sources"]
+    assert len(sources) >= 8
+    assert {source["year"] for source in sources} == {2026}
+    assert {
+        "https://arxiv.org/abs/2605.11378",
+        "https://arxiv.org/abs/2602.03238",
+        "https://arxiv.org/abs/2604.16762",
+    } <= {source["url"] for source in sources}
+
+    candidates = manifest["optimization"]["target"]["search_space"]["agent"]
+    assert [candidate["metadata"]["candidate_profile"] for candidate in candidates] == [
+        "raw_http_agent_learning_payload",
+        "openai_compatible_without_tool_schema",
+        "verified_openai_compatible_tools",
+    ]
+    assert candidates[-1]["type"] == "openai_compatible"
+    assert candidates[-1]["protocol"] == "openai_chat"
+    assert candidates[-1]["include_tools"] is True
+    assert manifest["evaluation"]["agent_report"]["config"]["required_tools"] == [
+        "external_agent_status"
+    ]
+
+    run_manifest = simulate.build_external_agent_run_manifest(endpoint=endpoint)
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert run_manifest["agent"]["type"] == "openai_compatible"
+    assert run_manifest["simulation"]["environments"][0]["type"] == "tool_mock"
+    assert "tool_mock" in simulate.supported_manifest_environment_types()
+    callback = simulate.build_manifest_agent_callback(run_manifest["agent"])
+    assert callback is not None
+
+
+def test_sdk_external_http_agent_optimization_example_runs(monkeypatch, tmp_path):
+    key = "real-local-sdk-external-http-agent-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY", key)
+    monkeypatch.delenv("AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_ENDPOINT", raising=False)
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_external_http_agent_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_external_http_agent_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"]
+    output_path = tmp_path / "sdk-external-http-agent-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized = output_path.read_text(encoding="utf-8")
+    assert key not in serialized
+    saved = json.loads(serialized)
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= result["summary"]["threshold"]
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["score"] >= result["summary"]["threshold"]
+    assert set(best_history["patch"]) == {"agent"}
+    assert best_history["metrics"]["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert result["optimization"]["best_config"]["agent"]["metadata"][
+        "candidate_profile"
+    ] == "verified_openai_compatible_tools"
+
+    case = best_history["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert state["external_agent_status"]["status"] == "verified"
+    trace = state["external_agent_trace"]
+    assert trace["protocol"] == "openai_chat"
+    assert trace["status_code"] == 200
+    assert trace["success"] is True
+    assert trace["auth"]["redacted"] is True
+    assert trace["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"
+    )
+    assert key not in json.dumps(trace, sort_keys=True, default=str)
+    assert trace["request_tool_count"] == 1
+    assert trace["response_tool_call_count"] == 1
+    assert [call["function"]["name"] for call in case["tool_calls"]] == [
+        "external_agent_status"
+    ]
 
 
 def test_sdk_stateful_tool_world_optimization_example_runs(monkeypatch, tmp_path):
