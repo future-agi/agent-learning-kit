@@ -353,6 +353,14 @@ per-child rows, governed/passed/failed/missing counts, and findings when an
 optimizer child lacks a passed `agent-learning.optimization.governance.v1`
 verdict. The trinity suite builder and `agent-learn init --preset all`
 scaffold enable this gate by default.
+Every suite also emits `agent-learning.suite.trust-certificate.v1`, a
+machine-verifiable deployment certificate with `approved`, `conditional`, or
+`rejected` verdicts. The certificate combines execution status, admitted/frozen
+evidence, framework coverage, optimizer governance, and trinity coverage
+(simulation, evaluation, red-team, optimization) into a single
+`promotion_ready` signal for CI and Future AGI UI. Trinity suites with governed
+optimizer children can become `approved`; narrower passing suites remain
+`conditional`; failed gates are `rejected`.
 Suite jobs can call other suite manifests, so the top-level suite can enforce
 coverage from composed child suites without losing nested child artifacts.
 `agent-learn optimize-suite` and `suite.optimize_suite()` search over the suite

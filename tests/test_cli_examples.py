@@ -978,6 +978,24 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     suite = json.loads(suite_output.read_text(encoding="utf-8"))
     assert suite["kind"] == "agent-learning.suite.v1"
     assert suite["status"] == "passed"
+    assert suite["summary"]["trust_certificate_verdict"] == "approved"
+    assert suite["summary"]["trust_certificate_assurance_level"] == (
+        "l3_trinity_governed"
+    )
+    assert suite["summary"]["trust_certificate_promotion_ready"] is True
+    assert suite["trust_certificate"]["kind"] == (
+        "agent-learning.suite.trust-certificate.v1"
+    )
+    assert suite["trust_certificate"]["verdict"] == "approved"
+    assert suite["trust_certificate"]["promotion_ready"] is True
+    assert suite["trust_certificate"]["coverage"] == {
+        "simulation": True,
+        "evaluation": True,
+        "redteam": True,
+        "optimization": True,
+    }
+    assert suite["trust_certificate"]["failed_gate_ids"] == []
+    assert suite["trust_certificate"]["conditional_gate_ids"] == []
     assert suite["summary"]["score"] == pytest.approx(1.0)
     assert suite["summary"]["job_count"] == 9
     assert suite["summary"]["passed_count"] == 9
@@ -1056,6 +1074,8 @@ def test_agent_learn_init_all_scaffold_runs_trinity_suite(
     assert "refund-agent-trinity-suite" in suite_markdown.read_text(
         encoding="utf-8",
     )
+    assert "## Trust Certificate" in suite_markdown.read_text(encoding="utf-8")
+    assert "- Verdict: `approved`" in suite_markdown.read_text(encoding="utf-8")
 
 
 def test_agent_learn_suite_can_require_optimizer_governance(
@@ -1096,6 +1116,14 @@ def test_agent_learn_suite_can_require_optimizer_governance(
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["status"] == "failed"
+    assert payload["summary"]["trust_certificate_verdict"] == "rejected"
+    assert payload["summary"]["trust_certificate_promotion_ready"] is False
+    assert payload["trust_certificate"]["verdict"] == "rejected"
+    assert payload["trust_certificate"]["promotion_ready"] is False
+    assert "execution" in payload["trust_certificate"]["failed_gate_ids"]
+    assert "optimizer_governance" in (
+        payload["trust_certificate"]["conditional_gate_ids"]
+    )
     assert payload["summary"]["optimizer_governance_gate_passed"] is False
     assert payload["summary"]["optimizer_governance_target_count"] == 1
     assert payload["summary"]["optimizer_governance_governed_count"] == 0

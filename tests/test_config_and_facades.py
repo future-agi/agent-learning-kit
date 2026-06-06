@@ -3585,6 +3585,24 @@ def test_sdk_trinity_suite_example_runs(monkeypatch, tmp_path):
     assert output_path.exists()
     assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
     assert result["kind"] == "agent-learning.suite.v1"
+    assert result["summary"]["trust_certificate_verdict"] == "approved"
+    assert result["summary"]["trust_certificate_assurance_level"] == (
+        "l3_trinity_governed"
+    )
+    assert result["summary"]["trust_certificate_promotion_ready"] is True
+    assert result["trust_certificate"]["kind"] == (
+        "agent-learning.suite.trust-certificate.v1"
+    )
+    assert result["trust_certificate"]["verdict"] == "approved"
+    assert result["trust_certificate"]["promotion_ready"] is True
+    assert result["trust_certificate"]["coverage"] == {
+        "simulation": True,
+        "evaluation": True,
+        "redteam": True,
+        "optimization": True,
+    }
+    assert result["trust_certificate"]["failed_gate_ids"] == []
+    assert result["trust_certificate"]["conditional_gate_ids"] == []
     assert result["summary"]["score"] == pytest.approx(1.0)
     assert result["summary"]["job_count"] == 10
     assert result["summary"]["passed_count"] == 10

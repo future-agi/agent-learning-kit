@@ -978,6 +978,9 @@ def render_junit(result: Mapping[str, Any]) -> str:
             "suite_evidence_freeze_missing",
             "suite_framework_adapter_conformance_failed",
             "suite_framework_coverage_missing",
+            "suite_optimizer_governance_failed",
+            "suite_optimizer_governance_missing",
+            "suite_optimizer_governance_warning",
         }
     ]
     failures = (
@@ -1066,6 +1069,7 @@ def render_markdown(
     source_path: str | Path = ".",
 ) -> str:
     summary = dict(result.get("summary") or {})
+    certificate = _as_mapping(result.get("trust_certificate"))
     lines = [
         f"# {result.get('name') or 'agent-learning-suite'}",
         "",
@@ -1073,6 +1077,11 @@ def render_markdown(
         f"- Status: `{result.get('status')}`",
         f"- Jobs: {summary.get('passed_count', 0)}/{summary.get('job_count', 0)} passed",
         f"- Score: {summary.get('score', 0.0)}",
+        (
+            "- Trust Certificate: "
+            f"{certificate.get('verdict') or summary.get('trust_certificate_verdict')}"
+            f" ({certificate.get('assurance_level') or summary.get('trust_certificate_assurance_level')})"
+        ),
         (
             "- Evidence: "
             f"{summary.get('admitted_evidence_count', 0)} admitted, "
@@ -1087,9 +1096,31 @@ def render_markdown(
             f"{summary.get('adapter_conformance_failed_count', 0)} adapter-failed"
         ),
         "",
+        "## Trust Certificate",
+        "",
+        f"- Verdict: `{certificate.get('verdict')}`",
+        f"- Assurance Level: `{certificate.get('assurance_level')}`",
+        f"- Promotion Ready: `{certificate.get('promotion_ready')}`",
+        f"- Reason: {certificate.get('reason') or ''}",
+        "",
+        "| Gate | Status | Required |",
+        "| --- | --- | --- |",
+    ]
+    for gate in _as_list(certificate.get("gates")):
+        gate_item = _as_mapping(gate)
+        if not gate_item:
+            continue
+        lines.append(
+            "| "
+            f"{_md_cell(gate_item.get('id') or '')} | "
+            f"{_md_cell(gate_item.get('status') or '')} | "
+            f"{_md_cell(str(bool(gate_item.get('required'))))} |"
+        )
+    lines.extend([
+        "",
         "| Job | Command | Status | Evidence | Exit |",
         "| --- | --- | --- | --- | --- |",
-    ]
+    ])
     for child in list(result.get("children") or result.get("jobs") or []):
         evidence = _as_mapping(child.get("evidence"))
         evidence_cell = evidence.get("status") or ""
@@ -1974,6 +2005,22 @@ def _suite_result(
         and not evidence_findings
         and not optimizer_governance_findings
     )
+    trust_certificate = _suite_trust_certificate(
+        suite=suite,
+        suite_path=suite_path,
+        children=children,
+        capabilities=capabilities,
+        framework_coverage=framework_coverage,
+        evidence_admission=evidence_admission,
+        optimizer_governance=optimizer_governance,
+        missing_capabilities=missing_capabilities,
+        suite_passed=suite_passed,
+        job_count=job_count,
+        executed_count=len(children),
+        passed_count=len(passed),
+        failed_count=len(failed),
+        score=score,
+    )
     return {
         "kind": AGENT_LEARNING_SUITE_KIND,
         "version": AGENT_LEARNING_SUITE_KIND,
@@ -1989,6 +2036,19 @@ def _suite_result(
             "failed_count": len(failed),
             "skipped_count": max(job_count - len(children), 0),
             "score": score,
+            "trust_certificate_verdict": trust_certificate["verdict"],
+            "trust_certificate_assurance_level": trust_certificate[
+                "assurance_level"
+            ],
+            "trust_certificate_promotion_ready": trust_certificate[
+                "promotion_ready"
+            ],
+            "trust_certificate_failed_gate_count": len(
+                trust_certificate["failed_gate_ids"]
+            ),
+            "trust_certificate_conditional_gate_count": len(
+                trust_certificate["conditional_gate_ids"]
+            ),
             "commands": command_counts,
             "capabilities": capabilities,
             "required_capabilities": required_capabilities,
@@ -2046,6 +2106,7 @@ def _suite_result(
         "framework_coverage": framework_coverage,
         "evidence_admission": evidence_admission,
         "optimizer_governance": optimizer_governance,
+        "trust_certificate": trust_certificate,
         "children": list(children),
         "jobs": list(children),
         "findings": suite_findings,
@@ -2067,6 +2128,225 @@ def _suite_descriptor(suite: Mapping[str, Any]) -> dict[str, Any]:
             for job in _suite_jobs(suite)
         ],
         "required_capabilities": _suite_required_capabilities(suite),
+    }
+
+
+def _suite_trust_certificate(
+    *,
+    suite: Mapping[str, Any],
+    suite_path: Path,
+    children: Sequence[Mapping[str, Any]],
+    capabilities: Mapping[str, Sequence[str]],
+    framework_coverage: Mapping[str, Any],
+    evidence_admission: Mapping[str, Any],
+    optimizer_governance: Mapping[str, Any],
+    missing_capabilities: Mapping[str, Sequence[str]],
+    suite_passed: bool,
+    job_count: int,
+    executed_count: int,
+    passed_count: int,
+    failed_count: int,
+    score: float,
+) -> dict[str, Any]:
+    coverage = _suite_trinity_coverage(capabilities)
+    admitted_count = int(evidence_admission.get("admitted_count") or 0)
+    admitted_frozen_count = int(evidence_admission.get("admitted_frozen_count") or 0)
+    governed_count = int(optimizer_governance.get("governed_count") or 0)
+    optimizer_failed_count = int(optimizer_governance.get("failed_count") or 0)
+    optimizer_missing_count = int(optimizer_governance.get("missing_count") or 0)
+    gates = [
+        _trust_gate(
+            "execution",
+            passed=failed_count == 0 and executed_count == job_count and suite_passed,
+            required=True,
+            reason="all declared suite jobs executed and exited successfully",
+            evidence={
+                "job_count": job_count,
+                "executed_count": executed_count,
+                "passed_count": passed_count,
+                "failed_count": failed_count,
+                "score": score,
+            },
+        ),
+        _trust_gate(
+            "capability_gate",
+            passed=not missing_capabilities,
+            required=True,
+            reason="declared required capabilities were observed",
+            evidence={"missing_required_capabilities": dict(missing_capabilities)},
+        ),
+        _trust_gate(
+            "framework_coverage",
+            passed=int(framework_coverage.get("missing_count") or 0) == 0
+            and int(framework_coverage.get("adapter_conformance_failed_count") or 0)
+            == 0,
+            required=True,
+            reason="required framework coverage and adapter conformance passed",
+            evidence={
+                "observed_count": framework_coverage.get("observed_count"),
+                "required_count": framework_coverage.get("required_count"),
+                "missing_count": framework_coverage.get("missing_count"),
+                "adapter_conformance_failed_count": framework_coverage.get(
+                    "adapter_conformance_failed_count"
+                ),
+            },
+        ),
+        _trust_gate(
+            "evidence_admission",
+            passed=admitted_count > 0
+            and int(evidence_admission.get("rejected_count") or 0) == 0,
+            required=False,
+            reason="at least one child artifact is admitted evidence",
+            evidence={
+                "admitted_count": admitted_count,
+                "rejected_count": evidence_admission.get("rejected_count"),
+                "by_status": evidence_admission.get("by_status"),
+            },
+        ),
+        _trust_gate(
+            "evidence_freeze",
+            passed=admitted_count > 0 and admitted_frozen_count == admitted_count,
+            required=False,
+            reason="admitted evidence rows are content-addressed",
+            evidence={
+                "admitted_count": admitted_count,
+                "admitted_frozen_count": admitted_frozen_count,
+            },
+        ),
+        _trust_gate(
+            "optimizer_governance",
+            passed=governed_count > 0
+            and optimizer_failed_count == 0
+            and optimizer_missing_count == 0,
+            required=False,
+            reason="optimizer children expose passed governance verdicts",
+            evidence={
+                "target_count": optimizer_governance.get("target_count"),
+                "governed_count": governed_count,
+                "failed_count": optimizer_failed_count,
+                "missing_count": optimizer_missing_count,
+                "warning_count": optimizer_governance.get("warning_count"),
+            },
+        ),
+        _trust_gate(
+            "trinity_coverage",
+            passed=all(coverage.values()),
+            required=False,
+            reason="suite covers simulation, evaluation, red-team, and optimization",
+            evidence=coverage,
+        ),
+    ]
+    failed_gate_ids = [
+        gate["id"] for gate in gates if gate["required"] and not gate["passed"]
+    ]
+    conditional_gate_ids = [
+        gate["id"] for gate in gates if not gate["required"] and not gate["passed"]
+    ]
+    if not suite_passed or failed_gate_ids:
+        verdict = "rejected"
+    elif conditional_gate_ids:
+        verdict = "conditional"
+    else:
+        verdict = "approved"
+    return {
+        "kind": "agent-learning.suite.trust-certificate.v1",
+        "verdict": verdict,
+        "promotion_ready": verdict == "approved",
+        "assurance_level": _suite_assurance_level(verdict, coverage, governed_count),
+        "subject": {
+            "suite_name": str(suite.get("name") or suite_path.stem),
+            "suite_path": str(suite_path),
+            "suite_version": suite.get("version") or AGENT_LEARNING_SUITE_KIND,
+            "job_count": job_count,
+        },
+        "coverage": coverage,
+        "evidence": {
+            "admitted_count": admitted_count,
+            "admitted_frozen_count": admitted_frozen_count,
+            "optimizer_governed_count": governed_count,
+            "optimizer_failed_count": optimizer_failed_count,
+            "optimizer_missing_count": optimizer_missing_count,
+            "framework_observed_count": framework_coverage.get("observed_count"),
+            "framework_missing_count": framework_coverage.get("missing_count"),
+        },
+        "failed_gate_ids": failed_gate_ids,
+        "conditional_gate_ids": conditional_gate_ids,
+        "reason": _suite_trust_reason(verdict, failed_gate_ids, conditional_gate_ids),
+        "gates": gates,
+        "child_ids": [str(child.get("id") or "") for child in children],
+    }
+
+
+def _suite_trinity_coverage(capabilities: Mapping[str, Sequence[str]]) -> dict[str, bool]:
+    commands = {_suite_key(command) for command in _as_list(capabilities.get("commands"))}
+    result_kinds = {
+        str(item)
+        for item in _as_list(capabilities.get("result_kinds"))
+        if str(item)
+    }
+    return {
+        "simulation": "run" in commands or "agent-learning.run.v1" in result_kinds,
+        "evaluation": bool(
+            commands & {"eval", "eval_artifact", "eval_task", "optimize_eval"}
+        )
+        or "agent-learning.eval.v1" in result_kinds,
+        "redteam": "redteam" in commands or "agent-learning.redteam.v1" in result_kinds,
+        "optimization": bool(commands & {"optimize", "optimize_eval", "optimize_suite"})
+        or "agent-learning.optimization.v1" in result_kinds
+        or "agent-learning.suite-optimization.v1" in result_kinds,
+    }
+
+
+def _suite_assurance_level(
+    verdict: str,
+    coverage: Mapping[str, bool],
+    governed_count: int,
+) -> str:
+    if verdict == "rejected":
+        return "rejected"
+    if all(coverage.values()) and governed_count > 0:
+        return "l3_trinity_governed"
+    if coverage.get("simulation") and coverage.get("evaluation"):
+        return "l2_evaluated_simulation"
+    return "l1_partial_evidence"
+
+
+def _suite_trust_reason(
+    verdict: str,
+    failed_gate_ids: Sequence[str],
+    conditional_gate_ids: Sequence[str],
+) -> str:
+    if verdict == "approved":
+        return (
+            "Approved: execution, evidence, framework coverage, red-team, "
+            "simulation, evaluation, optimization, and optimizer governance closed."
+        )
+    if verdict == "rejected":
+        return (
+            "Rejected: required suite gates failed"
+            + (f" ({', '.join(failed_gate_ids)})." if failed_gate_ids else ".")
+        )
+    return (
+        "Conditional: required gates passed but advisory deployment evidence is "
+        f"incomplete ({', '.join(conditional_gate_ids)})."
+    )
+
+
+def _trust_gate(
+    gate_id: str,
+    *,
+    passed: bool,
+    required: bool,
+    reason: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": gate_id,
+        "status": "passed" if passed else "failed" if required else "conditional",
+        "passed": passed,
+        "required": required,
+        "reason": reason,
+        "evidence": copy.deepcopy(dict(evidence)),
     }
 
 
