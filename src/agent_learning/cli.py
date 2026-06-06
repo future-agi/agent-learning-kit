@@ -40,6 +40,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     command = args[0]
     if command == "doctor":
         return _doctor(args[1:])
+    if command in {"release-check", "v1-check", "release"}:
+        return _release_check(args[1:])
     if command == "init":
         return _init(args[1:])
     if command in {"capabilities", "capability-catalog", "caps"}:
@@ -3121,6 +3123,45 @@ def _doctor(args: Sequence[str] = ()) -> int:
     return 0
 
 
+def _release_check(args: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(
+        prog="agent-learn release-check",
+        description="Verify Agent Learning Kit V1 release gates.",
+    )
+    parser.add_argument(
+        "--project-root",
+        default=None,
+        help="Source checkout root to inspect; defaults to this package root.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Write the V1 release-check JSON payload to this path.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print the release-check payload to stdout.",
+    )
+    parsed = parser.parse_args(list(args))
+
+    from agent_learning import trinity
+
+    payload = trinity.release_status(project_root=parsed.project_root)
+    if parsed.output:
+        output_path = Path(parsed.output).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload.setdefault("outputs_written", []).append(str(output_path))
+        output_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+    if not parsed.quiet:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return int(payload.get("exit_code", 0))
+
+
 def _help(error: Optional[str] = None) -> int:
     if error:
         print(f"agent-learn: {error}", file=sys.stderr)
@@ -3132,10 +3173,10 @@ def _help(error: Optional[str] = None) -> int:
         "command",
         nargs="?",
         help=(
-            "doctor, simulate, run, eval, redteam, optimize, replay, report, "
-            "compare, baseline, promote-to-regression, shrink, optimize-eval, "
-            "optimize-suite, suite, capabilities, actions, action-run, "
-            "action-optimize, trust, redteam-corpus, eval-cli, init"
+            "doctor, release-check, simulate, run, eval, redteam, optimize, "
+            "replay, report, compare, baseline, promote-to-regression, shrink, "
+            "optimize-eval, optimize-suite, suite, capabilities, actions, "
+            "action-run, action-optimize, trust, redteam-corpus, eval-cli, init"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

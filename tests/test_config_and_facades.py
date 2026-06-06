@@ -12414,6 +12414,80 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     assert written["modules"]["engine.simulate"]["available"] is True
 
 
+def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
+    from agent_learning import trinity
+
+    output_path = tmp_path / "release-check.json"
+    exit_code = main([
+        "release-check",
+        "--project-root",
+        str(PROJECT_ROOT),
+        "--output",
+        str(output_path),
+        "--quiet",
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    direct = trinity.release_status(project_root=PROJECT_ROOT)
+    assert exit_code == 0
+    assert captured.out == ""
+    assert payload["kind"] == "agent-learning.release-check.v1"
+    assert payload["schema_version"] == "agent-learning.cli.v1"
+    assert payload["status"] == "passed"
+    assert payload["exit_code"] == 0
+    assert payload["outputs_written"] == [str(output_path.resolve())]
+    assert payload["summary"]["release"] == "v1"
+    assert payload["summary"]["ready"] is True
+    assert payload["summary"]["failed_check_count"] == 0
+    assert payload["summary"]["package"] == "agent-learning-kit"
+    assert payload["required_cli_commands"] == trinity.V1_REQUIRED_CLI_COMMANDS
+    assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
+    assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
+    assert payload["required_local_sim_eval_examples"] == (
+        trinity.V1_LOCAL_SIM_EVAL_EXAMPLES
+    )
+    assert payload["required_redteam_examples"] == trinity.V1_REDTEAM_EXAMPLES
+    assert payload["required_framework_provider_examples"] == (
+        trinity.V1_FRAMEWORK_PROVIDER_EXAMPLES
+    )
+    assert payload["required_evidence_components"] == (
+        trinity.V1_REQUIRED_EVIDENCE_COMPONENTS
+    )
+    checks = {check["id"]: check for check in payload["checks"]}
+    assert set(checks) == {
+        "single_public_boundary",
+        "cli_command_surface",
+        "release_docs_present",
+        "v1_examples_present",
+        "local_sim_eval_examples_present",
+        "native_optimizer_evidence_components",
+        "redteam_core_examples_present",
+        "schema_kind_contract",
+        "framework_provider_examples_present",
+        "package_metadata",
+    }
+    assert all(check["status"] == "passed" for check in checks.values())
+    assert checks["release_docs_present"]["evidence"]["missing"] == []
+    assert checks["v1_examples_present"]["evidence"]["missing"] == []
+    assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []
+    assert checks["redteam_core_examples_present"]["evidence"]["missing"] == []
+    assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
+    evidence = checks["native_optimizer_evidence_components"]["evidence"]
+    assert evidence["missing"] == []
+    assert "framework_lifecycle" in evidence["observed"]
+    assert "world_hooks" in evidence["observed"]
+    assert "optimizer_portfolio" in evidence["observed"]
+    assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
+    assert payload["findings"] == []
+    assert {
+        key: value
+        for key, value in payload.items()
+        if key != "outputs_written"
+    } == direct
+    assert trinity.assert_release_ready(project_root=PROJECT_ROOT)["status"] == "passed"
+
+
 def test_stateful_tool_world_manifest_builds_research_backed_candidates():
     from agent_learning import optimize, simulate
 

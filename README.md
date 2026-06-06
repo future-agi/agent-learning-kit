@@ -42,6 +42,11 @@ public package/CLI, shared `AGENT_LEARNING_API_KEY` /
 not be project dependencies. For one-key local usage,
 `configure(api_key=...)` mirrors the key into legacy `FI_API_KEY` and
 `FI_SECRET_KEY` engine paths.
+Run `agent-learn release-check --project-root .` before cutting V1. It emits
+`agent-learning.release-check.v1` with the milestone gates from
+[`V1_RELEASE_ROADMAP.md`](V1_RELEASE_ROADMAP.md): SDK consolidation,
+promptfoo-style CLI, native optimizer evidence, required docs/examples, schema
+kinds, and packaging metadata.
 
 Python code can verify the same boundary without shelling out:
 
