@@ -185,6 +185,17 @@ SHA-256 freezes for patch, metrics, config, and report-summary evidence. This
 lets SDK, CLI, CI, and Future AGI UI compare optimizer behavior across prompt,
 world, framework, memory, and multi-agent runs without relying on a separate
 report action.
+Retrospective harness optimization is also native and local-only:
+`simulate.build_harness_trajectory_replay_run_manifest()` builds a replayable
+trajectory coreset, failure attribution, repair plan, candidate update, and
+provenance artifact, while
+`optimize.build_retrospective_harness_optimization_manifest()` and
+`optimize.optimize_retrospective_harness()` search weak versus verified harness
+repair bundles without calling an external grader or competitor platform. The
+same manifest can run from Python or through the promptfoo-style `agent-learn
+optimize <manifest>` CLI path, and passing results attach
+`agent-learning.optimization.retrospective-harness-proof.v1` with closed
+coreset, attribution, repair-plan, metric, report-state, and local-only checks.
 Optimization artifacts also attach
 `agent-learning.optimization.governance.v1`, a deterministic admission verdict
 over that lineage. Required checks verify that the selected candidate resolves

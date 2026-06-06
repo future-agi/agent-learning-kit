@@ -72,6 +72,7 @@ DEFAULT_METRICS = [
     "framework_trace_coverage",
     "framework_transcript_quality",
     "goal_progress",
+    "harness_trajectory_replay_quality",
     "memory_correctness",
     "multi_agent_coordination_quality",
     "multi_agent_trace_coverage",

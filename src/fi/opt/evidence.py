@@ -19,6 +19,7 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "world_contract": 3.0,
     "world_orchestration_replay": 3.0,
     "agent_memory_lineage": 2.0,
+    "harness_trajectory_replay": 4.0,
 }
 
 
@@ -150,6 +151,15 @@ def score_simulation_evidence(
             )
         )
 
+    if _should_score("harness_trajectory_replay", layers, env_states, cfg):
+        components.append(
+            _score_harness_trajectory_replay(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
     if not components:
         components.append(
             {
@@ -194,6 +204,7 @@ def score_simulation_evidence(
                     "Agent red-team 2026: readiness evidence must cover target, campaign, runtime, controls, and observability.",
                     "Agent observability 2026: integration readiness needs framework-neutral traces, sessions, and evaluation hooks.",
                     "AgentSentry/EnterpriseOps 2026: stateful tool worlds need temporal takeover, utility-under-attack, and executable state-delta evidence.",
+                    "RHO 2026: harness updates should be optimized from prior trajectory rollouts without external grading.",
                 ],
             }
         },
@@ -1067,6 +1078,164 @@ def _score_agent_memory_lineage(
     }
 
 
+def _score_harness_trajectory_replay(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "harness_trajectory_replay")
+    if not payload:
+        return _missing_component(
+            "harness_trajectory_replay",
+            "No harness_trajectory_replay evidence.",
+        )
+
+    quality = _first_mapping(
+        cfg.get("harness_trajectory_replay_quality"),
+        manifest_config.get("harness_trajectory_replay_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    trajectories = [_as_mapping(item) for item in _as_list(payload.get("trajectories"))]
+    coreset = {str(item) for item in _as_list(payload.get("coreset")) if str(item)}
+    attribution = [
+        _as_mapping(item)
+        for item in _as_list(payload.get("failure_attribution"))
+        if _as_mapping(item)
+    ]
+    repair_plan = [
+        _as_mapping(item)
+        for item in _as_list(payload.get("repair_plan"))
+        if _as_mapping(item)
+    ]
+    candidate_updates = [
+        _as_mapping(item)
+        for item in _as_list(payload.get("candidate_updates"))
+        if _as_mapping(item)
+    ]
+    provenance = _as_mapping(payload.get("provenance"))
+
+    required_layers = {
+        _norm(item)
+        for item in _as_list(quality.get("required_layers"))
+        if _norm(item)
+    }
+    observed_layers = {
+        _norm(item)
+        for item in _as_list(summary.get("layers"))
+        if _norm(item)
+    }
+    for row in [*trajectories, *attribution, *repair_plan]:
+        observed_layers.update(
+            _norm(item)
+            for item in _as_list(row.get("layers") or row.get("layer"))
+            if _norm(item)
+        )
+    layer_score = _coverage_score(
+        required_layers,
+        observed_layers,
+        bool(observed_layers),
+    )
+
+    required_modes = {
+        _norm(item)
+        for item in _as_list(quality.get("required_failure_modes"))
+        if _norm(item)
+    }
+    observed_modes = {
+        _norm(item)
+        for item in _as_list(summary.get("failure_modes"))
+        if _norm(item)
+    }
+    for row in [*trajectories, *attribution]:
+        observed_modes.update(
+            _norm(item)
+            for item in _as_list(row.get("failure_modes") or row.get("failure_mode"))
+            if _norm(item)
+        )
+    mode_score = _coverage_score(required_modes, observed_modes, bool(observed_modes))
+
+    count_checks = [
+        (
+            int(quality.get("min_trajectory_count") or 1),
+            int(summary.get("trajectory_count") or len(trajectories)),
+        ),
+        (
+            int(quality.get("min_coreset_count") or 1),
+            int(summary.get("coreset_count") or len(coreset)),
+        ),
+        (
+            int(quality.get("min_attributed_failure_count") or 1),
+            int(summary.get("attributed_failure_count") or len(attribution)),
+        ),
+        (
+            int(quality.get("min_repair_step_count") or 1),
+            int(summary.get("repair_step_count") or len(repair_plan)),
+        ),
+    ]
+    count_score = sum(1 for required, actual in count_checks if actual >= required) / len(count_checks)
+    selected_count = int(
+        summary.get("selected_repair_count")
+        or sum(1 for item in candidate_updates if item.get("selected"))
+    )
+    selected_score = (
+        1.0
+        if not quality.get("require_selected_repair") or selected_count > 0
+        else 0.0
+    )
+    provenance_score = (
+        1.0
+        if not quality.get("require_provenance")
+        or bool(provenance)
+        or bool(summary.get("source_run_ids"))
+        else 0.0
+    )
+    local_score = 1.0
+    if quality.get("require_local_only"):
+        local_score = 1.0 if bool(provenance.get("local_only", summary.get("local_only"))) else 0.0
+    max_external = int(quality.get("max_external_dependency_count", 0))
+    external_count = int(
+        provenance.get("external_dependency_count")
+        or summary.get("external_dependency_count")
+        or 0
+    )
+    dependency_score = 1.0 if external_count <= max_external else 0.0
+    max_findings = int(quality.get("max_open_findings", 0))
+    finding_count = int(summary.get("open_finding_count") or len(_as_list(payload.get("findings"))))
+    finding_score = 1.0 if finding_count <= max_findings else 0.0
+
+    score = round(
+        0.18 * count_score
+        + 0.18 * layer_score
+        + 0.18 * mode_score
+        + 0.14 * selected_score
+        + 0.14 * provenance_score
+        + 0.08 * local_score
+        + 0.05 * dependency_score
+        + 0.05 * finding_score,
+        4,
+    )
+    return {
+        "name": "harness_trajectory_replay",
+        "score": score,
+        "reason": (
+            "harness trajectory replay closes coreset, attribution, repair, and provenance"
+            if score >= 0.99
+            else "harness trajectory replay evidence incomplete"
+        ),
+        "details": {
+            "layers": sorted(observed_layers),
+            "required_layers": sorted(required_layers),
+            "failure_modes": sorted(observed_modes),
+            "required_failure_modes": sorted(required_modes),
+            "selected_repair_count": selected_count,
+            "external_dependency_count": external_count,
+            "open_finding_count": finding_count,
+            "summary": copy.deepcopy(summary),
+        },
+    }
+
+
 def _should_score(
     layer: str,
     layers: set[str],
@@ -1122,6 +1291,14 @@ def _should_score(
         "world": {"world", "environment"},
         "orchestration": {"orchestration", "multi_agent"},
         "memory": {"memory", "retrieval"},
+        "harness_trajectory_replay": {
+            "harness",
+            "trajectory",
+            "retrospective",
+            "retrospective_harness",
+            "harness_trajectory_replay",
+            "optimization",
+        },
     }
     scoring_layers = {_norm(item) for item in _as_list(cfg.get("layers"))}
     if scoring_layers:
@@ -1168,6 +1345,12 @@ def _should_score(
         return "world_orchestration_replay" in keys
     if layer == "memory":
         return "agent_memory_lineage" in keys
+    if layer == "harness_trajectory_replay":
+        return (
+            "harness_trajectory_replay" in keys
+            or bool(cfg.get("harness_trajectory_replay_quality"))
+            or bool(cfg.get("required_harness_trajectory_replay"))
+        )
     return False
 
 

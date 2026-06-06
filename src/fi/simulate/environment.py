@@ -11495,6 +11495,593 @@ class OptimizerTraceEnvironment(EnvironmentAdapter):
         return copy.deepcopy(self.trace)
 
 
+class HarnessTrajectoryReplayEnvironment(EnvironmentAdapter):
+    """
+    Replay prior agent trajectories as harness-optimization evidence.
+
+    This environment is intentionally local and deterministic. It does not
+    re-run an external grader; it exposes a trajectory coreset, failure
+    attribution, candidate harness updates, repair plan, and provenance so
+    agent-report metrics and AgentOptimizer can score harness repairs from
+    process evidence.
+    """
+
+    name = "harness_trajectory_replay"
+
+    def __init__(
+        self,
+        replay: Optional[Mapping[str, Any]] = None,
+        *,
+        name: str = "harness-trajectory-replay",
+        trajectories: Optional[Iterable[Mapping[str, Any]]] = None,
+        coreset: Optional[Iterable[Any]] = None,
+        failure_attribution: Optional[Iterable[Mapping[str, Any]]] = None,
+        repair_plan: Optional[Iterable[Mapping[str, Any]]] = None,
+        candidate_updates: Optional[Iterable[Mapping[str, Any]]] = None,
+        provenance: Optional[Mapping[str, Any]] = None,
+        findings: Optional[Iterable[Mapping[str, Any]]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        self.initial_replay = normalize_harness_trajectory_replay(
+            replay,
+            name=name,
+            trajectories=trajectories,
+            coreset=coreset,
+            failure_attribution=failure_attribution,
+            repair_plan=repair_plan,
+            candidate_updates=candidate_updates,
+            provenance=provenance,
+            findings=findings,
+            metadata=metadata,
+        )
+        self.replay: Dict[str, Any] = {}
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self.replay = copy.deepcopy(self.initial_replay)
+        events = [
+            SimulationEvent(
+                type="harness_trajectory_replay",
+                name="harness_trajectory_replay_ready",
+                payload={
+                    "name": self.replay.get("name"),
+                    "signals": copy.deepcopy(self.replay.get("signals", [])),
+                    "summary": copy.deepcopy(self.replay.get("summary", {})),
+                },
+            )
+        ]
+        for trajectory in self.replay.get("trajectories", []):
+            events.append(
+                SimulationEvent(
+                    type="harness_trajectory",
+                    name=str(trajectory.get("id") or "trajectory"),
+                    payload=copy.deepcopy(dict(trajectory)),
+                    metadata={"kind": "harness_trajectory_replay"},
+                )
+            )
+        return EnvironmentSnapshot(
+            tools=self._tool_specs(),
+            artifacts=[self._trace_artifact()],
+            events=events,
+            state={"harness_trajectory_replay": self._trace_payload()},
+            metadata={
+                "harness_trajectory_replay": {
+                    "name": self.replay.get("name"),
+                    "signals": copy.deepcopy(self.replay.get("signals", [])),
+                    "summary": copy.deepcopy(self.replay.get("summary", {})),
+                }
+            },
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        name = _tool_name(tool_call)
+        if name not in {
+            "harness_trajectory_replay_status",
+            "list_harness_trajectory_cases",
+            "inspect_harness_failure",
+            "list_harness_repair_plan",
+            "inspect_harness_candidate_update",
+        }:
+            return None
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+
+        if name == "harness_trajectory_replay_status":
+            result = self._trace_payload()
+            event_name = "harness_trajectory_replay_status"
+            content = "Harness trajectory replay status recorded."
+            success = True
+            error = None
+        elif name == "list_harness_trajectory_cases":
+            status = _normalize_harness_trajectory_key(arguments.get("status") or "")
+            layer = _normalize_harness_trajectory_key(arguments.get("layer") or "")
+            trajectories = [
+                copy.deepcopy(dict(item))
+                for item in self.replay.get("trajectories", [])
+            ]
+            if status:
+                trajectories = [
+                    item
+                    for item in trajectories
+                    if _normalize_harness_trajectory_key(item.get("status")) == status
+                ]
+            if layer:
+                trajectories = [
+                    item
+                    for item in trajectories
+                    if layer
+                    in {
+                        _normalize_harness_trajectory_key(value)
+                        for value in _as_iterable(item.get("layers"))
+                    }
+                ]
+            result = {
+                "name": self.replay.get("name"),
+                "trajectories": trajectories,
+                "count": len(trajectories),
+                "query": {"status": status, "layer": layer},
+            }
+            event_name = "harness_trajectory_cases_listed"
+            content = f"Listed {len(trajectories)} harness trajectory case(s)."
+            success = True
+            error = None
+        elif name == "inspect_harness_failure":
+            trajectory_id = str(arguments.get("trajectory_id") or arguments.get("id") or "")
+            failure_mode = _normalize_harness_trajectory_key(
+                arguments.get("failure_mode") or arguments.get("mode") or ""
+            )
+            attributions = [
+                copy.deepcopy(dict(item))
+                for item in self.replay.get("failure_attribution", [])
+                if isinstance(item, Mapping)
+            ]
+            if trajectory_id:
+                attributions = [
+                    item
+                    for item in attributions
+                    if str(item.get("trajectory_id") or item.get("id") or "")
+                    == trajectory_id
+                ]
+            if failure_mode:
+                attributions = [
+                    item
+                    for item in attributions
+                    if _normalize_harness_trajectory_key(item.get("failure_mode"))
+                    == failure_mode
+                ]
+            success = bool(attributions)
+            result = {
+                "name": self.replay.get("name"),
+                "failure_attribution": attributions,
+                "query": {
+                    "trajectory_id": trajectory_id,
+                    "failure_mode": failure_mode,
+                },
+            }
+            event_name = (
+                "harness_failure_inspected"
+                if success
+                else "harness_failure_missing"
+            )
+            content = f"Inspected {len(attributions)} harness failure attribution(s)."
+            error = None if success else "failure_attribution_not_found"
+        elif name == "list_harness_repair_plan":
+            layer = _normalize_harness_trajectory_key(arguments.get("layer") or "")
+            repairs = [
+                copy.deepcopy(dict(item))
+                for item in self.replay.get("repair_plan", [])
+                if isinstance(item, Mapping)
+            ]
+            if layer:
+                repairs = [
+                    item
+                    for item in repairs
+                    if _normalize_harness_trajectory_key(item.get("layer")) == layer
+                ]
+            result = {
+                "name": self.replay.get("name"),
+                "repair_plan": repairs,
+                "count": len(repairs),
+                "query": {"layer": layer},
+            }
+            event_name = "harness_repair_plan_listed"
+            content = f"Listed {len(repairs)} harness repair step(s)."
+            success = True
+            error = None
+        else:
+            candidate_id = str(arguments.get("candidate_id") or arguments.get("id") or "")
+            candidates = [
+                copy.deepcopy(dict(item))
+                for item in self.replay.get("candidate_updates", [])
+                if isinstance(item, Mapping)
+            ]
+            if candidate_id:
+                candidates = [
+                    item
+                    for item in candidates
+                    if candidate_id
+                    in {str(item.get("candidate_id")), str(item.get("id"))}
+                ]
+            selected_only = bool(arguments.get("selected_only"))
+            if selected_only:
+                candidates = [item for item in candidates if bool(item.get("selected"))]
+            success = bool(candidates)
+            result = {
+                "name": self.replay.get("name"),
+                "candidate_updates": candidates,
+                "query": {
+                    "candidate_id": candidate_id,
+                    "selected_only": selected_only,
+                },
+            }
+            event_name = (
+                "harness_candidate_update_inspected"
+                if success
+                else "harness_candidate_update_missing"
+            )
+            content = f"Inspected {len(candidates)} harness candidate update(s)."
+            error = None if success else "candidate_update_not_found"
+
+        return ToolExecutionResult(
+            tool_call_id=call_id,
+            tool_name=name,
+            content=content,
+            result=result,
+            success=success,
+            error=error,
+            state_updates={"harness_trajectory_replay": self._trace_payload()},
+            artifacts=[self._trace_artifact()],
+            events=[
+                SimulationEvent(
+                    type="harness_trajectory_replay",
+                    name=event_name,
+                    payload=copy.deepcopy(result),
+                    metadata={"kind": "harness_trajectory_replay"},
+                )
+            ],
+        )
+
+    def _tool_specs(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "harness_trajectory_replay_status",
+                "description": "Return the trajectory coreset, failure attribution, repair plan, candidate updates, provenance, and summary.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "list_harness_trajectory_cases",
+                "description": "List prior trajectories, optionally filtered by status or implicated harness layer.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "layer": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "inspect_harness_failure",
+                "description": "Inspect attributed failures from prior trajectories by trajectory id or failure mode.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "trajectory_id": {"type": "string"},
+                        "failure_mode": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "list_harness_repair_plan",
+                "description": "List deterministic repair operators derived from trajectory failure attribution.",
+                "parameters": {"type": "object", "properties": {"layer": {"type": "string"}}},
+            },
+            {
+                "name": "inspect_harness_candidate_update",
+                "description": "Inspect candidate harness updates, optionally limited to the selected update.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "selected_only": {"type": "boolean"},
+                    },
+                },
+            },
+        ]
+
+    def _trace_artifact(self) -> SimulationArtifact:
+        return SimulationArtifact(
+            type="trace",
+            role="environment",
+            data=self._trace_payload(),
+            metadata={
+                "kind": "harness_trajectory_replay",
+                "name": self.replay.get("name"),
+            },
+        )
+
+    def _trace_payload(self) -> Dict[str, Any]:
+        return copy.deepcopy(self.replay)
+
+
+def normalize_harness_trajectory_replay(
+    replay: Optional[Mapping[str, Any]] = None,
+    *,
+    name: str = "harness-trajectory-replay",
+    trajectories: Optional[Iterable[Mapping[str, Any]]] = None,
+    coreset: Optional[Iterable[Any]] = None,
+    failure_attribution: Optional[Iterable[Mapping[str, Any]]] = None,
+    repair_plan: Optional[Iterable[Mapping[str, Any]]] = None,
+    candidate_updates: Optional[Iterable[Mapping[str, Any]]] = None,
+    provenance: Optional[Mapping[str, Any]] = None,
+    findings: Optional[Iterable[Mapping[str, Any]]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Normalize local trajectory evidence into a replayable harness artifact."""
+
+    base = copy.deepcopy(dict(replay or {}))
+    trajectory_rows = [
+        _normalize_harness_trajectory_case(item, index=index)
+        for index, item in enumerate(
+            trajectories
+            if trajectories is not None
+            else _as_iterable(base.get("trajectories")),
+            start=1,
+        )
+        if isinstance(item, Mapping)
+    ]
+    coreset_ids = _normalize_harness_coreset(
+        coreset if coreset is not None else base.get("coreset"),
+        trajectories=trajectory_rows,
+    )
+    attribution_rows = [
+        _normalize_harness_failure_attribution(item)
+        for item in (
+            failure_attribution
+            if failure_attribution is not None
+            else _as_iterable(base.get("failure_attribution"))
+        )
+        if isinstance(item, Mapping)
+    ]
+    repair_rows = [
+        _normalize_harness_repair_step(item)
+        for item in (
+            repair_plan
+            if repair_plan is not None
+            else _as_iterable(base.get("repair_plan"))
+        )
+        if isinstance(item, Mapping)
+    ]
+    candidate_rows = [
+        _normalize_harness_candidate_update(item)
+        for item in (
+            candidate_updates
+            if candidate_updates is not None
+            else _as_iterable(base.get("candidate_updates"))
+        )
+        if isinstance(item, Mapping)
+    ]
+    finding_rows = [
+        copy.deepcopy(dict(item))
+        for item in (
+            findings if findings is not None else _as_iterable(base.get("findings"))
+        )
+        if isinstance(item, Mapping)
+    ]
+    provenance_payload = {
+        "source": "local_trajectory_replay",
+        "local_only": True,
+        "external_dependency_count": 0,
+        "evidence_refs": [],
+        **copy.deepcopy(dict(base.get("provenance") or {})),
+        **copy.deepcopy(dict(provenance or {})),
+    }
+    metadata_payload = {
+        **copy.deepcopy(dict(base.get("metadata") or {})),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    summary = _harness_trajectory_summary(
+        trajectories=trajectory_rows,
+        coreset=coreset_ids,
+        failure_attribution=attribution_rows,
+        repair_plan=repair_rows,
+        candidate_updates=candidate_rows,
+        provenance=provenance_payload,
+        findings=finding_rows,
+    )
+    signals = sorted(
+        {
+            "harness_trajectory_replay",
+            "trajectory_coreset",
+            "failure_attribution",
+            "repair_plan",
+            "candidate_update",
+            "provenance",
+            *summary.get("layers", []),
+            *summary.get("failure_modes", []),
+            *summary.get("weak_metrics", []),
+        }
+    )
+    return {
+        "kind": "agent-learning.harness-trajectory-replay.v1",
+        "name": str(base.get("name") or name),
+        "status": "passed" if summary["open_finding_count"] == 0 else "needs_repair",
+        "signals": signals,
+        "trajectories": trajectory_rows,
+        "coreset": coreset_ids,
+        "failure_attribution": attribution_rows,
+        "repair_plan": repair_rows,
+        "candidate_updates": candidate_rows,
+        "provenance": provenance_payload,
+        "findings": finding_rows,
+        "summary": summary,
+        "metadata": metadata_payload,
+    }
+
+
+def _normalize_harness_trajectory_case(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    row = copy.deepcopy(dict(item))
+    row.setdefault("id", f"trajectory_{index}")
+    row.setdefault("status", "passed" if float(row.get("score") or 0.0) >= 1.0 else "failed")
+    row["layers"] = [
+        _normalize_harness_trajectory_key(value)
+        for value in _as_iterable(row.get("layers"))
+        if _normalize_harness_trajectory_key(value)
+    ]
+    row["failure_modes"] = [
+        _normalize_harness_trajectory_key(value)
+        for value in _as_iterable(row.get("failure_modes"))
+        if _normalize_harness_trajectory_key(value)
+    ]
+    row["weak_metrics"] = [
+        _normalize_harness_trajectory_key(value)
+        for value in _as_iterable(row.get("weak_metrics"))
+        if _normalize_harness_trajectory_key(value)
+    ]
+    row.setdefault("provenance", {"source": "local", "evidence_refs": [row["id"]]})
+    return row
+
+
+def _normalize_harness_coreset(
+    value: Any,
+    *,
+    trajectories: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    items = _as_iterable(value)
+    if not items:
+        items = [
+            item.get("id")
+            for item in trajectories
+            if _normalize_harness_trajectory_key(item.get("status")) != "passed"
+        ]
+    result: List[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(_coerce_plain_dict(item).get("id") if isinstance(item, Mapping) else item or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
+def _normalize_harness_failure_attribution(item: Mapping[str, Any]) -> Dict[str, Any]:
+    row = copy.deepcopy(dict(item))
+    row["layer"] = _normalize_harness_trajectory_key(row.get("layer"))
+    row["failure_mode"] = _normalize_harness_trajectory_key(row.get("failure_mode"))
+    row["evidence_refs"] = [
+        str(value)
+        for value in _as_iterable(row.get("evidence_refs") or row.get("evidence"))
+        if str(value or "").strip()
+    ]
+    row.setdefault("repair_operator", "targeted_harness_update")
+    return row
+
+
+def _normalize_harness_repair_step(item: Mapping[str, Any]) -> Dict[str, Any]:
+    row = copy.deepcopy(dict(item))
+    row["layer"] = _normalize_harness_trajectory_key(row.get("layer"))
+    row["operator"] = _normalize_harness_trajectory_key(
+        row.get("operator") or row.get("repair_operator")
+    )
+    row.setdefault("status", "passed" if row.get("selected") else "planned")
+    row.setdefault("evidence_refs", [])
+    return row
+
+
+def _normalize_harness_candidate_update(item: Mapping[str, Any]) -> Dict[str, Any]:
+    row = copy.deepcopy(dict(item))
+    row.setdefault("id", row.get("candidate_id") or "candidate_update")
+    row.setdefault("candidate_id", row.get("id"))
+    row["target_layers"] = [
+        _normalize_harness_trajectory_key(value)
+        for value in _as_iterable(row.get("target_layers") or row.get("layers"))
+        if _normalize_harness_trajectory_key(value)
+    ]
+    row.setdefault("selected", bool(row.get("selected")))
+    row.setdefault("local_only", True)
+    return row
+
+
+def _harness_trajectory_summary(
+    *,
+    trajectories: Sequence[Mapping[str, Any]],
+    coreset: Sequence[str],
+    failure_attribution: Sequence[Mapping[str, Any]],
+    repair_plan: Sequence[Mapping[str, Any]],
+    candidate_updates: Sequence[Mapping[str, Any]],
+    provenance: Mapping[str, Any],
+    findings: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    failing = [
+        item
+        for item in trajectories
+        if _normalize_harness_trajectory_key(item.get("status")) not in {"passed", "success"}
+    ]
+    layers = sorted(
+        {
+            _normalize_harness_trajectory_key(value)
+            for row in [*trajectories, *failure_attribution, *repair_plan]
+            for value in _as_iterable(row.get("layers") or row.get("layer"))
+            if _normalize_harness_trajectory_key(value)
+        }
+    )
+    failure_modes = sorted(
+        {
+            _normalize_harness_trajectory_key(value)
+            for row in [*trajectories, *failure_attribution]
+            for value in _as_iterable(row.get("failure_modes") or row.get("failure_mode"))
+            if _normalize_harness_trajectory_key(value)
+        }
+    )
+    weak_metrics = sorted(
+        {
+            _normalize_harness_trajectory_key(value)
+            for row in trajectories
+            for value in _as_iterable(row.get("weak_metrics"))
+            if _normalize_harness_trajectory_key(value)
+        }
+    )
+    selected_candidates = [
+        item for item in candidate_updates if bool(item.get("selected"))
+    ]
+    return {
+        "trajectory_count": len(trajectories),
+        "failing_trajectory_count": len(failing),
+        "coreset_count": len(coreset),
+        "attributed_failure_count": len(failure_attribution),
+        "repair_step_count": len(repair_plan),
+        "selected_repair_count": len(selected_candidates),
+        "open_finding_count": len(findings),
+        "external_dependency_count": int(
+            provenance.get("external_dependency_count") or 0
+        ),
+        "local_only": bool(provenance.get("local_only", True)),
+        "layers": layers,
+        "failure_modes": failure_modes,
+        "weak_metrics": weak_metrics,
+        "source_run_ids": [
+            str(value)
+            for value in _as_iterable(provenance.get("source_run_ids"))
+            if str(value or "").strip()
+        ],
+        "selected_candidate_ids": [
+            str(item.get("candidate_id") or item.get("id"))
+            for item in selected_candidates
+            if item.get("candidate_id") or item.get("id")
+        ],
+    }
+
+
+def _normalize_harness_trajectory_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 class OptimizerPortfolioEnvironment(EnvironmentAdapter):
     """
     Replay a multi-interaction optimizer backend portfolio as simulation evidence.

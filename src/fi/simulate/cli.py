@@ -33,6 +33,7 @@ from fi.simulate import (
     FrameworkPortabilityEnvironment,
     FrameworkProbeEnvironment,
     FrameworkTraceEnvironment,
+    HarnessTrajectoryReplayEnvironment,
     ImageEnvironment,
     MultiAgentRoomEnvironment,
     ObservabilityReplayEnvironment,
@@ -830,6 +831,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(OptimizerPortfolioEnvironment(payload))
         elif env_type in {"optimizer_society_trace", "optimizer_trace"}:
             environments.append(OptimizerTraceEnvironment(payload))
+        elif env_type in {"harness_trajectory_replay", "retrospective_harness"}:
+            environments.append(HarnessTrajectoryReplayEnvironment(payload))
         elif env_type in {
             "persistent_state_attack",
             "persistent_state_redteam",

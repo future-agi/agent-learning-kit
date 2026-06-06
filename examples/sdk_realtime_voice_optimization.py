@@ -266,7 +266,7 @@ def evaluation_config() -> dict[str, Any]:
             "required_stages": ["vad", "stt", "llm", "tts"],
             "min_samples_per_stage": 2,
             "max_stage_p95_ms": {"vad": 45, "stt": 180, "llm": 260, "tts": 320},
-            "required_order": ["stt", "tts", "vad", "llm"],
+            "required_order": ["vad", "stt", "llm", "tts"],
         },
         "required_streaming_trace": [
             "trace",

@@ -62,6 +62,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "FrameworkPortabilityEnvironment",
     "FrameworkProbeEnvironment",
     "FrameworkTraceEnvironment",
+    "HarnessTrajectoryReplayEnvironment",
     "ImageEnvironment",
     "MultiAgentRoomEnvironment",
     "ObservabilityReplayEnvironment",
@@ -135,6 +136,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "normalize_optimizer_society_trace",
     "normalize_persistent_state_attack_manifest",
     "normalize_framework_trace_export",
+    "normalize_harness_trajectory_replay",
     "normalize_mcp_tool_session_export",
     "normalize_openai_responses_trace",
     "normalize_browser_trace_export",
@@ -3124,6 +3126,119 @@ def build_framework_adapter_matrix_run_manifest(
     return manifest
 
 
+def harness_trajectory_replay_artifact(
+    *,
+    name: str = "harness-trajectory-replay",
+    trajectories: Optional[Sequence[Mapping[str, Any]]] = None,
+    coreset: Optional[Sequence[Any]] = None,
+    failure_attribution: Optional[Sequence[Mapping[str, Any]]] = None,
+    repair_plan: Optional[Sequence[Mapping[str, Any]]] = None,
+    candidate_updates: Optional[Sequence[Mapping[str, Any]]] = None,
+    provenance: Optional[Mapping[str, Any]] = None,
+    findings: Optional[Sequence[Mapping[str, Any]]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a local trajectory replay artifact for harness optimization.
+
+    The artifact is a native Future AGI / Agent Learning Kit contract. It
+    captures past trajectories, a challenging coreset, failure attribution,
+    candidate harness repairs, and provenance without requiring external
+    graders or hosted optimizer integrations.
+    """
+
+    return copy.deepcopy(
+        _simulate().normalize_harness_trajectory_replay(
+            name=name,
+            trajectories=trajectories,
+            coreset=coreset,
+            failure_attribution=failure_attribution,
+            repair_plan=repair_plan,
+            candidate_updates=candidate_updates,
+            provenance=provenance,
+            findings=findings,
+            metadata=metadata,
+        )
+    )
+
+
+def build_harness_trajectory_replay_run_manifest(
+    *,
+    name: str = "harness-trajectory-replay-simulation",
+    replay: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct local run over harness trajectory replay evidence."""
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    replay_payload = (
+        copy.deepcopy(dict(replay))
+        if replay is not None
+        else _default_harness_trajectory_replay_artifact(name)
+    )
+    config = copy.deepcopy(
+        dict(
+            evaluation_config
+            or _harness_trajectory_replay_evaluation_config(replay_payload)
+        )
+    )
+    return {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(
+                scenario
+                or _default_harness_trajectory_replay_scenario(
+                    str(name),
+                    replay_payload,
+                )
+            )
+        ),
+        "agent": copy.deepcopy(
+            dict(agent or _default_harness_trajectory_replay_agent())
+        ),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": [
+                _harness_trajectory_replay_environment(replay_payload)
+            ],
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": config,
+            }
+        },
+        "metadata": {
+            "source": (
+                "agent_learning.simulate."
+                "build_harness_trajectory_replay_run_manifest"
+            ),
+            "task_kind": "retrospective_harness",
+            "harness_trajectory_replay": replay_payload,
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
 def build_multi_framework_suite_manifest(
     *,
     name: str,
@@ -4461,6 +4576,297 @@ def _framework_adapter_matrix_evaluation_config(
             "framework_adapter_contract_quality": 10.0,
             "task_completion": 1.0,
         },
+    }
+
+
+def _default_harness_trajectory_replay_artifact(name: str) -> dict[str, Any]:
+    return harness_trajectory_replay_artifact(
+        name=name,
+        trajectories=[
+            {
+                "id": "tool_fault_refund",
+                "status": "failed",
+                "score": 0.42,
+                "layers": ["tools", "world"],
+                "failure_modes": ["tool_fault", "world_contract_violation"],
+                "weak_metrics": ["tool_fault_tolerance", "world_contract_quality"],
+                "provenance": {
+                    "source": "local_prior_run",
+                    "evidence_refs": ["report.results[0]"],
+                },
+            },
+            {
+                "id": "memory_lineage_gap",
+                "status": "failed",
+                "score": 0.51,
+                "layers": ["memory", "retrieval"],
+                "failure_modes": ["memory_lineage_gap"],
+                "weak_metrics": ["agent_memory_lineage_quality"],
+                "provenance": {
+                    "source": "local_prior_run",
+                    "evidence_refs": ["report.results[1]"],
+                },
+            },
+            {
+                "id": "multi_agent_handoff_clean",
+                "status": "passed",
+                "score": 1.0,
+                "layers": ["orchestration", "multi_agent"],
+                "failure_modes": [],
+                "weak_metrics": [],
+                "provenance": {
+                    "source": "local_prior_run",
+                    "evidence_refs": ["report.results[2]"],
+                },
+            },
+        ],
+        coreset=["tool_fault_refund", "memory_lineage_gap"],
+        failure_attribution=[
+            {
+                "trajectory_id": "tool_fault_refund",
+                "layer": "tools",
+                "failure_mode": "tool_fault",
+                "evidence_refs": ["report.results[0].tool_calls"],
+                "repair_operator": "add_retry_and_schema_guard",
+            },
+            {
+                "trajectory_id": "tool_fault_refund",
+                "layer": "world",
+                "failure_mode": "world_contract_violation",
+                "evidence_refs": [
+                    "report.results[0].metadata.environment_state.world_contract"
+                ],
+                "repair_operator": "tighten_world_transition_gate",
+            },
+            {
+                "trajectory_id": "memory_lineage_gap",
+                "layer": "memory",
+                "failure_mode": "memory_lineage_gap",
+                "evidence_refs": [
+                    "report.results[1].metadata.environment_state.agent_memory_lineage"
+                ],
+                "repair_operator": "require_memory_write_provenance",
+            },
+        ],
+        repair_plan=[
+            {
+                "id": "repair_tool_fault",
+                "layer": "tools",
+                "operator": "add_retry_and_schema_guard",
+                "search_path": "simulation.environments",
+                "expected_metric": "tool_fault_tolerance",
+                "status": "passed",
+                "selected": True,
+                "evidence_refs": ["tool_fault_refund"],
+            },
+            {
+                "id": "repair_world_gate",
+                "layer": "world",
+                "operator": "tighten_world_transition_gate",
+                "search_path": "simulation.environments",
+                "expected_metric": "world_contract_quality",
+                "status": "passed",
+                "selected": True,
+                "evidence_refs": ["tool_fault_refund"],
+            },
+            {
+                "id": "repair_memory_lineage",
+                "layer": "memory",
+                "operator": "require_memory_write_provenance",
+                "search_path": "simulation.environments",
+                "expected_metric": "agent_memory_lineage_quality",
+                "status": "passed",
+                "selected": True,
+                "evidence_refs": ["memory_lineage_gap"],
+            },
+        ],
+        candidate_updates=[
+            {
+                "id": "trajectory_repair_verified",
+                "candidate_id": "trajectory_repair_verified",
+                "selected": True,
+                "target_layers": ["tools", "world", "memory", "orchestration"],
+                "patch": {"simulation.environments": "verified_trajectory_replay"},
+                "metrics": {
+                    "harness_trajectory_replay_quality": 1.0,
+                    "world_contract_quality": 1.0,
+                    "agent_memory_lineage_quality": 1.0,
+                },
+                "score": 1.0,
+                "local_only": True,
+            }
+        ],
+        provenance={
+            "source": "local_prior_run_set",
+            "source_run_ids": ["run_tool_fault", "run_memory_gap", "run_handoff"],
+            "local_only": True,
+            "external_dependency_count": 0,
+            "evidence_refs": [
+                "report.results[0]",
+                "report.results[1]",
+                "report.results[2]",
+            ],
+        },
+        metadata={
+            "source": "agent_learning.simulate.default_harness_trajectory_replay",
+            "research_direction": "retrospective_harness_optimization",
+        },
+    )
+
+
+def _harness_trajectory_replay_environment(
+    replay: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "type": "harness_trajectory_replay",
+        "data": copy.deepcopy(dict(replay)),
+    }
+
+
+def _harness_trajectory_replay_evaluation_config(
+    replay: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = dict(replay.get("summary") or {})
+    return {
+        "task_description": (
+            "Optimize a harness from prior trajectory evidence without external "
+            "grading."
+        ),
+        "expected_result": (
+            "The selected harness update is backed by local trajectory coreset, "
+            "failure attribution, repair plan, provenance, and report evidence."
+        ),
+        "success_criteria": [
+            "local trajectory coreset selected",
+            "failures attributed to harness layers",
+            "repair plan selected and verified",
+            "no external grading or service dependency",
+        ],
+        "required_tools": [
+            "harness_trajectory_replay_status",
+            "list_harness_trajectory_cases",
+            "inspect_harness_failure",
+            "list_harness_repair_plan",
+            "inspect_harness_candidate_update",
+        ],
+        "harness_trajectory_replay_quality": {
+            "min_trajectory_count": max(3, int(summary.get("trajectory_count") or 0)),
+            "min_coreset_count": max(2, int(summary.get("coreset_count") or 0)),
+            "min_attributed_failure_count": max(
+                3,
+                int(summary.get("attributed_failure_count") or 0),
+            ),
+            "min_repair_step_count": max(3, int(summary.get("repair_step_count") or 0)),
+            "required_layers": [
+                "tools",
+                "world",
+                "memory",
+                "orchestration",
+            ],
+            "required_failure_modes": [
+                "tool_fault",
+                "world_contract_violation",
+                "memory_lineage_gap",
+            ],
+            "required_weak_metrics": [
+                "tool_fault_tolerance",
+                "world_contract_quality",
+                "agent_memory_lineage_quality",
+            ],
+            "require_selected_repair": True,
+            "require_provenance": True,
+            "require_local_only": True,
+            "max_open_findings": 0,
+            "max_external_dependency_count": 0,
+        },
+        "metric_weights": {
+            "harness_trajectory_replay_quality": 12.0,
+            "tool_selection_accuracy": 2.0,
+            "final_response_quality": 1.0,
+        },
+    }
+
+
+def _default_harness_trajectory_replay_scenario(
+    name: str,
+    replay: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = dict(replay.get("summary") or {})
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {
+                    "name": "Ira",
+                    "role": "harness-optimization-lead",
+                },
+                "situation": (
+                    "Ira has prior agent trajectories and needs a local "
+                    "trajectory-derived harness repair plan with no external "
+                    "grader dependency."
+                ),
+                "outcome": (
+                    "The replay covers "
+                    f"{summary.get('trajectory_count', 0)} trajectories, "
+                    "attributes failures to harness layers, and selects a "
+                    "verified repair plan."
+                ),
+            }
+        ],
+    }
+
+
+def _default_harness_trajectory_replay_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "harness-trajectory-replay-agent",
+        "responses": [
+            {
+                "content": (
+                    "I will verify the local trajectory coreset, attribute each "
+                    "failure to harness layers, inspect the selected repair plan, "
+                    "and confirm provenance because local evidence is required; "
+                    "therefore no external grading should be needed."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "harness_status",
+                        "name": "harness_trajectory_replay_status",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "harness_cases",
+                        "name": "list_harness_trajectory_cases",
+                        "arguments": {"status": "failed"},
+                    },
+                    {
+                        "id": "harness_failures",
+                        "name": "inspect_harness_failure",
+                        "arguments": {"failure_mode": "tool_fault"},
+                    },
+                    {
+                        "id": "harness_repairs",
+                        "name": "list_harness_repair_plan",
+                        "arguments": {},
+                    },
+                    {
+                        "id": "harness_selected",
+                        "name": "inspect_harness_candidate_update",
+                        "arguments": {"selected_only": True},
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "The local trajectory coreset is selected, failures are "
+                    "attributed to harness layers, the repair plan is selected "
+                    "and verified, and there is no external grading or service "
+                    "dependency. The selected harness update is backed by local "
+                    "trajectory coreset, failure attribution, repair plan, "
+                    "provenance, and report evidence."
+                ),
+            },
+        ],
     }
 
 
@@ -7305,6 +7711,7 @@ __all__ = [
     "build_browser_cua_run_manifest",
     "build_framework_certification_run_manifest",
     "build_framework_adapter_matrix_run_manifest",
+    "build_harness_trajectory_replay_run_manifest",
     "build_framework_import_run_manifest",
     "build_framework_run_manifest",
     "build_manifest_agent_callback",
@@ -7340,6 +7747,7 @@ __all__ = [
     "evaluate_manifest_report",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
+    "harness_trajectory_replay_artifact",
     "load_eval_suite_file",
     "load_manifest",
     "load_manifest_file",

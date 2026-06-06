@@ -223,6 +223,8 @@ class AgentReportEvalConfig(BaseModel):
     optimizer_portfolio_quality: Dict[str, Any] = Field(default_factory=dict)
     required_manifest_optimization: List[str] = Field(default_factory=list)
     manifest_optimization_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_harness_trajectory_replay: List[str] = Field(default_factory=list)
+    harness_trajectory_replay_quality: Dict[str, Any] = Field(default_factory=dict)
     required_agent_memory_lineage: List[str] = Field(default_factory=list)
     agent_memory_lineage_quality: Dict[str, Any] = Field(default_factory=dict)
     required_retrieval_memory_trace: List[str] = Field(default_factory=list)
@@ -456,6 +458,8 @@ class AgentReportEvaluator:
                 *_optimizer_portfolio_quality_metrics(report_context, config),
                 *_manifest_optimization_coverage_metrics(report_context, config),
                 *_manifest_optimization_quality_metrics(report_context, config),
+                *_harness_trajectory_replay_coverage_metrics(report_context, config),
+                *_harness_trajectory_replay_quality_metrics(report_context, config),
                 *_agent_memory_lineage_coverage_metrics(report_context, config),
                 *_agent_memory_lineage_quality_metrics(report_context, config),
                 _retrieval_memory_attribution_metric(report_context, config),
@@ -22454,6 +22458,450 @@ def _append_manifest_optimization_check(
 
 
 def _dedupe_manifest_optimization_payloads(payloads: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        if not payload_dict:
+            continue
+        key = json.dumps(payload_dict, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload_dict)
+    return deduped
+
+
+def _harness_trajectory_replay_payloads_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    metadata = _as_dict(context.get("metadata", {}))
+    state = _as_dict(metadata.get("environment_state"))
+    state_payload = _as_dict(state.get("harness_trajectory_replay"))
+    if state_payload:
+        payloads.append(state_payload)
+    direct_payload = _as_dict(metadata.get("harness_trajectory_replay"))
+    if direct_payload:
+        payloads.append(direct_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        data = _as_dict(_get(artifact, "data", {}))
+        artifact_metadata = _as_dict(_get(artifact, "metadata", {}))
+        if _looks_like_harness_trajectory_replay(data, artifact_metadata):
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        event_name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        event_metadata = _as_dict(_get(event, "metadata", {}))
+        if _looks_like_harness_trajectory_replay(payload, event_metadata):
+            payloads.append(payload)
+        elif "harness_trajectory_replay" in event_type or "harness_trajectory" in event_name:
+            payloads.append({"kind": "harness_trajectory_replay", **payload})
+    return _dedupe_harness_trajectory_replay_payloads(payloads)
+
+
+def _looks_like_harness_trajectory_replay(
+    data: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> bool:
+    kind = str(data.get("kind") or metadata.get("kind") or "").lower()
+    if kind in {
+        "harness_trajectory_replay",
+        "agent-learning.harness-trajectory-replay.v1",
+    }:
+        return True
+    return (
+        "trajectories" in data
+        and ("failure_attribution" in data or "repair_plan" in data)
+        and ("coreset" in data or "candidate_updates" in data)
+    )
+
+
+def _harness_trajectory_replay_summary(
+    payloads: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    trajectories: List[Dict[str, Any]] = []
+    coreset: set[str] = set()
+    attribution: List[Dict[str, Any]] = []
+    repairs: List[Dict[str, Any]] = []
+    candidates: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    source_run_ids: set[str] = set()
+    layers: set[str] = set()
+    failure_modes: set[str] = set()
+    weak_metrics: set[str] = set()
+    local_only = False
+    external_dependency_count = 0
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        summary = _as_dict(payload_dict.get("summary"))
+        trajectories.extend(
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("trajectories"))
+            if _as_dict(item)
+        )
+        coreset.update(str(item) for item in _as_list(payload_dict.get("coreset")) if str(item))
+        attribution.extend(
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("failure_attribution"))
+            if _as_dict(item)
+        )
+        repairs.extend(
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("repair_plan"))
+            if _as_dict(item)
+        )
+        candidates.extend(
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("candidate_updates"))
+            if _as_dict(item)
+        )
+        findings.extend(
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("findings"))
+            if _as_dict(item)
+        )
+        provenance = _as_dict(payload_dict.get("provenance"))
+        local_only = local_only or bool(
+            provenance.get("local_only") or summary.get("local_only")
+        )
+        external_dependency_count += (
+            _as_int(provenance.get("external_dependency_count")) or 0
+        )
+        external_dependency_count += (
+            _as_int(summary.get("external_dependency_count")) or 0
+        )
+        source_run_ids.update(
+            str(item)
+            for item in _as_list(provenance.get("source_run_ids"))
+            if str(item)
+        )
+        for source_key, target in (
+            ("layers", layers),
+            ("failure_modes", failure_modes),
+            ("weak_metrics", weak_metrics),
+        ):
+            target.update(
+                _normalize_harness_trajectory_key(item)
+                for item in _as_list(summary.get(source_key))
+                if _normalize_harness_trajectory_key(item)
+            )
+
+    for trajectory in trajectories:
+        layers.update(
+            _normalize_harness_trajectory_key(item)
+            for item in _as_list(trajectory.get("layers"))
+            if _normalize_harness_trajectory_key(item)
+        )
+        failure_modes.update(
+            _normalize_harness_trajectory_key(item)
+            for item in _as_list(trajectory.get("failure_modes"))
+            if _normalize_harness_trajectory_key(item)
+        )
+        weak_metrics.update(
+            _normalize_harness_trajectory_key(item)
+            for item in _as_list(trajectory.get("weak_metrics"))
+            if _normalize_harness_trajectory_key(item)
+        )
+    for item in attribution:
+        layer = _normalize_harness_trajectory_key(item.get("layer"))
+        mode = _normalize_harness_trajectory_key(item.get("failure_mode"))
+        if layer:
+            layers.add(layer)
+        if mode:
+            failure_modes.add(mode)
+    for item in repairs:
+        layer = _normalize_harness_trajectory_key(item.get("layer"))
+        if layer:
+            layers.add(layer)
+
+    selected_candidates = [item for item in candidates if bool(item.get("selected"))]
+    return {
+        "trajectory_count": len(trajectories),
+        "failing_trajectory_count": sum(
+            1
+            for item in trajectories
+            if _normalize_harness_trajectory_key(item.get("status"))
+            not in {"passed", "success"}
+        ),
+        "coreset_count": len(coreset),
+        "attributed_failure_count": len(attribution),
+        "repair_step_count": len(repairs),
+        "selected_repair_count": len(selected_candidates),
+        "open_finding_count": len(findings),
+        "external_dependency_count": external_dependency_count,
+        "local_only": local_only,
+        "layers": sorted(layers),
+        "failure_modes": sorted(failure_modes),
+        "weak_metrics": sorted(weak_metrics),
+        "source_run_ids": sorted(source_run_ids),
+        "selected_candidate_ids": [
+            str(item.get("candidate_id") or item.get("id"))
+            for item in selected_candidates
+            if item.get("candidate_id") or item.get("id")
+        ],
+        "has_provenance": bool(source_run_ids) or any(
+            _as_dict(payload).get("provenance") for payload in payloads
+        ),
+        "payload_count": len(payloads),
+    }
+
+
+def _harness_trajectory_replay_observed(context: Mapping[str, Any]) -> set[str]:
+    summary = _harness_trajectory_replay_summary(
+        _harness_trajectory_replay_payloads_from_context(context)
+    )
+    observed = {
+        "harness_trajectory_replay",
+        "trajectory",
+        "trajectory_coreset",
+        "failure_attribution",
+        "repair_plan",
+        "candidate_update",
+        "provenance",
+    }
+    observed.update(summary["layers"])
+    observed.update(summary["failure_modes"])
+    observed.update(summary["weak_metrics"])
+    if summary["selected_repair_count"]:
+        observed.add("selected_repair")
+    if summary["local_only"]:
+        observed.add("local_only")
+    return {item for item in observed if item}
+
+
+def _harness_trajectory_replay_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.required_harness_trajectory_replay
+        and not _harness_trajectory_replay_payloads_from_context(context)
+    ):
+        return []
+    return [_harness_trajectory_replay_coverage_metric(context, config)]
+
+
+def _harness_trajectory_replay_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_harness_trajectory_key(key)
+        for key in config.required_harness_trajectory_replay
+    ]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="harness_trajectory_replay_coverage",
+            score=1.0,
+            reason="No required harness trajectory replay keys provided.",
+        )
+    observed = _harness_trajectory_replay_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="harness_trajectory_replay_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required harness trajectory replay evidence observed."
+            if not missing
+            else f"Missing harness trajectory replay evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_harness_trajectory_replay_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _harness_trajectory_replay_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.harness_trajectory_replay_quality:
+        return []
+    return [
+        _harness_trajectory_replay_quality_metric(
+            context,
+            config.harness_trajectory_replay_quality,
+        )
+    ]
+
+
+def _harness_trajectory_replay_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _harness_trajectory_replay_summary(
+        _harness_trajectory_replay_payloads_from_context(context)
+    )
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for config_key, observed_key, finding_type in (
+        ("min_trajectory_count", "trajectory_count", "harness_trajectory_count_low"),
+        ("min_coreset_count", "coreset_count", "harness_coreset_count_low"),
+        ("min_attributed_failure_count", "attributed_failure_count", "harness_attribution_count_low"),
+        ("min_repair_step_count", "repair_step_count", "harness_repair_step_count_low"),
+    ):
+        expected = _as_int(requirements.get(config_key))
+        if expected is None:
+            continue
+        actual = _as_int(observed.get(observed_key)) or 0
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check=config_key,
+            expected=expected,
+            actual=actual,
+            match=actual >= expected,
+            finding_type=finding_type,
+        )
+
+    for layer in _string_list(requirements.get("required_layers") or requirements.get("layers")):
+        normalized = _normalize_harness_trajectory_key(layer)
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check="layer",
+            expected=normalized,
+            actual=observed["layers"],
+            match=normalized in observed["layers"],
+            finding_type="harness_layer_missing",
+        )
+
+    for mode in _string_list(requirements.get("required_failure_modes") or requirements.get("failure_modes")):
+        normalized = _normalize_harness_trajectory_key(mode)
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check="failure_mode",
+            expected=normalized,
+            actual=observed["failure_modes"],
+            match=normalized in observed["failure_modes"],
+            finding_type="harness_failure_mode_missing",
+        )
+
+    for metric in _string_list(requirements.get("required_weak_metrics") or requirements.get("weak_metrics")):
+        normalized = _normalize_harness_trajectory_key(metric)
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check="weak_metric",
+            expected=normalized,
+            actual=observed["weak_metrics"],
+            match=normalized in observed["weak_metrics"],
+            finding_type="harness_weak_metric_missing",
+        )
+
+    max_open_findings = _as_int(requirements.get("max_open_findings"))
+    if max_open_findings is not None:
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check="max_open_findings",
+            expected=max_open_findings,
+            actual=observed["open_finding_count"],
+            match=observed["open_finding_count"] <= max_open_findings,
+            finding_type="harness_open_findings_high",
+        )
+
+    max_external_dependency_count = _as_int(
+        requirements.get("max_external_dependency_count")
+    )
+    if max_external_dependency_count is not None:
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check="max_external_dependency_count",
+            expected=max_external_dependency_count,
+            actual=observed["external_dependency_count"],
+            match=observed["external_dependency_count"] <= max_external_dependency_count,
+            finding_type="harness_external_dependency_present",
+        )
+
+    for key, observed_key, finding_type in (
+        ("require_selected_repair", "selected_repair_count", "harness_selected_repair_missing"),
+        ("require_provenance", "has_provenance", "harness_provenance_missing"),
+        ("require_local_only", "local_only", "harness_local_only_missing"),
+    ):
+        if requirements.get(key) is None:
+            continue
+        required = bool(requirements.get(key))
+        actual = observed[observed_key]
+        matched = bool(actual) is required if isinstance(actual, bool) else actual > 0
+        _append_harness_trajectory_replay_check(
+            checks,
+            findings,
+            check=key,
+            expected=required,
+            actual=actual,
+            match=matched,
+            finding_type=finding_type,
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="harness_trajectory_replay_quality",
+            score=1.0,
+            reason="No harness trajectory replay quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="harness_trajectory_replay_quality",
+        score=round(matched / len(checks), 4),
+        reason=(
+            f"{matched}/{len(checks)} harness trajectory replay quality "
+            "check(s) matched."
+        ),
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _append_harness_trajectory_replay_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append({"check": check, "expected": expected, "actual": actual, "match": match})
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": "harness_trajectory_replay_quality",
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_harness_trajectory_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _dedupe_harness_trajectory_replay_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
     seen: set[str] = set()
     deduped: List[Dict[str, Any]] = []
     for payload in payloads:

@@ -41,6 +41,9 @@ AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND = (
 AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND = (
     "agent-learning.optimization.redteam-campaign-proof.v1"
 )
+AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND = (
+    "agent-learning.optimization.retrospective-harness-proof.v1"
+)
 
 _FI_OPT_EXPORT_NAMES = (
     "AgentComponent",
@@ -359,6 +362,7 @@ def optimize_manifest_file(
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
+    payload = with_retrospective_harness_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
@@ -391,6 +395,7 @@ def optimize_manifest(
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
+    payload = with_retrospective_harness_proof(payload)
     payload = with_memory_lineage_proof(payload)
     payload = with_multi_agent_coordination_proof(payload)
     payload = with_orchestration_stack_proof(payload)
@@ -542,6 +547,36 @@ def with_framework_adapter_matrix_proof(payload: Mapping[str, Any]) -> dict[str,
         proof["failed_check_ids"]
     )
     summary["framework_adapter_matrix_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_retrospective_harness_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for trajectory-derived harness repair."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_retrospective_harness_optimization(result, optimization):
+        return result
+
+    proof = _retrospective_harness_proof(result, optimization)
+    result["retrospective_harness_proof"] = proof
+    optimization["retrospective_harness_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["retrospective_harness_proof_status"] = proof["status"]
+    summary["retrospective_harness_proof_passed"] = proof["passed"]
+    summary["retrospective_harness_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["retrospective_harness_proof_check_count"] = proof["check_count"]
+    summary["retrospective_harness_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["retrospective_harness_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -2504,6 +2539,172 @@ def optimize_framework_adapter_matrix(
     )
 
 
+def build_retrospective_harness_optimization_manifest(
+    *,
+    name: str = "retrospective-harness-optimization",
+    replay: Optional[Mapping[str, Any]] = None,
+    replay_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over local trajectory-derived harness repairs."""
+
+    if not name:
+        raise ValueError("name is required")
+
+    from . import simulate as _agent_simulate
+
+    verified_replay = (
+        copy.deepcopy(dict(replay))
+        if replay is not None
+        else _agent_simulate.build_harness_trajectory_replay_run_manifest(
+            name=name
+        )["metadata"]["harness_trajectory_replay"]
+    )
+    candidates = (
+        [copy.deepcopy(dict(item)) for item in replay_candidates]
+        if replay_candidates is not None
+        else [
+            _weak_harness_trajectory_replay_artifact(name),
+            verified_replay,
+        ]
+    )
+    if not candidates:
+        raise ValueError("replay_candidates must contain at least one candidate")
+
+    verified_run = _agent_simulate.build_harness_trajectory_replay_run_manifest(
+        name=name,
+        replay=verified_replay,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+    )
+    environment_candidates = [
+        _agent_simulate.build_harness_trajectory_replay_run_manifest(
+            name=name,
+            replay=candidate,
+            agent=agent,
+            scenario=scenario,
+            evaluation_config=evaluation_config,
+            required_env=required_env,
+            threshold=threshold,
+            simulation_engine=simulation_engine,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            metadata=target_metadata,
+        )["simulation"]["environments"]
+        for candidate in candidates
+    ]
+    search_space = {"simulation.environments": copy.deepcopy(environment_candidates)}
+    eval_config = copy.deepcopy(
+        verified_run["evaluation"]["agent_report"]["config"]
+    )
+    max_turns_value = int(verified_run["simulation"]["max_turns"])
+    return {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": str(name),
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(verified_run["scenario"]),
+        "agent": copy.deepcopy(verified_run["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": max_turns_value,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_candidates[0]),
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": str(name),
+                "layers": [
+                    "harness",
+                    "world",
+                    "memory",
+                    "orchestration",
+                    "evaluator",
+                    "environment",
+                ],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(environment_candidates[0])
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_retrospective_harness_optimization_manifest"
+                    ),
+                    "cookbook": "retrospective-harness-optimization",
+                    "task_kind": "retrospective_harness",
+                    "candidate_search_paths": ["simulation.environments"],
+                    "research_sources": _unique_research_sources(
+                        [
+                            *_retrospective_harness_research_sources(),
+                            *[dict(item) for item in research_sources],
+                        ]
+                    ),
+                    "original_synthesis": (
+                        "Harness optimization should mine prior trajectories "
+                        "into a local coreset, attribute failures to harness "
+                        "layers, search coherent repair artifacts, and verify "
+                        "selected updates from report-state provenance without "
+                        "external grading services."
+                    ),
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+
+
+def optimize_retrospective_harness(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute local trajectory-derived harness optimization."""
+
+    manifest = build_retrospective_harness_optimization_manifest(
+        **manifest_kwargs
+    )
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_stateful_tool_world_optimization_manifest(
     *,
     name: str = "stateful-tool-world-optimization",
@@ -4062,6 +4263,199 @@ def _framework_adapter_matrix_proof(
             "matrix_summary": copy.deepcopy(matrix_summary),
             "selected_metrics": selected_metric_evidence,
             "report_matrix_status": report_matrix.get("status"),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _retrospective_harness_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    report_state = _selected_report_environment_state(selected_history)
+    replay = _harness_trajectory_replay_from_environments(environments)
+    report_replay = _plain_mapping(report_state.get("harness_trajectory_replay"))
+    summary = _plain_mapping(replay.get("summary"))
+    report_summary = _plain_mapping(report_replay.get("summary"))
+    layers = _unique_strings(summary.get("layers"))
+    failure_modes = _unique_strings(summary.get("failure_modes"))
+    selected_candidates = _unique_strings(summary.get("selected_candidate_ids"))
+
+    checks = [
+        _proof_check(
+            "native_no_external_harness_trajectory_dependency",
+            passed=not _contains_nested_keys(
+                replay,
+                {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+            )
+            and _as_int(summary.get("external_dependency_count")) == 0
+            and bool(summary.get("local_only")),
+            required=True,
+            reason=(
+                "selected trajectory replay is local-only and has no endpoint/"
+                "auth/key dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(
+                        replay,
+                        {"endpoint", "auth", "api_key", "apiKey", "secret", "token"},
+                    )
+                ),
+                "external_dependency_count": summary.get("external_dependency_count"),
+                "local_only": summary.get("local_only"),
+            },
+        ),
+        _proof_check(
+            "trajectory_replay_environment_present",
+            passed="harness_trajectory_replay" in environment_types
+            and replay.get("kind")
+            == "agent-learning.harness-trajectory-replay.v1",
+            required=True,
+            reason=(
+                "selected candidate carries a harness_trajectory_replay "
+                "simulation environment"
+            ),
+            evidence={
+                "environment_types": environment_types,
+                "replay_kind": replay.get("kind"),
+            },
+        ),
+        _proof_check(
+            "trajectory_replay_coreset_closed",
+            passed=_as_int(summary.get("trajectory_count")) >= 3
+            and _as_int(summary.get("coreset_count")) >= 2
+            and _as_int(summary.get("failing_trajectory_count")) >= 2,
+            required=True,
+            reason=(
+                "selected replay has multiple prior trajectories and a "
+                "challenging failing-trajectory coreset"
+            ),
+            evidence={
+                "trajectory_count": summary.get("trajectory_count"),
+                "coreset_count": summary.get("coreset_count"),
+                "failing_trajectory_count": summary.get("failing_trajectory_count"),
+            },
+        ),
+        _proof_check(
+            "trajectory_replay_failure_attribution_closed",
+            passed=_as_int(summary.get("attributed_failure_count")) >= 3
+            and {"tools", "world", "memory"}.issubset(set(layers))
+            and {
+                "tool_fault",
+                "world_contract_violation",
+                "memory_lineage_gap",
+            }.issubset(set(failure_modes)),
+            required=True,
+            reason=(
+                "selected replay attributes prior failures to concrete harness "
+                "layers and failure modes"
+            ),
+            evidence={
+                "attributed_failure_count": summary.get("attributed_failure_count"),
+                "layers": layers,
+                "failure_modes": failure_modes,
+            },
+        ),
+        _proof_check(
+            "trajectory_replay_repair_plan_closed",
+            passed=_as_int(summary.get("repair_step_count")) >= 3
+            and _as_int(summary.get("selected_repair_count")) >= 1
+            and not _plain_list(replay.get("findings")),
+            required=True,
+            reason=(
+                "selected replay has a closed repair plan, selected candidate "
+                "update, and no open findings"
+            ),
+            evidence={
+                "repair_step_count": summary.get("repair_step_count"),
+                "selected_repair_count": summary.get("selected_repair_count"),
+                "selected_candidate_ids": selected_candidates,
+                "finding_count": len(_plain_list(replay.get("findings"))),
+            },
+        ),
+        _proof_check(
+            "trajectory_replay_metric_evidence_closed",
+            passed=_as_float(
+                selected_metrics.get("harness_trajectory_replay_quality")
+            )
+            >= 1.0,
+            required=True,
+            reason=(
+                "selected candidate report closes the harness trajectory replay "
+                "quality metric"
+            ),
+            evidence={
+                "harness_trajectory_replay_quality": selected_metrics.get(
+                    "harness_trajectory_replay_quality"
+                )
+            },
+        ),
+        _proof_check(
+            "trajectory_replay_report_evidence_closed",
+            passed=report_replay.get("kind")
+            == "agent-learning.harness-trajectory-replay.v1"
+            and _as_int(report_summary.get("trajectory_count"))
+            == _as_int(summary.get("trajectory_count"))
+            and _as_int(report_summary.get("selected_repair_count")) >= 1,
+            required=True,
+            reason=(
+                "selected report state contains the same trajectory replay "
+                "artifact that the optimizer selected"
+            ),
+            evidence={
+                "report_replay_kind": report_replay.get("kind"),
+                "report_trajectory_count": report_summary.get("trajectory_count"),
+                "report_selected_repair_count": report_summary.get(
+                    "selected_repair_count"
+                ),
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_retrospective_harness_verified"
+            if passed
+            else "retrospective_harness_proof_failed"
+        ),
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "layers": layers,
+        "failure_modes": failure_modes,
+        "requires_external_service": False,
+        "evidence": {
+            "environment_types": environment_types,
+            "replay_summary": copy.deepcopy(summary),
+            "selected_metrics": {
+                "harness_trajectory_replay_quality": selected_metrics.get(
+                    "harness_trajectory_replay_quality"
+                )
+            },
+            "report_replay_status": report_replay.get("status"),
         },
         "check_count": len(checks),
         "passed_check_count": sum(1 for check in checks if check["passed"]),
@@ -15302,6 +15696,110 @@ def _framework_adapter_matrix_research_sources() -> list[dict[str, str]]:
     ]
 
 
+def _retrospective_harness_research_sources() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "retrospective_harness_optimization",
+            "title": "Retrospective Harness Optimization",
+            "source": "arxiv:2606.05922",
+            "url": "https://arxiv.org/abs/2606.05922",
+        },
+        {
+            "id": "agent_execution_provenance",
+            "title": "From Agent Traces to Trust",
+            "source": "arxiv:2606.04990",
+            "url": "https://arxiv.org/abs/2606.04990",
+        },
+        {
+            "id": "ai_harness_engineering",
+            "title": "AI Harness Engineering",
+            "source": "arxiv:2605.13357",
+            "url": "https://arxiv.org/abs/2605.13357",
+        },
+        {
+            "id": "code_as_agent_harness",
+            "title": "Code as Agent Harness",
+            "source": "arxiv:2605.18747",
+            "url": "https://arxiv.org/abs/2605.18747",
+        },
+    ]
+
+
+def _weak_harness_trajectory_replay_artifact(name: str) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    return _agent_simulate.harness_trajectory_replay_artifact(
+        name=f"{name}-weak",
+        trajectories=[
+            {
+                "id": "tool_fault_refund",
+                "status": "failed",
+                "score": 0.42,
+                "layers": ["tools"],
+                "failure_modes": ["tool_fault"],
+                "weak_metrics": ["tool_fault_tolerance"],
+                "provenance": {
+                    "source": "local_prior_run",
+                    "evidence_refs": ["report.results[0]"],
+                },
+            },
+            {
+                "id": "memory_lineage_gap",
+                "status": "failed",
+                "score": 0.51,
+                "layers": ["memory"],
+                "failure_modes": [],
+                "weak_metrics": ["agent_memory_lineage_quality"],
+                "provenance": {
+                    "source": "local_prior_run",
+                    "evidence_refs": ["report.results[1]"],
+                },
+            },
+        ],
+        coreset=["tool_fault_refund"],
+        failure_attribution=[
+            {
+                "trajectory_id": "tool_fault_refund",
+                "layer": "tools",
+                "failure_mode": "tool_fault",
+                "evidence_refs": ["report.results[0].tool_calls"],
+                "repair_operator": "add_retry_and_schema_guard",
+            }
+        ],
+        repair_plan=[
+            {
+                "id": "repair_tool_fault",
+                "layer": "tools",
+                "operator": "add_retry_and_schema_guard",
+                "search_path": "simulation.environments",
+                "expected_metric": "tool_fault_tolerance",
+                "status": "planned",
+                "selected": False,
+                "evidence_refs": ["tool_fault_refund"],
+            }
+        ],
+        candidate_updates=[],
+        provenance={
+            "source": "local_prior_run_set",
+            "source_run_ids": ["run_tool_fault", "run_memory_gap"],
+            "local_only": True,
+            "external_dependency_count": 0,
+            "evidence_refs": ["report.results[0]", "report.results[1]"],
+        },
+        findings=[
+            {
+                "type": "missing_repair_coverage",
+                "layer": "world",
+                "status": "open",
+            }
+        ],
+        metadata={
+            "source": "agent_learning.optimize.weak_harness_trajectory_replay",
+            "candidate_profile": "weak_missing_attribution_and_repair",
+        },
+    )
+
+
 def _default_redteam_society_environment_candidates() -> list[list[dict[str, Any]]]:
     return [
         [_redteam_society_environment(_weak_redteam_society_room())],
@@ -19990,6 +20488,52 @@ def _framework_adapter_matrix_from_trace(trace: Mapping[str, Any]) -> dict[str, 
     return {}
 
 
+def _is_retrospective_harness_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) == "retrospective_harness":
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    replay = _harness_trajectory_replay_from_environments(environments)
+    return replay.get("kind") == "agent-learning.harness-trajectory-replay.v1"
+
+
+def _harness_trajectory_replay_from_environments(
+    environments: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    for environment in environments:
+        env = _plain_mapping(environment)
+        if _scope_key(env.get("type")) != "harness_trajectory_replay":
+            continue
+        data = _plain_mapping(env.get("data"))
+        for candidate in (
+            data,
+            data.get("harness_trajectory_replay"),
+            _plain_mapping(data.get("metadata")).get("harness_trajectory_replay"),
+            _plain_mapping(data.get("state")).get("harness_trajectory_replay"),
+        ):
+            replay = _plain_mapping(candidate)
+            if replay.get("kind") == "agent-learning.harness-trajectory-replay.v1":
+                return replay
+    return {}
+
+
 def _is_memory_lineage_optimization(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -20434,6 +20978,7 @@ __all__ = [
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND",
+    "AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
     "diagnose_text",
@@ -20469,6 +21014,7 @@ __all__ = [
     "build_redteam_optimization_manifest",
     "build_redteam_readiness_certification_optimization_manifest",
     "build_redteam_society_optimization_manifest",
+    "build_retrospective_harness_optimization_manifest",
     "build_retrieval_hook_optimization_manifest",
     "build_social_memory_framework_optimization_manifest",
     "build_stateful_tool_world_optimization_manifest",
@@ -20516,6 +21062,7 @@ __all__ = [
     "optimize_redteam_campaign",
     "optimize_redteam_readiness_certification",
     "optimize_redteam_society",
+    "optimize_retrospective_harness",
     "optimize_retrieval_hooks",
     "optimize_social_memory_framework",
     "optimize_stateful_tool_world",
@@ -20539,5 +21086,6 @@ __all__ = [
     "with_multi_agent_coordination_proof",
     "with_orchestration_stack_proof",
     "with_redteam_campaign_proof",
+    "with_retrospective_harness_proof",
     "with_world_hook_proof",
 ]

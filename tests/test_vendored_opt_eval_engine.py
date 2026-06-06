@@ -704,6 +704,78 @@ def test_manifest_optimizer_uses_vendored_eval_engine_for_local_scoring():
     assert best_history.metadata["metric_scores"]["state_goal_accuracy"] == 1.0
 
 
+def test_manifest_problem_replaces_full_list_search_path_candidates():
+    weak_environment = {
+        "type": "harness_trajectory_replay",
+        "data": {
+            "name": "weak",
+            "findings": [{"type": "missing_repair", "status": "open"}],
+        },
+    }
+    verified_environment = {
+        "type": "harness_trajectory_replay",
+        "data": {
+            "name": "verified",
+            "findings": [],
+            "summary": {"open_finding_count": 0},
+        },
+    }
+    manifest = {
+        "name": "full-list-candidate-replacement",
+        "agent": {"type": "scripted", "content": "Inspect harness evidence."},
+        "simulation": {
+            "engine": "local_text",
+            "environments": [copy.deepcopy(weak_environment)],
+        },
+        "optimization": {
+            "threshold": 0.9,
+            "target": {
+                "name": "harness-list-replacement",
+                "layers": ["harness", "environment"],
+                "base_config": {
+                    "simulation": {
+                        "environments": [copy.deepcopy(weak_environment)]
+                    }
+                },
+                "search_space": {
+                    "simulation.environments": [
+                        [copy.deepcopy(verified_environment)]
+                    ]
+                },
+            },
+            "optimizer": {
+                "max_candidates": 2,
+                "include_seed": True,
+                "auto_diagnose": False,
+            },
+        },
+    }
+    observed_findings = []
+
+    def evaluate_manifest(candidate_manifest, candidate):
+        findings = candidate_manifest["simulation"]["environments"][0]["data"][
+            "findings"
+        ]
+        observed_findings.append((bool(candidate.patch), copy.deepcopy(findings)))
+        return {"score": 1.0 if not findings else 0.1}
+
+    problem = agent_optimize.ManifestOptimizationProblem.from_manifest(
+        manifest,
+        evaluate_manifest=evaluate_manifest,
+    )
+    result = problem.optimize()
+
+    assert observed_findings == [
+        (False, [{"type": "missing_repair", "status": "open"}]),
+        (True, []),
+    ]
+    assert result.final_score == pytest.approx(1.0)
+    best_history = max(result.history, key=lambda item: item.average_score)
+    assert best_history.metadata["candidate_manifest"]["simulation"][
+        "environments"
+    ] == [verified_environment]
+
+
 def test_manifest_problem_selects_evolution_optimizer_from_manifest_config():
     paths = [
         "framework.events.source",

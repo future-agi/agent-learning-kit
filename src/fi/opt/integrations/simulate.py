@@ -16,6 +16,7 @@ from ..targets import (
     CandidateEvaluation,
     OptimizationLayer,
     OptimizationTarget,
+    set_path,
 )
 from ..types import EvaluationResult, OptimizationResult
 
@@ -105,10 +106,12 @@ class SimulateManifestOptimizationProblem:
         )
 
     def candidate_manifest(self, candidate: AgentCandidate) -> dict[str, Any]:
-        return deep_merge(
+        merged = deep_merge(
             copy.deepcopy(dict(self.base_manifest)),
             copy.deepcopy(candidate.config),
         )
+        _apply_candidate_patch_replacements(merged, candidate)
+        return merged
 
     def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
         candidate_manifest = self.candidate_manifest(candidate)
@@ -237,10 +240,12 @@ class SimulateEvalSuiteOptimizationProblem:
         )
 
     def candidate_suite(self, candidate: AgentCandidate) -> dict[str, Any]:
-        return deep_merge(
+        merged = deep_merge(
             copy.deepcopy(dict(self.base_suite)),
             copy.deepcopy(candidate.config),
         )
+        _apply_candidate_patch_replacements(merged, candidate)
+        return merged
 
     def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
         candidate_suite = self.candidate_suite(candidate)
@@ -358,10 +363,12 @@ class SimulateSuiteOptimizationProblem:
         )
 
     def candidate_suite(self, candidate: AgentCandidate) -> dict[str, Any]:
-        return deep_merge(
+        merged = deep_merge(
             copy.deepcopy(dict(self.base_suite)),
             copy.deepcopy(candidate.config),
         )
+        _apply_candidate_patch_replacements(merged, candidate)
+        return merged
 
     def evaluate_candidate(self, candidate: AgentCandidate) -> CandidateEvaluation:
         candidate_suite = self.candidate_suite(candidate)
@@ -630,6 +637,16 @@ def deep_merge(base: Any, patch: Any) -> Any:
                 merged.append(copy.deepcopy(value))
         return merged
     return copy.deepcopy(patch)
+
+
+def _apply_candidate_patch_replacements(
+    payload: dict[str, Any],
+    candidate: AgentCandidate,
+) -> None:
+    """Reapply exact search-path patches after deep-merge candidate assembly."""
+
+    for path, value in candidate.patch.items():
+        set_path(payload, str(path), copy.deepcopy(value))
 
 
 def _candidate_evaluation_from_value(
