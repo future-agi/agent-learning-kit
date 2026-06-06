@@ -40,7 +40,7 @@ framework/provider contract readiness.
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
-| M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage` |
+| M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness` |
 | M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata` |
@@ -125,7 +125,18 @@ Verification:
 
 ### M4: World-Best Red-Team Core
 
-Status: in progress.
+Status: gated and passing for the local V1 corpus/campaign contract.
+
+Current checkpoint:
+
+- `agent-learn release-check` now executes the canonical local
+  `examples/redteam_corpus.json` through the same
+  `build_redteam_corpus_campaign()` path used by `agent-learn redteam-corpus`.
+- The gate requires all 12 canonical corpus rows to become local campaign
+  evidence with 12 coverage cells, 12 executed cells, 12 passed runs,
+  artifact-backed trajectories, mapped findings, implemented mitigations, no
+  blocking gaps, all required research-backed attack types and surfaces, and
+  the expected `agent_learning_kit`/`local_cli`/`chat` execution context.
 
 Acceptance gates:
 
@@ -140,14 +151,15 @@ Acceptance gates:
   campaign dimensions can still request exhaustive cross-product coverage.
 - `agent-learn release-check` gates the required red-team corpus/campaign
   examples plus corpus-only and broader research-backed attack types, attack
-  surfaces, and source URLs.
+  surfaces, source URLs, and executable local corpus campaign evidence.
 
 Next implementation focus:
 
 - Keep the required local red-team corpus, campaign, attack-evolution,
   long-horizon, persistent-state, society, causal-attribution, and autonomous
   task-world examples present and passing.
-- Add native fixtures only when release-check exposes a concrete coverage gap.
+- Add native fixtures only when release-check exposes a concrete execution,
+  coverage, or UI-readiness gap.
 
 ### M5: Future AGI UI/UX Artifact Contract
 

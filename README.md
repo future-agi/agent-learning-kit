@@ -48,9 +48,11 @@ Run `agent-learn release-check --project-root .` before cutting V1. It emits
 promptfoo-style CLI, native optimizer evidence, required docs/examples, schema
 kinds, packaging metadata, and research-backed red-team corpus/campaign
 coverage across required examples, attack types, surfaces, source lineage, and
-the canonical local corpus rows. It also gates representative Future AGI
-UI/action/report readiness: renderable report payloads, executable action
-catalogs, saved action-run output evidence, and key-like secret-marker
+the canonical local corpus rows. It also executes the canonical local red-team
+corpus through the campaign builder and requires full row/cell/run/artifact/
+finding/mitigation closure before M4 passes. It also gates representative
+Future AGI UI/action/report readiness: renderable report payloads, executable
+action catalogs, saved action-run output evidence, and key-like secret-marker
 redaction across representative run, action-run, optimization, red-team,
 red-team campaign, provider-integration, and suite artifacts.
 Framework/provider readiness is executable too: release-check builds the native

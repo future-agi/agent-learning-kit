@@ -295,6 +295,14 @@ V1_REDTEAM_RESEARCH_SOURCE_URLS = [
     "https://arxiv.org/abs/2606.04329",
 ]
 
+V1_REDTEAM_CORPUS_EXECUTION_FILE = V1_REDTEAM_RESEARCH_CORPUS_FILE
+
+V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS = ["agent_learning_kit"]
+
+V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS = ["local_cli"]
+
+V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat"]
+
 V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/framework_certification_optimization.json",
     "examples/framework_import_repair_optimization.json",
@@ -584,6 +592,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M4",
         evidence=redteam_research,
     )
+    redteam_corpus_execution = _release_redteam_corpus_execution_status(root)
+    _append_release_check(
+        checks,
+        check_id="redteam_corpus_execution_readiness",
+        passed=(
+            not redteam_corpus_execution["missing_files"]
+            and not redteam_corpus_execution["parse_errors"]
+            and not redteam_corpus_execution["campaign_errors"]
+            and not redteam_corpus_execution["coverage_errors"]
+            and not redteam_corpus_execution["blocking_gaps"]
+            and not redteam_corpus_execution["missing_attack_types"]
+            and not redteam_corpus_execution["missing_surfaces"]
+            and not redteam_corpus_execution["missing_channels"]
+            and not redteam_corpus_execution["missing_providers"]
+            and not redteam_corpus_execution["missing_frameworks"]
+        ),
+        milestone="M4",
+        evidence=redteam_corpus_execution,
+    )
     _append_release_check(
         checks,
         check_id="schema_kind_contract",
@@ -695,6 +722,16 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_redteam_research_attack_types": list(V1_REDTEAM_RESEARCH_ATTACK_TYPES),
         "required_redteam_research_surfaces": list(V1_REDTEAM_RESEARCH_SURFACES),
         "required_redteam_research_source_urls": list(V1_REDTEAM_RESEARCH_SOURCE_URLS),
+        "required_redteam_corpus_execution_file": V1_REDTEAM_CORPUS_EXECUTION_FILE,
+        "required_redteam_corpus_execution_frameworks": list(
+            V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS
+        ),
+        "required_redteam_corpus_execution_providers": list(
+            V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS
+        ),
+        "required_redteam_corpus_execution_channels": list(
+            V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
+        ),
         "required_ui_action_report_artifacts": copy.deepcopy(
             V1_UI_ACTION_REPORT_ARTIFACTS
         ),
@@ -879,6 +916,231 @@ def _release_redteam_research_status(root: Path) -> dict[str, Any]:
         "missing_source_urls": sorted(required_sources - observed_source_urls),
         "corpus_observed_source_urls": sorted(corpus_source_urls),
         "corpus_missing_source_urls": sorted(required_sources - corpus_source_urls),
+    }
+
+
+def _release_redteam_corpus_execution_status(root: Path) -> dict[str, Any]:
+    corpus_file = V1_REDTEAM_CORPUS_EXECUTION_FILE
+    path = root / corpus_file
+    missing_files = [] if path.exists() else [corpus_file]
+    parse_errors: dict[str, str] = {}
+    campaign_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    blocking_gaps: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    campaign: Mapping[str, Any] = {}
+    summary: Mapping[str, Any] = {}
+    metadata: Mapping[str, Any] = {}
+    coverage_matrix: list[Mapping[str, Any]] = []
+
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                rows = [dict(item) for item in payload if isinstance(item, Mapping)]
+            elif isinstance(payload, Mapping):
+                raw_rows = (
+                    payload.get("rows")
+                    or payload.get("corpus_rows")
+                    or payload.get("attacks")
+                    or payload.get("cases")
+                    or []
+                )
+                rows = [dict(item) for item in raw_rows if isinstance(item, Mapping)]
+            else:
+                parse_errors[corpus_file] = (
+                    f"corpus root is {type(payload).__name__}, expected object/list"
+                )
+        except Exception as exc:
+            parse_errors[corpus_file] = str(exc)
+
+    required_attacks = {_release_norm(item) for item in V1_REDTEAM_RESEARCH_ATTACK_TYPES}
+    required_surfaces = {_release_norm(item) for item in V1_REDTEAM_RESEARCH_SURFACES}
+    required_channels = {_release_norm(item) for item in V1_REDTEAM_CORPUS_EXECUTION_CHANNELS}
+    required_providers = {_release_norm(item) for item in V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS}
+    required_frameworks = {_release_norm(item) for item in V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS}
+
+    if not missing_files and not parse_errors:
+        if not rows:
+            parse_errors[corpus_file] = "corpus contains no mapping rows"
+        else:
+            try:
+                from agent_learning import redteam
+
+                raw_campaign = redteam.build_redteam_corpus_campaign(
+                    name="release-check-redteam-corpus",
+                    corpus_rows=rows,
+                    frameworks=V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS,
+                )
+                if isinstance(raw_campaign, Mapping):
+                    campaign = raw_campaign
+                    summary = dict(campaign.get("summary") or {})
+                    metadata = dict(campaign.get("metadata") or {})
+                    coverage_matrix = [
+                        item
+                        for item in summary.get("coverage_matrix") or []
+                        if isinstance(item, Mapping)
+                    ]
+                else:
+                    campaign_errors.append(
+                        {
+                            "field": "campaign",
+                            "expected": "mapping",
+                            "observed": type(raw_campaign).__name__,
+                        }
+                    )
+            except Exception as exc:
+                campaign_errors.append({"field": "build_redteam_corpus_campaign", "error": str(exc)})
+
+    row_count = len(rows)
+    observed_attacks = {
+        _release_norm(item)
+        for item in summary.get("observed_attack_types") or []
+    }
+    observed_surfaces = {
+        _release_norm(item)
+        for item in summary.get("observed_surfaces") or []
+    }
+    observed_channels = {
+        _release_norm(item)
+        for item in summary.get("observed_channels") or []
+    }
+    observed_providers = {
+        _release_norm(item)
+        for item in summary.get("observed_providers") or []
+    }
+    observed_frameworks = {
+        _release_norm(item)
+        for item in summary.get("frameworks")
+        or metadata.get("frameworks")
+        or []
+    }
+    expected_counts = {
+        "row_count": row_count,
+        "summary.run_count": row_count,
+        "summary.passed_run_count": row_count,
+        "summary.failed_run_count": 0,
+        "summary.coverage_cell_count": row_count,
+        "summary.covered_cell_count": row_count,
+        "summary.executed_cell_count": row_count,
+        "summary.finding_count": row_count,
+        "summary.finding_mapped_count": row_count,
+        "summary.mitigation_count": row_count,
+        "summary.implemented_mitigation_count": row_count,
+    }
+    if campaign:
+        if campaign.get("kind") != "red_team_campaign":
+            campaign_errors.append(
+                {
+                    "field": "kind",
+                    "expected": "red_team_campaign",
+                    "observed": campaign.get("kind"),
+                }
+            )
+        if int(metadata.get("row_count") or 0) != row_count:
+            campaign_errors.append(
+                {
+                    "field": "metadata.row_count",
+                    "expected": row_count,
+                    "observed": metadata.get("row_count"),
+                }
+            )
+        for field, expected in expected_counts.items():
+            if field == "row_count":
+                continue
+            summary_field = field.removeprefix("summary.")
+            observed = summary.get(summary_field)
+            if observed != expected:
+                campaign_errors.append(
+                    {
+                        "field": field,
+                        "expected": expected,
+                        "observed": observed,
+                    }
+                )
+        if int(summary.get("artifact_count") or 0) < row_count:
+            campaign_errors.append(
+                {
+                    "field": "summary.artifact_count",
+                    "expected_minimum": row_count,
+                    "observed": summary.get("artifact_count"),
+                }
+            )
+        matrix_len = len(coverage_matrix)
+        if matrix_len != row_count:
+            coverage_errors.append(
+                {
+                    "field": "summary.coverage_matrix",
+                    "expected_count": row_count,
+                    "observed_count": matrix_len,
+                }
+            )
+        for item in coverage_matrix:
+            cell_id = str(item.get("id") or "")
+            for flag in (
+                "has_scenario",
+                "has_run",
+                "has_passed_run",
+                "has_executed_evidence",
+                "has_artifact",
+                "has_finding",
+                "has_mitigation",
+            ):
+                if item.get(flag) is not True:
+                    coverage_errors.append(
+                        {
+                            "cell": cell_id,
+                            "field": flag,
+                            "expected": True,
+                            "observed": item.get(flag),
+                        }
+                    )
+    for field in (
+        "missing_coverage_cells",
+        "missing_executed_cells",
+        "missing_run_artifact_cells",
+        "missing_mitigation_cells",
+        "unmapped_findings",
+        "failed_runs",
+        "open_high_findings",
+    ):
+        for value in summary.get(field) or []:
+            blocking_gaps.append({"field": f"summary.{field}", "value": value})
+
+    return {
+        "corpus_file": corpus_file,
+        "required_row_count": row_count,
+        "required_attack_types": list(V1_REDTEAM_RESEARCH_ATTACK_TYPES),
+        "observed_attack_types": sorted(observed_attacks),
+        "missing_attack_types": sorted(required_attacks - observed_attacks),
+        "required_surfaces": list(V1_REDTEAM_RESEARCH_SURFACES),
+        "observed_surfaces": sorted(observed_surfaces),
+        "missing_surfaces": sorted(required_surfaces - observed_surfaces),
+        "required_channels": list(V1_REDTEAM_CORPUS_EXECUTION_CHANNELS),
+        "observed_channels": sorted(observed_channels),
+        "missing_channels": sorted(required_channels - observed_channels),
+        "required_providers": list(V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS),
+        "observed_providers": sorted(observed_providers),
+        "missing_providers": sorted(required_providers - observed_providers),
+        "required_frameworks": list(V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS),
+        "observed_frameworks": sorted(observed_frameworks),
+        "missing_frameworks": sorted(required_frameworks - observed_frameworks),
+        "campaign_kind": campaign.get("kind"),
+        "campaign_summary": dict(summary),
+        "campaign_metadata": {
+            "source": metadata.get("source"),
+            "cookbook": metadata.get("cookbook"),
+            "row_count": metadata.get("row_count"),
+            "frameworks": list(metadata.get("frameworks") or []),
+        },
+        "coverage_cell_ids": [
+            str(item.get("id") or "") for item in coverage_matrix if item.get("id")
+        ],
+        "missing_files": missing_files,
+        "parse_errors": parse_errors,
+        "campaign_errors": campaign_errors,
+        "coverage_errors": coverage_errors,
+        "blocking_gaps": blocking_gaps,
     }
 
 
@@ -1755,6 +2017,10 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
     "V1_REDTEAM_EXAMPLES",
+    "V1_REDTEAM_CORPUS_EXECUTION_CHANNELS",
+    "V1_REDTEAM_CORPUS_EXECUTION_FILE",
+    "V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS",
+    "V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS",
     "V1_REDTEAM_RESEARCH_ATTACK_TYPES",
     "V1_REDTEAM_RESEARCH_CORPUS_FILE",
     "V1_REDTEAM_RESEARCH_FILES",

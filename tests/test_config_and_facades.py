@@ -12464,6 +12464,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_research_source_urls"] == (
         trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
     )
+    assert payload["required_redteam_corpus_execution_file"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_FILE
+    )
+    assert payload["required_redteam_corpus_execution_frameworks"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS
+    )
+    assert payload["required_redteam_corpus_execution_providers"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS
+    )
+    assert payload["required_redteam_corpus_execution_channels"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
+    )
     assert payload["required_ui_action_report_artifacts"] == (
         trinity.V1_UI_ACTION_REPORT_ARTIFACTS
     )
@@ -12501,6 +12513,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "native_optimizer_evidence_components",
         "redteam_core_examples_present",
         "redteam_research_coverage",
+        "redteam_corpus_execution_readiness",
         "schema_kind_contract",
         "ui_action_report_readiness",
         "framework_provider_examples_present",
@@ -12564,6 +12577,52 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(redteam_research["corpus_observed_source_urls"]) >= set(
         trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
     )
+    redteam_corpus_execution = checks[
+        "redteam_corpus_execution_readiness"
+    ]["evidence"]
+    assert redteam_corpus_execution["corpus_file"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_FILE
+    )
+    assert redteam_corpus_execution["missing_files"] == []
+    assert redteam_corpus_execution["parse_errors"] == {}
+    assert redteam_corpus_execution["campaign_errors"] == []
+    assert redteam_corpus_execution["coverage_errors"] == []
+    assert redteam_corpus_execution["blocking_gaps"] == []
+    assert redteam_corpus_execution["missing_attack_types"] == []
+    assert redteam_corpus_execution["missing_surfaces"] == []
+    assert redteam_corpus_execution["missing_channels"] == []
+    assert redteam_corpus_execution["missing_providers"] == []
+    assert redteam_corpus_execution["missing_frameworks"] == []
+    assert redteam_corpus_execution["required_row_count"] == 12
+    assert redteam_corpus_execution["campaign_kind"] == "red_team_campaign"
+    assert set(redteam_corpus_execution["observed_attack_types"]) >= set(
+        trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES
+    )
+    assert set(redteam_corpus_execution["observed_surfaces"]) >= set(
+        trinity.V1_REDTEAM_RESEARCH_SURFACES
+    )
+    assert redteam_corpus_execution["observed_channels"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
+    )
+    assert redteam_corpus_execution["observed_providers"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS
+    )
+    assert redteam_corpus_execution["observed_frameworks"] == (
+        trinity.V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS
+    )
+    corpus_summary = redteam_corpus_execution["campaign_summary"]
+    assert corpus_summary["run_count"] == 12
+    assert corpus_summary["passed_run_count"] == 12
+    assert corpus_summary["failed_run_count"] == 0
+    assert corpus_summary["coverage_cell_count"] == 12
+    assert corpus_summary["covered_cell_count"] == 12
+    assert corpus_summary["executed_cell_count"] == 12
+    assert corpus_summary["artifact_count"] == 24
+    assert corpus_summary["finding_count"] == 12
+    assert corpus_summary["finding_mapped_count"] == 12
+    assert corpus_summary["mitigation_count"] == 12
+    assert corpus_summary["implemented_mitigation_count"] == 12
+    assert len(redteam_corpus_execution["coverage_cell_ids"]) == 12
     ui_readiness = checks["ui_action_report_readiness"]["evidence"]
     assert ui_readiness["missing_files"] == []
     assert ui_readiness["failing_reports"] == []
