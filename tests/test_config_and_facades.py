@@ -179,6 +179,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.redteam_attack_evolution_report is not None
     assert simulate.redteam_adaptive_loop_artifact is not None
     assert simulate.redteam_attack_evolution_artifact is not None
+    assert simulate.shrink_attack_evolution is not None
+    assert simulate.shrink_attack_evolution_file is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
     assert simulate.build_eval_suite_manifest is not None
     assert simulate.write_eval_suite_file is not None
@@ -5647,7 +5649,7 @@ def test_sdk_redteam_adaptive_loop_optimization_example_runs(monkeypatch, tmp_pa
 
 
 def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp_path):
-    from agent_learning import evals, simulate
+    from agent_learning import evals, simulate, suite
 
     key = "real-local-sdk-redteam-attack-evolution-key"
     monkeypatch.setenv("AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY", key)
@@ -5770,6 +5772,7 @@ def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp
     assert {
         "report_attack_evolution",
         "promote_attack_evolution_regression",
+        "shrink_attack_evolution_regression",
         "export_attack_evolution_action_card",
         "export_attack_evolution_trace_jsonl",
         "export_attack_evolution_minimal_repro",
@@ -5796,6 +5799,118 @@ def test_sdk_redteam_attack_evolution_optimization_example_runs(monkeypatch, tmp
     assert export_action["kind"] == "download"
     assert export_action["artifact_ref"] == (
         "report.attack_evolution.artifacts.minimal_repro"
+    )
+
+    shrink = simulate.shrink_attack_evolution(
+        result,
+        source_path=output_path,
+        name="sdk-redteam-attack-evolution-shrink",
+        required_env=["AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY"],
+    )
+    assert shrink["kind"] == "agent-learning.attack-evolution-shrink.v1"
+    assert shrink["status"] == "passed"
+    assert shrink["summary"]["counterexample_id"] == "cx_prompt_memory_001"
+    assert shrink["summary"]["local_only"] is True
+    assert shrink["summary"]["requires_external_service"] is False
+    assert shrink["summary"]["metric_averages"][
+        "attack_evolution_shrink_quality"
+    ] == pytest.approx(1.0)
+    assert shrink["manifest"]["metadata"]["regression"]["promotion_kind"] == (
+        "redteam_attack_evolution_shrink"
+    )
+    assert shrink["manifest"]["simulation"]["environments"][0]["type"] == (
+        "red_team_attack_evolution"
+    )
+    shrink_config = shrink["manifest"]["evaluation"]["agent_report"]["config"]
+    assert shrink_config["red_team_attack_evolution_quality"][
+        "require_no_external_service"
+    ] is True
+    assert "require_path_expansion" not in shrink_config[
+        "red_team_attack_evolution_quality"
+    ]
+    assert "require_surface_expansion" not in shrink_config[
+        "red_team_attack_evolution_quality"
+    ]
+    shrink_manifest_path = tmp_path / (
+        "sdk-redteam-attack-evolution-shrink-regression.json"
+    )
+    shrink_manifest_path.write_text(
+        json.dumps(shrink["manifest"], indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    shrink_replay = simulate.replay_manifests(
+        [shrink_manifest_path],
+        name="sdk-redteam-attack-evolution-shrink-replay",
+    )
+    assert shrink_replay["status"] == "passed"
+    shrink_replay_row = shrink_replay["replay"]["manifests"][0]
+    assert shrink_replay_row["summary"]["metric_averages"][
+        "red_team_attack_evolution_quality"
+    ] == pytest.approx(1.0)
+
+    shrink_path = tmp_path / "sdk-redteam-attack-evolution-shrink.json"
+    shrink_cli_manifest = tmp_path / (
+        "sdk-redteam-attack-evolution-shrink-cli-regression.json"
+    )
+    shrink_junit = tmp_path / "sdk-redteam-attack-evolution-shrink.junit.xml"
+    shrink_sarif = tmp_path / "sdk-redteam-attack-evolution-shrink.sarif.json"
+    shrink_markdown = tmp_path / "sdk-redteam-attack-evolution-shrink.md"
+    shrink_exit = main([
+        "shrink",
+        str(output_path),
+        "--output",
+        str(shrink_path),
+        "--manifest",
+        str(shrink_cli_manifest),
+        "--junit",
+        str(shrink_junit),
+        "--sarif",
+        str(shrink_sarif),
+        "--markdown",
+        str(shrink_markdown),
+        "--required-env",
+        "AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY",
+    ])
+    assert shrink_exit == 0
+    shrink_saved = json.loads(shrink_path.read_text(encoding="utf-8"))
+    assert shrink_saved["kind"] == "agent-learning.attack-evolution-shrink.v1"
+    assert shrink_saved["status"] == "passed"
+    assert shrink_saved["manifest"]["version"] == "agent-learning.run.v1"
+    assert json.loads(shrink_cli_manifest.read_text(encoding="utf-8"))["version"] == (
+        "agent-learning.run.v1"
+    )
+    assert 'failures="0"' in shrink_junit.read_text(encoding="utf-8")
+    assert json.loads(shrink_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
+    assert "## Attack Evolution Shrink" in shrink_markdown.read_text(encoding="utf-8")
+    assert key not in shrink_path.read_text(encoding="utf-8")
+    assert key not in shrink_cli_manifest.read_text(encoding="utf-8")
+
+    alias_path = tmp_path / "sdk-redteam-attack-evolution-minimize.json"
+    assert main(["minimize", str(output_path), "--output", str(alias_path)]) == 0
+    alias_saved = json.loads(alias_path.read_text(encoding="utf-8"))
+    assert alias_saved["kind"] == "agent-learning.attack-evolution-shrink.v1"
+
+    shrink_suite = suite.run_suite(
+        {
+            "version": "agent-learning.suite.v1",
+            "name": "sdk-redteam-attack-evolution-shrink-suite",
+            "jobs": [
+                {
+                    "id": "shrink-counterexample",
+                    "command": "shrink",
+                    "path": str(output_path),
+                    "name": "sdk-redteam-attack-evolution-shrink-suite-child",
+                    "required_env": [
+                        "AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY"
+                    ],
+                }
+            ],
+        },
+        suite_path=tmp_path / "sdk-redteam-attack-evolution-shrink-suite.json",
+    )
+    assert shrink_suite["status"] == "passed"
+    assert shrink_suite["children"][0]["result"]["kind"] == (
+        "agent-learning.attack-evolution-shrink.v1"
     )
 
     promotion = simulate.promote_to_regression(

@@ -29,6 +29,7 @@ COMMANDS = [
     "replay",
     "report",
     "run",
+    "shrink",
     "suite",
 ]
 
@@ -47,6 +48,7 @@ RESULT_KINDS = [
     "agent_learning.redteam.v1",
     "agent_learning.report.v1",
     "agent_learning.run.v1",
+    "agent_learning.attack_evolution_shrink.v1",
     "agent_learning.suite.v1",
     "agent_learning.suite_optimization.v1",
 ]

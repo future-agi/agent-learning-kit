@@ -35,6 +35,7 @@ _CHILD_COMMANDS = {
     "replay",
     "report",
     "run",
+    "shrink",
     "suite",
     "eval",
     "eval_artifact",
@@ -1576,6 +1577,20 @@ def _execute_child_payload(
             name=_job_name(job),
             min_level=str(job.get("min_level") or job.get("min-level") or "warning"),
             max_findings=_job_int(job, "max_findings", "max-findings", default=25),
+            required_env=_as_string_list(job.get("required_env")),
+        )
+    if command == "shrink":
+        from agent_learning import simulate
+
+        return simulate.shrink_attack_evolution_file(
+            path,
+            name=_job_name(job),
+            manifest_name=str(
+                job.get("manifest_name")
+                or job.get("manifest-name")
+                or ""
+            )
+            or None,
             required_env=_as_string_list(job.get("required_env")),
         )
     if command == "replay":
@@ -3290,6 +3305,8 @@ def _normalize_command(value: Any) -> str:
         "promotion": "promote_to_regression",
         "regression_promotion": "promote_to_regression",
         "promote": "promote_to_regression",
+        "minimize": "shrink",
+        "minimize_counterexample": "shrink",
     }
     command = aliases.get(command, command)
     if command not in _CHILD_COMMANDS:

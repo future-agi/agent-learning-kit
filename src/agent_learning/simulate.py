@@ -215,6 +215,8 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "run_manifest_file",
     "run_redteam_manifest",
     "run_redteam_manifest_file",
+    "shrink_attack_evolution",
+    "shrink_attack_evolution_file",
     "supported_manifest_environment_types",
     "validate_manifest_env",
 )
@@ -4592,6 +4594,46 @@ def promote_to_regression(
     return public_payload(payload)
 
 
+def shrink_attack_evolution_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+    manifest_name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+) -> dict[str, Any]:
+    payload = _manifest().shrink_attack_evolution_file(
+        path,
+        name=name,
+        manifest_name=manifest_name,
+        required_env=required_env,
+    )
+    return public_payload(
+        payload,
+        kind="agent-learning.attack-evolution-shrink.v1",
+    )
+
+
+def shrink_attack_evolution(
+    source: Mapping[str, Any],
+    *,
+    source_path: str | Path = ".",
+    name: Optional[str] = None,
+    manifest_name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+) -> dict[str, Any]:
+    payload = _manifest().shrink_attack_evolution(
+        source,
+        source_path=source_path,
+        name=name,
+        manifest_name=manifest_name,
+        required_env=required_env,
+    )
+    return public_payload(
+        payload,
+        kind="agent-learning.attack-evolution-shrink.v1",
+    )
+
+
 def replay_manifests(
     manifests: Sequence[str | Path],
     *,
@@ -8427,6 +8469,8 @@ __all__ = [
     "run_local_text_manifest",
     "run_manifest",
     "run_manifest_file",
+    "shrink_attack_evolution",
+    "shrink_attack_evolution_file",
     "supported_manifest_environment_types",
     "validate_manifest_env",
     "write_eval_suite_file",

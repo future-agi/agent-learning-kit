@@ -372,6 +372,46 @@ def promote_to_regression(
     )
 
 
+def shrink_attack_evolution_file(
+    path: str | Path,
+    *,
+    name: Optional[str] = None,
+    manifest_name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Load an attack-evolution artifact and return a minimized replay manifest."""
+
+    source_path = Path(path).expanduser().resolve()
+    return shrink_attack_evolution(
+        load_manifest_file(source_path),
+        source_path=source_path,
+        name=name,
+        manifest_name=manifest_name,
+        required_env=required_env,
+    )
+
+
+def shrink_attack_evolution(
+    source: Mapping[str, Any],
+    *,
+    source_path: str | Path = ".",
+    name: Optional[str] = None,
+    manifest_name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Return a minimized attack-evolution regression payload."""
+
+    started = time.time()
+    return _cli()._attack_evolution_shrink_result(
+        source=copy.deepcopy(dict(source)),
+        source_path=Path(source_path).expanduser().resolve(),
+        name=name,
+        manifest_name=manifest_name,
+        required_env=list(required_env),
+        duration_seconds=round(time.time() - started, 4),
+    )
+
+
 def replay_manifests(
     manifests: Sequence[str | Path],
     *,
@@ -931,6 +971,8 @@ __all__ = [
     "run_manifest_file",
     "run_redteam_manifest",
     "run_redteam_manifest_file",
+    "shrink_attack_evolution",
+    "shrink_attack_evolution_file",
     "supported_manifest_environment_types",
     "validate_manifest_env",
 ]

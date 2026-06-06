@@ -80,6 +80,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _trust(args[1:])
     if command in {"eval-cli", "fi"}:
         return _eval_cli(args[1:])
+    if command in {"shrink", "minimize", "minimize-counterexample"}:
+        return _simulate(["shrink", *args[1:]])
     if command == "simulate":
         return _simulate(args[1:])
     if command in SIMULATE_COMMANDS:
@@ -2765,7 +2767,7 @@ def _normalize_agent_learning_simulate_side_effects(args: Sequence[str]) -> None
         _normalize_agent_learning_json_file(
             _agent_learning_resolve_side_effect_path(raw_path, base_dir),
         )
-    if command == "promote-to-regression":
+    if command in {"promote-to-regression", "shrink"}:
         for raw_path in _agent_learning_option_values(arguments, "--manifest"):
             _normalize_agent_learning_json_file(
                 _agent_learning_resolve_side_effect_path(raw_path, base_dir),
@@ -3037,7 +3039,7 @@ def _help(error: Optional[str] = None) -> int:
         nargs="?",
         help=(
             "doctor, simulate, run, eval, redteam, optimize, replay, report, "
-            "compare, baseline, promote-to-regression, optimize-eval, "
+            "compare, baseline, promote-to-regression, shrink, optimize-eval, "
             "optimize-suite, suite, capabilities, actions, action-run, "
             "action-optimize, trust, redteam-corpus, eval-cli, init"
         ),

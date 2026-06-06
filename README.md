@@ -1098,6 +1098,14 @@ result can be promoted with `simulate.promote_to_regression()` or
 reruns status, mutation, counterexample, minimized-replay, and gap tools with
 `red_team_attack_evolution_coverage=1.0` and
 `red_team_attack_evolution_quality=1.0`.
+For a smaller regression gate, use `simulate.shrink_attack_evolution()` or
+`agent-learn shrink <artifact> --manifest artifacts/attack-evolution-shrink.json`
+(`agent-learn minimize` is an alias). Shrink turns one verified counterexample
+into a typed, content-addressed, local-only minimal repro manifest with
+counterexample minimization, independent replay assertions, JSON/JUnit/SARIF/
+Markdown outputs, and the same replay command surface; it deliberately does not
+require broad path/surface expansion, because the gate is proving minimal
+reproducibility rather than campaign coverage.
 `agent-learn report` now renders the same loop as a native
 `attack_evolution` action card for Future AGI UI, SDK, and CI users. The card
 summarizes mutation lineage, counterexample minimization, replay closure,

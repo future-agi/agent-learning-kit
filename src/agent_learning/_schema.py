@@ -24,6 +24,9 @@ _PUBLIC_VALUE_REPLACEMENTS = {
     "agent-simulate.regression_promotion.v1": (
         "agent-learning.regression-promotion.v1"
     ),
+    "agent-simulate.attack-evolution-shrink.v1": (
+        "agent-learning.attack-evolution-shrink.v1"
+    ),
     "agent-simulate.replay.v1": "agent-learning.replay.v1",
     "agent-simulate.report.v1": "agent-learning.report.v1",
     "agent_simulate": "agent_learning_kit",

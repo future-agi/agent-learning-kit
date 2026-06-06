@@ -196,6 +196,8 @@ from .manifest import (
     run_manifest_file,
     run_redteam_manifest,
     run_redteam_manifest_file,
+    shrink_attack_evolution,
+    shrink_attack_evolution_file,
     supported_manifest_environment_types,
     validate_manifest_env,
 )
@@ -405,6 +407,8 @@ __all__ = [
     "run_manifest_file",
     "run_redteam_manifest",
     "run_redteam_manifest_file",
+    "shrink_attack_evolution",
+    "shrink_attack_evolution_file",
     "supported_manifest_environment_types",
     "validate_manifest_env",
 ]
