@@ -435,6 +435,15 @@ Agent-report evaluation can now score that same metadata with
 native gate alongside runtime and trace metrics, so an HTTP target or
 external-service contract is diagnosed locally instead of delegated to an
 external optimizer/eval platform.
+Use `simulate.framework_adapter_contract_matrix([...])` when Future AGI UI,
+CI, or CLI needs to certify many framework adapters in one artifact. The matrix
+emits `agent-learning.framework-adapter-contract-matrix.v1`, expands to one
+local `agent-learning.framework-adapter-contract.v1` per framework, rejects
+HTTP/HTTPS targets by default, and carries a `contract_quality_gate` that
+`framework_adapter_contract_quality` can score with plural requirements such as
+`required_frameworks`. The default matrix covers LangChain, LangGraph,
+LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, and Pipecat without
+importing or calling those packages.
 
 For arbitrary task/world simulation, build a normal run manifest from an agent
 spec, task description, environment bundle, and optional agent-report eval

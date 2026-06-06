@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from fi.simulate.agent.generic import GenericAgentWrapper, InputMode
@@ -164,6 +164,113 @@ def framework_adapter_contract(
     return contract
 
 
+def framework_adapter_contract_matrix(
+    frameworks: Sequence[str] | str | None = None,
+    *,
+    targets: Mapping[str, str] | None = None,
+    methods: Mapping[str, str] | None = None,
+    input_modes: Mapping[str, InputMode] | None = None,
+    modalities: Mapping[str, str] | None = None,
+    trace_runtime: bool = True,
+    allow_external_targets: bool = False,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Return a native, import-free adapter contract matrix.
+
+    The matrix is a first-party certification artifact: it proves what the
+    Agent Learning simulator can run through local adapter fixtures without
+    importing or calling LangGraph, LiveKit, Pipecat, or other frameworks.
+    HTTP/HTTPS targets are rejected by default so this path stays native unless
+    a caller explicitly opts into external target documentation.
+    """
+
+    framework_keys = _framework_matrix_keys(frameworks)
+    target_map = {
+        _framework_key(key): str(value)
+        for key, value in dict(targets or {}).items()
+    }
+    method_map = {
+        _framework_key(key): str(value)
+        for key, value in dict(methods or {}).items()
+    }
+    input_mode_map = {
+        _framework_key(key): value for key, value in dict(input_modes or {}).items()
+    }
+    modality_map = {
+        _framework_key(key): str(value)
+        for key, value in dict(modalities or {}).items()
+    }
+    external_targets = {
+        key: target
+        for key, target in target_map.items()
+        if _is_external_target(target)
+    }
+    if external_targets and not allow_external_targets:
+        blocked = ", ".join(
+            f"{key}={target}" for key, target in sorted(external_targets.items())
+        )
+        raise ValueError(
+            "external targets are disabled for native framework adapter matrices: "
+            f"{blocked}"
+        )
+
+    contracts = [
+        framework_adapter_contract(
+            key,
+            target=target_map.get(key) or _local_fixture_target(key),
+            method=method_map.get(key),
+            input_mode=input_mode_map.get(key),
+            modality=modality_map.get(key),
+            trace_runtime=trace_runtime,
+            metadata=copy_metadata,
+        )
+        for key in framework_keys
+        for copy_metadata in [dict(metadata or {})]
+    ]
+    findings = _framework_matrix_findings(contracts)
+    summary = _framework_matrix_summary(contracts)
+    return {
+        "kind": "agent-learning.framework-adapter-contract-matrix.v1",
+        "status": "passed" if not findings else "failed",
+        "requires_external_service": False,
+        "runtime": "in_process",
+        "allow_external_targets": bool(allow_external_targets),
+        "framework_count": len(framework_keys),
+        "frameworks": framework_keys,
+        "contracts": contracts,
+        "summary": summary,
+        "findings": findings,
+        "contract_quality_gate": {
+            "kind": "agent-learning.framework-adapter-contract.v1",
+            "required_frameworks": framework_keys,
+            "require_trace_runtime": bool(trace_runtime),
+            "require_local_executable_fixture": not bool(allow_external_targets),
+            "require_no_external_service": True,
+            "require_target": True,
+            "forbidden_target_schemes": (
+                [] if allow_external_targets else ["http", "https"]
+            ),
+            "required_schema_sections": ["input", "output"],
+            "required_lifecycle_hooks": ["setup", "teardown"],
+            "required_capabilities": ["messages", "tool_calls", "runtime_trace"],
+            "required_evidence_requirements": [
+                "framework_runtime",
+                "framework_trace",
+                "tool_calls",
+                "adapter_conformance",
+                "metric_evidence",
+            ],
+        },
+        "evidence_requirements": [
+            "framework_runtime",
+            "framework_trace",
+            "adapter_conformance",
+            "metric_evidence",
+            "matrix_coverage",
+        ],
+    }
+
+
 def wrap_framework(
     framework: str,
     agent: Any,
@@ -237,6 +344,116 @@ def wrap_framework(
 
 def _framework_key(value: str) -> str:
     return str(value or "custom").strip().lower().replace("-", "_") or "custom"
+
+
+def _framework_matrix_keys(frameworks: Sequence[str] | str | None) -> list[str]:
+    default_frameworks = (
+        "langchain",
+        "langgraph",
+        "llamaindex",
+        "crewai",
+        "autogen",
+        "openai_agents",
+        "livekit",
+        "pipecat",
+    )
+    values: Sequence[str] | str = frameworks or default_frameworks
+    if isinstance(values, str):
+        values = [values]
+    keys: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = _framework_key(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    if not keys:
+        raise ValueError("frameworks must contain at least one framework")
+    return keys
+
+
+def _local_fixture_target(framework: str) -> str:
+    return f"agent-learning-fixture://framework/{_framework_key(framework)}"
+
+
+def _is_external_target(target: str) -> bool:
+    return urlparse(str(target or "")).scheme.lower() in {"http", "https"}
+
+
+def _framework_matrix_summary(contracts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    frameworks: list[str] = []
+    methods: dict[str, str] = {}
+    input_modes: dict[str, str] = {}
+    modalities: dict[str, str] = {}
+    transports: dict[str, str] = {}
+    capabilities: set[str] = set()
+    evidence_requirements: set[str] = set()
+    target_schemes: set[str] = set()
+
+    for contract in contracts:
+        framework = _framework_key(str(contract.get("framework") or "custom"))
+        frameworks.append(framework)
+        methods[framework] = str(contract.get("method") or "")
+        input_modes[framework] = str(contract.get("input_mode") or "")
+        modalities[framework] = str(contract.get("modality") or "")
+        transports[framework] = str(contract.get("transport") or "")
+        capabilities.update(
+            str(item) for item in contract.get("capabilities", []) or []
+        )
+        evidence_requirements.update(
+            str(item) for item in contract.get("evidence_requirements", []) or []
+        )
+        target_scheme = str(contract.get("target_scheme") or "")
+        if target_scheme:
+            target_schemes.add(target_scheme)
+
+    return {
+        "frameworks": frameworks,
+        "modalities": sorted(set(modalities.values())),
+        "transports": sorted(set(transports.values())),
+        "methods": methods,
+        "input_modes": input_modes,
+        "framework_modalities": modalities,
+        "framework_transports": transports,
+        "capabilities": sorted(capabilities),
+        "evidence_requirements": sorted(evidence_requirements),
+        "target_schemes": sorted(target_schemes),
+        "contract_count": len(contracts),
+        "local_executable_fixture_count": sum(
+            1 for contract in contracts if bool(contract.get("local_executable_fixture"))
+        ),
+        "trace_runtime_count": sum(
+            1 for contract in contracts if bool(contract.get("trace_runtime"))
+        ),
+        "requires_external_service_count": sum(
+            1 for contract in contracts if bool(contract.get("requires_external_service"))
+        ),
+        "external_target_count": sum(
+            1
+            for contract in contracts
+            if _is_external_target(str(contract.get("target") or ""))
+        ),
+    }
+
+
+def _framework_matrix_findings(
+    contracts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for contract in contracts:
+        framework = _framework_key(str(contract.get("framework") or "custom"))
+        if contract.get("kind") != "agent-learning.framework-adapter-contract.v1":
+            findings.append({"framework": framework, "type": "contract_kind_mismatch"})
+        if bool(contract.get("requires_external_service")):
+            findings.append(
+                {"framework": framework, "type": "external_service_required"}
+            )
+        if not bool(contract.get("local_executable_fixture")):
+            findings.append({"framework": framework, "type": "local_fixture_missing"})
+        if _is_external_target(str(contract.get("target") or "")):
+            findings.append({"framework": framework, "type": "external_target_scheme"})
+    return findings
 
 
 def _default_transport(modality: str) -> str:

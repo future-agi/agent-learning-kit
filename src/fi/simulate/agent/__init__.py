@@ -4,6 +4,7 @@ from .generic import GenericAgentWrapper, wrap_agent
 from .frameworks import (
     FrameworkAdapterSpec,
     framework_adapter_contract,
+    framework_adapter_contract_matrix,
     supported_frameworks,
     wrap_framework,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
     "framework_adapter_contract",
+    "framework_adapter_contract_matrix",
     "supported_frameworks",
     "probe_framework_imports",
     "wrap_agent",

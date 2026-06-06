@@ -31,6 +31,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
     "framework_adapter_contract",
+    "framework_adapter_contract_matrix",
     "supported_frameworks",
     "wrap_agent",
     "wrap_framework",
@@ -4252,6 +4253,10 @@ def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract(*args, **kwargs)
 
 
+def framework_adapter_contract_matrix(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().framework_adapter_contract_matrix(*args, **kwargs)
+
+
 def _default_framework_scenario(
     name: str,
     framework: str,
@@ -7126,6 +7131,7 @@ __all__ = [
     "detect_manifest_command",
     "evaluate_manifest_report",
     "framework_adapter_contract",
+    "framework_adapter_contract_matrix",
     "load_eval_suite_file",
     "load_manifest",
     "load_manifest_file",

@@ -153,6 +153,21 @@ def test_facades_expose_unified_agent_learning_modules():
         "structured_input",
     }
     assert simulate.framework_adapter_contract is not None
+    matrix = simulate.framework_adapter_contract_matrix(
+        ["langchain", "langgraph", "livekit", "pipecat"]
+    )
+    assert matrix["kind"] == "agent-learning.framework-adapter-contract-matrix.v1"
+    assert matrix["status"] == "passed"
+    assert matrix["requires_external_service"] is False
+    assert matrix["frameworks"] == ["langchain", "langgraph", "livekit", "pipecat"]
+    assert matrix["summary"]["contract_count"] == 4
+    assert matrix["summary"]["requires_external_service_count"] == 0
+    assert matrix["summary"]["external_target_count"] == 0
+    assert matrix["summary"]["local_executable_fixture_count"] == 4
+    assert matrix["contract_quality_gate"]["required_frameworks"] == (
+        matrix["frameworks"]
+    )
+    assert simulate.framework_adapter_contract_matrix is not None
     assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
     assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
     assert simulate.run_eval_suite_file is not None

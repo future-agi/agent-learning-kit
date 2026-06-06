@@ -8038,6 +8038,43 @@ def _framework_adapter_contract_quality_metric(
             finding_type=finding_type,
         )
 
+    plural_scalar_checks = (
+        (
+            "required_frameworks",
+            "frameworks",
+            "framework_adapter_contract_framework_mismatch",
+        ),
+        ("required_methods", "methods", "framework_adapter_contract_method_missing"),
+        (
+            "required_input_modes",
+            "input_modes",
+            "framework_adapter_contract_input_mode_mismatch",
+        ),
+        (
+            "required_modalities",
+            "modalities",
+            "framework_adapter_contract_modality_mismatch",
+        ),
+        (
+            "required_transports",
+            "transports",
+            "framework_adapter_contract_transport_mismatch",
+        ),
+        ("required_adapters", "adapters", "framework_adapter_contract_adapter_mismatch"),
+    )
+    for requirement_key, observed_key, finding_type in plural_scalar_checks:
+        for expected in _string_list(requirements.get(requirement_key)):
+            normalized = _normalize_framework_adapter_contract_key(expected)
+            _append_framework_adapter_contract_check(
+                checks,
+                findings,
+                check=requirement_key,
+                expected=normalized,
+                actual=observed[observed_key],
+                match=normalized in observed[observed_key],
+                finding_type=finding_type,
+            )
+
     bool_checks = (
         (
             "require_trace_runtime",
@@ -17702,37 +17739,73 @@ def _framework_adapter_contracts_from_context(
         seen.add(signature)
         contracts.append(contract)
 
+    def append_matrix(value: Any) -> None:
+        matrix = _as_dict(value)
+        if not matrix:
+            return
+        kind = str(matrix.get("kind") or "").lower()
+        if kind != "agent-learning.framework-adapter-contract-matrix.v1":
+            return
+        for contract in _as_list(matrix.get("contracts")):
+            append_contract(contract)
+
+    append_matrix(context.get("framework_adapter_contract_matrix"))
     metadata = _as_dict(context.get("metadata", {}))
     append_contract(metadata.get("framework_adapter_contract"))
+    append_matrix(metadata.get("framework_adapter_contract_matrix"))
 
     agent = _as_dict(metadata.get("agent") or context.get("agent"))
     append_contract(_as_dict(agent.get("metadata")).get("framework_adapter_contract"))
+    append_matrix(
+        _as_dict(agent.get("metadata")).get("framework_adapter_contract_matrix")
+    )
     append_contract(
         _as_dict(agent.get("runtime_metadata")).get("framework_adapter_contract")
+    )
+    append_matrix(
+        _as_dict(agent.get("runtime_metadata")).get(
+            "framework_adapter_contract_matrix"
+        )
     )
 
     state = _as_dict(metadata.get("environment_state"))
     for state_key in ("framework_runtime", "framework_trace"):
         payload = _as_dict(state.get(state_key))
         append_contract(payload.get("framework_adapter_contract"))
+        append_matrix(payload.get("framework_adapter_contract_matrix"))
         append_contract(_as_dict(payload.get("metadata")).get("framework_adapter_contract"))
+        append_matrix(
+            _as_dict(payload.get("metadata")).get(
+                "framework_adapter_contract_matrix"
+            )
+        )
 
     for payload in _framework_runtime_payloads_from_context(context):
         payload_dict = _as_dict(payload)
         append_contract(payload_dict.get("framework_adapter_contract"))
+        append_matrix(payload_dict.get("framework_adapter_contract_matrix"))
         append_contract(_as_dict(payload_dict.get("metadata")).get("framework_adapter_contract"))
+        append_matrix(
+            _as_dict(payload_dict.get("metadata")).get(
+                "framework_adapter_contract_matrix"
+            )
+        )
 
     for artifact in _as_list(context.get("artifacts", [])):
         data = _as_dict(_get(artifact, "data", {}))
         artifact_metadata = _as_dict(_get(artifact, "metadata", {}))
         append_contract(data.get("framework_adapter_contract"))
+        append_matrix(data.get("framework_adapter_contract_matrix"))
         append_contract(artifact_metadata.get("framework_adapter_contract"))
+        append_matrix(artifact_metadata.get("framework_adapter_contract_matrix"))
 
     for event in _as_list(context.get("events", [])):
         payload = _as_dict(_get(event, "payload", {}))
         event_metadata = _as_dict(_get(event, "metadata", {}))
         append_contract(payload.get("framework_adapter_contract"))
+        append_matrix(payload.get("framework_adapter_contract_matrix"))
         append_contract(event_metadata.get("framework_adapter_contract"))
+        append_matrix(event_metadata.get("framework_adapter_contract_matrix"))
 
     return contracts
 

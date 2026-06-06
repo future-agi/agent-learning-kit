@@ -181,6 +181,71 @@ def test_framework_adapter_contract_quality_flags_external_contract():
     } <= finding_types
 
 
+def test_framework_adapter_contract_quality_scores_native_matrix():
+    from agent_learning import simulate
+
+    frameworks = [
+        "langchain",
+        "langgraph",
+        "llamaindex",
+        "crewai",
+        "autogen",
+        "openai_agents",
+        "livekit",
+        "pipecat",
+    ]
+    matrix = simulate.framework_adapter_contract_matrix(frameworks)
+    assert matrix["status"] == "passed"
+    assert matrix["summary"]["requires_external_service_count"] == 0
+    assert matrix["summary"]["local_executable_fixture_count"] == len(frameworks)
+
+    evaluation = agent_evals.evaluate_agent_report(
+        {
+            "results": [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Certify framework matrix."},
+                        {"role": "assistant", "content": "Matrix certified."},
+                    ],
+                    "metadata": {
+                        "framework_adapter_contract_matrix": matrix,
+                    },
+                }
+            ]
+        },
+        config={
+            "framework_adapter_contract_quality": {
+                **matrix["contract_quality_gate"],
+                "required_modalities": ["text", "voice"],
+                "required_transports": ["in_process"],
+            },
+            "metric_weights": {"framework_adapter_contract_quality": 1.0},
+        },
+        threshold=1.0,
+    )
+    metric = next(
+        item
+        for item in evaluation.cases[0].metrics
+        if item.name == "framework_adapter_contract_quality"
+    )
+    assert metric.score == pytest.approx(1.0)
+    assert metric.details["findings"] == []
+    observed = metric.details["observed"]
+    assert observed["contract_count"] == len(frameworks)
+    assert set(observed["frameworks"]) == set(frameworks)
+    assert {"text", "voice"} <= set(observed["modalities"])
+
+
+def test_framework_adapter_contract_matrix_rejects_external_target_by_default():
+    from agent_learning import simulate
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.framework_adapter_contract_matrix(
+            ["langgraph"],
+            targets={"langgraph": "https://example.invalid/agent"},
+        )
+
+
 def test_world_hook_contract_quality_flags_external_hook_contract():
     external_contract = {
         "kind": "agent-learning.world-hooks-contract.v1",
