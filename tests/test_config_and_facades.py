@@ -12444,6 +12444,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["summary"]["failed_check_count"] == 0
     assert payload["summary"]["package"] == "agent-learning-kit"
     assert payload["required_cli_commands"] == trinity.V1_REQUIRED_CLI_COMMANDS
+    assert payload["typescript_public_package"] == trinity.TYPESCRIPT_PUBLIC_PACKAGE
+    assert payload["legacy_typescript_packages"] == trinity.LEGACY_TYPESCRIPT_PACKAGES
+    assert payload["required_typescript_sdk_files"] == (
+        trinity.V1_TYPESCRIPT_SDK_REQUIRED_FILES
+    )
     assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
     assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
     assert payload["required_local_sim_eval_examples"] == (
@@ -12522,6 +12527,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == {
         "single_public_boundary",
+        "typescript_sdk_consolidation_boundary",
         "cli_command_surface",
         "release_docs_present",
         "v1_examples_present",
@@ -12538,6 +12544,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "package_metadata",
     }
     assert all(check["status"] == "passed" for check in checks.values())
+    typescript_boundary = checks["typescript_sdk_consolidation_boundary"]["evidence"]
+    assert typescript_boundary["package_name"] == "@future-agi/agent-learning-kit"
+    assert typescript_boundary["missing_files"] == []
+    assert typescript_boundary["metadata_errors"] == []
+    assert typescript_boundary["forbidden_token_findings"] == []
+    assert typescript_boundary["legacy_sibling_errors"] == []
     assert checks["release_docs_present"]["evidence"]["missing"] == []
     assert checks["v1_examples_present"]["evidence"]["missing"] == []
     assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []
@@ -12929,7 +12941,7 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
     assert payload["summary"]["unknown_selected_check_count"] == 0
     assert payload["summary"]["passed_check_count"] == 2
     assert payload["summary"]["failed_check_count"] == 0
-    assert payload["summary"]["skipped_check_count"] == 3
+    assert payload["summary"]["skipped_check_count"] == 5
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == set(trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS)
     assert checks["release_check"]["status"] == "passed"
@@ -12948,6 +12960,8 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
     ]
     assert checks["pytest"]["status"] == "skipped"
     assert checks["build"]["status"] == "skipped"
+    assert checks["typescript_build"]["status"] == "skipped"
+    assert checks["typescript_test"]["status"] == "skipped"
     assert checks["ruff"]["status"] == "skipped"
     assert {
         finding["type"] for finding in payload["findings"]
@@ -12977,7 +12991,7 @@ def test_agent_learn_release_proof_dry_run_emits_plan(tmp_path, capsys):
     assert payload["dry_run"] is True
     assert payload["summary"]["ready"] is False
     assert payload["summary"]["full_proof"] is True
-    assert payload["summary"]["pending_check_count"] == 5
+    assert payload["summary"]["pending_check_count"] == 7
     assert payload["summary"]["failed_check_count"] == 0
     assert payload["summary"]["unknown_selected_check_count"] == 0
     assert {check["status"] for check in payload["checks"]} == {"pending"}

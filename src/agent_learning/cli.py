@@ -3186,6 +3186,8 @@ def _release_proof(args: Sequence[str] = ()) -> int:
             "ruff",
             "pytest",
             "build",
+            "typescript_build",
+            "typescript_test",
             "git_diff_check",
         ],
         help="Run only this proof check; repeatable. Omit for full release proof.",
@@ -3315,6 +3317,27 @@ def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[st
         return [python, "-m", "pytest", "-q"]
     if check_id == "build":
         return [python, "-m", "build"]
+    if check_id == "typescript_build":
+        return [
+            "pnpm",
+            "--dir",
+            str(project_root / "typescript"),
+            "--filter",
+            "@future-agi/agent-learning-kit",
+            "build",
+        ]
+    if check_id == "typescript_test":
+        return [
+            "pnpm",
+            "--dir",
+            str(project_root / "typescript"),
+            "--filter",
+            "@future-agi/agent-learning-kit",
+            "test",
+            "--",
+            "--runInBand",
+            "--silent",
+        ]
     if check_id == "git_diff_check":
         return ["git", "diff", "--check"]
     raise ValueError(f"unknown release proof check: {check_id}")

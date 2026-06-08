@@ -18,10 +18,11 @@ V1 is releasable when a user can:
 4. Run local simulation, eval, red-team, optimization, report, replay, and
    regression promotion workflows.
 5. Use the Python SDK through `agent_learning.{simulate,evals,redteam,optimize,suite}`.
-6. Export artifacts that Future AGI can render as UI/UX, observability, eval,
+6. Use the TypeScript eval surface through `@future-agi/agent-learning-kit`.
+7. Export artifacts that Future AGI can render as UI/UX, observability, eval,
    simulation, red-team, and optimizer results.
-7. Run a promptfoo-style CLI workflow without writing platform code.
-8. Verify release readiness with `agent-learn doctor` and
+8. Run a promptfoo-style CLI workflow without writing platform code.
+9. Verify release readiness with `agent-learn doctor` and
    `agent-learn release-check`, then cut V1 with
    `agent-learn release-proof`.
 
@@ -33,14 +34,14 @@ coverage across required examples, canonical corpus rows, attack types,
 surfaces, source lineage, UI/action/report readiness, and executable
 framework/provider contract readiness. `agent-learn release-proof --project-root .`
 is the heavier release-cut artifact; it runs release-check, full-repo ruff,
-pytest, package build, and `git diff --check`, then stores their command
+pytest, Python package build, TypeScript package build/test, and `git diff --check`, then stores their command
 evidence in `agent-learning.release-proof.v1`.
 
 ## Release-Cut Breakdown
 
 | Milestone | Release promise | Executable gate |
 | --- | --- | --- |
-| M0 | One public SDK boundary | `single_public_boundary` |
+| M0 | One public SDK boundary | `single_public_boundary`, `typescript_sdk_consolidation_boundary` |
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
@@ -51,21 +52,26 @@ evidence in `agent-learning.release-proof.v1`.
 
 ### M0: SDK Consolidation Boundary
 
-Status: mostly complete.
+Status: complete for the Python and TypeScript SDK boundary; still keep the gate
+green as features move.
 
 Acceptance gates:
 
 - Public distribution is `agent-learning-kit`.
 - Public import namespace is `agent_learning`.
 - Public CLI is `agent-learn`.
+- Public TypeScript package is `@future-agi/agent-learning-kit`.
 - `simulate`, `evals`, `redteam`, `optimize`, `suite`, and `capabilities` are
   importable through `agent_learning`.
 - `fi.simulate`, `fi.evals`, and `fi.opt` remain vendored engine internals.
 - No new public work lands in `simulate-sdk`, `ai-evaluation`, or `agent-opt`.
+- Legacy TypeScript eval source is marker-only; the moved source lives in
+  `agent-learning-kit/typescript/agent-learning-kit`.
 
 Verification:
 
 - `agent-learn doctor`
+- `PYTHONPATH=src python -m agent_learning.cli release-check --project-root . --quiet`
 - `PYTHONPATH=src python -m pytest tests/test_config_and_facades.py::test_agent_learn_doctor_reports_module_availability -q`
 
 ### M1: Promptfoo-Style CLI
@@ -249,10 +255,14 @@ Current checkpoint:
 - `agent-learn release-proof` emits one release-cut artifact with command,
   duration, exit-code, timeout, and output-tail evidence for each required local
   proof check.
+- The release proof includes `typescript_build` and `typescript_test` for
+  `@future-agi/agent-learning-kit`.
 
 Acceptance gates:
 
 - `python -m build` succeeds.
+- `pnpm --dir typescript --filter @future-agi/agent-learning-kit build` succeeds.
+- `pnpm --dir typescript --filter @future-agi/agent-learning-kit test -- --runInBand --silent` succeeds.
 - `agent-learn release-check --project-root .` passes.
 - `agent-learn release-proof --project-root .` passes with
   `agent-learning.release-proof.v1` and `ready=true`.
@@ -266,6 +276,8 @@ Verification:
 - `PYTHONPATH=src python -m ruff check .`
 - `PYTHONPATH=src python -m pytest -q`
 - `python -m build`
+- `pnpm --dir typescript --filter @future-agi/agent-learning-kit build`
+- `pnpm --dir typescript --filter @future-agi/agent-learning-kit test -- --runInBand --silent`
 - `git diff --check`
 - `PYTHONPATH=src python -m agent_learning.cli release-proof --project-root . --output /tmp/agent-learning-release-proof.json --quiet`
 

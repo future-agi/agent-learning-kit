@@ -1,0 +1,6 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./agent-learning-kit" }
+  ]
+}

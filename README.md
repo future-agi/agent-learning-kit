@@ -28,6 +28,17 @@ pip install agent-learning-kit[nli]
 pip install agent-learning-kit[all]
 ```
 
+The TypeScript eval surface is also housed here under the same SDK name:
+
+```bash
+pnpm add @future-agi/agent-learning-kit
+```
+
+```typescript
+import { Evaluator } from "@future-agi/agent-learning-kit";
+import { LocalEvaluator } from "@future-agi/agent-learning-kit/evals/local";
+```
+
 `agent-learning-kit` is the public SDK. The simulation, evaluation, and
 optimization engine code is vendored into this package; public docs and
 automation should use `agent_learning.*` and `agent-learn`.
@@ -39,7 +50,9 @@ public package/CLI, shared `AGENT_LEARNING_API_KEY` /
 `AGENT_LEARNING_SECRET_KEY` config, unified
 `agent_learning.{simulate,evals,redteam,optimize,suite,trinity}` APIs, vendored
 `fi.{simulate,evals,opt}` engines, and legacy Python distributions that should
-not be project dependencies. For one-key local usage,
+not be project dependencies. `release-check` also verifies the TypeScript
+public package boundary: `@future-agi/agent-learning-kit` owns the moved eval
+SDK source and the legacy TypeScript eval package is marker-only. For one-key local usage,
 `configure(api_key=...)` mirrors the key into legacy `FI_API_KEY` and
 `FI_SECRET_KEY` engine paths.
 Run `agent-learn release-check --project-root .` before cutting V1. It emits
@@ -66,9 +79,10 @@ realtime manifests.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
-local proof stack: release-check, full-repo ruff, pytest, package build, and
-`git diff --check`. Use `--only <check>` for a partial proof during development
-or `--dry-run` to print the exact plan without executing commands.
+local proof stack: release-check, full-repo ruff, pytest, Python package build,
+TypeScript package build/test, and `git diff --check`. Use `--only <check>` for
+a partial proof during development or `--dry-run` to print the exact plan
+without executing commands.
 
 Python code can verify the same boundary without shelling out:
 
@@ -341,6 +355,11 @@ Protect helpers, execution handles, and the unified `evaluate` API.
 It also promotes AutoEval pipeline builders/templates and local/offline metric
 routing, so users can generate eval configs and run local heuristic checks
 without importing legacy `fi.evals.*` paths.
+The TypeScript eval SDK has also moved from
+`ai-evaluation/typescript/ai-evaluation` into
+`typescript/agent-learning-kit` and publishes as
+`@future-agi/agent-learning-kit`, with eval exports available from the package
+root and `@future-agi/agent-learning-kit/evals/local`.
 `agent_learning.redteam` exposes the red-team runtime directly: manifest
 execution, adversarial/campaign/readiness environments, local guardrail scanner
 pipelines, Protect/guardrail config types, code-security metrics, CWE detector

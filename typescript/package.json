@@ -1,0 +1,15 @@
+{
+  "name": "agent-learning-kit-typescript-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript workspace for the unified Future AGI agent-learning-kit SDK.",
+  "scripts": {
+    "build": "pnpm --filter @future-agi/agent-learning-kit build",
+    "test": "pnpm --filter @future-agi/agent-learning-kit test",
+    "typecheck": "pnpm --filter @future-agi/agent-learning-kit typecheck"
+  },
+  "dependencies": {
+    "@future-agi/agent-learning-kit": "workspace:*"
+  },
+  "packageManager": "pnpm@8.15.0"
+}

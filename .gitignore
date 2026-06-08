@@ -5,7 +5,10 @@ __pycache__/
 .venv-*/
 *.py[cod]
 *.egg-info/
+node_modules/
 dist/
 build/
+coverage/
+*.tsbuildinfo
 .DS_Store
 examples/artifacts/

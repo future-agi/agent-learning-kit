@@ -6,6 +6,8 @@ evaluation, red teaming, and optimization.
 All new public SDK work should land here first:
 
 - Public Python imports belong under `agent_learning.*`.
+- Public TypeScript package work belongs under `typescript/agent-learning-kit`
+  and publishes as `@future-agi/agent-learning-kit`.
 - Public CLI commands belong under `agent-learn`.
 - Public examples and cookbooks should use `agent-learning-kit` install commands.
 - Runtime implementation should live under this repo, either in
@@ -27,7 +29,10 @@ When moving an existing surface:
 
 1. Move or add the implementation code under this repository.
 2. Add or update the `agent_learning.*` API/CLI.
-3. Verify it against real local artifacts and relevant engine tests using this
+3. For TypeScript surfaces, add/update the package under
+   `typescript/agent-learning-kit` and verify `pnpm --dir typescript --filter
+   @future-agi/agent-learning-kit build` plus the package test command.
+4. Verify it against real local artifacts and relevant engine tests using this
    repository as the source path.
-4. Update public docs/examples to use `agent-learning-kit`.
-5. Only then simplify or hide the older engine-level surface.
+5. Update public docs/examples to use `agent-learning-kit`.
+6. Only then simplify or hide the older engine-level surface.

@@ -30,12 +30,29 @@ LEGACY_PYTHON_DISTRIBUTIONS = [
     "agent-opt",
 ]
 
+LEGACY_TYPESCRIPT_PACKAGES = [
+    "@future-agi/ai-evaluation",
+]
+
 PUBLIC_CONSOLE_SCRIPTS = ["agent-learn"]
 
 REJECTED_LEGACY_CONSOLE_SCRIPTS = [
     "agent-simulate",
     "ai-evaluation",
     "agent-opt",
+]
+
+TYPESCRIPT_PUBLIC_PACKAGE = "@future-agi/agent-learning-kit"
+
+V1_TYPESCRIPT_SDK_REQUIRED_FILES = [
+    "typescript/package.json",
+    "typescript/pnpm-workspace.yaml",
+    "typescript/pnpm-lock.yaml",
+    "typescript/tsconfig.json",
+    "typescript/agent-learning-kit/package.json",
+    "typescript/agent-learning-kit/src/index.ts",
+    "typescript/agent-learning-kit/src/local/index.ts",
+    "typescript/agent-learning-kit/examples/02-local-heuristic-metrics.ts",
 ]
 
 RESEARCH_SOURCES = [
@@ -105,6 +122,8 @@ V1_RELEASE_PROOF_REQUIRED_CHECKS = [
     "ruff",
     "pytest",
     "build",
+    "typescript_build",
+    "typescript_test",
     "git_diff_check",
 ]
 
@@ -616,6 +635,19 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "missing_engine_modules": trinity["summary"]["missing_engine_modules"],
         },
     )
+    typescript_consolidation = _release_typescript_sdk_consolidation_status(root)
+    _append_release_check(
+        checks,
+        check_id="typescript_sdk_consolidation_boundary",
+        passed=(
+            not typescript_consolidation["missing_files"]
+            and not typescript_consolidation["metadata_errors"]
+            and not typescript_consolidation["forbidden_token_findings"]
+            and not typescript_consolidation["legacy_sibling_errors"]
+        ),
+        milestone="M0",
+        evidence=typescript_consolidation,
+    )
     _append_release_check(
         checks,
         check_id="cli_command_surface",
@@ -830,6 +862,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "milestones": milestones,
         "checks": checks,
         "required_cli_commands": list(V1_REQUIRED_CLI_COMMANDS),
+        "typescript_public_package": TYPESCRIPT_PUBLIC_PACKAGE,
+        "legacy_typescript_packages": list(LEGACY_TYPESCRIPT_PACKAGES),
+        "required_typescript_sdk_files": list(V1_TYPESCRIPT_SDK_REQUIRED_FILES),
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
@@ -898,7 +933,7 @@ def release_proof_status(
 
     ``release_status()`` is intentionally fast and deterministic. This artifact
     records the heavier local proof stack used when cutting V1: release-check,
-    ruff, pytest, build, and git diff hygiene.
+    ruff, pytest, package build, TypeScript build/test, and git diff hygiene.
     """
 
     root = _release_project_root(project_root)
@@ -1098,6 +1133,141 @@ def _missing_relative_paths(root: Path, relative_paths: Iterable[str]) -> list[s
         if not (root / relative_path).exists():
             missing.append(relative_path)
     return missing
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _release_typescript_sdk_consolidation_status(root: Path) -> dict[str, Any]:
+    package_root = root / "typescript" / "agent-learning-kit"
+    package_json_path = package_root / "package.json"
+    workspace_package_json_path = root / "typescript" / "package.json"
+    package_json = _read_json_file(package_json_path)
+    workspace_package_json = _read_json_file(workspace_package_json_path)
+    missing_files = _missing_relative_paths(root, V1_TYPESCRIPT_SDK_REQUIRED_FILES)
+    metadata_errors: list[dict[str, Any]] = []
+
+    if package_json.get("name") != TYPESCRIPT_PUBLIC_PACKAGE:
+        metadata_errors.append(
+            {
+                "field": "typescript/agent-learning-kit/package.json:name",
+                "expected": TYPESCRIPT_PUBLIC_PACKAGE,
+                "actual": package_json.get("name"),
+            }
+        )
+    exports = package_json.get("exports", {})
+    if not isinstance(exports, dict) or "./evals" not in exports:
+        metadata_errors.append(
+            {
+                "field": "typescript/agent-learning-kit/package.json:exports",
+                "expected": "./evals",
+                "actual": sorted(exports) if isinstance(exports, dict) else exports,
+            }
+        )
+    if not isinstance(exports, dict) or "./evals/local" not in exports:
+        metadata_errors.append(
+            {
+                "field": "typescript/agent-learning-kit/package.json:exports",
+                "expected": "./evals/local",
+                "actual": sorted(exports) if isinstance(exports, dict) else exports,
+            }
+        )
+    package_bin = package_json.get("bin", {})
+    if isinstance(package_bin, dict) and "fi" in package_bin:
+        metadata_errors.append(
+            {
+                "field": "typescript/agent-learning-kit/package.json:bin.fi",
+                "expected": "absent",
+                "actual": package_bin["fi"],
+            }
+        )
+    workspace_deps = workspace_package_json.get("dependencies", {})
+    if not isinstance(workspace_deps, dict) or (
+        workspace_deps.get(TYPESCRIPT_PUBLIC_PACKAGE) != "workspace:*"
+    ):
+        metadata_errors.append(
+            {
+                "field": "typescript/package.json:dependencies",
+                "expected": {TYPESCRIPT_PUBLIC_PACKAGE: "workspace:*"},
+                "actual": workspace_deps,
+            }
+        )
+
+    forbidden_token_findings: list[dict[str, Any]] = []
+    scan_suffixes = {".cjs", ".json", ".md", ".ts", ".yaml", ".yml"}
+    scan_roots = [root / "typescript"]
+    for scan_root in scan_roots:
+        if not scan_root.exists():
+            continue
+        for path in sorted(scan_root.rglob("*")):
+            if not path.is_file() or path.suffix not in scan_suffixes:
+                continue
+            if any(part in {"dist", "node_modules"} for part in path.parts):
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for forbidden in LEGACY_TYPESCRIPT_PACKAGES:
+                if forbidden in text:
+                    forbidden_token_findings.append(
+                        {
+                            "path": str(path.relative_to(root)),
+                            "token": forbidden,
+                        }
+                    )
+            if '"fi"' in text or "dist/src/cli/main.js" in text:
+                forbidden_token_findings.append(
+                    {
+                        "path": str(path.relative_to(root)),
+                        "token": "legacy fi TypeScript CLI",
+                    }
+                )
+
+    legacy_sibling = root.parent / "ai-evaluation" / "typescript" / "ai-evaluation"
+    legacy_sibling_errors: list[dict[str, Any]] = []
+    legacy_sibling_status: dict[str, Any]
+    if legacy_sibling.exists():
+        legacy_package_json = _read_json_file(legacy_sibling / "package.json")
+        legacy_source_files = [
+            str(path.relative_to(legacy_sibling))
+            for path in sorted((legacy_sibling / "src").rglob("*"))
+            if path.is_file()
+        ] if (legacy_sibling / "src").exists() else []
+        legacy_name = legacy_package_json.get("name")
+        legacy_sibling_status = {
+            "path": str(legacy_sibling),
+            "exists": True,
+            "package_name": legacy_name,
+            "source_file_count": len(legacy_source_files),
+            "source_files_sample": legacy_source_files[:10],
+        }
+        if legacy_name in LEGACY_TYPESCRIPT_PACKAGES and legacy_source_files:
+            legacy_sibling_errors.append(
+                {
+                    "path": str(legacy_sibling),
+                    "reason": "legacy TypeScript eval SDK still has active source files",
+                    "package_name": legacy_name,
+                    "source_file_count": len(legacy_source_files),
+                }
+            )
+    else:
+        legacy_sibling_status = {"exists": False}
+
+    return {
+        "package_root": str(package_root),
+        "package_name": package_json.get("name"),
+        "workspace_dependencies": workspace_package_json.get("dependencies", {}),
+        "required_files": list(V1_TYPESCRIPT_SDK_REQUIRED_FILES),
+        "missing_files": missing_files,
+        "metadata_errors": metadata_errors,
+        "forbidden_tokens": list(LEGACY_TYPESCRIPT_PACKAGES),
+        "forbidden_token_findings": forbidden_token_findings,
+        "legacy_sibling": legacy_sibling_status,
+        "legacy_sibling_errors": legacy_sibling_errors,
+    }
 
 
 def _release_evidence_component_status() -> dict[str, Any]:
@@ -2602,16 +2772,19 @@ def _trinity_findings(
 __all__ = [
     "ENGINE_MODULES",
     "LEGACY_PYTHON_DISTRIBUTIONS",
+    "LEGACY_TYPESCRIPT_PACKAGES",
     "PUBLIC_MODULES",
     "PUBLIC_CONSOLE_SCRIPTS",
     "REJECTED_LEGACY_CONSOLE_SCRIPTS",
     "RESEARCH_SOURCES",
+    "TYPESCRIPT_PUBLIC_PACKAGE",
     "V1_REQUIRED_CLI_COMMANDS",
     "V1_REQUIRED_DOCS",
     "V1_REQUIRED_EVIDENCE_COMPONENTS",
     "V1_REQUIRED_EXAMPLES",
     "V1_REQUIRED_SCHEMA_KINDS",
     "V1_RELEASE_PROOF_REQUIRED_CHECKS",
+    "V1_TYPESCRIPT_SDK_REQUIRED_FILES",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES",
