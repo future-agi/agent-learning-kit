@@ -2143,6 +2143,83 @@ def test_sdk_framework_adapter_trace_export_example_runs(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_sdk_framework_adapter_orchestration_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_orchestration_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_orchestration_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-orchestration-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_orchestration_trace_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["orchestration_trace"]
+    assert runtime_contract["required_tools"] == ["policy_lookup"]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_orchestration_trace"]) >= {
+        "orchestration_trace",
+        "trace",
+        "step",
+        "node",
+        "route",
+        "agent",
+        "spawn",
+        "delegate",
+        "handoff",
+        "communicate",
+        "aggregate",
+        "stop",
+        "retry",
+        "recovered",
+        "latency",
+        "cost",
+        "tool",
+        "state",
+    }
+    assert config["metric_weights"]["orchestration_trace_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["orchestration_flow_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["orchestration_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["orchestration_flow_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    trace = state["orchestration_trace"]
+    summary = trace["summary"]
+    assert summary["node_count"] == 4
+    assert summary["edge_count"] == 3
+    assert summary["step_count"] == 6
+    assert summary["spawn_count"] == 1
+    assert summary["delegation_count"] == 2
+    assert summary["communication_count"] == 2
+    assert summary["aggregation_count"] == 2
+    assert summary["stop_count"] == 1
+    assert summary["failure_count"] == 1
+    assert summary["retry_count"] == 1
+    assert summary["recovered_failures"] == 1
+    assert summary["terminal_status"] == "success"
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["policy_lookup"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "orchestration_step",
+        "orchestration_trace",
+    } <= set(output["event_types"])
+
+
 def test_sdk_framework_adapter_mcp_tool_session_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_mcp_tool_session.py"
     spec = importlib.util.spec_from_file_location(

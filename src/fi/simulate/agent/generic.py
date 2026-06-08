@@ -10,6 +10,8 @@ from fi.simulate.environment import (
     normalize_framework_trace_events,
     normalize_framework_trace_export,
     normalize_mcp_tool_session_export,
+    normalize_orchestration_trace_events,
+    normalize_orchestration_trace_export,
 )
 from fi.simulate.agent.wrapper import (
     AgentInput,
@@ -449,6 +451,7 @@ class GenericAgentWrapper(AgentWrapper):
         history_tool_calls = _message_history_tool_calls(raw)
         realtime_tool_calls = _realtime_tool_calls(raw)
         framework_trace_tool_calls = _framework_trace_tool_calls(raw)
+        orchestration_tool_calls = _orchestration_trace_tool_calls(raw)
         mcp_tool_calls = _mcp_tool_session_tool_calls(raw)
         workflow_tool_calls = _workflow_trace_tool_calls(raw)
         browser_tool_calls = _browser_cua_tool_calls(raw)
@@ -458,6 +461,7 @@ class GenericAgentWrapper(AgentWrapper):
             *history_tool_calls,
             *realtime_tool_calls,
             *framework_trace_tool_calls,
+            *orchestration_tool_calls,
             *mcp_tool_calls,
             *workflow_tool_calls,
             *browser_tool_calls,
@@ -468,12 +472,14 @@ class GenericAgentWrapper(AgentWrapper):
         history_tool_responses = _message_history_tool_responses(raw)
         realtime_tool_responses = _realtime_tool_responses(raw)
         framework_trace_tool_responses = _framework_trace_tool_responses(raw)
+        orchestration_tool_responses = _orchestration_trace_tool_responses(raw)
         mcp_tool_responses = _mcp_tool_session_tool_responses(raw)
         return [
             *(tool_responses or []),
             *history_tool_responses,
             *realtime_tool_responses,
             *framework_trace_tool_responses,
+            *orchestration_tool_responses,
             *mcp_tool_responses,
         ] or None
 
@@ -544,6 +550,9 @@ class GenericAgentWrapper(AgentWrapper):
         framework_trace_state = _framework_trace_state(raw)
         if framework_trace_state:
             state.setdefault("framework_trace", framework_trace_state)
+        orchestration_state = _orchestration_trace_state(raw)
+        if orchestration_state:
+            state.setdefault("orchestration_trace", orchestration_state)
         mcp_state = _mcp_tool_session_state(raw)
         if mcp_state:
             state.setdefault("mcp_tool_session", mcp_state)
@@ -611,6 +620,20 @@ class GenericAgentWrapper(AgentWrapper):
                     metadata={
                         "kind": "framework_trace",
                         "framework": framework_trace_state.get("framework", "generic"),
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+        orchestration_state = _orchestration_trace_state(raw)
+        if orchestration_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=orchestration_state,
+                    metadata={
+                        "kind": "orchestration_trace",
+                        "framework": orchestration_state.get("framework", "generic"),
                         "source": "generic_agent_wrapper",
                     },
                 )
@@ -726,6 +749,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_realtime_trace_events(raw))
         events.extend(_framework_lifecycle_events(raw))
         events.extend(_framework_trace_events(raw))
+        events.extend(_orchestration_trace_events(raw))
         events.extend(_mcp_tool_session_events(raw))
         events.extend(_a2a_protocol_events(raw))
         events.extend(_workflow_trace_events(raw))
@@ -3537,6 +3561,559 @@ def _a2a_task_prefer(candidate: Mapping[str, Any], existing: Mapping[str, Any]) 
     return candidate_evidence > existing_evidence
 
 
+def _orchestration_trace_state(raw: Any) -> Dict[str, Any]:
+    if not _has_orchestration_trace_shape(raw):
+        return {}
+    framework = _orchestration_trace_framework(raw)
+    metadata = _orchestration_trace_metadata(raw)
+    runtime_state = _orchestration_trace_runtime_state(raw)
+    nodes = _orchestration_trace_nodes(raw)
+    edges = _orchestration_trace_edges(raw)
+    steps = _orchestration_trace_steps(raw)
+    records = _orchestration_trace_records(raw)
+    export_count = 0
+    for trace_export in _orchestration_trace_exports(raw):
+        export_trace = normalize_orchestration_trace_export(
+            trace_export,
+            framework=framework,
+            state=runtime_state,
+            metadata=metadata,
+        )
+        export_count += 1
+        nodes.extend(_plain_list(export_trace.get("nodes")))
+        edges.extend(_plain_list(export_trace.get("edges")))
+        records.extend(_plain_list(export_trace.get("steps")))
+    if not any([nodes, edges, steps, records]):
+        return {}
+    trace = normalize_orchestration_trace_events(
+        framework,
+        records,
+        nodes=[_plain_mapping(node) for node in nodes if _plain_mapping(node)],
+        edges=[_plain_mapping(edge) for edge in edges if _plain_mapping(edge)],
+        steps=[_plain_mapping(step) for step in steps if _plain_mapping(step)],
+        state=runtime_state,
+        metadata=metadata,
+    )
+    if export_count:
+        trace.setdefault("metadata", {}).setdefault("trace_export", {})[
+            "source"
+        ] = "framework_adapter_output"
+    return trace
+
+
+def _orchestration_trace_events(raw: Any) -> List[SimulationEvent]:
+    state = _orchestration_trace_state(raw)
+    if not state:
+        return []
+    framework = str(state.get("framework") or "generic")
+    events: List[SimulationEvent] = []
+    for index, step in enumerate(_plain_list(state.get("steps")), start=1):
+        step_dict = _plain_mapping(step)
+        events.append(
+            SimulationEvent(
+                type="orchestration_step",
+                name=str(
+                    step_dict.get("name")
+                    or step_dict.get("node")
+                    or f"orchestration_step_{index}"
+                ),
+                payload={**step_dict, "sequence": index},
+                metadata={
+                    "kind": "orchestration_trace",
+                    "framework": framework,
+                    "source": "framework_adapter_output",
+                    "signals": _plain_list(step_dict.get("signals")),
+                },
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="orchestration_trace",
+            name="orchestration_trace",
+            payload=state,
+            metadata={
+                "kind": "orchestration_trace",
+                "framework": framework,
+                "source": "framework_adapter_output",
+            },
+        )
+    )
+    return events
+
+
+def _orchestration_trace_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    state = _orchestration_trace_state(raw)
+    if not state:
+        return []
+    calls: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, step in enumerate(_plain_list(state.get("steps")), start=1):
+        step_dict = _plain_mapping(step)
+        if not _orchestration_trace_step_has_tool_signal(step_dict):
+            continue
+        name = _orchestration_trace_step_tool_name(step_dict)
+        if not name:
+            continue
+        call_id = _orchestration_trace_step_call_id(step_dict, index=index)
+        signature = f"{call_id}:{name}"
+        if signature in seen:
+            continue
+        seen.add(signature)
+        arguments = _orchestration_trace_step_arguments(step_dict)
+        calls.append(
+            {
+                "id": call_id,
+                "type": "orchestration_trace_tool_call",
+                "name": name,
+                "arguments": arguments,
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+    return calls
+
+
+def _orchestration_trace_tool_responses(raw: Any) -> List[Dict[str, Any]]:
+    state = _orchestration_trace_state(raw)
+    if not state:
+        return []
+    responses: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, step in enumerate(_plain_list(state.get("steps")), start=1):
+        step_dict = _plain_mapping(step)
+        if not _orchestration_trace_step_has_tool_signal(step_dict):
+            continue
+        output = _orchestration_trace_step_output(step_dict)
+        error = step_dict.get("error")
+        if output in (None, "", [], {}) and not error:
+            continue
+        name = _orchestration_trace_step_tool_name(step_dict)
+        if not name:
+            continue
+        call_id = _orchestration_trace_step_call_id(step_dict, index=index)
+        signature = f"{call_id}:{name}:{bool(error)}"
+        if signature in seen:
+            continue
+        seen.add(signature)
+        responses.append(
+            {
+                "id": f"{call_id}_response",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": _plain_value(error if error else output),
+                "success": not bool(error),
+                "result": _plain_value(output),
+                "error": _plain_value(error),
+            }
+        )
+    return responses
+
+
+def _has_orchestration_trace_shape(raw: Any) -> bool:
+    if raw in (None, "", [], {}):
+        return False
+    if isinstance(raw, (list, tuple)):
+        return any(_looks_like_orchestration_trace_record(item) for item in raw)
+    raw_mapping = _object_mapping(raw)
+    explicit_names = (
+        "orchestration_trace",
+        "orchestration_trace_export",
+        "orchestration_export",
+        "orchestration_records",
+        "orchestration_events",
+        "orchestration_steps",
+        "orchestration_nodes",
+        "orchestration_edges",
+        "orchestration_state",
+        "agent_orchestration_trace",
+        "agent_graph_trace",
+        "agent_graph_trace_export",
+        "coordination_trace",
+        "coordination_events",
+        "multi_agent_orchestration",
+        "handoff_trace",
+        "delegation_trace",
+        "supervisor_trace",
+    )
+    if raw_mapping is None:
+        return any(
+            hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+            for name in explicit_names
+        )
+    if any(raw_mapping.get(name) not in (None, "", [], {}) for name in explicit_names):
+        return True
+    if _looks_like_orchestration_trace_record(raw_mapping):
+        return True
+    if not _orchestration_trace_has_marker(raw_mapping):
+        return False
+    if raw_mapping.get("trace_export") not in (None, "", [], {}):
+        return True
+    return any(
+        raw_mapping.get(name) not in (None, "", [], {})
+        for name in ("nodes", "edges", "steps", "records", "events", "items", "results")
+    )
+
+
+def _orchestration_trace_exports(raw: Any) -> List[Any]:
+    exports: List[Any] = []
+    for name in (
+        "orchestration_trace_export",
+        "orchestration_export",
+        "agent_graph_trace_export",
+        "coordination_trace_export",
+    ):
+        value = _plain_value(_orchestration_trace_field(raw, name))
+        if value not in (None, "", [], {}):
+            exports.append(value)
+    explicit = _orchestration_trace_explicit_payload(raw)
+    for name in ("trace_export", "export"):
+        value = _plain_value(explicit.get(name))
+        if value not in (None, "", [], {}):
+            exports.append(value)
+    raw_mapping = _object_mapping(raw)
+    if (
+        raw_mapping
+        and _orchestration_trace_has_marker(raw_mapping)
+        and raw_mapping.get("trace_export") not in (None, "", [], {})
+    ):
+        exports.append(raw_mapping["trace_export"])
+    return _dedupe_framework_trace_values(exports)
+
+
+def _orchestration_trace_records(raw: Any) -> List[Any]:
+    if isinstance(raw, (list, tuple)):
+        return [_plain_value(item) for item in raw if _plain_value(item) not in (None, "", [], {})]
+    records: List[Any] = []
+    explicit = _orchestration_trace_explicit_payload(raw)
+    for key in ("records", "events", "items", "results", "spans"):
+        records.extend(_plain_list(explicit.get(key)))
+    for name in (
+        "orchestration_records",
+        "orchestration_events",
+        "orchestration_spans",
+        "coordination_events",
+        "agent_events",
+        "agent_trace_events",
+        "handoff_events",
+        "delegation_events",
+        "supervisor_events",
+    ):
+        records.extend(_plain_list(_orchestration_trace_field(raw, name)))
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _orchestration_trace_has_marker(raw_mapping):
+        for key in ("records", "events", "items", "results", "spans"):
+            records.extend(_plain_list(raw_mapping.get(key)))
+    if raw_mapping and _looks_like_orchestration_trace_record(raw_mapping):
+        records.append(raw_mapping)
+    return [
+        _plain_value(record)
+        for record in records
+        if _plain_value(record) not in (None, "", [], {})
+    ]
+
+
+def _orchestration_trace_nodes(raw: Any) -> List[Any]:
+    explicit = _orchestration_trace_explicit_payload(raw)
+    values: List[Any] = []
+    for name in ("orchestration_nodes", "agent_nodes", "agent_graph_nodes"):
+        values.extend(_plain_list(_orchestration_trace_field(raw, name)))
+    for key in ("nodes", "agents"):
+        values.extend(_plain_list(explicit.get(key)))
+    return [
+        _plain_value(value)
+        for value in values
+        if _plain_mapping(value) or str(value)
+    ]
+
+
+def _orchestration_trace_edges(raw: Any) -> List[Any]:
+    explicit = _orchestration_trace_explicit_payload(raw)
+    values: List[Any] = []
+    for name in ("orchestration_edges", "agent_edges", "agent_graph_edges"):
+        values.extend(_plain_list(_orchestration_trace_field(raw, name)))
+    for key in ("edges", "routes", "handoffs", "delegations"):
+        values.extend(_plain_list(explicit.get(key)))
+    return [_plain_value(value) for value in values if _plain_mapping(value)]
+
+
+def _orchestration_trace_steps(raw: Any) -> List[Any]:
+    explicit = _orchestration_trace_explicit_payload(raw)
+    values: List[Any] = []
+    for name in (
+        "orchestration_steps",
+        "agent_steps",
+        "task_steps",
+        "coordination_steps",
+        "handoff_steps",
+        "delegation_steps",
+        "supervisor_steps",
+    ):
+        values.extend(_plain_list(_orchestration_trace_field(raw, name)))
+    for key in ("steps", "orchestration_steps", "agent_steps"):
+        values.extend(_plain_list(explicit.get(key)))
+    return [
+        _orchestration_trace_clean_step(value)
+        for value in values
+        if _plain_mapping(value)
+    ]
+
+
+def _orchestration_trace_explicit_payload(raw: Any) -> Dict[str, Any]:
+    for name in (
+        "orchestration_trace",
+        "agent_orchestration_trace",
+        "agent_graph_trace",
+        "coordination_trace",
+        "multi_agent_orchestration",
+        "handoff_trace",
+        "delegation_trace",
+        "supervisor_trace",
+    ):
+        value = _plain_mapping(_orchestration_trace_field(raw, name))
+        if value:
+            return value
+    return {}
+
+
+def _orchestration_trace_framework(raw: Any) -> str:
+    explicit = _orchestration_trace_explicit_payload(raw)
+    metadata = _plain_mapping(_orchestration_trace_field(raw, "metadata"))
+    value = (
+        _orchestration_trace_field(raw, "framework")
+        or _orchestration_trace_field(raw, "orchestration_framework")
+        or _orchestration_trace_field(raw, "trace_framework")
+        or explicit.get("framework")
+        or explicit.get("trace_provider")
+        or metadata.get("framework")
+        or metadata.get("trace_provider")
+        or "generic"
+    )
+    return str(value or "generic")
+
+
+def _orchestration_trace_metadata(raw: Any) -> Dict[str, Any]:
+    explicit = _orchestration_trace_explicit_payload(raw)
+    metadata = {
+        **_plain_mapping(explicit.get("metadata")),
+        **_plain_mapping(_orchestration_trace_field(raw, "trace_metadata")),
+        **_plain_mapping(_orchestration_trace_field(raw, "orchestration_metadata")),
+        **_plain_mapping(_orchestration_trace_field(raw, "metadata")),
+    }
+    if _orchestration_trace_exports(raw):
+        metadata.setdefault("trace_export", {})["source"] = "framework_adapter_output"
+    return metadata
+
+
+def _orchestration_trace_runtime_state(raw: Any) -> Dict[str, Any]:
+    explicit = _orchestration_trace_explicit_payload(raw)
+    return (
+        _plain_mapping(_orchestration_trace_field(raw, "orchestration_state"))
+        or _plain_mapping(_orchestration_trace_field(raw, "agent_state"))
+        or _plain_mapping(_orchestration_trace_field(raw, "coordination_state"))
+        or _plain_mapping(_orchestration_trace_field(raw, "final_state"))
+        or _plain_mapping(explicit.get("state"))
+        or _plain_mapping(explicit.get("final_state"))
+    )
+
+
+def _orchestration_trace_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
+
+
+def _orchestration_trace_has_marker(value: Mapping[str, Any]) -> bool:
+    markers = {
+        "orchestration",
+        "orchestration_trace",
+        "agent_orchestration",
+        "agent_graph",
+        "multi_agent",
+        "supervisor",
+        "coordination",
+        "handoff",
+        "delegation",
+        "delegate",
+    }
+    for key in ("kind", "type", "protocol", "trace_provider", "provider", "telemetry"):
+        marker = _orchestration_trace_key(value.get(key))
+        if marker in markers:
+            return True
+    metadata = _plain_mapping(value.get("metadata"))
+    return bool(metadata) and _orchestration_trace_has_marker(metadata)
+
+
+def _looks_like_orchestration_trace_record(value: Any) -> bool:
+    record = _plain_mapping(value)
+    if not record:
+        return False
+    if any(
+        record.get(key) not in (None, "", [], {})
+        for key in (
+            "route_from",
+            "route_to",
+            "handoff_to",
+            "handoff_from",
+            "delegate_to",
+            "delegate_from",
+        )
+    ):
+        return True
+    signals = {_orchestration_trace_key(item) for item in _plain_list(record.get("signals"))}
+    if signals & {"spawn", "delegate", "handoff", "communicate", "aggregate", "stop"}:
+        return True
+    text = " ".join(
+        str(record.get(key) or "")
+        for key in ("kind", "type", "event", "method", "name", "operation")
+    )
+    if any(
+        token in text.lower()
+        for token in (
+            "orchestration",
+            "supervisor",
+            "multi_agent",
+            "agent_graph",
+            "handoff",
+            "delegate",
+            "spawn",
+            "aggregate",
+            "consensus",
+        )
+    ):
+        return True
+    return _orchestration_trace_has_marker(record) and any(
+        record.get(key) not in (None, "", [], {})
+        for key in ("node", "agent", "name", "status", "input", "output", "attributes")
+    )
+
+
+def _orchestration_trace_step_has_tool_signal(step: Mapping[str, Any]) -> bool:
+    signals = {_orchestration_trace_key(signal) for signal in _plain_list(step.get("signals"))}
+    if "tool" in signals or _orchestration_trace_key(step.get("type")) == "tool":
+        return True
+    attributes = _plain_mapping(step.get("attributes"))
+    return any(
+        source.get(key) not in (None, "", [], {})
+        for source in (step, attributes)
+        for key in (
+            "tool",
+            "gen_ai.tool.name",
+            "mcp.tool.name",
+            "tool.name",
+        )
+    )
+
+
+def _orchestration_trace_clean_step(value: Any) -> Dict[str, Any]:
+    step = _plain_mapping(value)
+    for key in (
+        "error",
+        "recovered",
+        "recoverable",
+        "route_from",
+        "route_to",
+        "tool_name",
+        "tool_call_id",
+    ):
+        if step.get(key) in (None, "", [], {}, False):
+            step.pop(key, None)
+    step.pop("recoverable", None)
+    return step
+
+
+def _orchestration_trace_step_tool_name(step: Mapping[str, Any]) -> str:
+    attributes = _plain_mapping(step.get("attributes"))
+    for source in (step, attributes):
+        for key in (
+            "tool_name",
+            "tool",
+            "gen_ai.tool.name",
+            "mcp.tool.name",
+            "tool.name",
+        ):
+            value = source.get(key)
+            if value not in (None, "", [], {}):
+                parsed = _orchestration_trace_tool_name_from_text(str(value))
+                return parsed or str(value)
+    return _orchestration_trace_tool_name_from_text(
+        str(step.get("name") or step.get("type") or "")
+    )
+
+
+def _orchestration_trace_step_call_id(step: Mapping[str, Any], *, index: int) -> str:
+    attributes = _plain_mapping(step.get("attributes"))
+    return str(
+        step.get("tool_call_id")
+        or step.get("call_id")
+        or attributes.get("tool_call_id")
+        or attributes.get("mcp.tool.call_id")
+        or step.get("id")
+        or f"orchestration_tool_{index}"
+    )
+
+
+def _orchestration_trace_step_arguments(step: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(step.get("attributes"))
+    return _plain_value(
+        step.get("arguments")
+        if "arguments" in step
+        else step.get(
+            "input",
+            attributes.get(
+                "arguments",
+                attributes.get("gen_ai.tool.arguments", attributes.get("mcp.tool.arguments", {})),
+            ),
+        )
+    )
+
+
+def _orchestration_trace_step_output(step: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(step.get("attributes"))
+    return _plain_value(
+        step.get("result")
+        if "result" in step
+        else step.get(
+            "output",
+            attributes.get(
+                "result",
+                attributes.get("gen_ai.tool.result", attributes.get("mcp.tool.result")),
+            ),
+        )
+    )
+
+
+def _orchestration_trace_tool_name_from_text(value: str) -> str:
+    lowered = value.lower()
+    for prefix in ("tool result ", "tool error ", "tool call ", "function call "):
+        if lowered.startswith(prefix):
+            return value[len(prefix):].strip(" :")
+    return ""
+
+
+def _orchestration_trace_key(value: Any) -> str:
+    aliases = {
+        "delegation": "delegate",
+        "delegated": "delegate",
+        "transfer": "handoff",
+        "message": "communicate",
+        "communication": "communicate",
+        "consensus": "aggregate",
+        "vote": "aggregate",
+        "finish": "stop",
+        "terminate": "stop",
+        "function": "tool",
+        "function_call": "tool",
+        "tool_call": "tool",
+        "duration": "latency",
+        "duration_ms": "latency",
+        "tokens": "cost",
+        "usage": "cost",
+        "recover": "recovered",
+    }
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    return aliases.get(normalized, normalized)
+
+
 def _workflow_trace_state(raw: Any) -> Dict[str, Any]:
     if not _has_workflow_trace_shape(raw):
         return {}
@@ -3794,7 +4371,6 @@ def _has_workflow_trace_shape(raw: Any) -> bool:
     names = (
         "workflow_trace",
         "graph_trace",
-        "orchestration_trace",
         "workflow_steps",
         "workflow_events",
         "workflow_nodes",
@@ -3822,7 +4398,7 @@ def _has_workflow_trace_shape(raw: Any) -> bool:
 
 
 def _workflow_explicit_trace(raw: Any) -> Dict[str, Any]:
-    for name in ("workflow_trace", "graph_trace", "orchestration_trace"):
+    for name in ("workflow_trace", "graph_trace"):
         trace = _plain_mapping(_workflow_trace_field(raw, name))
         if trace:
             return trace

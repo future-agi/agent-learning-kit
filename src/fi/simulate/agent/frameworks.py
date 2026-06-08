@@ -1575,6 +1575,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "framework_trace_summary": _probe_framework_trace_summary(
             state.get("framework_trace")
         ),
+        "orchestration_trace_summary": _probe_orchestration_trace_summary(
+            state.get("orchestration_trace")
+        ),
         "mcp_tool_session_summary": _probe_mcp_tool_session_summary(
             state.get("mcp_tool_session")
         ),
@@ -1604,6 +1607,30 @@ def _probe_framework_trace_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
     summary = trace.get("summary")
     return dict(summary) if isinstance(summary, Mapping) else {}
+
+
+def _probe_orchestration_trace_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    summary = dict(trace.get("summary") or {}) if isinstance(trace.get("summary"), Mapping) else {}
+    if trace.get("signals"):
+        summary["signals"] = sorted(str(signal) for signal in trace.get("signals", []) if str(signal))
+    if trace.get("nodes"):
+        summary["node_names"] = sorted(
+            {
+                str(dict(node).get("name") or dict(node).get("id") or "")
+                for node in trace.get("nodes", [])
+                if isinstance(node, Mapping)
+                and (dict(node).get("name") or dict(node).get("id"))
+            }
+        )
+    for key, trace_key in (
+        ("node_count", "nodes"),
+        ("edge_count", "edges"),
+        ("step_count", "steps"),
+    ):
+        if key not in summary and isinstance(trace.get(trace_key), list):
+            summary[key] = len(trace.get(trace_key, []))
+    return summary
 
 
 def _probe_mcp_tool_session_summary(value: Any) -> dict[str, Any]:

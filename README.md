@@ -719,6 +719,13 @@ CrewAI Flow-style routes/state, and LlamaIndex workflow step/event traces become
 ordinary tool calls from step-level tool evidence. See
 `examples/sdk_framework_adapter_workflow_trace.py`.
 
+Orchestration framework exports normalize multi-agent control semantics.
+Supervisor/delegate/handoff traces, CrewAI-style routed coordination records,
+and agent graph communication/aggregation/stop decisions become
+`orchestration_trace` state, trace artifacts, `orchestration_*` events,
+ordinary tool evidence, and generated orchestration coverage/quality gates. See
+`examples/sdk_framework_adapter_orchestration_trace.py`.
+
 Framework lifecycle exports normalize reliability and recovery semantics.
 LiveKit/Pipecat/LangGraph-style setup, tool registration, sessions, invocation
 errors, retries, streaming, checkpoints, cancellation, resume, and cleanup become
@@ -1355,6 +1362,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_browser_cua_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_workflow_trace.py \
   artifacts/sdk-framework-adapter-workflow-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_orchestration_trace.py \
+  artifacts/sdk-framework-adapter-orchestration-trace.json
 
 PYTHONPATH=src python examples/sdk_framework_adapter_lifecycle_trace.py \
   artifacts/sdk-framework-adapter-lifecycle-trace.json

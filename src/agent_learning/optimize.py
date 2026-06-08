@@ -15804,6 +15804,22 @@ def build_framework_adapter_probe_evaluation_config(
         if framework_trace_observed
         else []
     )
+    orchestration_trace_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "orchestration_trace_summary",
+    )
+    orchestration_trace_observed = (
+        "orchestration_trace" in state_keys
+        or bool(orchestration_trace_summary)
+    )
+    orchestration_requirements = (
+        _framework_probe_orchestration_requirements(
+            framework,
+            orchestration_trace_summary,
+        )
+        if orchestration_trace_observed
+        else {}
+    )
     lifecycle_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_lifecycle_summary",
@@ -15825,6 +15841,7 @@ def build_framework_adapter_probe_evaluation_config(
             "metadata",
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
+            *(["orchestration"] if orchestration_trace_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -15838,6 +15855,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["typed state evidence"] if runtime_state_keys else []),
             *(["streaming trace evidence"] if streaming_observed else []),
             *(["framework trace evidence"] if framework_trace_observed else []),
+            *(["orchestration trace evidence"] if orchestration_trace_observed else []),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
             *(["artifact evidence"] if artifact_types else []),
@@ -15920,6 +15938,9 @@ def build_framework_adapter_probe_evaluation_config(
         metric_weights["streaming_trace_coverage"] = 4.0
     if framework_trace_observed:
         metric_weights["framework_trace_coverage"] = 4.0
+    if orchestration_trace_observed:
+        metric_weights["orchestration_trace_coverage"] = 4.0
+        metric_weights["orchestration_flow_quality"] = 4.0
     if lifecycle_observed:
         metric_weights["framework_lifecycle_coverage"] = 4.0
         metric_weights["framework_lifecycle_quality"] = 4.0
@@ -15945,6 +15966,7 @@ def build_framework_adapter_probe_evaluation_config(
             "metadata",
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
+            *(["orchestration"] if orchestration_trace_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -15957,6 +15979,13 @@ def build_framework_adapter_probe_evaluation_config(
         config["required_streaming_trace"] = streaming_trace_signals
     if framework_trace_observed:
         config["required_framework_trace"] = required_framework_trace
+    if orchestration_trace_observed:
+        config["required_orchestration_trace"] = orchestration_requirements[
+            "required_orchestration_trace"
+        ]
+        config["orchestration_trace_quality"] = orchestration_requirements[
+            "orchestration_trace_quality"
+        ]
     if lifecycle_observed:
         config["required_framework_lifecycle"] = lifecycle_requirements[
             "required_framework_lifecycle"
@@ -16077,6 +16106,79 @@ def _framework_probe_trace_requirements(
     if framework:
         requirements.append("framework")
     return _unique_strings(str(item) for item in requirements if str(item))
+
+
+def _framework_probe_orchestration_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required_trace = ["orchestration_trace", "trace", "step"]
+    required_trace.extend(_plain_list(summary.get("signals")))
+    signal_checks = (
+        ("node_count", "node"),
+        ("edge_count", "route"),
+        ("agent_count", "agent"),
+        ("spawn_count", "spawn"),
+        ("delegation_count", "delegate"),
+        ("communication_count", "communicate"),
+        ("aggregation_count", "aggregate"),
+        ("stop_count", "stop"),
+        ("retry_count", "retry"),
+        ("recovered_failures", "recovered"),
+        ("failure_count", "error"),
+        ("total_latency_ms", "latency"),
+        ("total_cost", "cost"),
+    )
+    for summary_key, signal in signal_checks:
+        value = summary.get(summary_key)
+        if summary_key in {"total_latency_ms", "total_cost"}:
+            observed = value not in (None, "", [], {})
+        else:
+            observed = _as_int(value) > 0
+        if observed:
+            required_trace.append(signal)
+    if "state" in set(_plain_list(summary.get("signals"))):
+        required_trace.append("state")
+    if "tool" in set(_plain_list(summary.get("signals"))):
+        required_trace.append("tool")
+    if framework:
+        required_trace.append("framework")
+
+    quality: dict[str, Any] = {"framework": framework}
+    node_names = _unique_strings(summary.get("node_names"))
+    if node_names:
+        quality["required_nodes"] = node_names
+    for summary_key, quality_key in (
+        ("agent_count", "min_agent_count"),
+        ("spawn_count", "min_spawn_count"),
+        ("delegation_count", "min_delegation_count"),
+        ("communication_count", "min_communication_count"),
+        ("aggregation_count", "min_aggregation_count"),
+        ("stop_count", "min_stop_count"),
+        ("retry_count", "min_retry_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    if _as_int(summary.get("aggregation_count")) > 0:
+        quality["require_aggregation"] = True
+    if _as_int(summary.get("stop_count")) > 0:
+        quality["require_stop_decision"] = True
+    if _as_int(summary.get("recovered_failures")) > 0:
+        quality["require_recovered_errors"] = True
+    failure_count = _as_int(summary.get("failure_count"))
+    if failure_count >= 0:
+        quality["max_error_count"] = failure_count
+    terminal_status = str(summary.get("terminal_status") or "")
+    if terminal_status:
+        quality["terminal_status"] = terminal_status
+    return {
+        "required_orchestration_trace": _unique_strings(
+            str(item) for item in required_trace if str(item)
+        ),
+        "orchestration_trace_quality": quality,
+    }
 
 
 def _framework_probe_output_artifact_types(
