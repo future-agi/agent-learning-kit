@@ -30,15 +30,18 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "SimulationEvent",
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
+    "browser_cua_contract",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
     "memory_layer_contract",
     "multi_agent_room_contract",
+    "probe_browser_cua",
     "probe_framework_adapter",
     "probe_memory_layer",
     "probe_multi_agent_room",
     "probe_realtime_stack",
     "realtime_stack_contract",
+    "run_browser_cua_probe",
     "run_framework_adapter_probe",
     "run_memory_layer_probe",
     "run_multi_agent_room_probe",
@@ -246,6 +249,7 @@ _SIMULATE_EXPORTS.update(
 _SIMULATE_SUBMODULE_ALIASES = {
     "agent": "fi.simulate.agent",
     "agent.definition": "fi.simulate.agent.definition",
+    "agent.browser": "fi.simulate.agent.browser",
     "agent.frameworks": "fi.simulate.agent.frameworks",
     "agent.generic": "fi.simulate.agent.generic",
     "agent.import_probe": "fi.simulate.agent.import_probe",
@@ -4842,6 +4846,14 @@ def run_realtime_stack_probe(*args: Any, **kwargs: Any) -> Any:
     return _simulate().run_realtime_stack_probe(*args, **kwargs)
 
 
+def probe_browser_cua(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().probe_browser_cua(*args, **kwargs)
+
+
+def run_browser_cua_probe(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().run_browser_cua_probe(*args, **kwargs)
+
+
 def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract(*args, **kwargs)
 
@@ -4856,6 +4868,10 @@ def memory_layer_contract(*args: Any, **kwargs: Any) -> Any:
 
 def multi_agent_room_contract(*args: Any, **kwargs: Any) -> Any:
     return _simulate().multi_agent_room_contract(*args, **kwargs)
+
+
+def browser_cua_contract(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().browser_cua_contract(*args, **kwargs)
 
 
 def realtime_stack_contract(*args: Any, **kwargs: Any) -> Any:

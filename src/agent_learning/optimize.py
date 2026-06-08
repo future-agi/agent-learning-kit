@@ -26,6 +26,9 @@ AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
 AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND = (
     "agent-learning.optimization.framework-adapter-matrix-proof.v1"
 )
+AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.browser-cua-probe-proof.v1"
+)
 AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND = (
     "agent-learning.optimization.framework-adapter-probe-proof.v1"
 )
@@ -11218,6 +11221,683 @@ def optimize_browser_cua(
         name=result_name,
         dry_run=dry_run,
     )
+
+
+def optimize_browser_cua_probe(
+    *,
+    name: str,
+    browser_candidates: Optional[Sequence[Any]] = None,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    target: str | None = None,
+    expected_url: str = "https://shop.example.test/confirmation",
+    expected_state: Optional[Mapping[str, Any]] = None,
+    expected_order_id: str = "ord_123",
+    allowed_domains: Sequence[str] = ("shop.example.test",),
+    url: str = "https://shop.example.test/checkout",
+    confirmation_url: str = "https://shop.example.test/confirmation",
+    order_id: str = "ord_123",
+    expected_selector: str = "button[data-testid='place-order-safe']",
+    threshold: float = 0.9,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize local browser/CUA replay candidates with direct probes."""
+
+    if not name:
+        raise ValueError("name is required")
+    domain_values = _unique_strings(allowed_domains) or [_browser_domain(url)]
+    candidate_sources = (
+        list(browser_candidates)
+        if browser_candidates is not None
+        else [
+            _seed_browser_cua_candidate(url=url, allowed_domains=domain_values),
+            _hardened_browser_cua_candidate(
+                url=url,
+                confirmation_url=confirmation_url,
+                order_id=order_id,
+                allowed_domains=domain_values,
+            ),
+        ]
+    )
+    if not candidate_sources:
+        raise ValueError("browser_candidates must contain at least one candidate")
+    browser_configs = [
+        _browser_probe_candidate_config(
+            candidate,
+            target=target,
+            allow_external_target=allow_external_target,
+            allowed_domains=domain_values,
+        )
+        for candidate in candidate_sources
+    ]
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else [_default_browser_cua_agent()]
+    )
+    expected_state_map = (
+        copy.deepcopy(dict(expected_state))
+        if expected_state is not None
+        else {"checkout_complete": True, "order_id": expected_order_id or order_id}
+    )
+    pair_candidates = [
+        {
+            "agent": copy.deepcopy(dict(agent)),
+            **copy.deepcopy(dict(browser_config)),
+        }
+        for agent in agents
+        for browser_config in browser_configs
+    ]
+    opt = _opt()
+    optimizer_module = optional_module("fi.opt.optimizers", _OPTIMIZE_EXTRA)
+    optimization_target = opt.OptimizationTarget(
+        name=name,
+        layers=["browser", "cua", "security", "harness", "evaluator"],
+        base_config=copy.deepcopy(pair_candidates[0]),
+        search_space={"browser_cua": copy.deepcopy(pair_candidates)},
+        metadata={
+            "source": "agent_learning.optimize.optimize_browser_cua_probe",
+            "task_kind": "browser_cua_probe",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+    def evaluate_candidate(candidate: Any) -> Any:
+        config = _plain_mapping(candidate.config)
+        pair = _plain_mapping(config.get("browser_cua")) or config
+        probe_result = _run_browser_cua_probe_candidate(
+            agent=_plain_mapping(pair.get("agent")),
+            browser=pair.get("browser"),
+            target=str(pair.get("target") or target or ""),
+            expected_url=str(pair.get("expected_url") or expected_url or ""),
+            expected_state=_plain_mapping(
+                pair.get("expected_state") or expected_state_map
+            ),
+            expected_order_id=str(
+                pair.get("expected_order_id") or expected_order_id or order_id or ""
+            ),
+            expected_selector=str(pair.get("expected_selector") or expected_selector),
+            allowed_domains=domain_values,
+            metadata=metadata,
+            default_allow_external_target=allow_external_target,
+            allow_external_target=bool(
+                pair.get("allow_external_target", allow_external_target)
+            ),
+        )
+        scoring = score_browser_cua_probe_result(probe_result)
+        return opt.CandidateEvaluation(
+            candidate=candidate,
+            score=float(scoring["score"]),
+            reason=str(scoring["reason"]),
+            report=copy.deepcopy(probe_result),
+            metadata={
+                "candidate_patch": copy.deepcopy(candidate.patch),
+                "patch": copy.deepcopy(candidate.patch),
+                "search_paths": list(candidate.metadata.get("search_paths", [])),
+                "metrics": copy.deepcopy(scoring["metrics"]),
+                "findings": copy.deepcopy(probe_result.get("findings", [])),
+                "report_summary": copy.deepcopy(probe_result.get("summary", {})),
+                "evaluation_score": float(scoring["score"]),
+                "evaluation_passed": bool(scoring["passed"]),
+            },
+        )
+
+    optimizer = optimizer_module.AgentOptimizer(
+        target=optimization_target,
+        evaluate_candidate=evaluate_candidate,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        auto_diagnose=False,
+    )
+    optimization_result = optimizer.optimize()
+    payload = _browser_cua_probe_optimization_payload(
+        name=name,
+        threshold=threshold,
+        optimization_result=optimization_result,
+        metadata=metadata,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_browser_cua_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def build_browser_cua_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    evaluation_config: Mapping[str, Any],
+    name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    metadata: Optional[Mapping[str, Any]] = None,
+    min_turns: int = 4,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+) -> dict[str, Any]:
+    """Promote a verified browser/CUA probe optimization into a run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    pair = _plain_mapping(best_config.get("browser_cua")) or best_config
+    browser = pair.get("browser")
+    if not browser:
+        raise ValueError("selected browser/CUA candidate is required")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    proof = _plain_mapping(
+        payload.get("browser_cua_probe_proof")
+        or optimization.get("browser_cua_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND:
+        raise ValueError("browser_cua_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("browser_cua_probe_proof must be passed")
+
+    from . import simulate as _agent_simulate
+
+    agent = _plain_mapping(pair.get("agent")) or _default_browser_cua_agent()
+    inferred_turns = _max_agent_response_count([agent], min_turns)
+    manifest_name = str(name or f"{payload.get('name') or 'browser-cua-probe'}-run")
+    merged_metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_browser_cua_run_manifest_from_probe_optimization"
+        ),
+        "promoted_from_browser_cua_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+            or proof.get("selected_candidate_id")
+        ),
+        "browser_cua_probe_proof": copy.deepcopy(proof),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    manifest = _agent_simulate.build_task_run_manifest(
+        name=manifest_name,
+        agent=agent,
+        scenario=scenario or _default_browser_cua_scenario(manifest_name),
+        environments=_browser_probe_manifest_environments(browser),
+        required_env=required_env,
+        evaluation_config=evaluation_config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns if max_turns is not None else inferred_turns,
+        auto_execute_tools=auto_execute_tools,
+        modality="cua",
+        metadata=merged_metadata,
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_browser_cua_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": merged_metadata["probe_selected_candidate_id"],
+        "browser_cua_probe_proof_status": proof.get("status"),
+    }
+    return manifest
+
+
+def score_browser_cua_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Score a browser/CUA probe artifact into local optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    case_count = max(_as_int(summary.get("case_count")), 1)
+    case_pass_rate = _as_int(summary.get("passed_case_count")) / case_count
+    local_contract_quality = 1.0 if (
+        summary.get("local_executable_fixture") is True
+        and summary.get("requires_external_service") is False
+    ) else 0.0
+    trace_quality = 1.0 if (
+        _as_int(summary.get("snapshot_count")) > 0
+        and summary.get("current_snapshot_has_dom") is True
+        and summary.get("current_snapshot_has_screenshot") is True
+        and summary.get("refreshed_snapshot") is True
+        and _as_int(summary.get("region_count")) > 0
+        and _as_int(summary.get("prompt_injection_surface_count")) > 0
+    ) else 0.0
+    action_quality = 1.0 if (
+        _as_int(summary.get("action_replay_count")) > 0
+        and _as_int(summary.get("successful_action_count")) > 0
+        and _as_int(summary.get("matched_action_count")) > 0
+        and _as_int(summary.get("selector_match_count")) > 0
+        and _as_int(summary.get("blocked_action_count")) == 0
+        and _as_int(summary.get("failed_action_count")) == 0
+        and _as_int(summary.get("prompt_injection_touched_count")) == 0
+    ) else 0.0
+    mutation_grounding_quality = 1.0 if (
+        _as_int(summary.get("mutation_count")) > 0
+        and _as_int(summary.get("screenshot_diff_count")) > 0
+        and summary.get("layout_shift_present") is True
+        and summary.get("storage_present") is True
+        and _as_int(summary.get("runtime_event_count")) > 0
+        and _as_int(summary.get("performance_entry_count")) > 0
+        and _as_int(summary.get("network_request_count")) > 0
+    ) else 0.0
+    state_quality = 1.0 if (
+        summary.get("url_match") is True
+        and summary.get("final_state_match") is True
+        and summary.get("order_id_match") is True
+    ) else 0.0
+    required_tools = set(_plain_list(summary.get("required_tools")))
+    successful_tools = set(_plain_list(summary.get("successful_tool_names")))
+    tool_evidence = 1.0 if required_tools and required_tools.issubset(successful_tools) else 0.0
+    score = round(
+        (
+            case_pass_rate * 0.15
+            + local_contract_quality * 0.05
+            + trace_quality * 0.15
+            + action_quality * 0.2
+            + mutation_grounding_quality * 0.2
+            + state_quality * 0.1
+            + tool_evidence * 0.1
+            + (1.0 if not _plain_list(result.get("findings")) else 0.0) * 0.05
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.browser-cua-probe-score.v1",
+        "score": score,
+        "passed": bool(result.get("passed")) and score >= 0.9,
+        "reason": (
+            "browser/CUA probe passed with trace, action, mutation, and state evidence"
+            if bool(result.get("passed")) and score >= 0.9
+            else "browser/CUA probe did not close trace/action/mutation evidence"
+        ),
+        "metrics": {
+            "browser_cua_probe_pass_rate": round(case_pass_rate, 6),
+            "browser_cua_probe_local_contract_quality": local_contract_quality,
+            "browser_cua_probe_trace_quality": trace_quality,
+            "browser_cua_probe_action_quality": action_quality,
+            "browser_cua_probe_mutation_grounding_quality": mutation_grounding_quality,
+            "browser_cua_probe_state_quality": state_quality,
+            "browser_cua_probe_tool_evidence": tool_evidence,
+            "browser_cua_probe_score": score,
+        },
+        "summary": copy.deepcopy(dict(summary)),
+    }
+
+
+def _browser_probe_candidate_config(
+    candidate: Any,
+    *,
+    target: str | None,
+    allow_external_target: bool,
+    allowed_domains: Sequence[str],
+) -> dict[str, Any]:
+    environments = _browser_probe_manifest_environments(
+        candidate,
+        allowed_domains=allowed_domains,
+    )
+    return {
+        "browser": environments,
+        "target": target,
+        "allow_external_target": allow_external_target,
+    }
+
+
+def _browser_probe_manifest_environments(
+    browser: Any,
+    *,
+    allowed_domains: Sequence[str] = ("shop.example.test",),
+) -> list[dict[str, Any]]:
+    if isinstance(browser, Mapping):
+        source = copy.deepcopy(dict(browser))
+        if source.get("environments") is not None:
+            return [
+                _browser_cua_environment(item)
+                for item in _plain_list(source.get("environments"))
+            ]
+        if source.get("type") in {"browser", "browser_cua", "cua", "computer_use"}:
+            env = _browser_cua_environment(source)
+            data = _plain_mapping(env.get("data"))
+            if data and not _unique_strings(data.get("allowed_domains")):
+                data["allowed_domains"] = _unique_strings(allowed_domains)
+                env["data"] = data
+            return [env]
+        if source.get("browser") is not None and isinstance(
+            source.get("browser"),
+            (list, tuple),
+        ):
+            return [
+                _browser_cua_environment(item)
+                for item in _plain_list(source.get("browser"))
+            ]
+        return [_browser_cua_environment(source)]
+    return [_browser_cua_environment(item) for item in _plain_list(browser)]
+
+
+def _run_browser_cua_probe_candidate(
+    *,
+    agent: Mapping[str, Any],
+    browser: Any,
+    target: str | None,
+    expected_url: str | None,
+    expected_state: Mapping[str, Any],
+    expected_order_id: str | None,
+    expected_selector: str,
+    allowed_domains: Sequence[str],
+    metadata: Optional[Mapping[str, Any]],
+    default_allow_external_target: bool,
+    allow_external_target: bool,
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        return _agent_simulate.run_browser_cua_probe(
+            browser,
+            agent=agent,
+            target=target,
+            expected_url=expected_url,
+            expected_state=expected_state,
+            expected_order_id=expected_order_id,
+            expected_selector=expected_selector,
+            allowed_domains=allowed_domains,
+            metadata=metadata,
+            allow_external_target=bool(
+                allow_external_target or default_allow_external_target
+            ),
+        )
+    except Exception as exc:
+        return _failed_browser_cua_probe(
+            browser=browser,
+            target=target,
+            error=exc,
+            metadata=metadata,
+        )
+
+
+def _failed_browser_cua_probe(
+    *,
+    browser: Any,
+    target: str | None,
+    error: Exception,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        contract = _agent_simulate.browser_cua_contract(
+            target=target,
+            metadata=dict(metadata or {}),
+        )
+    except Exception:
+        contract = {
+            "kind": "agent-learning.browser-cua-contract.v1",
+            "requires_external_service": False,
+            "local_executable_fixture": bool(browser),
+        }
+    return {
+        "kind": "agent-learning.browser-cua-probe.v1",
+        "status": "failed",
+        "passed": False,
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "contract": contract,
+        "summary": {
+            "case_count": 1,
+            "passed_case_count": 0,
+            "failed_case_count": 1,
+            "finding_count": 1,
+            "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+            "requires_external_service": bool(contract.get("requires_external_service")),
+        },
+        "browser": copy.deepcopy(browser),
+        "state": {},
+        "findings": [
+            {
+                "check": "browser_cua_probe_exception",
+                "level": "error",
+                "message": str(error),
+                "observed": type(error).__name__,
+            }
+        ],
+    }
+
+
+def _browser_cua_probe_optimization_payload(
+    *,
+    name: str,
+    threshold: float,
+    optimization_result: Any,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
+    best_candidate = getattr(optimization_result, "best_candidate", None)
+    best_candidate_id = getattr(best_candidate, "id", None)
+    best_config = _json_plain(getattr(best_candidate, "config", {}) or {})
+    history = _browser_cua_probe_history(optimization_result)
+    search_paths = _unique_strings(
+        [
+            str(path)
+            for row in history
+            for path in _plain_list(row.get("search_paths"))
+            if str(path)
+        ]
+    )
+    metric_averages = _metric_averages_from_history(history)
+    passed = final_score >= float(threshold)
+    return {
+        "schema_version": "agent-learning.cli.v1",
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": final_score,
+            "optimization_passed": passed,
+            "evaluation_score": final_score,
+            "evaluation_passed": passed,
+            "metric_averages": metric_averages,
+            "threshold": float(threshold),
+            "total_iterations": getattr(optimization_result, "total_iterations", None),
+            "total_evaluations": getattr(optimization_result, "total_evaluations", None),
+            "best_candidate_id": best_candidate_id,
+            "search_paths": search_paths,
+        },
+        "optimization": {
+            "final_score": final_score,
+            "best_candidate_id": best_candidate_id,
+            "best_config": best_config,
+            "source_manifest": {
+                "name": name,
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_browser_cua_probe",
+                    "task_kind": "browser_cua_probe",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "history": history,
+            "manifest_optimization": {
+                "kind": "browser_cua_probe_optimization",
+                "name": name,
+                "final_score": final_score,
+                "threshold": float(threshold),
+                "passed": passed,
+                "best_candidate_id": best_candidate_id,
+                "best_config": copy.deepcopy(best_config),
+                "search_paths": search_paths,
+                "metrics": metric_averages,
+                "history": copy.deepcopy(history),
+            },
+        },
+        "evaluation": {
+            "kind": "agent-learning.browser-cua-probe-evaluation.v1",
+            "score": final_score,
+            "passed": passed,
+            "summary": {
+                "metric_averages": metric_averages,
+                "history_count": len(history),
+                "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
+            },
+        },
+    }
+
+
+def _browser_cua_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(optimization_result, "history", []) or []):
+        metadata = _plain_mapping(getattr(item, "metadata", {}) or {})
+        report = _json_plain(metadata.get("report") or {})
+        report_summary = _plain_mapping(metadata.get("report_summary"))
+        if not report_summary and isinstance(report, Mapping):
+            report_summary = _plain_mapping(report.get("summary"))
+        patch = _plain_mapping(metadata.get("patch") or metadata.get("candidate_patch"))
+        score = getattr(item, "average_score", None)
+        rows.append(
+            {
+                "candidate_id": getattr(item, "candidate_id", None),
+                "score": score,
+                "patch": patch,
+                "candidate_patch": patch,
+                "candidate_config": _json_plain(getattr(item, "candidate_config", {}) or {}),
+                "search_paths": list(metadata.get("search_paths") or []),
+                "metrics": _plain_mapping(metadata.get("metrics")),
+                "findings": _plain_list(metadata.get("findings")),
+                "evaluation_score": metadata.get("evaluation_score", score),
+                "evaluation_passed": metadata.get("evaluation_passed"),
+                "report": report,
+                "report_summary": report_summary,
+            }
+        )
+    return rows
+
+
+def _with_browser_cua_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _browser_cua_probe_proof(result, optimization)
+    result["browser_cua_probe_proof"] = proof
+    optimization["browser_cua_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["browser_cua_probe_proof_status"] = proof["status"]
+    summary["browser_cua_probe_proof_passed"] = proof["passed"]
+    summary["browser_cua_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["browser_cua_probe_proof_check_count"] = proof["check_count"]
+    summary["browser_cua_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _browser_cua_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    selected_summary = _plain_mapping(selected_report.get("summary"))
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    contract = _plain_mapping(selected_report.get("contract"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold")) or 0.9
+    checks = [
+        _proof_check(
+            "browser_cua_probe_report_present",
+            passed=selected_report.get("kind") == "agent-learning.browser-cua-probe.v1"
+            and selected_report.get("status") == "passed",
+            required=True,
+            reason="selected candidate carries a passing browser/CUA probe",
+            evidence={"kind": selected_report.get("kind"), "status": selected_report.get("status")},
+        ),
+        _proof_check(
+            "browser_cua_probe_local_contract_closed",
+            passed=contract.get("kind") == "agent-learning.browser-cua-contract.v1"
+            and contract.get("requires_external_service") is False
+            and contract.get("local_executable_fixture") is True,
+            required=True,
+            reason="selected browser/CUA contract is local and no-external-service",
+            evidence={"browser_cua_contract": copy.deepcopy(contract)},
+        ),
+        _proof_check(
+            "browser_cua_probe_trace_closed",
+            passed=_as_float(selected_metrics.get("browser_cua_probe_trace_quality")) >= 1.0,
+            required=True,
+            reason="selected probe closes refreshed snapshot, DOM, screenshot, region, and injection-surface evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "browser_cua_probe_action_closed",
+            passed=_as_float(selected_metrics.get("browser_cua_probe_action_quality")) >= 1.0,
+            required=True,
+            reason="selected probe closes safe selector action replay without injection touches",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "browser_cua_probe_mutation_grounding_closed",
+            passed=_as_float(selected_metrics.get("browser_cua_probe_mutation_grounding_quality")) >= 1.0,
+            required=True,
+            reason="selected probe closes mutation, screenshot-diff, storage/runtime/network, and layout evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "browser_cua_probe_state_tool_closed",
+            passed=_as_float(selected_metrics.get("browser_cua_probe_state_quality")) >= 1.0
+            and _as_float(selected_metrics.get("browser_cua_probe_tool_evidence")) >= 1.0,
+            required=True,
+            reason="selected probe reaches expected browser state and exercises required tools",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "browser_cua_probe_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("browser_cua_probe_score")) >= threshold,
+            required=True,
+            reason="selected browser/CUA probe metrics meet threshold",
+            evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
+        ),
+        _proof_check(
+            "browser_cua_probe_patch_surface_present",
+            passed=bool(selected_patch) and "browser_cua" in selected_patch,
+            required=True,
+            reason="optimizer selected a concrete browser/CUA candidate",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "browser_cua_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for browser/CUA probe search",
+            evidence={"governance_status": governance.get("status")},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l2_native_browser_cua_probe_verified"
+            if passed
+            else "browser_cua_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "requires_external_service": False,
+        "evidence": {
+            "selected_report_summary": copy.deepcopy(selected_summary),
+            "selected_metrics": copy.deepcopy(selected_metrics),
+            "browser_cua_contract": copy.deepcopy(contract),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
 
 
 def build_agent_integration_optimization_manifest(
@@ -25998,6 +26678,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     *_OPTIMIZE_EXPORTS,
+    "AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
@@ -26024,6 +26705,7 @@ __all__ = [
     "build_artifact_optimization_suite",
     "build_agent_integration_optimization_manifest",
     "build_browser_cua_optimization_manifest",
+    "build_browser_cua_run_manifest_from_probe_optimization",
     "build_component_optimization_manifest",
     "build_eval_suite_optimization_manifest",
     "build_evaluation_hook_optimization_manifest",
@@ -26079,6 +26761,7 @@ __all__ = [
     "optimize_agent_integration",
     "optimize_autonomous_redteam_task_world",
     "optimize_browser_cua",
+    "optimize_browser_cua_probe",
     "optimize_component",
     "optimize_evaluation_hooks",
     "optimize_external_agent_adapter",
@@ -26130,6 +26813,7 @@ __all__ = [
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
+    "score_browser_cua_probe_result",
     "score_framework_adapter_probe_result",
     "score_memory_layer_probe_result",
     "score_multi_agent_room_probe_result",

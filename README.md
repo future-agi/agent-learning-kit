@@ -944,6 +944,9 @@ PYTHONPATH=src python examples/sdk_multi_agent_room_probe_optimization.py \
 PYTHONPATH=src python examples/sdk_realtime_stack_probe_optimization.py \
   artifacts/sdk-realtime-stack-probe-optimization.json
 
+PYTHONPATH=src python examples/sdk_browser_cua_probe_optimization.py \
+  artifacts/sdk-browser-cua-probe-optimization.json
+
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
   artifacts/sdk-artifact-optimization.json
@@ -1054,6 +1057,9 @@ AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_agent_control_plane_simulation.py \
   artifacts/sdk-agent-control-plane-simulation.json
+
+PYTHONPATH=src python examples/sdk_browser_cua_probe_optimization.py \
+  artifacts/sdk-browser-cua-probe-optimization.json
 
 AGENT_LEARNING_SDK_BROWSER_CUA_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_browser_cua_optimization.py \
@@ -1665,6 +1671,16 @@ red-team harness. It verifies selector-drift recovery, refreshed screenshots,
 coordinate grounding, semantic screenshot diffs, storage/runtime evidence,
 network traces, layout-shift resilience, mutation-pack mitigations, and
 prompt-injection surface avoidance.
+Before writing a full browser/CUA manifest, use
+`simulate.run_browser_cua_probe()` or
+`optimize.optimize_browser_cua_probe()` to test local browser replay fixtures
+for refreshed snapshots, safe selector fallback, coordinate-region grounding,
+mutation-pack and screenshot-diff evidence, storage/runtime/network checks,
+layout-shift evidence, and prompt-injection-surface avoidance.
+`optimize.build_browser_cua_run_manifest_from_probe_optimization(...)` promotes
+the selected bundle into the normal CUA simulation path. See
+`examples/sdk_browser_cua_probe_optimization.py` for an end-to-end probe,
+promotion, and evaluated run cookbook.
 The same harness is available from Python through
 `optimize.build_browser_cua_optimization_manifest()` and
 `examples/sdk_browser_cua_optimization.py`, which search weak versus hardened

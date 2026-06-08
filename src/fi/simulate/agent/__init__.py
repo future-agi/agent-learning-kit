@@ -10,6 +10,7 @@ from .frameworks import (
     supported_frameworks,
     wrap_framework,
 )
+from .browser import browser_cua_contract, probe_browser_cua, run_browser_cua_probe
 from .import_probe import probe_framework_imports
 from .memory import memory_layer_contract, probe_memory_layer, run_memory_layer_probe
 from .multi_agent import (
@@ -50,6 +51,9 @@ __all__ = [
     "framework_adapter_contract_matrix",
     "probe_framework_adapter",
     "run_framework_adapter_probe",
+    "browser_cua_contract",
+    "probe_browser_cua",
+    "run_browser_cua_probe",
     "memory_layer_contract",
     "probe_memory_layer",
     "run_memory_layer_probe",

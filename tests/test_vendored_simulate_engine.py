@@ -232,6 +232,66 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
     assert callable(simulate.realtime_stack_contract)
     assert callable(simulate.probe_realtime_stack)
     assert callable(simulate.run_realtime_stack_probe)
+    assert callable(simulate.browser_cua_contract)
+    assert callable(simulate.probe_browser_cua)
+    assert callable(simulate.run_browser_cua_probe)
+
+
+def test_browser_cua_probe_scores_local_replay_and_rejects_external_target() -> None:
+    from agent_learning import optimize
+
+    manifest = optimize.build_browser_cua_optimization_manifest(
+        name="browser-cua-probe-test",
+    )
+    weak, strong = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+
+    result = simulate.run_browser_cua_probe(
+        strong,
+        expected_url="https://shop.example.test/confirmation",
+        expected_state={"checkout_complete": True, "order_id": "ord_123"},
+        expected_order_id="ord_123",
+    )
+
+    assert result["kind"] == "agent-learning.browser-cua-probe.v1"
+    assert result["status"] == "passed"
+    assert result["contract"]["kind"] == "agent-learning.browser-cua-contract.v1"
+    assert result["contract"]["local_executable_fixture"] is True
+    assert result["summary"]["refreshed_snapshot"] is True
+    assert result["summary"]["selector_match_count"] == 1
+    assert result["summary"]["mutation_count"] == 2
+    assert result["summary"]["screenshot_diff_count"] == 1
+    assert result["summary"]["prompt_injection_touched_count"] == 0
+    assert result["summary"]["observed_tool_names"] == [
+        "browser_snapshot",
+        "browser_refresh_snapshot",
+        "browser_mutations",
+        "browser_click",
+        "browser_storage",
+        "browser_runtime",
+        "browser_network",
+    ]
+    scoring = optimize.score_browser_cua_probe_result(result)
+    assert scoring["metrics"]["browser_cua_probe_score"] == pytest.approx(1.0)
+
+    weak_result = simulate.run_browser_cua_probe(
+        weak,
+        expected_url="https://shop.example.test/confirmation",
+        expected_state={"checkout_complete": True, "order_id": "ord_123"},
+        expected_order_id="ord_123",
+    )
+    assert weak_result["status"] == "failed"
+    assert {
+        "browser_cua_probe_mutation_grounding",
+        "browser_cua_probe_expected_state",
+    } <= {finding["check"] for finding in weak_result["findings"]}
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.run_browser_cua_probe(
+            strong,
+            target="https://example.com/browser-agent",
+        )
 
 
 def test_realtime_stack_probe_scores_local_voice_streaming_and_rejects_external_target() -> None:

@@ -196,6 +196,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.build_realtime_run_manifest is not None
     assert simulate.build_browser_cua_run_manifest is not None
+    assert simulate.browser_cua_contract is not None
+    assert simulate.probe_browser_cua is not None
+    assert simulate.run_browser_cua_probe is not None
     assert simulate.write_manifest_file is not None
     assert simulate.build_agent_integration_run_manifest is not None
     assert simulate.build_workspace_observability_run_manifest is not None
@@ -245,6 +248,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_autonomous_redteam_task_world_run_manifest is not None
     assert optimize.build_browser_cua_optimization_manifest is not None
     assert optimize.optimize_browser_cua is not None
+    assert optimize.optimize_browser_cua_probe is not None
+    assert optimize.score_browser_cua_probe_result is not None
+    assert optimize.build_browser_cua_run_manifest_from_probe_optimization is not None
     assert optimize.build_eval_suite_optimization_manifest is not None
     assert optimize.optimize_eval_suite_response is not None
     assert optimize.build_agent_integration_optimization_manifest is not None
@@ -8219,6 +8225,77 @@ def test_sdk_agent_control_plane_simulation_example_runs(monkeypatch, tmp_path):
         "agent_control_budgets_listed",
         "agent_control_incidents_listed",
     } <= event_names
+
+
+def test_optimize_browser_cua_probe_selects_and_promotes_hardened_candidate(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    result = optimize.optimize_browser_cua_probe(
+        name="sdk-browser-cua-probe-optimization",
+        metadata={"cookbook": "sdk-browser-cua-probe-optimization"},
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["browser_cua_probe_proof_passed"] is True
+    assert result["browser_cua_probe_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND
+    )
+    assert result["browser_cua_probe_proof"]["failed_check_ids"] == []
+    best_browser = result["optimization"]["best_config"]["browser_cua"]["browser"]
+    assert best_browser[0]["type"] == "browser_cua"
+    history_by_type = {}
+    for item in result["optimization"]["history"]:
+        pair = item["candidate_config"].get("browser_cua") or item[
+            "candidate_config"
+        ]
+        history_by_type[pair["browser"][0]["type"]] = item
+    assert history_by_type["browser"]["score"] < history_by_type["browser_cua"][
+        "score"
+    ]
+    assert history_by_type["browser_cua"]["metrics"][
+        "browser_cua_probe_mutation_grounding_quality"
+    ] == pytest.approx(1.0)
+
+    evaluation_config = optimize.build_browser_cua_optimization_manifest(
+        name="sdk-browser-cua-probe-evaluation-config",
+    )["evaluation"]["agent_report"]["config"]
+    manifest = optimize.build_browser_cua_run_manifest_from_probe_optimization(
+        result,
+        name="promoted-browser-cua-probe-run",
+        evaluation_config=evaluation_config,
+        metadata={"cookbook": "sdk-browser-cua-probe-optimization"},
+    )
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["metadata"]["promoted_from_browser_cua_probe"] is True
+    assert manifest["metadata"]["browser_cua_probe_proof_status"] == "passed"
+    assert manifest["simulation"]["modality"] == "cua"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "browser_cua"
+    ]
+    assert manifest["evaluation"]["agent_report"]["config"] == evaluation_config
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-browser-cua-probe-run.json",
+    )
+    run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    assert run_result["summary"]["metric_averages"][
+        "browser_action_outcome"
+    ] == pytest.approx(1.0)
+    assert run_result["summary"]["metric_averages"][
+        "browser_trace_coverage"
+    ] == pytest.approx(1.0)
+    state = run_result["report"]["results"][0]["metadata"]["environment_state"]
+    browser = state["browser"]
+    assert browser["checkout_complete"] is True
+    assert browser["order_id"] == "ord_123"
+    assert browser["url"] == "https://shop.example.test/confirmation"
+    assert browser["action_replay"][0]["prompt_injection_touched"] is False
 
 
 def test_sdk_browser_cua_optimization_example_runs(monkeypatch, tmp_path):
