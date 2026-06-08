@@ -1338,6 +1338,45 @@ def test_probe_optimization_promotes_to_framework_run_manifest(
     assert state["framework_runtime"]["summary"]["input_modes"] == ["dict"]
 
 
+def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
+    from agent_learning import optimize
+
+    shim_path = (
+        PROJECT_ROOT / "examples" / "sdk_framework_adapter_auto_discovery_promotion.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_auto_discovery_promotion_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    optimization_result = module.build_probe_optimization()
+    manifest = optimize.build_framework_run_manifest_from_probe_optimization(
+        optimization_result,
+        name="promoted-framework-adapter-auto-discovery-run",
+        evaluation_config=module.evaluation_config(),
+        metadata={"suite": "auto-discovery-promotion"},
+    )
+
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    assert (
+        manifest["agent"]["metadata"]["framework_adapter_discovery_used"] is True
+    )
+    discovery = manifest["agent"]["metadata"]["framework_adapter_discovery"]
+    assert discovery["kind"] == "agent-learning.framework-adapter-discovery.v1"
+    assert discovery["status"] == "passed"
+    assert discovery["adapter_candidates"][0]["method"] == "execute_task"
+    assert manifest["metadata"]["adapter_candidate_source"] == "discovery"
+    assert manifest["metadata"]["framework_adapter_discovery_used"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_status"] == "passed"
+
+
 def test_sdk_social_memory_framework_optimization_example_runs(
     monkeypatch,
     tmp_path,

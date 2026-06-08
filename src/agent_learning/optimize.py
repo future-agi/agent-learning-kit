@@ -15329,6 +15329,12 @@ def build_framework_run_manifest_from_probe_optimization(
         selected_report.get("contract")
         or proof_evidence.get("framework_adapter_contract")
     )
+    discovery = _plain_mapping(
+        payload.get("framework_adapter_discovery")
+        or optimization.get("framework_adapter_discovery")
+        or proof_evidence.get("framework_adapter_discovery")
+    )
+    discovery_summary = _plain_mapping(discovery.get("summary"))
 
     framework = str(
         best_config.get("framework")
@@ -15387,6 +15393,14 @@ def build_framework_run_manifest_from_probe_optimization(
         "framework_adapter_probe_report_summary": copy.deepcopy(
             selected_report_summary
         ),
+        "adapter_candidate_source": (
+            summary.get("adapter_candidate_source")
+            or source_metadata.get("adapter_candidate_source")
+            or "explicit"
+        ),
+        "framework_adapter_discovery_used": bool(discovery),
+        "framework_adapter_discovery": copy.deepcopy(discovery),
+        "framework_adapter_discovery_summary": copy.deepcopy(discovery_summary),
     }
 
     from . import simulate as _agent_simulate
@@ -15419,6 +15433,9 @@ def build_framework_run_manifest_from_probe_optimization(
             "probe_selected_candidate_id"
         ],
         "framework_adapter_probe_proof_status": proof.get("status"),
+        "adapter_candidate_source": merged_metadata["adapter_candidate_source"],
+        "framework_adapter_discovery_used": bool(discovery),
+        "framework_adapter_discovery_status": discovery.get("status"),
     }
     if evaluation_config is not None:
         manifest["evaluation"] = {

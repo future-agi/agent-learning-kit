@@ -585,11 +585,12 @@ assert result["framework_adapter_probe_proof"]["status"] == "passed"
 Promote that selected adapter into the normal local simulation path with
 `optimize.build_framework_run_manifest_from_probe_optimization(...)`. The
 helper preserves the selected target, method, input mode, runtime tracing, probe
-proof, and selected contract metadata, while optionally attaching the same
-`agent_report` evaluation config used by full framework simulations. See
-`examples/sdk_framework_adapter_probe_promotion.py` for an end-to-end cookbook
-that probes candidates, builds the manifest, runs it, and saves an
-`agent-learning.run.v1` result.
+proof, selected contract metadata, and any auto-discovery artifact, while
+optionally attaching the same `agent_report` evaluation config used by full
+framework simulations. See `examples/sdk_framework_adapter_probe_promotion.py`
+and `examples/sdk_framework_adapter_auto_discovery_promotion.py` for end-to-end
+cookbooks that probe or discover candidates, build the manifest, run it, and
+save an `agent-learning.run.v1` result.
 
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
