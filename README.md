@@ -619,6 +619,13 @@ chunks, the generated eval config requires `framework_runtime_contract` to prove
 streaming and `streaming_trace_coverage` to score the normalized chunk/tool/final
 trace. See `examples/sdk_framework_adapter_streaming.py`.
 
+Typed-output framework results are normalized too. If a local adapter returns a
+Pydantic/dataclass/model-dump style object with `content`, `tool_calls`,
+`events`, `state`, or `metadata`, the generic wrapper preserves those fields in
+the run artifact instead of flattening them into text. Auto-generated eval gates
+then require the observed structured state keys, as shown in
+`examples/sdk_framework_adapter_typed_output.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1215,6 +1222,9 @@ AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY=... \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_streaming.py \
   artifacts/sdk-framework-adapter-streaming.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_typed_output.py \
+  artifacts/sdk-framework-adapter-typed-output.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

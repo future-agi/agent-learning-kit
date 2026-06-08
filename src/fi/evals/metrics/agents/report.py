@@ -9881,6 +9881,18 @@ def _framework_runtime_contract_metric(
             finding_type="framework_runtime_event_missing",
         )
 
+    for state_key in _string_list(requirements.get("required_state_keys") or requirements.get("state_keys")):
+        normalized = _normalize_framework_runtime_key(state_key)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="state_key",
+            expected=normalized,
+            actual=observed["state_keys"],
+            match=normalized in observed["state_keys"],
+            finding_type="framework_runtime_state_key_missing",
+        )
+
     for metadata_key in _string_list(requirements.get("required_metadata_keys") or requirements.get("metadata_keys")):
         normalized = _normalize_framework_runtime_key(metadata_key)
         _append_framework_runtime_check(

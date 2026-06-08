@@ -1,7 +1,8 @@
 import inspect
 import json
 import time
-from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Union
+from dataclasses import asdict, is_dataclass
+from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Union
 
 from fi.simulate.agent.wrapper import (
     AgentInput,
@@ -194,6 +195,8 @@ class GenericAgentWrapper(AgentWrapper):
         tool_responses = self._extract_tool_responses(raw)
         artifacts = self._extract_artifacts(raw)
         events = self._extract_events(raw)
+        memory_updates = self._extract_memory_updates(raw)
+        state = self._extract_state(raw)
         metadata = self._extract_metadata(raw)
         if self.metadata:
             metadata = {**metadata, **self.metadata}
@@ -204,6 +207,8 @@ class GenericAgentWrapper(AgentWrapper):
             tool_responses=tool_responses,
             artifacts=artifacts,
             events=events,
+            memory_updates=memory_updates,
+            state=state or None,
             metadata=metadata or None,
         )
 
@@ -277,9 +282,10 @@ class GenericAgentWrapper(AgentWrapper):
         if isinstance(raw, bytes):
             return raw.decode("utf-8", errors="replace")
 
-        if isinstance(raw, dict):
-            if self.output_key and self.output_key in raw:
-                return _stringify(raw[self.output_key])
+        raw_mapping = _object_mapping(raw)
+        if raw_mapping is not None:
+            if self.output_key and self.output_key in raw_mapping:
+                return _stringify(raw_mapping[self.output_key])
             for key in (
                 "content",
                 "output",
@@ -288,15 +294,16 @@ class GenericAgentWrapper(AgentWrapper):
                 "final_output",
                 "answer",
                 "result",
+                "data",
             ):
-                if key in raw and raw[key] is not None:
-                    return _stringify(raw[key])
-            if "message" in raw:
-                return _message_content(raw["message"])
-            if "messages" in raw:
-                return _last_message_content(raw["messages"])
-            if "choices" in raw:
-                return _choices_content(raw["choices"])
+                if key in raw_mapping and raw_mapping[key] is not None:
+                    return _stringify(raw_mapping[key])
+            if "message" in raw_mapping:
+                return _message_content(raw_mapping["message"])
+            if "messages" in raw_mapping:
+                return _last_message_content(raw_mapping["messages"])
+            if "choices" in raw_mapping:
+                return _choices_content(raw_mapping["choices"])
 
         for attr in ("content", "output", "response", "text", "final_output", "answer"):
             if hasattr(raw, attr):
@@ -323,11 +330,45 @@ class GenericAgentWrapper(AgentWrapper):
         return _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
 
     def _extract_metadata(self, raw: Any) -> Dict[str, Any]:
-        if isinstance(raw, dict):
-            value = raw.get("metadata")
+        raw_mapping = _object_mapping(raw)
+        if raw_mapping is not None:
+            value = raw_mapping.get("metadata")
             return dict(value) if isinstance(value, dict) else {}
         value = getattr(raw, "metadata", None)
         return dict(value) if isinstance(value, dict) else {}
+
+    def _extract_memory_updates(self, raw: Any) -> Optional[Dict[str, Any]]:
+        raw_mapping = _object_mapping(raw)
+        for name in ("memory_updates", "memoryUpdates"):
+            value = raw_mapping.get(name) if raw_mapping is not None else getattr(raw, name, None)
+            plain = _plain_value(value)
+            if isinstance(plain, Mapping):
+                return dict(plain)
+        return None
+
+    def _extract_state(self, raw: Any) -> Dict[str, Any]:
+        raw_mapping = _object_mapping(raw)
+        state: Dict[str, Any] = {}
+        for name in ("state", "output_state", "outputState"):
+            value = raw_mapping.get(name) if raw_mapping is not None else getattr(raw, name, None)
+            plain = _plain_value(value)
+            if isinstance(plain, Mapping):
+                state.update(dict(plain))
+
+        if raw_mapping is not None:
+            for name in ("typed_output", "structured_output", "validated_output"):
+                value = raw_mapping.get(name)
+                if value not in (None, "", [], {}):
+                    state[name] = _plain_value(value)
+            output_value = raw_mapping.get("output")
+            output_payload = _plain_value(output_value)
+            if (
+                isinstance(output_payload, Mapping)
+                and output_payload
+                and "typed_output" not in state
+            ):
+                state["typed_output"] = dict(output_payload)
+        return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
         values = _extract_list_field(raw, ("artifacts", "media", "attachments"))
@@ -386,9 +427,10 @@ def wrap_agent(
 
 def _extract_list_field(raw: Any, names: Iterable[str]) -> Optional[List[Dict[str, Any]]]:
     value = None
-    if isinstance(raw, dict):
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
         for name in names:
-            value = raw.get(name)
+            value = raw_mapping.get(name)
             if value is not None:
                 break
     else:
@@ -396,9 +438,14 @@ def _extract_list_field(raw: Any, names: Iterable[str]) -> Optional[List[Dict[st
             if hasattr(raw, name):
                 value = getattr(raw, name)
                 break
-    if not isinstance(value, list):
+    if not isinstance(value, (list, tuple)):
         return None
-    return [dict(item) for item in value if isinstance(item, dict)] or None
+    items: List[Dict[str, Any]] = []
+    for item in value:
+        item_mapping = _object_mapping(item)
+        if item_mapping is not None:
+            items.append(dict(item_mapping))
+    return items or None
 
 
 def _is_async_stream(value: Any) -> bool:
@@ -491,16 +538,11 @@ def _stream_chunk_timestamp_ms(chunk: Any) -> Optional[int]:
 
 
 def _stream_chunk_payload(chunk: Any) -> Dict[str, Any]:
-    if isinstance(chunk, dict):
-        return dict(chunk)
+    chunk_mapping = _object_mapping(chunk)
+    if chunk_mapping is not None:
+        return dict(chunk_mapping)
     if isinstance(chunk, (str, bytes)):
         return {"delta": _stream_chunk_text(chunk)}
-    if hasattr(chunk, "model_dump"):
-        value = chunk.model_dump()
-        return dict(value) if isinstance(value, dict) else {"value": value}
-    if hasattr(chunk, "dict"):
-        value = chunk.dict()
-        return dict(value) if isinstance(value, dict) else {"value": value}
     payload: Dict[str, Any] = {}
     for key in ("id", "type", "event", "name", "content", "delta", "text", "transcript"):
         if hasattr(chunk, key):
@@ -511,13 +553,14 @@ def _stream_chunk_payload(chunk: Any) -> Dict[str, Any]:
 
 
 def _stream_chunk_field(chunk: Any, names: Iterable[str]) -> Any:
-    if isinstance(chunk, dict):
+    chunk_mapping = _object_mapping(chunk)
+    if chunk_mapping is not None:
         for name in names:
-            value = chunk.get(name)
+            value = chunk_mapping.get(name)
             if value is not None:
                 return value
         for key in ("data", "payload"):
-            value = chunk.get(key)
+            value = chunk_mapping.get(key)
             if isinstance(value, dict):
                 nested = _stream_chunk_field(value, names)
                 if nested is not None:
@@ -774,14 +817,62 @@ def _stringify(value: Any) -> str:
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
-    if isinstance(value, (dict, list, tuple)):
-        return json.dumps(value, default=str)
+    plain = _plain_value(value)
+    if isinstance(plain, (dict, list, tuple)):
+        return json.dumps(plain, default=str)
     return str(value)
 
 
 def _model_to_dict(value: Any) -> Dict[str, Any]:
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if hasattr(value, "dict"):
-        return value.dict()
+    mapping = _object_mapping(value)
+    if mapping is not None:
+        return dict(mapping)
     return dict(value)
+
+
+def _object_mapping(value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _plain_value(item)
+            for key, item in value.items()
+        }
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            str(key): _plain_value(item)
+            for key, item in asdict(value).items()
+        }
+    for method_name in ("model_dump", "dict"):
+        method = getattr(value, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            dumped = method()
+        except TypeError:
+            try:
+                dumped = method(mode="json")
+            except TypeError:
+                continue
+        if isinstance(dumped, Mapping):
+            return {
+                str(key): _plain_value(item)
+                for key, item in dumped.items()
+            }
+    return None
+
+
+def _plain_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, Mapping):
+        return {
+            str(key): _plain_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_plain_value(item) for item in value]
+    mapping = _object_mapping(value)
+    if mapping is not None:
+        return mapping
+    return value

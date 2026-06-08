@@ -40,6 +40,11 @@ the local-first adapter contract.
   implication: adapter responses should retain structured output metadata and
   state, not flatten everything into only text. Source:
   https://docs.pydantic.dev/dev/examples/pydantic_ai/
+- Instructor and OpenAI Agents-style structured output paths use Pydantic or
+  dataclass-like response models. Probe implication: `model_dump()`/dataclass
+  payloads should normalize into content, tools, events, metadata, and state so
+  the evaluator can require typed-output state keys instead of accepting a
+  stringified object.
 
 ## Benchmark And Optimization Signals
 
@@ -83,6 +88,10 @@ Keep framework support local-first:
   local adapter candidates. If a selected candidate emits chunks, the probe
   should preserve normalized streaming signals and promotion should require both
   framework-runtime streaming and streaming-trace coverage.
+- Preserve structured typed outputs from Pydantic/dataclass/model-dump response
+  objects. Promotion should include observed typed state keys in the generated
+  `framework_runtime_contract` so typed output cannot silently degrade into
+  plain text.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

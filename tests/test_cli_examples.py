@@ -1575,6 +1575,34 @@ def test_sdk_framework_adapter_streaming_example_runs(tmp_path):
     assert state["streaming_trace"]["summary"]["tool_delta_count"] == 1
 
 
+def test_sdk_framework_adapter_typed_output_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_typed_output.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_typed_output",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-typed-output.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_typed_output_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]["required_state_keys"] == ["typed_output"]
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["typed_output"]["decision"]["verdict"] == "approved"
+    assert state["framework_runtime"]["summary"]["state_key_count"] == 1
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

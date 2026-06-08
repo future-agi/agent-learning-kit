@@ -1329,6 +1329,47 @@ def test_streaming_framework_adapter_discovery_promotes_streaming_manifest(
     assert state["streaming_trace"]["summary"]["completion_status"] == "completed"
 
 
+def test_typed_framework_adapter_output_preserves_structured_state(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_typed_output.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_typed_output_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["framework_runtime_contract"]["required_state_keys"] == [
+        "typed_output"
+    ]
+    assert "state" in config["framework_runtime_contract"]["required_signals"]
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-typed-output-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["typed_output"]["schema"] == "RefundDecision"
+    assert state["typed_output"]["decision"]["verdict"] == "approved"
+    assert state["framework_runtime"]["summary"]["methods"] == ["execute_task"]
+    invocation = state["framework_runtime"]["invocations"][0]
+    assert "typed_output" in invocation["output"]["state_keys"]
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 
