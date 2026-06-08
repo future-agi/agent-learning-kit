@@ -595,6 +595,14 @@ probe proof. See `examples/sdk_framework_adapter_probe_promotion.py` and
 cookbooks that probe or discover candidates, build the manifest, run it, and
 save an `agent-learning.run.v1` result.
 
+For the shortest SDK path, use
+`optimize.build_framework_run_manifest_from_local_adapter(...)`: it runs local
+adapter discovery when candidates are omitted, optimizes the adapter probe,
+promotes the selected method/input mode, and attaches generated eval gates in
+one call before you run the manifest. See
+`examples/sdk_framework_adapter_one_call_promotion.py` for the full local
+object-to-evaluated-run flow.
+
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
 native gate alongside runtime and trace metrics, so an HTTP target or

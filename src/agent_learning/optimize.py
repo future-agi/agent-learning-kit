@@ -15273,6 +15273,78 @@ def optimize_framework_adapter_probe(
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
+def build_framework_run_manifest_from_local_adapter(
+    *,
+    name: str,
+    framework: str,
+    target: str,
+    adapter_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Any = None,
+    agent_factory: Optional[Callable[[], Any]] = None,
+    cases: Sequence[Mapping[str, Any]] = (),
+    method_candidates: Optional[Sequence[str | None]] = None,
+    input_mode_candidates: Optional[Sequence[str]] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    framework_trace: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    auto_evaluation_config: bool = True,
+    threshold: float = 0.9,
+    trace_runtime: bool = True,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    discovery_max_candidates: Optional[int] = 8,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+    factory: Optional[bool] = None,
+    min_turns: int = 1,
+    max_turns: int = 1,
+) -> dict[str, Any]:
+    """Optimize a local framework adapter and return a promoted run manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not target:
+        raise ValueError("target is required")
+
+    optimization_result = optimize_framework_adapter_probe(
+        name=f"{name}-adapter-probe",
+        framework=framework,
+        target=target,
+        adapter_candidates=adapter_candidates,
+        agent=agent,
+        agent_factory=agent_factory,
+        cases=cases,
+        method_candidates=method_candidates,
+        input_mode_candidates=input_mode_candidates,
+        threshold=threshold,
+        trace_runtime=trace_runtime,
+        allow_external_target=allow_external_target,
+        metadata=metadata,
+        discovery_max_candidates=discovery_max_candidates,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+    )
+    return build_framework_run_manifest_from_probe_optimization(
+        optimization_result,
+        name=name,
+        target=target,
+        required_env=required_env,
+        scenario=scenario,
+        framework_trace=framework_trace,
+        evaluation_config=evaluation_config,
+        auto_evaluation_config=auto_evaluation_config,
+        threshold=threshold,
+        metadata={
+            "source": "agent_learning.optimize.build_framework_run_manifest_from_local_adapter",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+        factory=factory,
+        min_turns=min_turns,
+        max_turns=max_turns,
+    )
+
+
 def build_framework_run_manifest_from_probe_optimization(
     optimization_result: Mapping[str, Any],
     *,
@@ -29137,6 +29209,7 @@ __all__ = [
     "build_external_agent_adapter_optimization_manifest",
     "build_framework_adapter_matrix_optimization_manifest",
     "build_framework_adapter_probe_evaluation_config",
+    "build_framework_run_manifest_from_local_adapter",
     "build_framework_run_manifest_from_probe_optimization",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",

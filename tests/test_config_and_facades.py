@@ -344,6 +344,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
     assert optimize.build_framework_adapter_probe_evaluation_config is not None
+    assert optimize.build_framework_run_manifest_from_local_adapter is not None
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
     assert optimize.optimize_multi_agent_framework_handoff is not None
@@ -1386,6 +1387,54 @@ def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
         "execute_task"
     )
     assert eval_config["metric_weights"]["framework_runtime_contract"] == 10.0
+
+
+def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes():
+    from agent_learning import optimize
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_one_call_promotion.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_one_call_promotion_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = optimize.build_framework_run_manifest_from_local_adapter(
+        name="one-call-framework-adapter-run",
+        framework="custom_refund_orchestrator",
+        target=module.TARGET,
+        agent_factory=module.LocalRefundOrchestrator,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        discovery_max_candidates=4,
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit framework evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+        auto_evaluation_config=True,
+        metadata={"suite": "one-call-framework-adapter"},
+    )
+
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["agent"]["target"] == module.TARGET
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    assert manifest["agent"]["metadata"]["framework_adapter_probe_proof"][
+        "status"
+    ] == "passed"
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]["required_tools"] == ["framework_trace_status"]
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(
