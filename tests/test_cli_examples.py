@@ -1364,6 +1364,40 @@ def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     ] == "doc_refund_2026"
 
 
+def test_sdk_multi_agent_room_probe_optimization_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_multi_agent_room_probe_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_room_probe_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-multi-agent-room-probe-optimization.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        output_path.with_suffix(".manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"][
+        "multi_agent_coordination_quality"
+    ] == pytest.approx(1.0)
+    assert manifest["metadata"]["promoted_from_multi_agent_room_probe"] is True
+    assert manifest["metadata"]["multi_agent_room_probe_proof_status"] == "passed"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "multi_agent_room"
+    ]
+    assert manifest["simulation"]["environments"][0]["data"]["expected_reconciliation"][
+        "accepted_source"
+    ] == "critic"
+
+
 def test_world_framework_memory_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,

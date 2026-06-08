@@ -226,6 +226,129 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
     assert callable(simulate.memory_layer_contract)
     assert callable(simulate.probe_memory_layer)
     assert callable(simulate.run_memory_layer_probe)
+    assert callable(simulate.multi_agent_room_contract)
+    assert callable(simulate.probe_multi_agent_room)
+    assert callable(simulate.run_multi_agent_room_probe)
+
+
+def test_multi_agent_room_probe_scores_local_coordination_and_rejects_external_target() -> None:
+    participants = {
+        "planner": {"name": "planner", "role": "task planner"},
+        "retriever": {"name": "retriever", "role": "policy evidence retriever"},
+        "critic": {"name": "critic", "role": "grounding reviewer"},
+    }
+    agent = {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": "Route evidence and request review.",
+                "tool_calls": [
+                    {
+                        "id": "handoff_retriever",
+                        "name": "handoff",
+                        "arguments": {
+                            "to": "retriever",
+                            "task": "Collect the current refund policy evidence.",
+                            "reason": "source grounding is required",
+                            "context": {
+                                "doc_id": "doc_refund_2026",
+                                "world_state": "refund_case_open",
+                            },
+                        },
+                    },
+                    {
+                        "id": "review_critic",
+                        "name": "request_review",
+                        "arguments": {
+                            "reviewer": "critic",
+                            "target": "refund policy answer",
+                            "criteria": ["policy", "source"],
+                        },
+                    },
+                    {
+                        "id": "reconcile_answer",
+                        "name": "reconcile",
+                        "arguments": {
+                            "summary": "approved refund answer",
+                            "decision": "ship grounded refund decision",
+                            "accepted_source": "critic",
+                            "conflicts": [],
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    room = {
+        "handoff_contracts": {
+            "retriever": {
+                "require_reason": True,
+                "required_context_keys": ["doc_id", "world_state"],
+                "required_task_terms": ["refund policy"],
+            }
+        },
+        "expected_handoffs": [
+            {
+                "to": "retriever",
+                "task_contains": "current refund policy",
+                "reason_contains": "source grounding",
+                "context_keys": ["doc_id", "world_state"],
+                "contract_matched": True,
+            }
+        ],
+        "expected_reviews": [
+            {
+                "reviewer": "critic",
+                "target_contains": "refund policy answer",
+                "criteria": ["policy", "source"],
+            }
+        ],
+        "expected_reconciliation": {
+            "summary_contains": "approved refund answer",
+            "accepted_source": "critic",
+            "conflicts_empty": True,
+        },
+        "allow_unknown_roles": False,
+        "state": {"case": {"status": "resolved"}},
+    }
+
+    result = simulate.probe_multi_agent_room(
+        participants=participants,
+        room=room,
+        agent=agent,
+        target="multi_agent_room.py:local_fixture",
+        metadata={"suite": "multi-agent-room-probe"},
+    )
+
+    assert result["kind"] == "agent-learning.multi-agent-room-probe.v1"
+    assert result["status"] == "passed"
+    assert result["contract"]["kind"] == "agent-learning.multi-agent-room-contract.v1"
+    assert result["contract"]["local_executable_fixture"] is True
+    assert result["summary"]["participant_count"] == 3
+    assert result["summary"]["handoff_contract_matched_count"] == 1
+    assert result["summary"]["matched_coordination_check_count"] == (
+        result["summary"]["coordination_check_count"]
+    )
+    assert result["summary"]["terminal_state"] is True
+    assert result["environment"]["type"] == "multi_agent_room"
+
+    weak = simulate.probe_multi_agent_room(
+        participants=participants,
+        room={"allow_unknown_roles": True, "state": {"case": {"status": "triage"}}},
+        agent={"responses": [{"content": "solo answer", "tool_calls": []}]},
+    )
+    assert weak["status"] == "failed"
+    assert "multi_agent_probe_role_boundary" in {
+        finding["check"] for finding in weak["findings"]
+    }
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.probe_multi_agent_room(
+            participants=participants,
+            room=room,
+            agent=agent,
+            target="https://example.com/multi-agent-room",
+        )
 
 
 def test_framework_adapter_probe_runs_custom_framework_runtime() -> None:

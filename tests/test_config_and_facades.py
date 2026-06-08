@@ -363,7 +363,11 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.run_memory_layer_probe is not None
     assert optimize.build_multi_agent_optimization_manifest is not None
     assert optimize.optimize_multi_agent_coordination is not None
+    assert optimize.optimize_multi_agent_room_probe is not None
+    assert optimize.score_multi_agent_room_probe_result is not None
+    assert optimize.build_multi_agent_run_manifest_from_probe_optimization is not None
     assert simulate.build_multi_agent_coordination_run_manifest is not None
+    assert simulate.probe_multi_agent_room is not None
     assert optimize.build_orchestration_optimization_manifest is not None
     assert optimize.optimize_orchestration_stack is not None
     assert simulate.build_orchestration_stack_run_manifest is not None
@@ -3435,6 +3439,90 @@ def test_sdk_multi_agent_optimization_example_runs(monkeypatch, tmp_path):
         "temporal_structural_credit_surface_present",
         "multi_agent_metric_evidence_closed",
     }
+
+
+def test_optimize_multi_agent_room_probe_selects_and_promotes_strong_pair(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_multi_agent_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_optimization_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = optimize.optimize_multi_agent_room_probe(
+        name="sdk-multi-agent-room-probe-optimization",
+        participants=module.participants(),
+        agent_candidates=[module.weak_agent(), module.strong_agent()],
+        room_candidates=[module.weak_room(), module.strong_room()],
+        metadata={"cookbook": "sdk-multi-agent-room-probe-optimization"},
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["multi_agent_room_probe_proof_passed"] is True
+    assert result["multi_agent_room_probe_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
+    )
+    assert result["multi_agent_room_probe_proof"]["failed_check_ids"] == []
+    best_pair = result["optimization"]["best_config"]["agent_room"]
+    assert best_pair["room"]["allow_unknown_roles"] is False
+    assert set(best_pair["room"]["participants"]) == {
+        "planner",
+        "retriever",
+        "critic",
+    }
+    history_by_status = {}
+    for item in result["optimization"]["history"]:
+        pair = item["candidate_config"].get("agent_room") or item["candidate_config"]
+        history_by_status[
+            (
+                pair["room"]["allow_unknown_roles"],
+                len(pair["agent"]["responses"][0]["tool_calls"]),
+            )
+        ] = item
+    assert history_by_status[(True, 0)]["score"] < history_by_status[(False, 1)][
+        "score"
+    ]
+    assert history_by_status[(False, 1)]["metrics"][
+        "multi_agent_room_probe_coordination_quality"
+    ] == pytest.approx(1.0)
+
+    manifest = optimize.build_multi_agent_run_manifest_from_probe_optimization(
+        result,
+        name="promoted-multi-agent-room-probe-run",
+        evaluation_config=module.evaluation_config(),
+        metadata={"cookbook": "sdk-multi-agent-room-probe-optimization"},
+    )
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["metadata"]["promoted_from_multi_agent_room_probe"] is True
+    assert manifest["metadata"]["multi_agent_room_probe_proof_status"] == "passed"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "multi_agent_room"
+    ]
+    room = manifest["simulation"]["environments"][0]["data"]
+    assert room["handoff_contracts"]["retriever"]["require_reason"] is True
+    assert room["expected_reconciliation"]["accepted_source"] == "critic"
+    assert manifest["evaluation"]["agent_report"]["config"] == module.evaluation_config()
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-multi-agent-room-probe-run.json",
+    )
+    run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    assert run_result["summary"]["metric_averages"][
+        "multi_agent_coordination_quality"
+    ] == pytest.approx(1.0)
+    state = run_result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
 
 
 def test_sdk_multi_agent_simulation_example_runs(monkeypatch, tmp_path):

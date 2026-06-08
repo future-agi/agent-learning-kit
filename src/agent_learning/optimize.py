@@ -41,6 +41,9 @@ AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND = (
 AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND = (
     "agent-learning.optimization.multi-agent-coordination-proof.v1"
 )
+AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.multi-agent-room-probe-proof.v1"
+)
 AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND = (
     "agent-learning.optimization.orchestration-stack-proof.v1"
 )
@@ -7197,6 +7200,602 @@ def optimize_multi_agent_coordination(
         name=result_name,
         dry_run=dry_run,
     )
+
+
+def optimize_multi_agent_room_probe(
+    *,
+    name: str,
+    participants: Mapping[str, Any] | Sequence[Any],
+    agent_candidates: Sequence[Mapping[str, Any]],
+    room_candidates: Sequence[Mapping[str, Any]],
+    target: str | None = None,
+    threshold: float = 0.9,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize local multi-agent room candidates with direct probes."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not participants:
+        raise ValueError("participants is required")
+    if not agent_candidates:
+        raise ValueError("agent_candidates must contain at least one candidate")
+    if not room_candidates:
+        raise ValueError("room_candidates must contain at least one candidate")
+
+    pair_candidates = [
+        {
+            "agent": copy.deepcopy(dict(agent)),
+            "room": _multi_agent_probe_room_candidate(
+                participants=participants,
+                room=candidate,
+                target=target,
+                allow_external_target=allow_external_target,
+            ),
+        }
+        for agent in agent_candidates
+        for candidate in room_candidates
+    ]
+    opt = _opt()
+    optimizer_module = optional_module("fi.opt.optimizers", _OPTIMIZE_EXTRA)
+    optimization_target = opt.OptimizationTarget(
+        name=name,
+        layers=["multi_agent", "orchestration", "policy", "harness", "evaluator"],
+        base_config=copy.deepcopy(pair_candidates[0]),
+        search_space={"agent_room": copy.deepcopy(pair_candidates)},
+        metadata={
+            "source": "agent_learning.optimize.optimize_multi_agent_room_probe",
+            "task_kind": "multi_agent_room_probe",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+    def evaluate_candidate(candidate: Any) -> Any:
+        config = _plain_mapping(candidate.config)
+        pair = _plain_mapping(config.get("agent_room")) or config
+        agent = _plain_mapping(pair.get("agent"))
+        room = _plain_mapping(pair.get("room"))
+        probe_result = _run_multi_agent_room_probe_candidate(
+            participants=participants,
+            agent=agent,
+            room=room,
+            target=target,
+            metadata=metadata,
+            default_allow_external_target=allow_external_target,
+        )
+        scoring = score_multi_agent_room_probe_result(probe_result)
+        return opt.CandidateEvaluation(
+            candidate=candidate,
+            score=float(scoring["score"]),
+            reason=str(scoring["reason"]),
+            report=copy.deepcopy(probe_result),
+            metadata={
+                "candidate_patch": copy.deepcopy(candidate.patch),
+                "patch": copy.deepcopy(candidate.patch),
+                "search_paths": list(candidate.metadata.get("search_paths", [])),
+                "metrics": copy.deepcopy(scoring["metrics"]),
+                "findings": copy.deepcopy(probe_result.get("findings", [])),
+                "report_summary": copy.deepcopy(probe_result.get("summary", {})),
+                "evaluation_score": float(scoring["score"]),
+                "evaluation_passed": bool(scoring["passed"]),
+            },
+        )
+
+    optimizer = optimizer_module.AgentOptimizer(
+        target=optimization_target,
+        evaluate_candidate=evaluate_candidate,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        auto_diagnose=False,
+    )
+    optimization_result = optimizer.optimize()
+    payload = _multi_agent_probe_optimization_payload(
+        name=name,
+        threshold=threshold,
+        optimization_result=optimization_result,
+        metadata=metadata,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_multi_agent_room_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def build_multi_agent_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    evaluation_config: Mapping[str, Any],
+    name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    metadata: Optional[Mapping[str, Any]] = None,
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+) -> dict[str, Any]:
+    """Promote a verified multi-agent probe optimization into a run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    pair = _plain_mapping(best_config.get("agent_room")) or best_config
+    agent = _plain_mapping(pair.get("agent"))
+    room = _multi_agent_probe_manifest_room(_plain_mapping(pair.get("room")))
+    participants = room.get("participants")
+    if not agent:
+        raise ValueError("selected agent is required")
+    if not room or not participants:
+        raise ValueError("selected room participants are required")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    proof = _plain_mapping(
+        payload.get("multi_agent_room_probe_proof")
+        or optimization.get("multi_agent_room_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND:
+        raise ValueError("multi_agent_room_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("multi_agent_room_probe_proof must be passed")
+
+    from . import simulate as _agent_simulate
+
+    merged_metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_multi_agent_run_manifest_from_probe_optimization"
+        ),
+        "promoted_from_multi_agent_room_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+            or proof.get("selected_candidate_id")
+        ),
+        "multi_agent_room_probe_proof": copy.deepcopy(proof),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    manifest = _agent_simulate.build_multi_agent_coordination_run_manifest(
+        name=str(name or f"{payload.get('name') or 'multi-agent-room-probe'}-run"),
+        participants=participants,
+        agent=agent,
+        room=room,
+        evaluation_config=evaluation_config,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+        metadata=merged_metadata,
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_multi_agent_room_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": merged_metadata["probe_selected_candidate_id"],
+        "multi_agent_room_probe_proof_status": proof.get("status"),
+    }
+    return manifest
+
+
+def score_multi_agent_room_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Score a multi-agent room probe artifact into local optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    case_count = max(_as_int(summary.get("case_count")), 1)
+    passed_cases = _as_int(summary.get("passed_case_count"))
+    case_pass_rate = passed_cases / case_count
+    local_contract_quality = 1.0 if (
+        summary.get("local_executable_fixture") is True
+        and summary.get("requires_external_service") is False
+    ) else 0.0
+    role_boundary = 1.0 if (
+        _as_int(summary.get("participant_count")) >= 2
+        and summary.get("allow_unknown_roles") is False
+        and _as_int(summary.get("known_handoff_count"))
+        >= _as_int(summary.get("handoff_count"))
+        and _as_int(summary.get("known_review_count"))
+        >= _as_int(summary.get("review_count"))
+    ) else 0.0
+    handoff_contract = 1.0 if (
+        _as_int(summary.get("handoff_count")) > 0
+        and _as_int(summary.get("handoff_contract_count")) > 0
+        and _as_int(summary.get("handoff_contract_matched_count"))
+        >= _as_int(summary.get("handoff_count"))
+    ) else 0.0
+    coordination_quality = 1.0 if (
+        _as_int(summary.get("expected_handoff_count")) > 0
+        and _as_int(summary.get("expected_review_count")) > 0
+        and summary.get("expected_reconciliation_present") is True
+        and _as_int(summary.get("unmatched_coordination_check_count")) == 0
+        and _as_int(summary.get("review_count")) > 0
+        and _as_int(summary.get("reconciliation_count")) > 0
+        and _as_int(summary.get("reconciliation_conflict_count")) == 0
+        and summary.get("terminal_state") is True
+    ) else 0.0
+    finding_quality = 1.0 if len(_plain_list(result.get("findings"))) == 0 else 0.0
+    score = round(
+        (
+            case_pass_rate * 0.2
+            + role_boundary * 0.2
+            + handoff_contract * 0.2
+            + coordination_quality * 0.25
+            + local_contract_quality * 0.05
+            + finding_quality * 0.1
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.multi-agent-room-probe-score.v1",
+        "score": score,
+        "passed": bool(result.get("passed")) and score >= 0.9,
+        "reason": (
+            "multi-agent room probe passed with handoff, review, and reconciliation evidence"
+            if bool(result.get("passed")) and score >= 0.9
+            else "multi-agent room probe did not close coordination evidence"
+        ),
+        "metrics": {
+            "multi_agent_room_probe_pass_rate": round(case_pass_rate, 6),
+            "multi_agent_room_probe_local_contract_quality": local_contract_quality,
+            "multi_agent_room_probe_role_boundary": role_boundary,
+            "multi_agent_room_probe_handoff_contract": handoff_contract,
+            "multi_agent_room_probe_coordination_quality": coordination_quality,
+            "multi_agent_room_probe_finding_quality": finding_quality,
+            "multi_agent_room_probe_score": score,
+        },
+        "summary": copy.deepcopy(dict(summary)),
+    }
+
+
+def _multi_agent_probe_room_candidate(
+    *,
+    participants: Mapping[str, Any] | Sequence[Any],
+    room: Mapping[str, Any],
+    target: str | None,
+    allow_external_target: bool,
+) -> dict[str, Any]:
+    config = _multi_agent_room_data(participants=participants, room=room)
+    config.setdefault("target", target)
+    config.setdefault("allow_external_target", allow_external_target)
+    return config
+
+
+def _multi_agent_probe_manifest_room(room: Mapping[str, Any]) -> dict[str, Any]:
+    config = copy.deepcopy(dict(room))
+    for key in ("target", "allow_external_target", "metadata"):
+        config.pop(key, None)
+    return config
+
+
+def _run_multi_agent_room_probe_candidate(
+    *,
+    participants: Mapping[str, Any] | Sequence[Any],
+    agent: Mapping[str, Any],
+    room: Mapping[str, Any],
+    target: str | None,
+    metadata: Optional[Mapping[str, Any]],
+    default_allow_external_target: bool,
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        return _agent_simulate.probe_multi_agent_room(
+            participants=participants,
+            agent=agent,
+            room=room,
+            target=str(room.get("target") or target or ""),
+            metadata={
+                **copy.deepcopy(dict(metadata or {})),
+                **copy.deepcopy(dict(room.get("metadata") or {})),
+            },
+            allow_external_target=bool(
+                room.get("allow_external_target", default_allow_external_target)
+            ),
+        )
+    except Exception as exc:
+        return _failed_multi_agent_room_probe(
+            participants=participants,
+            agent=agent,
+            room=room,
+            target=target,
+            error=exc,
+            metadata=metadata,
+        )
+
+
+def _failed_multi_agent_room_probe(
+    *,
+    participants: Mapping[str, Any] | Sequence[Any],
+    agent: Mapping[str, Any],
+    room: Mapping[str, Any],
+    target: str | None,
+    error: Exception,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        contract = _agent_simulate.multi_agent_room_contract(
+            target=str(room.get("target") or target or ""),
+            participants=room.get("participants") or participants,
+            metadata=dict(metadata or {}),
+        )
+    except Exception:
+        contract = {
+            "kind": "agent-learning.multi-agent-room-contract.v1",
+            "requires_external_service": False,
+            "local_executable_fixture": bool(participants),
+        }
+    return {
+        "kind": "agent-learning.multi-agent-room-probe.v1",
+        "status": "failed",
+        "passed": False,
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "contract": contract,
+        "summary": {
+            "case_count": 1,
+            "passed_case_count": 0,
+            "failed_case_count": 1,
+            "finding_count": 1,
+            "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+            "requires_external_service": bool(contract.get("requires_external_service")),
+        },
+        "room": copy.deepcopy(dict(room)),
+        "state": {},
+        "findings": [
+            {
+                "check": "multi_agent_room_probe_exception",
+                "level": "error",
+                "message": str(error),
+                "observed": type(error).__name__,
+                "agent": copy.deepcopy(dict(agent)),
+            }
+        ],
+    }
+
+
+def _multi_agent_probe_optimization_payload(
+    *,
+    name: str,
+    threshold: float,
+    optimization_result: Any,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
+    best_candidate = getattr(optimization_result, "best_candidate", None)
+    best_candidate_id = getattr(best_candidate, "id", None)
+    best_config = _json_plain(getattr(best_candidate, "config", {}) or {})
+    history = _multi_agent_probe_history(optimization_result)
+    search_paths = _unique_strings(
+        [
+            str(path)
+            for row in history
+            for path in _plain_list(row.get("search_paths"))
+            if str(path)
+        ]
+    )
+    metric_averages = _metric_averages_from_history(history)
+    passed = final_score >= float(threshold)
+    return {
+        "schema_version": "agent-learning.cli.v1",
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": final_score,
+            "optimization_passed": passed,
+            "evaluation_score": final_score,
+            "evaluation_passed": passed,
+            "metric_averages": metric_averages,
+            "threshold": float(threshold),
+            "total_iterations": getattr(optimization_result, "total_iterations", None),
+            "total_evaluations": getattr(optimization_result, "total_evaluations", None),
+            "best_candidate_id": best_candidate_id,
+            "search_paths": search_paths,
+        },
+        "optimization": {
+            "final_score": final_score,
+            "best_candidate_id": best_candidate_id,
+            "best_config": best_config,
+            "source_manifest": {
+                "name": name,
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_multi_agent_room_probe",
+                    "task_kind": "multi_agent_room_probe",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "history": history,
+            "manifest_optimization": {
+                "kind": "multi_agent_room_probe_optimization",
+                "name": name,
+                "final_score": final_score,
+                "threshold": float(threshold),
+                "passed": passed,
+                "best_candidate_id": best_candidate_id,
+                "best_config": copy.deepcopy(best_config),
+                "search_paths": search_paths,
+                "metrics": metric_averages,
+                "history": copy.deepcopy(history),
+            },
+        },
+        "evaluation": {
+            "kind": "agent-learning.multi-agent-room-probe-evaluation.v1",
+            "score": final_score,
+            "passed": passed,
+            "summary": {
+                "metric_averages": metric_averages,
+                "history_count": len(history),
+                "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
+            },
+        },
+    }
+
+
+def _multi_agent_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(optimization_result, "history", []) or []):
+        metadata = _plain_mapping(getattr(item, "metadata", {}) or {})
+        report = _json_plain(metadata.get("report") or {})
+        report_summary = _plain_mapping(metadata.get("report_summary"))
+        if not report_summary and isinstance(report, Mapping):
+            report_summary = _plain_mapping(report.get("summary"))
+        patch = _plain_mapping(metadata.get("patch") or metadata.get("candidate_patch"))
+        score = getattr(item, "average_score", None)
+        rows.append(
+            {
+                "candidate_id": getattr(item, "candidate_id", None),
+                "score": score,
+                "patch": patch,
+                "candidate_patch": patch,
+                "candidate_config": _json_plain(getattr(item, "candidate_config", {}) or {}),
+                "search_paths": list(metadata.get("search_paths") or []),
+                "metrics": _plain_mapping(metadata.get("metrics")),
+                "findings": _plain_list(metadata.get("findings")),
+                "evaluation_score": metadata.get("evaluation_score", score),
+                "evaluation_passed": metadata.get("evaluation_passed"),
+                "report": report,
+                "report_summary": report_summary,
+            }
+        )
+    return rows
+
+
+def _with_multi_agent_room_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _multi_agent_room_probe_proof(result, optimization)
+    result["multi_agent_room_probe_proof"] = proof
+    optimization["multi_agent_room_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["multi_agent_room_probe_proof_status"] = proof["status"]
+    summary["multi_agent_room_probe_proof_passed"] = proof["passed"]
+    summary["multi_agent_room_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["multi_agent_room_probe_proof_check_count"] = proof["check_count"]
+    summary["multi_agent_room_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _multi_agent_room_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    selected_summary = _plain_mapping(selected_report.get("summary"))
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    contract = _plain_mapping(selected_report.get("contract"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold")) or 0.9
+    checks = [
+        _proof_check(
+            "multi_agent_room_probe_report_present",
+            passed=selected_report.get("kind") == "agent-learning.multi-agent-room-probe.v1"
+            and selected_report.get("status") == "passed",
+            required=True,
+            reason="selected candidate carries a passing multi-agent room probe",
+            evidence={"kind": selected_report.get("kind"), "status": selected_report.get("status")},
+        ),
+        _proof_check(
+            "multi_agent_room_probe_local_contract_closed",
+            passed=contract.get("kind") == "agent-learning.multi-agent-room-contract.v1"
+            and contract.get("requires_external_service") is False
+            and contract.get("local_executable_fixture") is True,
+            required=True,
+            reason="selected multi-agent room contract is local and no-external-service",
+            evidence={"multi_agent_room_contract": copy.deepcopy(contract)},
+        ),
+        _proof_check(
+            "multi_agent_room_probe_role_boundary_closed",
+            passed=_as_int(selected_summary.get("participant_count")) >= 2
+            and selected_summary.get("allow_unknown_roles") is False
+            and _as_int(selected_summary.get("known_handoff_count"))
+            >= _as_int(selected_summary.get("handoff_count"))
+            and _as_int(selected_summary.get("known_review_count"))
+            >= _as_int(selected_summary.get("review_count")),
+            required=True,
+            reason="selected probe has explicit roles and known handoff/review targets",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "multi_agent_room_probe_coordination_closed",
+            passed=_as_int(selected_summary.get("handoff_count")) > 0
+            and _as_int(selected_summary.get("handoff_contract_matched_count"))
+            >= _as_int(selected_summary.get("handoff_count"))
+            and _as_int(selected_summary.get("review_count")) > 0
+            and _as_int(selected_summary.get("reconciliation_count")) > 0
+            and _as_int(selected_summary.get("unmatched_coordination_check_count")) == 0
+            and _as_int(selected_summary.get("reconciliation_conflict_count")) == 0
+            and selected_summary.get("terminal_state") is True,
+            required=True,
+            reason="selected probe closes handoff, review, reconciliation, and terminal state evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "multi_agent_room_probe_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("multi_agent_room_probe_score")) >= threshold
+            and _as_float(selected_metrics.get("multi_agent_room_probe_coordination_quality")) >= 1.0
+            and _as_float(selected_metrics.get("multi_agent_room_probe_role_boundary")) >= 1.0,
+            required=True,
+            reason="selected multi-agent probe metrics meet threshold",
+            evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
+        ),
+        _proof_check(
+            "multi_agent_room_probe_patch_surface_present",
+            passed=bool(selected_patch) and "agent_room" in selected_patch,
+            required=True,
+            reason="optimizer selected a concrete agent-room candidate",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "multi_agent_room_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for multi-agent probe search",
+            evidence={"governance_status": governance.get("status")},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l2_native_multi_agent_room_probe_verified"
+            if passed
+            else "multi_agent_room_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "requires_external_service": False,
+        "evidence": {
+            "selected_report_summary": copy.deepcopy(selected_summary),
+            "selected_metrics": copy.deepcopy(selected_metrics),
+            "multi_agent_room_contract": copy.deepcopy(contract),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
 
 
 def build_realtime_optimization_manifest(
@@ -24775,6 +25374,7 @@ __all__ = [
     "AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
+    "AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
     "AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_ATTACK_EVOLUTION_PROOF_KIND",
@@ -24804,6 +25404,7 @@ __all__ = [
     "build_long_horizon_redteam_optimization_manifest",
     "build_memory_optimization_manifest",
     "build_memory_run_manifest_from_probe_optimization",
+    "build_multi_agent_run_manifest_from_probe_optimization",
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_multimodal_image_optimization_manifest",
@@ -24860,6 +25461,7 @@ __all__ = [
     "optimize_memory_layer_probe",
     "optimize_multi_agent_framework_handoff",
     "optimize_multi_agent_coordination",
+    "optimize_multi_agent_room_probe",
     "optimize_multimodal_image",
     "optimize_optimizer_backend_portfolio",
     "optimize_optimizer_governance",
@@ -24896,6 +25498,7 @@ __all__ = [
     "relevant_search_paths",
     "score_framework_adapter_probe_result",
     "score_memory_layer_probe_result",
+    "score_multi_agent_room_probe_result",
     "with_framework_adapter_matrix_proof",
     "with_framework_certification_proof",
     "with_framework_runtime_proof",

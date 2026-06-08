@@ -12,6 +12,11 @@ from .frameworks import (
 )
 from .import_probe import probe_framework_imports
 from .memory import memory_layer_contract, probe_memory_layer, run_memory_layer_probe
+from .multi_agent import (
+    multi_agent_room_contract,
+    probe_multi_agent_room,
+    run_multi_agent_room_probe,
+)
 from .mocks import EchoAgentWrapper, RuleBasedAgentWrapper, ScriptedAgentWrapper, make_tool_response
 from .wrappers import (
     OpenAIAgentWrapper,
@@ -43,6 +48,9 @@ __all__ = [
     "memory_layer_contract",
     "probe_memory_layer",
     "run_memory_layer_probe",
+    "multi_agent_room_contract",
+    "probe_multi_agent_room",
+    "run_multi_agent_room_probe",
     "supported_frameworks",
     "probe_framework_imports",
     "wrap_agent",

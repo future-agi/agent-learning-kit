@@ -854,6 +854,16 @@ For multi-agent coordination, pass explicit participant roles, agent trace
 candidates, and room-contract candidates. The SDK builds a runnable
 `multi_agent_room` optimization manifest that can search handoff, review,
 reconciliation, and shared room-state behavior together.
+Before writing a full multi-agent manifest, use
+`simulate.probe_multi_agent_room()` or
+`optimize.optimize_multi_agent_room_probe()` to test local agent/room pairs for
+explicit role boundaries, known handoff and review targets, matched handoff
+contracts, expected handoff/review/reconciliation checks, conflict-free
+accepted-source reconciliation, and terminal room state.
+`optimize.build_multi_agent_run_manifest_from_probe_optimization(...)` promotes
+the selected pair into the normal multi-agent simulation path. See
+`examples/sdk_multi_agent_room_probe_optimization.py` for an end-to-end probe,
+promotion, and evaluated run cookbook.
 Multi-agent coordination optimization artifacts also emit
 `agent-learning.optimization.multi-agent-coordination-proof.v1`, a native proof
 derived from the selected candidate and selected report. It checks that the
@@ -917,6 +927,9 @@ AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY=... \
 
 PYTHONPATH=src python examples/sdk_memory_layer_probe_optimization.py \
   artifacts/sdk-memory-layer-probe-optimization.json
+
+PYTHONPATH=src python examples/sdk_multi_agent_room_probe_optimization.py \
+  artifacts/sdk-multi-agent-room-probe-optimization.json
 
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
