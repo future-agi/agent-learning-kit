@@ -587,8 +587,11 @@ Promote that selected adapter into the normal local simulation path with
 helper preserves the selected target, method, input mode, runtime tracing, probe
 proof, selected contract metadata, and any auto-discovery artifact, while
 optionally attaching the same `agent_report` evaluation config used by full
-framework simulations. See `examples/sdk_framework_adapter_probe_promotion.py`
-and `examples/sdk_framework_adapter_auto_discovery_promotion.py` for end-to-end
+framework simulations. Set `auto_evaluation_config=True` or call
+`optimize.build_framework_adapter_probe_evaluation_config(...)` to generate
+runtime-contract and adapter-contract eval gates directly from the selected
+probe proof. See `examples/sdk_framework_adapter_probe_promotion.py` and
+`examples/sdk_framework_adapter_auto_discovery_promotion.py` for end-to-end
 cookbooks that probe or discover candidates, build the manifest, run it, and
 save an `agent-learning.run.v1` result.
 

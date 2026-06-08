@@ -343,6 +343,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.build_artifact_optimization_suite is not None
     assert optimize.optimize_artifact_evidence is not None
     assert optimize.build_framework_optimization_manifest is not None
+    assert optimize.build_framework_adapter_probe_evaluation_config is not None
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
     assert optimize.optimize_multi_agent_framework_handoff is not None
@@ -1357,7 +1358,7 @@ def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
     manifest = optimize.build_framework_run_manifest_from_probe_optimization(
         optimization_result,
         name="promoted-framework-adapter-auto-discovery-run",
-        evaluation_config=module.evaluation_config(),
+        auto_evaluation_config=True,
         metadata={"suite": "auto-discovery-promotion"},
     )
 
@@ -1375,6 +1376,16 @@ def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
     assert manifest["metadata"]["adapter_candidate_source"] == "discovery"
     assert manifest["metadata"]["framework_adapter_discovery_used"] is True
     assert manifest["metadata"]["framework_adapter_discovery_status"] == "passed"
+    eval_config = manifest["evaluation"]["agent_report"]["config"]
+    assert eval_config["framework_runtime_contract"]["method"] == "execute_task"
+    assert eval_config["framework_runtime_contract"]["input_mode"] == "dict"
+    assert eval_config["framework_runtime_contract"]["required_tools"] == [
+        "framework_trace_status"
+    ]
+    assert eval_config["framework_adapter_contract_quality"]["method"] == (
+        "execute_task"
+    )
+    assert eval_config["metric_weights"]["framework_runtime_contract"] == 10.0
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(

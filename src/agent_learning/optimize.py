@@ -15282,6 +15282,7 @@ def build_framework_run_manifest_from_probe_optimization(
     scenario: Optional[Mapping[str, Any]] = None,
     framework_trace: Optional[Mapping[str, Any]] = None,
     evaluation_config: Optional[Mapping[str, Any]] = None,
+    auto_evaluation_config: bool = False,
     threshold: float = 0.9,
     metadata: Optional[Mapping[str, Any]] = None,
     factory: Optional[bool] = None,
@@ -15402,6 +15403,15 @@ def build_framework_run_manifest_from_probe_optimization(
         "framework_adapter_discovery": copy.deepcopy(discovery),
         "framework_adapter_discovery_summary": copy.deepcopy(discovery_summary),
     }
+    selected_evaluation_config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else (
+            build_framework_adapter_probe_evaluation_config(payload)
+            if auto_evaluation_config
+            else None
+        )
+    )
 
     from . import simulate as _agent_simulate
 
@@ -15419,7 +15429,7 @@ def build_framework_run_manifest_from_probe_optimization(
         framework_trace=framework_trace,
         min_turns=min_turns,
         max_turns=max_turns,
-        evaluation_enabled=evaluation_config is not None,
+        evaluation_enabled=selected_evaluation_config is not None,
         output_key=str(adapter["output_key"]) if adapter.get("output_key") else None,
         system_prompt=(
             str(adapter["system_prompt"]) if adapter.get("system_prompt") else None
@@ -15437,15 +15447,194 @@ def build_framework_run_manifest_from_probe_optimization(
         "framework_adapter_discovery_used": bool(discovery),
         "framework_adapter_discovery_status": discovery.get("status"),
     }
-    if evaluation_config is not None:
+    if selected_evaluation_config is not None:
         manifest["evaluation"] = {
             "enabled": True,
             "agent_report": {
                 "threshold": float(threshold),
-                "config": copy.deepcopy(dict(evaluation_config)),
+                "config": selected_evaluation_config,
             },
         }
     return manifest
+
+
+def build_framework_adapter_probe_evaluation_config(
+    optimization_result: Mapping[str, Any],
+    *,
+    task_description: Optional[str] = None,
+    expected_result: Optional[str] = None,
+    required_tools: Optional[Sequence[str]] = None,
+    success_criteria: Optional[Sequence[str]] = None,
+) -> dict[str, Any]:
+    """Build an agent-report config from a verified adapter-probe optimization."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    adapter = _plain_mapping(best_config.get("adapter"))
+    proof = _plain_mapping(
+        payload.get("framework_adapter_probe_proof")
+        or optimization.get("framework_adapter_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND:
+        raise ValueError("framework_adapter_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("framework_adapter_probe_proof must be passed")
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    proof_evidence = _plain_mapping(proof.get("evidence"))
+    contract = _plain_mapping(
+        selected_report.get("contract")
+        or proof_evidence.get("framework_adapter_contract")
+    )
+    selected_report_summary = _plain_mapping(
+        selected_report.get("summary")
+        or proof_evidence.get("selected_report_summary")
+    )
+    framework = str(
+        contract.get("framework")
+        or selected_report.get("framework")
+        or proof.get("framework")
+        or best_config.get("framework")
+        or "custom"
+    )
+    method = str(
+        adapter.get("method")
+        or proof.get("method")
+        or selected_report.get("method")
+        or contract.get("method")
+        or "auto"
+    )
+    input_mode = str(
+        adapter.get("input_mode")
+        or proof.get("input_mode")
+        or selected_report.get("input_mode")
+        or contract.get("input_mode")
+        or "auto"
+    )
+    tool_names = _unique_strings(
+        [
+            *list(required_tools or []),
+            *_framework_probe_response_values(selected_report, "tool_names"),
+        ]
+    )
+    required_signals = _unique_strings(
+        [
+            "method",
+            "input",
+            "output",
+            "metadata",
+            *(["tool"] if tool_names else []),
+        ]
+    )
+    criteria = _unique_strings(
+        list(success_criteria or [])
+        or [
+            f"{method} runtime evidence",
+            "framework adapter contract quality",
+            *(["tool evidence"] if tool_names else []),
+        ]
+    )
+    contract_capabilities = _unique_strings(contract.get("capabilities"))
+    required_capabilities = [
+        capability
+        for capability in [
+            "messages",
+            "tool_calls",
+            "runtime_trace",
+            "structured_input",
+        ]
+        if capability in contract_capabilities
+    ]
+    if not required_capabilities:
+        required_capabilities = ["messages", "tool_calls", "runtime_trace"]
+
+    runtime_contract: dict[str, Any] = {
+        "framework": framework,
+        "method": method,
+        "input_mode": input_mode,
+        "required_signals": required_signals,
+        "max_error_count": 0,
+        "min_invocation_count": max(
+            _as_int(selected_report_summary.get("runtime_trace_count")),
+            1,
+        ),
+    }
+    if tool_names:
+        runtime_contract["required_tools"] = tool_names
+
+    contract_quality: dict[str, Any] = {
+        "kind": "agent-learning.framework-adapter-contract.v1",
+        "framework": framework,
+        "method": method,
+        "input_mode": input_mode,
+        "require_trace_runtime": True,
+        "require_local_executable_fixture": True,
+        "require_no_external_service": True,
+        "require_target": True,
+        "required_schema_sections": ["input", "output"],
+        "required_lifecycle_hooks": _unique_strings(
+            contract.get("lifecycle_hooks")
+        )
+        or ["setup", "invoke", "observe", "teardown"],
+        "required_capabilities": required_capabilities,
+        "required_evidence_requirements": _unique_strings(
+            contract.get("evidence_requirements")
+        )
+        or [
+            "framework_runtime",
+            "framework_trace",
+            "tool_calls",
+            "adapter_conformance",
+            "metric_evidence",
+        ],
+    }
+    metric_weights = {
+        "framework_adapter_contract_quality": 8.0,
+        "framework_runtime_contract": 10.0,
+        "task_completion": 1.0,
+    }
+    if tool_names:
+        metric_weights["tool_selection_accuracy"] = 4.0
+
+    return {
+        "task_description": task_description
+        or f"Validate the promoted {framework} framework adapter.",
+        "expected_result": expected_result
+        or (
+            f"The selected {method}/{input_mode} adapter emits local framework "
+            "runtime evidence."
+        ),
+        "required_tools": tool_names,
+        "available_tools": tool_names,
+        "success_criteria": criteria,
+        "required_framework_runtime": [
+            "framework_runtime",
+            "method",
+            "input",
+            "output",
+            "metadata",
+            *(["tool"] if tool_names else []),
+        ],
+        "framework_runtime_contract": runtime_contract,
+        "framework_adapter_contract_quality": contract_quality,
+        "metric_weights": metric_weights,
+    }
+
+
+def _framework_probe_response_values(
+    selected_report: Mapping[str, Any],
+    key: str,
+) -> list[str]:
+    values: list[str] = []
+    for case in _plain_list(selected_report.get("cases")):
+        case_dict = _plain_mapping(case)
+        response = _plain_mapping(case_dict.get("response"))
+        values.extend(str(item) for item in _plain_list(response.get(key)) if str(item))
+    return values
 
 
 def score_framework_adapter_probe_result(
@@ -28947,6 +29136,7 @@ __all__ = [
     "build_evaluation_hook_run_manifest_from_probe_optimization",
     "build_external_agent_adapter_optimization_manifest",
     "build_framework_adapter_matrix_optimization_manifest",
+    "build_framework_adapter_probe_evaluation_config",
     "build_framework_run_manifest_from_probe_optimization",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",
