@@ -50,7 +50,6 @@ def build_manifest() -> dict[str, Any]:
         name="sdk-framework-adapter-one-call-promotion-run",
         framework="custom_refund_orchestrator",
         target=TARGET,
-        agent_factory=LocalRefundOrchestrator,
         method_candidates=["run", "execute_task"],
         input_mode_candidates=["text", "dict", "agent_input"],
         discovery_max_candidates=4,

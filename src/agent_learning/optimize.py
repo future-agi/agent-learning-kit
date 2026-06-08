@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import importlib
+import importlib.util
+import inspect
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlparse
@@ -15125,6 +15128,8 @@ def optimize_framework_adapter_probe(
     agent_factory: Optional[Callable[[], Any]] = None,
     cases: Sequence[Mapping[str, Any]] = (),
     target: str | None = None,
+    target_base_dir: str | Path = ".",
+    target_factory: Optional[bool] = None,
     method_candidates: Optional[Sequence[str | None]] = None,
     input_mode_candidates: Optional[Sequence[str]] = None,
     threshold: float = 0.9,
@@ -15141,17 +15146,26 @@ def optimize_framework_adapter_probe(
     pass a local framework object or factory, optional candidate adapter specs,
     and probe cases. When ``adapter_candidates`` is omitted, the helper first
     runs local framework adapter discovery and then probes the discovered
-    candidates. It returns a normal ``agent-learning.optimization.v1`` artifact
-    with candidate lineage, optimizer governance, discovery evidence, and a
-    probe-specific proof.
+    candidates. If no live object is supplied, a local ``target`` string such
+    as ``"path/to/app.py:Agent"`` or ``"package.module:factory"`` is resolved
+    before probing. It returns a normal ``agent-learning.optimization.v1``
+    artifact with candidate lineage, optimizer governance, discovery evidence,
+    and a probe-specific proof.
     """
 
     if not name:
         raise ValueError("name is required")
     if not framework:
         raise ValueError("framework is required")
+    agent, agent_factory, _ = _resolve_framework_probe_agent(
+        agent=agent,
+        agent_factory=agent_factory,
+        target=target,
+        target_base_dir=target_base_dir,
+        target_factory=target_factory,
+    )
     if agent is None and agent_factory is None:
-        raise ValueError("agent or agent_factory is required")
+        raise ValueError("agent, agent_factory, or a local target is required")
     discovery_result: dict[str, Any] | None = None
     candidate_source = "explicit"
     if adapter_candidates:
@@ -15282,6 +15296,8 @@ def build_framework_run_manifest_from_local_adapter(
     agent: Any = None,
     agent_factory: Optional[Callable[[], Any]] = None,
     cases: Sequence[Mapping[str, Any]] = (),
+    target_base_dir: str | Path = ".",
+    target_factory: Optional[bool] = None,
     method_candidates: Optional[Sequence[str | None]] = None,
     input_mode_candidates: Optional[Sequence[str]] = None,
     required_env: Sequence[str] = (),
@@ -15300,17 +15316,36 @@ def build_framework_run_manifest_from_local_adapter(
     min_turns: int = 1,
     max_turns: int = 1,
 ) -> dict[str, Any]:
-    """Optimize a local framework adapter and return a promoted run manifest."""
+    """Optimize a local framework adapter and return a promoted run manifest.
+
+    ``agent`` or ``agent_factory`` may be supplied directly. When they are
+    omitted, the helper resolves the local ``target`` string and probes that
+    callable before writing the promoted manifest.
+    """
 
     if not name:
         raise ValueError("name is required")
     if not target:
         raise ValueError("target is required")
 
+    agent, agent_factory, inferred_target_factory = _resolve_framework_probe_agent(
+        agent=agent,
+        agent_factory=agent_factory,
+        target=target,
+        target_base_dir=target_base_dir,
+        target_factory=target_factory,
+    )
+    selected_factory = (
+        factory
+        if factory is not None
+        else inferred_target_factory
+    )
     optimization_result = optimize_framework_adapter_probe(
         name=f"{name}-adapter-probe",
         framework=framework,
         target=target,
+        target_base_dir=target_base_dir,
+        target_factory=target_factory,
         adapter_candidates=adapter_candidates,
         agent=agent,
         agent_factory=agent_factory,
@@ -15339,7 +15374,7 @@ def build_framework_run_manifest_from_local_adapter(
             "source": "agent_learning.optimize.build_framework_run_manifest_from_local_adapter",
             **copy.deepcopy(dict(metadata or {})),
         },
-        factory=factory,
+        factory=selected_factory,
         min_turns=min_turns,
         max_turns=max_turns,
     )
@@ -15786,6 +15821,75 @@ def _framework_probe_candidate_config(
     config.setdefault("trace_runtime", trace_runtime)
     config.setdefault("allow_external_target", allow_external_target)
     return config
+
+
+def _resolve_framework_probe_agent(
+    *,
+    agent: Any,
+    agent_factory: Optional[Callable[[], Any]],
+    target: str | None,
+    target_base_dir: str | Path,
+    target_factory: Optional[bool],
+) -> tuple[Any, Optional[Callable[[], Any]], Optional[bool]]:
+    if agent is not None or agent_factory is not None:
+        return agent, agent_factory, None
+    if not target:
+        return agent, agent_factory, None
+
+    resolved = _load_local_framework_target(target, base_dir=target_base_dir)
+    use_factory = (
+        bool(target_factory)
+        if target_factory is not None
+        else inspect.isclass(resolved)
+    )
+    if use_factory:
+        return None, resolved, True
+    return resolved, None, False
+
+
+def _load_local_framework_target(
+    target: str | Path,
+    *,
+    base_dir: str | Path = ".",
+) -> Callable[..., Any]:
+    target_text = str(target or "").strip()
+    target_scheme = urlparse(target_text).scheme.lower()
+    if target_scheme in {"http", "https"}:
+        raise ValueError(
+            "local framework adapter target is required for probe optimization; "
+            "pass agent or agent_factory for live external targets"
+        )
+
+    module_name, separator, attribute_path = target_text.partition(":")
+    if not separator or not module_name or not attribute_path:
+        raise ValueError(
+            "local framework adapter target must use "
+            "'module:callable' or 'path.py:callable'"
+        )
+
+    if module_name.endswith(".py") or "/" in module_name or "\\" in module_name:
+        module_path = Path(module_name).expanduser()
+        if not module_path.is_absolute():
+            module_path = Path(base_dir).expanduser() / module_path
+        spec = importlib.util.spec_from_file_location(module_path.stem, module_path)
+        if spec is None or spec.loader is None:
+            raise ValueError(f"cannot load framework adapter target: {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    else:
+        module = importlib.import_module(module_name)
+
+    value: Any = module
+    for raw_part in attribute_path.split("."):
+        part = raw_part.strip()
+        if not part:
+            raise ValueError(f"invalid framework adapter target: {target_text}")
+        value = getattr(value, part, None)
+        if value is None:
+            raise ValueError(f"framework adapter target not found: {target_text}")
+    if not callable(value):
+        raise ValueError(f"framework adapter target is not callable: {target_text}")
+    return value
 
 
 def _discover_framework_probe_candidates(

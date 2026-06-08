@@ -554,7 +554,9 @@ assert result["status"] == "passed"
 When several adapter shapes are plausible, run the same probe through
 AgentOptimizer before building a full manifest. You can pass explicit
 `adapter_candidates`, or omit them and let the optimizer use local adapter
-discovery first:
+discovery first. If you omit `agent` and `agent_factory`, the SDK resolves a
+local `target` string such as `framework_shims.py:LocalRefundOrchestrator` or
+`my_package.agent:build_agent` before probing:
 
 ```python
 from agent_learning import optimize
@@ -599,9 +601,10 @@ For the shortest SDK path, use
 `optimize.build_framework_run_manifest_from_local_adapter(...)`: it runs local
 adapter discovery when candidates are omitted, optimizes the adapter probe,
 promotes the selected method/input mode, and attaches generated eval gates in
-one call before you run the manifest. See
+one call before you run the manifest. It can start from a live object/factory
+or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_one_call_promotion.py` for the full local
-object-to-evaluated-run flow.
+target-to-evaluated-run flow.
 
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a

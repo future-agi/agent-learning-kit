@@ -1256,6 +1256,40 @@ def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
     assert proof_checks["framework_adapter_probe_discovery_closed"]["required"] is True
 
 
+def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
+    from agent_learning import optimize
+
+    target = (
+        f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
+        ":LocalRefundOrchestrator"
+    )
+    result = optimize.optimize_framework_adapter_probe(
+        name="target-only-framework-adapter-probe",
+        framework="custom_refund_orchestrator",
+        target=target,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        discovery_max_candidates=4,
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit framework evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+    )
+
+    assert result["status"] == "passed"
+    assert result["summary"]["adapter_candidate_source"] == "discovery"
+    assert result["summary"]["framework_adapter_discovery_used"] is True
+    assert result["optimization"]["best_config"]["adapter"]["method"] == "execute_task"
+    assert result["optimization"]["best_config"]["adapter"]["input_mode"] == "dict"
+    assert result["framework_adapter_probe_proof"]["status"] == "passed"
+
+
 def test_probe_optimization_promotes_to_framework_run_manifest(
     monkeypatch,
     tmp_path,
@@ -1406,7 +1440,6 @@ def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes(
         name="one-call-framework-adapter-run",
         framework="custom_refund_orchestrator",
         target=module.TARGET,
-        agent_factory=module.LocalRefundOrchestrator,
         method_candidates=["run", "execute_task"],
         input_mode_candidates=["text", "dict", "agent_input"],
         discovery_max_candidates=4,
@@ -1426,6 +1459,7 @@ def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes(
 
     assert manifest["version"] == "agent-learning.run.v1"
     assert manifest["agent"]["target"] == module.TARGET
+    assert manifest["agent"]["factory"] is True
     assert manifest["agent"]["method"] == "execute_task"
     assert manifest["agent"]["input_mode"] == "dict"
     assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
