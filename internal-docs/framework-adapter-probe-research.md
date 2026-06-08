@@ -24,8 +24,8 @@ the local-first adapter contract.
   https://reference.langchain.com/javascript/langchain-langgraph/index/CompiledGraph/invoke
 - AutoGen AgentChat agents use `run` and `run_stream`, return task/message
   histories, and are explicitly stateful. Probe implication: streaming and
-  multi-message outputs should be normalized into response content, events, and
-  tool evidence. Source:
+  multi-message outputs should be normalized into response content, tool calls,
+  tool responses, transcript events, and message-history state. Source:
   https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/agents.html
 - CrewAI crews call the crew entrypoint with an `inputs` payload. Probe
   implication: adapter discovery must preserve keyword-only input keys such as
@@ -127,6 +127,10 @@ Keep framework support local-first:
   finish reasons, usage blocks, and content `tool_use` blocks should normalize
   into ordinary `AgentResponse.tool_calls`, `provider_choice` /
   `provider_tool_call` events, provider metadata, and `provider_response` state.
+- Preserve framework transcript histories. `TaskResult(messages=[...])`,
+  message-history objects, tool-call request events, and tool-call execution
+  events should normalize into ordinary tool calls, tool responses, transcript
+  events, and `message_history` state.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

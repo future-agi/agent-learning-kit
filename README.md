@@ -654,6 +654,13 @@ content `tool_use` blocks become ordinary `tool_calls`, `provider_choice` /
 the same agent-report gates can require nested provider evidence. See
 `examples/sdk_framework_adapter_provider_response.py`.
 
+Message-history framework results are normalized as well. AutoGen-style
+`TaskResult(messages=[...])`, transcript objects, and message lists with
+embedded tool-call request/execution events become normal `tool_calls`,
+`tool_responses`, transcript events, and `message_history` state, so multi-agent
+framework transcripts can be optimized and scored without hand-written
+post-processing. See `examples/sdk_framework_adapter_message_history.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1265,6 +1272,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_nested_method.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_provider_response.py \
   artifacts/sdk-framework-adapter-provider-response.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_message_history.py \
+  artifacts/sdk-framework-adapter-message-history.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

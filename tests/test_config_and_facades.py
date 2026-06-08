@@ -1662,6 +1662,81 @@ def test_provider_response_framework_adapter_preserves_nested_tool_evidence(tmp_
     assert anthropic_case["runtime_trace"]["summary"]["input_kwargs_keys"] == ["model"]
 
 
+def test_message_history_framework_adapter_preserves_transcript_evidence(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_message_history.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_message_history_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "autogen",
+        module.LocalAutoGenTeam(),
+        target=module.TARGET,
+        method_candidates=["chat", "run"],
+        input_mode_candidates=["text"],
+        max_candidates=4,
+    )
+
+    assert discovery["status"] == "passed"
+    assert discovery["adapter_candidates"][0]["method"] == "run"
+    assert discovery["adapter_candidates"][0]["input_mode"] == "text"
+    assert discovery["adapter_candidates"][0]["input_key"] == "task"
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "run"
+    assert manifest["agent"]["input_mode"] == "text"
+    assert manifest["agent"]["input_key"] == "task"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == ["framework_trace_status"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["input_key"] == "task"
+    assert runtime_contract["call_style"] == "keyword"
+    assert runtime_contract["required_tools"] == ["framework_trace_status"]
+    assert runtime_contract["required_state_keys"] == ["message_history"]
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-message-history-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    history = state["message_history"]
+    assert history["message_count"] == 4
+    assert history["tool_call_count"] == 1
+    assert history["tool_response_count"] == 1
+    assert history["tool_names"] == ["framework_trace_status"]
+    assert history["stop_reason"] == "completed"
+    assert set(history["types"]) >= {
+        "TextMessage",
+        "ToolCallExecutionEvent",
+        "ToolCallRequestEvent",
+    }
+    runtime = state["framework_runtime"]
+    invocation = runtime["invocations"][0]
+    assert invocation["output"]["tool_names"] == ["framework_trace_status"]
+    assert invocation["output"]["tool_response_count"] == 1
+    assert set(invocation["output"]["event_types"]) >= {
+        "ToolCallExecutionEvent",
+        "ToolCallRequestEvent",
+    }
+    assert runtime["summary"]["input_keys"] == ["task"]
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

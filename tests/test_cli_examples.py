@@ -1732,6 +1732,40 @@ def test_sdk_framework_adapter_provider_response_example_runs(tmp_path):
     assert output["event_types"] == ["provider_choice", "provider_tool_call"]
 
 
+def test_sdk_framework_adapter_message_history_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_message_history.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_message_history",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-message-history.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_message_history_manifest"]
+    assert manifest["agent"]["method"] == "run"
+    assert manifest["agent"]["input_key"] == "task"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_state_keys"] == ["message_history"]
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    history = state["message_history"]
+    assert history["tool_names"] == ["framework_trace_status"]
+    assert history["tool_response_count"] == 1
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["framework_trace_status"]
+    assert "ToolCallRequestEvent" in output["event_types"]
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

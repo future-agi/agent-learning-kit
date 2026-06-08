@@ -427,10 +427,13 @@ class GenericAgentWrapper(AgentWrapper):
             ("tool_calls", "toolCalls", "tool_call_chunks", "toolCallChunks"),
         )
         provider_tool_calls = _provider_tool_calls(raw)
-        return [*(tool_calls or []), *provider_tool_calls] or None
+        history_tool_calls = _message_history_tool_calls(raw)
+        return [*(tool_calls or []), *provider_tool_calls, *history_tool_calls] or None
 
     def _extract_tool_responses(self, raw: Any) -> Optional[List[Dict[str, Any]]]:
-        return _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
+        tool_responses = _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
+        history_tool_responses = _message_history_tool_responses(raw)
+        return [*(tool_responses or []), *history_tool_responses] or None
 
     def _extract_metadata(self, raw: Any) -> Dict[str, Any]:
         raw_mapping = _object_mapping(raw)
@@ -481,6 +484,9 @@ class GenericAgentWrapper(AgentWrapper):
             provider_state = _provider_response_state(raw_mapping)
             if provider_state:
                 state.setdefault("provider_response", provider_state)
+        history_state = _message_history_state(raw)
+        if history_state:
+            state.setdefault("message_history", history_state)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -502,6 +508,7 @@ class GenericAgentWrapper(AgentWrapper):
             except Exception:
                 continue
         events.extend(_provider_events(raw))
+        events.extend(_message_history_events(raw))
         return events
 
 
@@ -599,7 +606,12 @@ def _tool_calls_from_message(
             }
         )
     for block in _content_blocks(message.get("content")):
-        if str(block.get("type") or "") != "tool_use":
+        block_type = str(block.get("type") or block.get("kind") or "")
+        block_type_key = block_type.lower().replace("_", "").replace("-", "")
+        has_tool_shape = bool(block.get("name")) and (
+            "arguments" in block or "input" in block or "args" in block
+        )
+        if block_type != "tool_use" and "functioncall" not in block_type_key and not has_tool_shape:
             continue
         name = str(block.get("name") or block.get("tool") or "")
         calls.append(
@@ -674,6 +686,16 @@ def _provider_response_state(raw: Any) -> Dict[str, Any]:
     choices = _provider_choices(raw_mapping)
     tool_calls = _provider_tool_calls(raw_mapping)
     usage = _object_mapping(raw_mapping.get("usage"))
+    has_provider_envelope = bool(
+        choices
+        or tool_calls
+        or usage
+        or raw_mapping.get("model")
+        or raw_mapping.get("object")
+        or raw_mapping.get("id")
+    )
+    if not has_provider_envelope:
+        return {}
     finish_reasons = sorted(
         {
             str(choice.get("finish_reason") or choice.get("stop_reason") or "")
@@ -760,6 +782,265 @@ def _list_of_mappings(value: Any) -> List[Dict[str, Any]]:
         if mapping:
             items.append(mapping)
     return items
+
+
+def _message_history_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    for message in _message_history(raw):
+        calls.extend(_tool_calls_from_message(message))
+    return calls
+
+
+def _message_history_tool_responses(raw: Any) -> List[Dict[str, Any]]:
+    responses: List[Dict[str, Any]] = []
+    for message in _message_history(raw):
+        message_type = str(message.get("type") or message.get("kind") or "")
+        content_blocks = _content_blocks(message.get("content"))
+        if not content_blocks and (
+            "ToolCallExecution" in message_type
+            or str(message.get("role") or "") == "tool"
+        ):
+            content = message.get("content") or message.get("result") or message.get("output")
+            if content not in (None, "", [], {}):
+                responses.append(
+                    {
+                        "id": str(
+                            message.get("id")
+                            or message.get("call_id")
+                            or message.get("tool_call_id")
+                            or "tool_response"
+                        ),
+                        "name": str(message.get("name") or message.get("tool") or ""),
+                        "content": _plain_value(content),
+                        "is_error": bool(message.get("is_error") or message.get("error")),
+                    }
+                )
+            continue
+        for block in content_blocks:
+            block_type = str(block.get("type") or block.get("kind") or "")
+            block_type_key = block_type.lower().replace("_", "").replace("-", "")
+            is_response = (
+                "toolcallresult" in block_type_key
+                or "toolresult" in block_type_key
+                or bool(block.get("call_id") or block.get("tool_call_id"))
+                and ("content" in block or "result" in block or "output" in block)
+            )
+            if not is_response:
+                continue
+            responses.append(
+                {
+                    "id": str(
+                        block.get("id")
+                        or block.get("call_id")
+                        or block.get("tool_call_id")
+                        or "tool_response"
+                    ),
+                    "name": str(block.get("name") or block.get("tool") or ""),
+                    "content": _plain_value(
+                        block.get("content")
+                        if "content" in block
+                        else block.get("result", block.get("output"))
+                    ),
+                    "is_error": bool(block.get("is_error") or block.get("error")),
+                }
+            )
+    return responses
+
+
+def _message_history_events(raw: Any) -> List[SimulationEvent]:
+    events: List[SimulationEvent] = []
+    for index, message in enumerate(_message_history(raw), start=1):
+        message_type = str(
+            message.get("type")
+            or message.get("kind")
+            or message.get("role")
+            or "message_history"
+        )
+        source = str(
+            message.get("source")
+            or message.get("name")
+            or message.get("speaker")
+            or message.get("role")
+            or ""
+        )
+        payload = {
+            "index": index,
+            "type": message_type,
+            "role": message.get("role"),
+            "source": source,
+            "content_length": len(_message_content(message)),
+            "tool_call_count": len(_tool_calls_from_message(message)),
+            "tool_response_count": len(
+                _message_history_tool_responses({"messages": [message]})
+            ),
+        }
+        for key in ("handoff_from", "handoff_to", "recipient", "task", "stop_reason"):
+            value = message.get(key)
+            if value not in (None, "", [], {}):
+                payload[key] = value
+        events.append(
+            SimulationEvent(
+                type=message_type,
+                name=source or message_type,
+                payload=payload,
+                metadata={"kind": "message_history", "message_index": index},
+            )
+        )
+    return events
+
+
+def _message_history_state(raw: Any) -> Dict[str, Any]:
+    messages = _message_history(raw)
+    if not messages:
+        return {}
+    tool_calls = [
+        call
+        for message in messages
+        for call in _tool_calls_from_message(message)
+    ]
+    tool_responses = _message_history_tool_responses(raw)
+    roles = sorted(
+        {
+            str(message.get("role"))
+            for message in messages
+            if message.get("role") not in (None, "", [], {})
+        }
+    )
+    sources = sorted(
+        {
+            str(message.get("source") or message.get("speaker") or message.get("name"))
+            for message in messages
+            if message.get("source") or message.get("speaker") or message.get("name")
+        }
+    )
+    types = sorted(
+        {
+            str(message.get("type") or message.get("kind") or message.get("role") or "")
+            for message in messages
+            if message.get("type") or message.get("kind") or message.get("role")
+        }
+    )
+    stop_reason = _message_history_stop_reason(raw)
+    state: Dict[str, Any] = {
+        "message_count": len(messages),
+        "roles": roles,
+        "sources": sources,
+        "types": types,
+        "tool_call_count": len(tool_calls),
+        "tool_response_count": len(tool_responses),
+        "tool_names": sorted(
+            {
+                str(
+                    call.get("name")
+                    or call.get("tool")
+                    or dict(call.get("function") or {}).get("name")
+                    or ""
+                )
+                for call in tool_calls
+                if isinstance(call, Mapping)
+            }
+        ),
+        "last_content": _message_content(messages[-1]),
+        "messages": [
+            {
+                "index": index,
+                "type": str(message.get("type") or message.get("kind") or ""),
+                "role": str(message.get("role") or ""),
+                "source": str(message.get("source") or message.get("speaker") or message.get("name") or ""),
+                "content_length": len(_message_content(message)),
+                "tool_call_count": len(_tool_calls_from_message(message)),
+            }
+            for index, message in enumerate(messages, start=1)
+        ],
+    }
+    if stop_reason:
+        state["stop_reason"] = stop_reason
+    handoffs = [
+        {
+            "from": message.get("handoff_from"),
+            "to": message.get("handoff_to") or message.get("recipient"),
+            "task": message.get("task"),
+        }
+        for message in messages
+        if message.get("handoff_to") or message.get("recipient")
+    ]
+    if handoffs:
+        state["handoff_count"] = len(handoffs)
+        state["handoffs"] = handoffs
+    return state
+
+
+def _message_history(raw: Any) -> List[Dict[str, Any]]:
+    value = None
+    raw_mapping = _object_mapping(raw)
+    for name in ("messages", "history", "chat_history", "conversation"):
+        if raw_mapping is not None and raw_mapping.get(name) is not None:
+            value = raw_mapping.get(name)
+            break
+        if raw_mapping is None and hasattr(raw, name):
+            value = getattr(raw, name)
+            break
+    if not isinstance(value, (list, tuple)):
+        return []
+    messages: List[Dict[str, Any]] = []
+    for item in value:
+        mapping = _message_mapping(item)
+        if mapping:
+            messages.append(mapping)
+    return messages
+
+
+def _message_mapping(message: Any) -> Dict[str, Any]:
+    mapping = _object_mapping(message)
+    if mapping is not None:
+        return mapping
+    values: Dict[str, Any] = {}
+    for attr in (
+        "id",
+        "type",
+        "kind",
+        "role",
+        "source",
+        "speaker",
+        "name",
+        "content",
+        "tool_calls",
+        "tool_responses",
+        "metadata",
+        "models_usage",
+        "handoff_from",
+        "handoff_to",
+        "recipient",
+        "task",
+        "call_id",
+        "tool_call_id",
+        "result",
+        "output",
+        "is_error",
+    ):
+        if not hasattr(message, attr):
+            continue
+        value = getattr(message, attr)
+        if value not in (None, "", [], {}):
+            values[attr] = _plain_value(value)
+    if values and "type" not in values:
+        values["type"] = type(message).__name__
+    return values
+
+
+def _message_history_stop_reason(raw: Any) -> str:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        for key in ("stop_reason", "finish_reason", "termination", "termination_reason"):
+            value = raw_mapping.get(key)
+            if value not in (None, "", [], {}):
+                return str(value)
+    for attr in ("stop_reason", "finish_reason", "termination", "termination_reason"):
+        if hasattr(raw, attr):
+            value = getattr(raw, attr)
+            if value not in (None, "", [], {}):
+                return str(value)
+    return ""
 
 
 def _resolve_callable_attr_path(root: Any, path: str | None) -> Callable[..., Any] | None:
