@@ -183,13 +183,15 @@ Keep framework support local-first:
 - Preserve A2A/Agent2Agent protocol semantics. Local framework outputs carrying
   agent cards, `SendMessage` JSON-RPC records, messages, tasks, status updates,
   artifact updates, or protocol artifacts should normalize into
-  `a2a_protocol_trace` state, trace/json artifacts, and `a2a_*` events so
-  remote-agent collaboration can be optimized through the same adapter path.
+  `a2a_protocol_trace` state, trace/json artifacts, `a2a_*` events, and
+  selected-output-derived A2A coverage/quality gates so remote-agent
+  collaboration can be optimized through the same adapter path.
 - Preserve MCP tool protocol semantics. Local framework outputs carrying MCP
   `tools/list`, `tools/call`, resources, JSON-RPC request/result records, or
   `{tools, calls}` fixtures should normalize into `mcp_tool_session` state,
-  trace artifacts, `mcp_*` events, ordinary tool calls, and tool responses so
-  MCP client/server integrations can be optimized through the same adapter path.
+  trace artifacts, `mcp_*` events, ordinary tool calls, tool responses, and
+  selected-output-derived MCP coverage/quality gates so MCP client/server
+  integrations can be optimized through the same adapter path.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

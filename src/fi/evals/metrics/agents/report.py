@@ -199,6 +199,10 @@ class AgentReportEvalConfig(BaseModel):
     required_red_team_readiness: List[str] = Field(default_factory=list)
     red_team_readiness_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
+    required_mcp_tool_session: List[str] = Field(default_factory=list)
+    mcp_tool_session_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_a2a_protocol: List[str] = Field(default_factory=list)
+    a2a_protocol_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_import: List[str] = Field(default_factory=list)
     framework_import_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_runtime: List[str] = Field(default_factory=list)
@@ -442,6 +446,10 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                *_mcp_tool_session_coverage_metrics(report_context, config),
+                *_mcp_tool_session_quality_metrics(report_context, config),
+                *_a2a_protocol_coverage_metrics(report_context, config),
+                *_a2a_protocol_quality_metrics(report_context, config),
                 *_framework_import_coverage_metrics(report_context, config),
                 *_framework_import_quality_metrics(report_context, config),
                 *_framework_runtime_coverage_metrics(report_context, config),
@@ -9711,6 +9719,356 @@ def _framework_trace_coverage_metric(
             "observed": sorted(observed),
             "missing": missing,
             "findings": findings,
+        },
+    )
+
+
+def _mcp_tool_session_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.required_mcp_tool_session
+        and not _mcp_tool_session_payloads_from_context(context)
+    ):
+        return []
+    return [_mcp_tool_session_coverage_metric(context, config)]
+
+
+def _mcp_tool_session_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_mcp_tool_session_key(key)
+        for key in config.required_mcp_tool_session
+    ]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="mcp_tool_session_coverage",
+            score=1.0,
+            reason="No required MCP tool session keys provided.",
+        )
+    observed = _mcp_tool_session_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="mcp_tool_session_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required MCP tool session evidence observed."
+            if not missing
+            else f"Missing MCP tool session evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_mcp_tool_session_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _mcp_tool_session_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.mcp_tool_session_quality:
+        return []
+    return [_mcp_tool_session_quality_metric(context, config.mcp_tool_session_quality)]
+
+
+def _mcp_tool_session_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _mcp_tool_session_payloads_from_context(context)
+    summary = _mcp_tool_session_summary_from_payloads(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for tool in _string_list(requirements.get("required_tools") or requirements.get("tools")):
+        normalized = _normalize_protocol_name(tool)
+        actual = sorted(summary["tool_names"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="mcp_tool_session_quality",
+            check="required_tool",
+            expected=normalized,
+            actual=actual,
+            match=normalized in summary["tool_names"],
+            finding_type="mcp_tool_missing",
+        )
+    for server in _string_list(requirements.get("required_servers") or requirements.get("servers")):
+        normalized = _normalize_protocol_name(server)
+        actual = sorted(summary["server_names"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="mcp_tool_session_quality",
+            check="required_server",
+            expected=normalized,
+            actual=actual,
+            match=normalized in summary["server_names"],
+            finding_type="mcp_server_missing",
+        )
+    for session_id in _string_list(requirements.get("required_sessions") or requirements.get("session_ids")):
+        actual = sorted(summary["session_ids"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="mcp_tool_session_quality",
+            check="required_session",
+            expected=session_id,
+            actual=actual,
+            match=session_id in summary["session_ids"],
+            finding_type="mcp_session_missing",
+        )
+    for requirement_key, summary_key, finding_type in (
+        ("min_server_count", "server_count", "mcp_server_count_low"),
+        ("min_schema_count", "schema_count", "mcp_schema_count_low"),
+        ("min_resource_count", "resource_count", "mcp_resource_count_low"),
+        ("min_call_count", "call_count", "mcp_call_count_low"),
+        ("min_result_count", "result_count", "mcp_result_count_low"),
+        ("min_tool_response_count", "tool_response_count", "mcp_tool_response_count_low"),
+    ):
+        expected_min = _as_int(requirements.get(requirement_key))
+        if expected_min is None:
+            continue
+        actual = int(summary.get(summary_key) or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="mcp_tool_session_quality",
+            check=requirement_key,
+            expected=expected_min,
+            actual=actual,
+            match=actual >= expected_min,
+            finding_type=finding_type,
+        )
+    max_error_count = _as_int(requirements.get("max_error_count"))
+    if max_error_count is not None:
+        actual = int(summary.get("error_count") or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="mcp_tool_session_quality",
+            check="max_error_count",
+            expected=max_error_count,
+            actual=actual,
+            match=actual <= max_error_count,
+            finding_type="mcp_error_threshold_exceeded",
+        )
+    if not checks:
+        return AgentReportMetricResult(
+            name="mcp_tool_session_quality",
+            score=1.0,
+            reason="No expected MCP tool session checks provided.",
+        )
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="mcp_tool_session_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} MCP tool session check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "summary": _protocol_summary_details(summary),
+        },
+    )
+
+
+def _a2a_protocol_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.required_a2a_protocol
+        and not _a2a_protocol_payloads_from_context(context)
+    ):
+        return []
+    return [_a2a_protocol_coverage_metric(context, config)]
+
+
+def _a2a_protocol_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_a2a_protocol_key(key)
+        for key in config.required_a2a_protocol
+    ]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="a2a_protocol_coverage",
+            score=1.0,
+            reason="No required A2A protocol keys provided.",
+        )
+    observed = _a2a_protocol_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="a2a_protocol_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required A2A protocol evidence observed."
+            if not missing
+            else f"Missing A2A protocol evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_a2a_protocol_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _a2a_protocol_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.a2a_protocol_quality:
+        return []
+    return [_a2a_protocol_quality_metric(context, config.a2a_protocol_quality)]
+
+
+def _a2a_protocol_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _a2a_protocol_payloads_from_context(context)
+    summary = _a2a_protocol_summary_from_payloads(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for agent in _string_list(requirements.get("required_agents") or requirements.get("agents")):
+        normalized = _normalize_protocol_name(agent)
+        actual = sorted(summary["agent_names"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check="required_agent",
+            expected=normalized,
+            actual=actual,
+            match=normalized in summary["agent_names"],
+            finding_type="a2a_agent_missing",
+        )
+    for skill in _string_list(requirements.get("required_skills") or requirements.get("skills")):
+        normalized = _normalize_protocol_name(skill)
+        actual = sorted(summary["skill_names"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check="required_skill",
+            expected=normalized,
+            actual=actual,
+            match=normalized in summary["skill_names"],
+            finding_type="a2a_skill_missing",
+        )
+    for role in _string_list(requirements.get("required_roles") or requirements.get("roles")):
+        normalized = _normalize_protocol_name(role)
+        actual = sorted(summary["roles"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check="required_role",
+            expected=normalized,
+            actual=actual,
+            match=normalized in summary["roles"],
+            finding_type="a2a_role_missing",
+        )
+    for state in _string_list(requirements.get("required_states") or requirements.get("states")):
+        normalized = _normalize_protocol_name(state)
+        actual = sorted(summary["states"])
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check="required_state",
+            expected=normalized,
+            actual=actual,
+            match=normalized in summary["states"],
+            finding_type="a2a_state_missing",
+        )
+    for requirement_key, summary_key, finding_type in (
+        ("min_agent_card_count", "agent_card_count", "a2a_agent_card_count_low"),
+        ("min_skill_count", "skill_count", "a2a_skill_count_low"),
+        ("min_message_count", "message_count", "a2a_message_count_low"),
+        ("min_task_count", "task_count", "a2a_task_count_low"),
+        ("min_artifact_count", "artifact_count", "a2a_artifact_count_low"),
+        ("min_status_update_count", "status_update_count", "a2a_status_update_count_low"),
+        ("min_terminal_task_count", "terminal_task_count", "a2a_terminal_task_count_low"),
+    ):
+        expected_min = _as_int(requirements.get(requirement_key))
+        if expected_min is None:
+            continue
+        actual = int(summary.get(summary_key) or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check=requirement_key,
+            expected=expected_min,
+            actual=actual,
+            match=actual >= expected_min,
+            finding_type=finding_type,
+        )
+    if requirements.get("require_terminal_task") is not None:
+        required = bool(requirements.get("require_terminal_task"))
+        actual = int(summary.get("terminal_task_count") or 0) > 0
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check="require_terminal_task",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="a2a_terminal_task_missing",
+        )
+    max_error_count = _as_int(requirements.get("max_error_count"))
+    if max_error_count is not None:
+        actual = int(summary.get("error_count") or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="a2a_protocol_quality",
+            check="max_error_count",
+            expected=max_error_count,
+            actual=actual,
+            match=actual <= max_error_count,
+            finding_type="a2a_error_threshold_exceeded",
+        )
+    if not checks:
+        return AgentReportMetricResult(
+            name="a2a_protocol_quality",
+            score=1.0,
+            reason="No expected A2A protocol checks provided.",
+        )
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="a2a_protocol_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} A2A protocol check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "summary": _protocol_summary_details(summary),
         },
     )
 
@@ -19562,6 +19920,8 @@ def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("state")
             if bool(output.get("streaming")):
                 observed.add("streaming")
+            if _framework_runtime_output_has_protocol_evidence(output):
+                observed.add("protocol")
     return observed
 
 
@@ -19705,6 +20065,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
                 for key in _as_list(output.get("metadata_keys", []))
                 if _normalize_framework_runtime_key(key)
             )
+            if _framework_runtime_output_has_protocol_evidence(output):
+                signals.add("protocol")
 
     return {
         "invocation_count": len(invocations),
@@ -19740,6 +20102,25 @@ def _framework_runtime_invocations(payloads: Sequence[Mapping[str, Any]]) -> Lis
             payload_invocations.append(payload_dict)
         invocations.extend(payload_invocations)
     return invocations
+
+
+def _framework_runtime_output_has_protocol_evidence(output: Mapping[str, Any]) -> bool:
+    values = [
+        *_as_list(output.get("state_keys", [])),
+        *_as_list(output.get("event_types", [])),
+        *_as_list(output.get("artifact_types", [])),
+        *_as_list(output.get("metadata_keys", [])),
+    ]
+    normalized = {_normalize_framework_runtime_key(value) for value in values}
+    return any(
+        value
+        and (
+            value in {"mcp_tool_session", "a2a_protocol_trace"}
+            or value.startswith("mcp_")
+            or value.startswith("a2a_")
+        )
+        for value in normalized
+    )
 
 
 def _append_framework_runtime_check(
@@ -26816,6 +27197,558 @@ def _normalize_framework_trace_key(key: str) -> str:
         "pagination": "export_pagination",
     }
     return aliases.get(normalized, normalized)
+
+
+def _mcp_tool_session_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("mcp_tool_session"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("mcp_tool_session"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_dict = _as_dict(artifact)
+        metadata = _as_dict(artifact_dict.get("metadata"))
+        data = _as_dict(artifact_dict.get("data"))
+        if str(metadata.get("kind") or data.get("kind") or "").lower() == "mcp_tool_session":
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_dict = _as_dict(event)
+        event_type = str(event_dict.get("type") or "")
+        metadata = _as_dict(event_dict.get("metadata"))
+        payload = _as_dict(event_dict.get("payload"))
+        if str(metadata.get("kind") or payload.get("kind") or "").lower() == "mcp_tool_session":
+            payloads.append(payload)
+        elif _is_mcp_tool_session_event_type(event_type):
+            payloads.append({"kind": "mcp_tool_session", "spans": [payload]})
+    return [payload for payload in payloads if payload]
+
+
+def _mcp_tool_session_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _mcp_tool_session_payloads_from_context(context):
+        observed.add("trace")
+        _merge_mcp_tool_session_payload(observed, payload)
+    for event in _as_list(context.get("events", [])):
+        event_dict = _as_dict(event)
+        event_type = str(event_dict.get("type") or "")
+        event_name = str(event_dict.get("name") or "")
+        payload = _as_dict(event_dict.get("payload"))
+        if _is_mcp_tool_session_event_type(event_type):
+            _add_mcp_tool_session_key(observed, event_type)
+        if _is_mcp_tool_session_event_type(event_name):
+            _add_mcp_tool_session_key(observed, event_name)
+        if (
+            _is_mcp_tool_session_event_type(event_type)
+            or _is_mcp_tool_session_event_type(event_name)
+            or str(payload.get("kind") or "").lower() == "mcp_tool_session"
+        ):
+            _merge_mcp_tool_session_payload(observed, payload)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        call = _as_dict(tool_call)
+        if str(call.get("type") or "").lower() == "mcp_tool_call":
+            observed.update({"tool", "tool_call"})
+        if call.get("name") or call.get("tool"):
+            observed.add("tool")
+    for tool_response in _as_list(context.get("tool_responses", [])):
+        response = _as_dict(tool_response)
+        observed.add("tool_error" if response.get("error") else "tool_result")
+    return observed
+
+
+def _merge_mcp_tool_session_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if not payload:
+        return
+    if str(payload.get("kind") or "").lower() == "mcp_tool_session":
+        observed.update({"trace", "session"})
+    summary = _as_dict(payload.get("summary"))
+    for signal in _as_list(payload.get("signals") or summary.get("signals")):
+        _add_mcp_tool_session_key(observed, str(signal))
+    for record_type in _as_list(summary.get("record_types")):
+        _add_mcp_tool_session_key(observed, str(record_type))
+    for count_key, signal in {
+        "server_count": "server",
+        "schema_count": "tool_schema",
+        "resource_count": "resource",
+        "call_count": "tool_call",
+        "result_count": "tool_result",
+        "error_count": "tool_error",
+        "tool_response_count": "tool_result",
+        "tool_count": "tool",
+    }.items():
+        if (_as_int(summary.get(count_key)) or 0) > 0 or (_as_int(payload.get(count_key)) or 0) > 0:
+            observed.add(signal)
+    if _as_list(payload.get("tool_calls")):
+        observed.update({"tool", "tool_call"})
+    if _as_list(payload.get("tool_responses")):
+        observed.add("tool_result")
+    if _as_list(summary.get("server_names")) or payload.get("server_name"):
+        observed.add("server")
+    if _as_list(summary.get("session_ids")) or payload.get("session_id"):
+        observed.add("session")
+    for span in _as_list(payload.get("spans")):
+        span_dict = _as_dict(span)
+        _add_mcp_tool_session_key(observed, str(span_dict.get("type") or ""))
+        _add_mcp_tool_session_key(observed, str(span_dict.get("name") or ""))
+        for signal in _as_list(span_dict.get("signals")):
+            _add_mcp_tool_session_key(observed, str(signal))
+        attributes = _as_dict(span_dict.get("attributes"))
+        if attributes.get("mcp.tool.name") or span_dict.get("tool_name"):
+            observed.add("tool")
+        if attributes.get("mcp.server.name"):
+            observed.add("server")
+        if attributes.get("mcp.session.id"):
+            observed.add("session")
+
+
+def _mcp_tool_session_summary_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "server_count": 0,
+        "schema_count": 0,
+        "resource_count": 0,
+        "call_count": 0,
+        "result_count": 0,
+        "error_count": 0,
+        "tool_response_count": 0,
+        "tool_names": set(),
+        "server_names": set(),
+        "session_ids": set(),
+    }
+    for payload in payloads:
+        payload_summary = _as_dict(payload.get("summary"))
+        for key in (
+            "server_count",
+            "schema_count",
+            "resource_count",
+            "call_count",
+            "result_count",
+            "error_count",
+            "tool_response_count",
+        ):
+            summary[key] = max(
+                int(summary[key]),
+                int(_as_int(payload_summary.get(key)) or _as_int(payload.get(key)) or 0),
+            )
+        summary["tool_names"].update(
+            _normalize_protocol_name(item)
+            for item in _as_list(payload_summary.get("tool_names") or payload.get("tool_names"))
+            if _normalize_protocol_name(item)
+        )
+        summary["server_names"].update(
+            _normalize_protocol_name(item)
+            for item in _as_list(payload_summary.get("server_names") or payload.get("server_names"))
+            if _normalize_protocol_name(item)
+        )
+        if payload.get("server_name"):
+            summary["server_names"].add(_normalize_protocol_name(payload.get("server_name")))
+        summary["session_ids"].update(
+            str(item)
+            for item in _as_list(payload_summary.get("session_ids") or payload.get("session_ids"))
+            if str(item)
+        )
+        if payload.get("session_id"):
+            summary["session_ids"].add(str(payload.get("session_id")))
+        for tool_call in _as_list(payload.get("tool_calls")):
+            call = _as_dict(tool_call)
+            name = _normalize_protocol_name(call.get("name") or call.get("tool"))
+            if name:
+                summary["tool_names"].add(name)
+        for span in _as_list(payload.get("spans")):
+            span_dict = _as_dict(span)
+            attributes = _as_dict(span_dict.get("attributes"))
+            tool_name = _normalize_protocol_name(
+                span_dict.get("tool_name") or attributes.get("mcp.tool.name")
+            )
+            if tool_name:
+                summary["tool_names"].add(tool_name)
+            server_name = _normalize_protocol_name(attributes.get("mcp.server.name"))
+            if server_name:
+                summary["server_names"].add(server_name)
+            if attributes.get("mcp.session.id"):
+                summary["session_ids"].add(str(attributes.get("mcp.session.id")))
+    return summary
+
+
+def _normalize_mcp_tool_session_key(value: Any) -> str:
+    normalized = _normalize_protocol_key(value)
+    aliases = {
+        "mcp": "trace",
+        "mcp_tool_session": "trace",
+        "tool_session": "trace",
+        "session": "session",
+        "session_id": "session",
+        "mcp_session": "session",
+        "server": "server",
+        "mcp_server": "server",
+        "tool": "tool",
+        "tools": "tool",
+        "schema": "tool_schema",
+        "tool_schema": "tool_schema",
+        "mcp_tool_schema": "tool_schema",
+        "resource": "resource",
+        "mcp_resource": "resource",
+        "call": "tool_call",
+        "tool_call": "tool_call",
+        "mcp_tool_call": "tool_call",
+        "result": "tool_result",
+        "tool_result": "tool_result",
+        "mcp_tool_result": "tool_result",
+        "error": "tool_error",
+        "tool_error": "tool_error",
+        "mcp_tool_error": "tool_error",
+        "response": "tool_result",
+        "tool_response": "tool_result",
+        "trace": "trace",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _add_mcp_tool_session_key(observed: set[str], value: str) -> None:
+    normalized = _normalize_mcp_tool_session_key(value)
+    if normalized:
+        observed.add(normalized)
+
+
+def _is_mcp_tool_session_event_type(value: Any) -> bool:
+    raw = str(value or "").strip().lower()
+    normalized = _normalize_protocol_key(value)
+    return bool(
+        normalized
+        and (
+            "mcp" in normalized
+            or raw
+            in {
+                "tools/list",
+                "tools/call",
+                "resources/list",
+                "resources/read",
+                "resources/subscribe",
+                "resources/unsubscribe",
+            }
+            or raw.startswith("notifications/tools/")
+            or raw.startswith("notifications/resources/")
+        )
+    )
+
+
+def _a2a_protocol_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("a2a_protocol_trace"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("a2a_protocol_trace"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_dict = _as_dict(artifact)
+        metadata = _as_dict(artifact_dict.get("metadata"))
+        data = _as_dict(artifact_dict.get("data"))
+        if str(metadata.get("kind") or data.get("kind") or "").lower() in {
+            "a2a_protocol_trace",
+            "a2a_artifact",
+        }:
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_dict = _as_dict(event)
+        event_type = str(event_dict.get("type") or "")
+        metadata = _as_dict(event_dict.get("metadata"))
+        payload = _as_dict(event_dict.get("payload"))
+        if str(metadata.get("kind") or payload.get("kind") or "").lower() == "a2a_protocol_trace":
+            payloads.append(payload)
+        elif _is_a2a_protocol_event_type(event_type):
+            payloads.append(
+                {
+                    "kind": "a2a_protocol_trace",
+                    "events": [payload],
+                    "summary": {"event_types": [event_type]},
+                }
+            )
+    return [payload for payload in payloads if payload]
+
+
+def _a2a_protocol_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _a2a_protocol_payloads_from_context(context):
+        observed.add("trace")
+        _merge_a2a_protocol_payload(observed, payload)
+    for event in _as_list(context.get("events", [])):
+        event_dict = _as_dict(event)
+        event_type = str(event_dict.get("type") or "")
+        event_name = str(event_dict.get("name") or "")
+        payload = _as_dict(event_dict.get("payload"))
+        if _is_a2a_protocol_event_type(event_type):
+            _add_a2a_protocol_key(observed, event_type)
+        if _is_a2a_protocol_event_type(event_name):
+            _add_a2a_protocol_key(observed, event_name)
+        if (
+            _is_a2a_protocol_event_type(event_type)
+            or _is_a2a_protocol_event_type(event_name)
+            or str(payload.get("kind") or "").lower() == "a2a_protocol_trace"
+        ):
+            _merge_a2a_protocol_payload(observed, payload)
+    return observed
+
+
+def _merge_a2a_protocol_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if not payload:
+        return
+    if str(payload.get("kind") or "").lower() == "a2a_protocol_trace":
+        observed.add("trace")
+    summary = _as_dict(payload.get("summary"))
+    for event_type in _as_list(summary.get("event_types")):
+        _add_a2a_protocol_key(observed, str(event_type))
+    for count_key, signal in {
+        "agent_card_count": "agent_card",
+        "skill_count": "skill",
+        "message_count": "message",
+        "task_count": "task",
+        "artifact_count": "artifact",
+        "protocol_event_count": "protocol_event",
+        "part_count": "part",
+        "text_part_count": "text_part",
+        "data_part_count": "data_part",
+        "file_part_count": "file_part",
+        "status_update_count": "status_update",
+        "artifact_update_count": "artifact_update",
+        "terminal_task_count": "terminal_task",
+        "input_required_count": "input_required",
+        "error_count": "error",
+    }.items():
+        if (_as_int(summary.get(count_key)) or _as_int(payload.get(count_key)) or 0) > 0:
+            observed.add(signal)
+    for key, signal in (
+        ("agent_cards", "agent_card"),
+        ("skills", "skill"),
+        ("messages", "message"),
+        ("tasks", "task"),
+        ("artifacts", "artifact"),
+        ("events", "protocol_event"),
+    ):
+        if _as_list(payload.get(key)):
+            observed.add(signal)
+    for event in _as_list(payload.get("events")):
+        event_dict = _as_dict(event)
+        _add_a2a_protocol_key(observed, str(event_dict.get("type") or event_dict.get("method") or ""))
+        if event_dict.get("state"):
+            observed.add("state")
+        if event_dict.get("task_id"):
+            observed.add("task_id")
+        if event_dict.get("context_id"):
+            observed.add("context")
+        if event_dict.get("error"):
+            observed.add("error")
+    for message in _as_list(payload.get("messages")):
+        message_dict = _as_dict(message)
+        if message_dict.get("role"):
+            observed.add("role")
+        if message_dict.get("context_id"):
+            observed.add("context")
+        if message_dict.get("task_id"):
+            observed.add("task_id")
+        for part in _as_list(message_dict.get("parts")):
+            _add_a2a_protocol_key(observed, f"{_as_dict(part).get('kind')}_part")
+    for task in _as_list(payload.get("tasks")):
+        task_dict = _as_dict(task)
+        if task_dict.get("state"):
+            observed.add("state")
+        if task_dict.get("id"):
+            observed.add("task_id")
+        if task_dict.get("context_id"):
+            observed.add("context")
+
+
+def _a2a_protocol_summary_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "agent_card_count": 0,
+        "skill_count": 0,
+        "message_count": 0,
+        "task_count": 0,
+        "artifact_count": 0,
+        "status_update_count": 0,
+        "artifact_update_count": 0,
+        "terminal_task_count": 0,
+        "error_count": 0,
+        "agent_names": set(),
+        "skill_names": set(),
+        "roles": set(),
+        "states": set(),
+    }
+    for payload in payloads:
+        payload_summary = _as_dict(payload.get("summary"))
+        for key in (
+            "agent_card_count",
+            "skill_count",
+            "message_count",
+            "task_count",
+            "artifact_count",
+            "status_update_count",
+            "artifact_update_count",
+            "terminal_task_count",
+            "error_count",
+        ):
+            summary[key] = max(
+                int(summary[key]),
+                int(_as_int(payload_summary.get(key)) or _as_int(payload.get(key)) or 0),
+            )
+        for target_key, payload_key in (
+            ("agent_names", "agent_names"),
+            ("skill_names", "skill_names"),
+            ("roles", "roles"),
+            ("states", "states"),
+        ):
+            summary[target_key].update(
+                _normalize_protocol_name(item)
+                for item in _as_list(payload_summary.get(payload_key) or payload.get(payload_key))
+                if _normalize_protocol_name(item)
+            )
+        for card in _as_list(payload.get("agent_cards")):
+            card_dict = _as_dict(card)
+            name = _normalize_protocol_name(card_dict.get("name"))
+            if name:
+                summary["agent_names"].add(name)
+            for skill in _as_list(card_dict.get("skills")):
+                skill_dict = _as_dict(skill)
+                skill_name = _normalize_protocol_name(skill_dict.get("name") or skill_dict.get("id"))
+                if skill_name:
+                    summary["skill_names"].add(skill_name)
+        for message in _as_list(payload.get("messages")):
+            role = _normalize_protocol_name(_as_dict(message).get("role"))
+            if role:
+                summary["roles"].add(role)
+        for task in _as_list(payload.get("tasks")):
+            state = _normalize_protocol_name(_as_dict(task).get("state"))
+            if state:
+                summary["states"].add(state)
+    return summary
+
+
+def _normalize_a2a_protocol_key(value: Any) -> str:
+    normalized = _normalize_protocol_key(value)
+    aliases = {
+        "a2a": "trace",
+        "agent2agent": "trace",
+        "a2a_protocol": "trace",
+        "a2a_protocol_trace": "trace",
+        "agent_card": "agent_card",
+        "a2a_agent_card": "agent_card",
+        "card": "agent_card",
+        "skill": "skill",
+        "skills": "skill",
+        "message": "message",
+        "a2a_message": "message",
+        "sendmessage": "message",
+        "message_send": "message",
+        "a2a_message_send": "message",
+        "task": "task",
+        "a2a_task": "task",
+        "status": "status_update",
+        "task_status": "status_update",
+        "a2a_task_status": "status_update",
+        "taskstatusupdateevent": "status_update",
+        "artifact": "artifact",
+        "a2a_artifact": "artifact",
+        "task_artifact": "artifact_update",
+        "a2a_task_artifact": "artifact_update",
+        "taskartifactupdateevent": "artifact_update",
+        "protocol_event": "protocol_event",
+        "a2a_protocol_event": "protocol_event",
+        "part": "part",
+        "text_part": "text_part",
+        "data_part": "data_part",
+        "file_part": "file_part",
+        "terminal": "terminal_task",
+        "terminal_task": "terminal_task",
+        "input_required": "input_required",
+        "input_required_count": "input_required",
+        "role": "role",
+        "state": "state",
+        "context": "context",
+        "context_id": "context",
+        "task_id": "task_id",
+        "error": "error",
+        "trace": "trace",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _add_a2a_protocol_key(observed: set[str], value: str) -> None:
+    normalized = _normalize_a2a_protocol_key(value)
+    if normalized:
+        observed.add(normalized)
+
+
+def _is_a2a_protocol_event_type(value: Any) -> bool:
+    raw = str(value or "").strip().lower()
+    normalized = _normalize_protocol_key(value)
+    return bool(
+        normalized
+        and (
+            "a2a" in normalized
+            or "agent2agent" in normalized
+            or normalized in {"taskstatusupdateevent", "taskartifactupdateevent"}
+            or raw in {"message/send", "message/stream"}
+            or raw.startswith("tasks/")
+        )
+    )
+
+
+def _normalize_protocol_key(value: Any) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace(".", "_")
+        .replace(" ", "_")
+    )
+
+
+def _normalize_protocol_name(value: Any) -> str:
+    return _normalize_protocol_key(value)
+
+
+def _protocol_summary_details(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        key: sorted(value) if isinstance(value, set) else value
+        for key, value in summary.items()
+    }
+
+
+def _append_protocol_quality_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    metric: str,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": match,
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": metric,
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
 
 
 def _retrieval_memory_observed(context: Mapping[str, Any]) -> set[str]:

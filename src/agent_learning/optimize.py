@@ -15820,6 +15820,38 @@ def build_framework_adapter_probe_evaluation_config(
         if orchestration_trace_observed
         else {}
     )
+    mcp_tool_session_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "mcp_tool_session_summary",
+    )
+    mcp_tool_session_observed = (
+        "mcp_tool_session" in state_keys
+        or bool(mcp_tool_session_summary)
+    )
+    mcp_tool_session_requirements = (
+        _framework_probe_mcp_tool_session_requirements(
+            framework,
+            mcp_tool_session_summary,
+        )
+        if mcp_tool_session_observed
+        else {}
+    )
+    a2a_protocol_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "a2a_protocol_summary",
+    )
+    a2a_protocol_observed = (
+        "a2a_protocol_trace" in state_keys
+        or bool(a2a_protocol_summary)
+    )
+    a2a_protocol_requirements = (
+        _framework_probe_a2a_protocol_requirements(
+            framework,
+            a2a_protocol_summary,
+        )
+        if a2a_protocol_observed
+        else {}
+    )
     lifecycle_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_lifecycle_summary",
@@ -15842,6 +15874,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
+            *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -15856,6 +15889,8 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming trace evidence"] if streaming_observed else []),
             *(["framework trace evidence"] if framework_trace_observed else []),
             *(["orchestration trace evidence"] if orchestration_trace_observed else []),
+            *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
+            *(["A2A protocol evidence"] if a2a_protocol_observed else []),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
             *(["artifact evidence"] if artifact_types else []),
@@ -15941,6 +15976,12 @@ def build_framework_adapter_probe_evaluation_config(
     if orchestration_trace_observed:
         metric_weights["orchestration_trace_coverage"] = 4.0
         metric_weights["orchestration_flow_quality"] = 4.0
+    if mcp_tool_session_observed:
+        metric_weights["mcp_tool_session_coverage"] = 4.0
+        metric_weights["mcp_tool_session_quality"] = 4.0
+    if a2a_protocol_observed:
+        metric_weights["a2a_protocol_coverage"] = 4.0
+        metric_weights["a2a_protocol_quality"] = 4.0
     if lifecycle_observed:
         metric_weights["framework_lifecycle_coverage"] = 4.0
         metric_weights["framework_lifecycle_quality"] = 4.0
@@ -15967,6 +16008,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
+            *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -15985,6 +16027,20 @@ def build_framework_adapter_probe_evaluation_config(
         ]
         config["orchestration_trace_quality"] = orchestration_requirements[
             "orchestration_trace_quality"
+        ]
+    if mcp_tool_session_observed:
+        config["required_mcp_tool_session"] = mcp_tool_session_requirements[
+            "required_mcp_tool_session"
+        ]
+        config["mcp_tool_session_quality"] = mcp_tool_session_requirements[
+            "mcp_tool_session_quality"
+        ]
+    if a2a_protocol_observed:
+        config["required_a2a_protocol"] = a2a_protocol_requirements[
+            "required_a2a_protocol"
+        ]
+        config["a2a_protocol_quality"] = a2a_protocol_requirements[
+            "a2a_protocol_quality"
         ]
     if lifecycle_observed:
         config["required_framework_lifecycle"] = lifecycle_requirements[
@@ -16178,6 +16234,136 @@ def _framework_probe_orchestration_requirements(
             str(item) for item in required_trace if str(item)
         ),
         "orchestration_trace_quality": quality,
+    }
+
+
+def _framework_probe_mcp_tool_session_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required = ["mcp_tool_session", "trace"]
+    required.extend(_plain_list(summary.get("signals")))
+    signal_checks = (
+        ("server_count", "server"),
+        ("schema_count", "tool_schema"),
+        ("resource_count", "resource"),
+        ("call_count", "tool_call"),
+        ("result_count", "tool_result"),
+        ("error_count", "tool_error"),
+        ("tool_response_count", "tool_result"),
+        ("tool_count", "tool"),
+    )
+    for summary_key, signal in signal_checks:
+        if _as_int(summary.get(summary_key)) > 0:
+            required.append(signal)
+    if _plain_list(summary.get("server_names")):
+        required.append("server")
+    if _plain_list(summary.get("session_ids")):
+        required.append("session")
+
+    quality: dict[str, Any] = {"framework": framework}
+    tool_names = _unique_strings(summary.get("tool_names"))
+    if tool_names:
+        quality["required_tools"] = tool_names
+    server_names = _unique_strings(summary.get("server_names"))
+    if server_names:
+        quality["required_servers"] = server_names
+    session_ids = _unique_strings(summary.get("session_ids"))
+    if session_ids:
+        quality["required_sessions"] = session_ids
+    for summary_key, quality_key in (
+        ("server_count", "min_server_count"),
+        ("schema_count", "min_schema_count"),
+        ("resource_count", "min_resource_count"),
+        ("call_count", "min_call_count"),
+        ("result_count", "min_result_count"),
+        ("tool_response_count", "min_tool_response_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+    return {
+        "required_mcp_tool_session": _unique_strings(
+            str(item) for item in required if str(item)
+        ),
+        "mcp_tool_session_quality": quality,
+    }
+
+
+def _framework_probe_a2a_protocol_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required = ["a2a_protocol_trace", "trace"]
+    signal_checks = (
+        ("agent_card_count", "agent_card"),
+        ("skill_count", "skill"),
+        ("message_count", "message"),
+        ("task_count", "task"),
+        ("artifact_count", "artifact"),
+        ("protocol_event_count", "protocol_event"),
+        ("part_count", "part"),
+        ("text_part_count", "text_part"),
+        ("data_part_count", "data_part"),
+        ("file_part_count", "file_part"),
+        ("status_update_count", "status_update"),
+        ("artifact_update_count", "artifact_update"),
+        ("terminal_task_count", "terminal_task"),
+        ("input_required_count", "input_required"),
+        ("error_count", "error"),
+    )
+    for summary_key, signal in signal_checks:
+        if _as_int(summary.get(summary_key)) > 0:
+            required.append(signal)
+    if _plain_list(summary.get("roles")):
+        required.append("role")
+    if _plain_list(summary.get("states")):
+        required.append("state")
+    if _plain_list(summary.get("task_ids")):
+        required.append("task_id")
+    if _plain_list(summary.get("context_ids")):
+        required.append("context")
+
+    quality: dict[str, Any] = {"framework": framework}
+    agent_names = _unique_strings(summary.get("agent_names"))
+    if agent_names:
+        quality["required_agents"] = agent_names
+    skill_names = _unique_strings(summary.get("skill_names"))
+    if skill_names:
+        quality["required_skills"] = skill_names
+    roles = _unique_strings(summary.get("roles"))
+    if roles:
+        quality["required_roles"] = roles
+    states = _unique_strings(summary.get("states"))
+    if states:
+        quality["required_states"] = states
+    for summary_key, quality_key in (
+        ("agent_card_count", "min_agent_card_count"),
+        ("skill_count", "min_skill_count"),
+        ("message_count", "min_message_count"),
+        ("task_count", "min_task_count"),
+        ("artifact_count", "min_artifact_count"),
+        ("status_update_count", "min_status_update_count"),
+        ("terminal_task_count", "min_terminal_task_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    if _as_int(summary.get("terminal_task_count")) > 0:
+        quality["require_terminal_task"] = True
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+    return {
+        "required_a2a_protocol": _unique_strings(
+            str(item) for item in required if str(item)
+        ),
+        "a2a_protocol_quality": quality,
     }
 
 

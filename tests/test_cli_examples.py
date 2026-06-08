@@ -2248,6 +2248,30 @@ def test_sdk_framework_adapter_mcp_tool_session_example_runs(tmp_path):
         "refund_status",
     ]
     assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_mcp_tool_session"]) >= {
+        "mcp_tool_session",
+        "trace",
+        "server",
+        "session",
+        "tool",
+        "tool_schema",
+        "resource",
+        "tool_call",
+        "tool_result",
+    }
+    assert config["mcp_tool_session_quality"]["required_tools"] == [
+        "refund_policy_lookup",
+        "refund_status",
+    ]
+    assert config["mcp_tool_session_quality"]["required_servers"] == ["refund-tools"]
+    assert config["metric_weights"]["mcp_tool_session_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["mcp_tool_session_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["mcp_tool_session_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["mcp_tool_session_quality"] == (
+        pytest.approx(1.0)
+    )
     assert {
         "mcp_server",
         "mcp_tool_schema",
@@ -2300,6 +2324,40 @@ def test_sdk_framework_adapter_a2a_protocol_trace_example_runs(tmp_path):
     runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == ["a2a_protocol_trace"]
     assert set(runtime_contract["required_artifact_types"]) == {"trace", "json"}
+    assert set(config["required_a2a_protocol"]) >= {
+        "a2a_protocol_trace",
+        "trace",
+        "agent_card",
+        "skill",
+        "message",
+        "task",
+        "artifact",
+        "protocol_event",
+        "part",
+        "text_part",
+        "data_part",
+        "status_update",
+        "artifact_update",
+        "terminal_task",
+        "role",
+        "state",
+        "task_id",
+        "context",
+    }
+    assert config["a2a_protocol_quality"]["required_agents"] == [
+        "refund-review-agent"
+    ]
+    assert config["a2a_protocol_quality"]["required_skills"] == ["refund_review"]
+    assert config["a2a_protocol_quality"]["required_roles"] == ["agent", "user"]
+    assert config["a2a_protocol_quality"]["required_states"] == ["completed"]
+    assert config["metric_weights"]["a2a_protocol_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["a2a_protocol_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["a2a_protocol_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["a2a_protocol_quality"] == (
+        pytest.approx(1.0)
+    )
     assert {
         "a2a_agent_card",
         "a2a_message_send",

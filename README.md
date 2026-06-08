@@ -678,15 +678,17 @@ tool-call evidence, adapter conformance summaries, and generated
 A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs
 carrying agent cards, JSON-RPC `SendMessage` records, messages, tasks, task
 status updates, task artifact updates, or protocol artifacts become
-`a2a_protocol_trace` state, trace/json artifacts, and `a2a_*` events, so remote
-agent collaboration can be optimized through the same local framework adapter
-path. See `examples/sdk_framework_adapter_a2a_protocol_trace.py`.
+`a2a_protocol_trace` state, trace/json artifacts, and `a2a_*` events. Generated
+adapter eval configs can also require A2A coverage and quality gates for agent
+cards, skills, messages, tasks, artifacts, status updates, terminal tasks, roles,
+and states. See `examples/sdk_framework_adapter_a2a_protocol_trace.py`.
 
 MCP client/server sessions normalize protocol-native tool evidence. Outputs
 carrying MCP `tools/list`, `tools/call`, resource, JSON-RPC, or `{tools, calls}`
 exports become `mcp_tool_session` state, a trace artifact, `mcp_*` events,
-ordinary tool calls, and tool responses, so MCP servers can be optimized through
-the same local framework adapter path. See
+ordinary tool calls, and tool responses. Generated adapter eval configs can also
+require MCP coverage and quality gates for servers, sessions, schemas,
+resources, tool calls, tool results, and tool names. See
 `examples/sdk_framework_adapter_mcp_tool_session.py`.
 
 Realtime framework exports are normalized from local session traces. Pipecat-like

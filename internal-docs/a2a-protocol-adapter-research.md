@@ -46,10 +46,13 @@ Those outputs normalize into:
 - `a2a_agent_card`, `a2a_message`, `a2a_task`, `a2a_artifact`,
   `a2a_message_send`, `a2a_task_status`, `a2a_task_artifact`, and final
   `a2a_protocol_trace` events.
+- Generated adapter-probe eval configs with `required_a2a_protocol`,
+  `a2a_protocol_quality`, `a2a_protocol_coverage`, and `a2a_protocol_quality`
+  metric weights when the selected candidate emits A2A evidence.
 
 The cookbook in `examples/sdk_framework_adapter_a2a_protocol_trace.py` covers
 the strongest local path: adapter discovery selects `send_message(dict)`, the
 adapter emits an Agent Card, one `SendMessage` record, task status updates, a
 task artifact update, and a final task with a structured decision artifact. The
 generated eval config requires the resulting events, trace/json artifacts, and
-`a2a_protocol_trace` state.
+`a2a_protocol_trace` state, plus protocol-specific coverage/quality metrics.

@@ -50,9 +50,14 @@ Those outputs normalize into:
 - Ordinary `AgentResponse.tool_calls` and `tool_responses`, so existing
   `tool_selection_accuracy`, tool outcome, and runtime-contract gates can score
   MCP sessions without MCP-specific report wiring.
+- Generated adapter-probe eval configs with `required_mcp_tool_session`,
+  `mcp_tool_session_quality`, `mcp_tool_session_coverage`, and
+  `mcp_tool_session_quality` metric weights when the selected candidate emits
+  MCP evidence.
 
 The cookbook in `examples/sdk_framework_adapter_mcp_tool_session.py` covers the
 strongest local path: adapter discovery selects `execute_task(dict)`, the
 adapter emits a local MCP session with `tools/list`, two `tools/call`
 request/result pairs, and a resource, and the generated eval config requires
-the resulting tools, events, trace artifact, and `mcp_tool_session` state.
+the resulting tools, events, trace artifact, `mcp_tool_session` state, and
+protocol-specific coverage/quality metrics.
