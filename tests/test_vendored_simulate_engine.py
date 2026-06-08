@@ -229,6 +229,64 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
     assert callable(simulate.multi_agent_room_contract)
     assert callable(simulate.probe_multi_agent_room)
     assert callable(simulate.run_multi_agent_room_probe)
+    assert callable(simulate.realtime_stack_contract)
+    assert callable(simulate.probe_realtime_stack)
+    assert callable(simulate.run_realtime_stack_probe)
+
+
+def test_realtime_stack_probe_scores_local_voice_streaming_and_rejects_external_target() -> None:
+    example_path = PROJECT_ROOT / "examples" / "sdk_realtime_voice_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_realtime_voice_optimization_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = simulate.run_realtime_stack_probe(
+        module.strong_candidate(),
+        framework="livekit",
+        expected_route="support",
+        metadata={"suite": "realtime-stack-probe"},
+    )
+
+    assert result["kind"] == "agent-learning.realtime-stack-probe.v1"
+    assert result["status"] == "passed"
+    assert result["contract"]["kind"] == "agent-learning.realtime-stack-contract.v1"
+    assert result["contract"]["local_executable_fixture"] is True
+    assert result["summary"]["sample_rate_hz"] == 16000
+    assert result["summary"]["current_route"] == "support"
+    assert result["summary"]["streaming_tool_delta_count"] == 1
+    assert result["summary"]["observed_tool_names"] == [
+        "voice_status",
+        "voice_timing",
+        "transcribe_audio",
+        "route_call",
+        "speak",
+        "streaming_trace_status",
+        "list_stream_events",
+        "inspect_stream_event",
+    ]
+
+    weak = simulate.run_realtime_stack_probe(
+        module.weak_candidate(),
+        framework="livekit",
+        expected_route="support",
+    )
+    assert weak["status"] == "failed"
+    assert "realtime_probe_streaming_trace" in {
+        finding["check"] for finding in weak["findings"]
+    }
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.run_realtime_stack_probe(
+            module.strong_candidate(),
+            framework="livekit",
+            expected_route="support",
+            target="https://example.com/realtime-agent",
+        )
 
 
 def test_multi_agent_room_probe_scores_local_coordination_and_rejects_external_target() -> None:

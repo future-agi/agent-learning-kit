@@ -125,6 +125,7 @@ def strong_candidate() -> dict[str, Any]:
                 },
             ],
             "timing_distribution": {
+                "stage_order": ["vad", "stt", "llm", "tts"],
                 "stages": {
                     "vad": [24, 29, 31],
                     "stt": [120, 132, 148],

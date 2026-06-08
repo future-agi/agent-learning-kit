@@ -881,6 +881,16 @@ For realtime voice and streaming stacks, pass paired candidates with `voice`
 and `streaming_trace` data. The SDK builds a runnable local optimization
 manifest that searches call routing, voice timing/audio quality, and streaming
 tool-delta evidence as one coherent candidate bundle.
+Before writing a full realtime manifest, use
+`simulate.run_realtime_stack_probe()` or
+`optimize.optimize_realtime_stack_probe()` to test local LiveKit/Pipecat-style
+voice plus streaming fixtures for transcript, route, TTS, audio frame,
+sample-rate, timing distribution, audio-quality, stream chunk, stream tool
+delta, completion, and no-drop/no-error evidence.
+`optimize.build_realtime_run_manifest_from_probe_optimization(...)` promotes the
+selected stack into the normal realtime simulation path. See
+`examples/sdk_realtime_stack_probe_optimization.py` for an end-to-end probe,
+promotion, and evaluated run cookbook.
 
 Runnable SDK cookbook:
 
@@ -930,6 +940,9 @@ PYTHONPATH=src python examples/sdk_memory_layer_probe_optimization.py \
 
 PYTHONPATH=src python examples/sdk_multi_agent_room_probe_optimization.py \
   artifacts/sdk-multi-agent-room-probe-optimization.json
+
+PYTHONPATH=src python examples/sdk_realtime_stack_probe_optimization.py \
+  artifacts/sdk-realtime-stack-probe-optimization.json
 
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \

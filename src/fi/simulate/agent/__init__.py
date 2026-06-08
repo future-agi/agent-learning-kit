@@ -17,6 +17,11 @@ from .multi_agent import (
     probe_multi_agent_room,
     run_multi_agent_room_probe,
 )
+from .realtime import (
+    probe_realtime_stack,
+    realtime_stack_contract,
+    run_realtime_stack_probe,
+)
 from .mocks import EchoAgentWrapper, RuleBasedAgentWrapper, ScriptedAgentWrapper, make_tool_response
 from .wrappers import (
     OpenAIAgentWrapper,
@@ -51,6 +56,9 @@ __all__ = [
     "multi_agent_room_contract",
     "probe_multi_agent_room",
     "run_multi_agent_room_probe",
+    "probe_realtime_stack",
+    "realtime_stack_contract",
+    "run_realtime_stack_probe",
     "supported_frameworks",
     "probe_framework_imports",
     "wrap_agent",

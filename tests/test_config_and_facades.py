@@ -380,6 +380,10 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_world_framework_memory_run_manifest is not None
     assert optimize.build_realtime_optimization_manifest is not None
     assert optimize.optimize_realtime_stack is not None
+    assert optimize.optimize_realtime_stack_probe is not None
+    assert optimize.score_realtime_stack_probe_result is not None
+    assert optimize.build_realtime_run_manifest_from_probe_optimization is not None
+    assert simulate.run_realtime_stack_probe is not None
     assert optimize.build_redteam_autogen_optimization_manifest is not None
     assert optimize.optimize_redteam_autogen is not None
     assert optimize.build_long_horizon_redteam_optimization_manifest is not None
@@ -4300,6 +4304,84 @@ def test_sdk_realtime_voice_optimization_example_runs(monkeypatch, tmp_path):
         pytest.approx(1.0)
     )
     state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["voice"]["current_route"] == "support"
+    assert state["streaming_trace"]["state"]["route"] == "support"
+
+
+def test_optimize_realtime_stack_probe_selects_and_promotes_strong_candidate(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_realtime_voice_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_realtime_voice_optimization_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = optimize.optimize_realtime_stack_probe(
+        name="sdk-realtime-stack-probe-optimization",
+        realtime_candidates=[module.weak_candidate(), module.strong_candidate()],
+        framework="livekit",
+        expected_route="support",
+        metadata={"cookbook": "sdk-realtime-stack-probe-optimization"},
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["realtime_stack_probe_proof_passed"] is True
+    assert result["realtime_stack_probe_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND
+    )
+    assert result["realtime_stack_probe_proof"]["failed_check_ids"] == []
+    best_stack = result["optimization"]["best_config"]["realtime_stack"][
+        "realtime"
+    ]
+    assert best_stack["voice"]["sample_rate_hz"] == 16000
+    assert best_stack["streaming_trace"]["state"]["route"] == "support"
+    history_by_route = {}
+    for item in result["optimization"]["history"]:
+        pair = item["candidate_config"].get("realtime_stack") or item[
+            "candidate_config"
+        ]
+        history_by_route[pair["realtime"]["streaming_trace"]["state"]["route"]] = item
+    assert history_by_route["billing"]["score"] < history_by_route["support"]["score"]
+    assert history_by_route["support"]["metrics"][
+        "realtime_stack_probe_streaming_quality"
+    ] == pytest.approx(1.0)
+
+    manifest = optimize.build_realtime_run_manifest_from_probe_optimization(
+        result,
+        name="promoted-realtime-stack-probe-run",
+        evaluation_config=module.evaluation_config(),
+        metadata={"cookbook": "sdk-realtime-stack-probe-optimization"},
+    )
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["metadata"]["promoted_from_realtime_stack_probe"] is True
+    assert manifest["metadata"]["realtime_stack_probe_proof_status"] == "passed"
+    assert manifest["simulation"]["modality"] == "voice"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "voice",
+        "streaming_trace",
+    ]
+    assert manifest["simulation"]["environments"][0]["data"]["sample_rate_hz"] == 16000
+    assert manifest["evaluation"]["agent_report"]["config"] == module.evaluation_config()
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-realtime-stack-probe-run.json",
+    )
+    run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    assert run_result["summary"]["metric_averages"][
+        "streaming_interaction_quality"
+    ] == pytest.approx(1.0)
+    state = run_result["report"]["results"][0]["metadata"]["environment_state"]
     assert state["voice"]["current_route"] == "support"
     assert state["streaming_trace"]["state"]["route"] == "support"
 

@@ -47,6 +47,9 @@ AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND = (
 AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND = (
     "agent-learning.optimization.orchestration-stack-proof.v1"
 )
+AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.realtime-stack-probe-proof.v1"
+)
 AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND = (
     "agent-learning.optimization.redteam-campaign-proof.v1"
 )
@@ -7902,6 +7905,633 @@ def optimize_realtime_stack(
     )
 
 
+def optimize_realtime_stack_probe(
+    *,
+    name: str,
+    realtime_candidates: Sequence[Mapping[str, Any]],
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    framework: str = "livekit",
+    target: str | None = None,
+    expected_route: str | None = None,
+    threshold: float = 0.9,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize local realtime voice/streaming candidates with direct probes."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not realtime_candidates:
+        raise ValueError("realtime_candidates must contain at least one candidate")
+
+    realtime_configs = [
+        _realtime_probe_stack_candidate(
+            candidate,
+            framework=framework,
+            target=target,
+            allow_external_target=allow_external_target,
+        )
+        for candidate in realtime_candidates
+    ]
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else [
+            _default_realtime_agent(
+                include_voice=any("voice" in config["realtime"] for config in realtime_configs),
+                include_streaming=any(
+                    "streaming_trace" in config["realtime"]
+                    for config in realtime_configs
+                ),
+            )
+        ]
+    )
+    pair_candidates = [
+        {
+            "agent": copy.deepcopy(dict(agent)),
+            **copy.deepcopy(dict(realtime_config)),
+        }
+        for agent in agents
+        for realtime_config in realtime_configs
+    ]
+    opt = _opt()
+    optimizer_module = optional_module("fi.opt.optimizers", _OPTIMIZE_EXTRA)
+    optimization_target = opt.OptimizationTarget(
+        name=name,
+        layers=["voice", "streaming", "integration", "harness", "evaluator"],
+        base_config=copy.deepcopy(pair_candidates[0]),
+        search_space={"realtime_stack": copy.deepcopy(pair_candidates)},
+        metadata={
+            "source": "agent_learning.optimize.optimize_realtime_stack_probe",
+            "task_kind": "realtime_stack_probe",
+            "framework": framework,
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+    def evaluate_candidate(candidate: Any) -> Any:
+        config = _plain_mapping(candidate.config)
+        pair = _plain_mapping(config.get("realtime_stack")) or config
+        probe_result = _run_realtime_stack_probe_candidate(
+            agent=_plain_mapping(pair.get("agent")),
+            realtime=_plain_mapping(pair.get("realtime")),
+            framework=framework,
+            target=str(pair.get("target") or target or ""),
+            expected_route=expected_route,
+            metadata=metadata,
+            default_allow_external_target=allow_external_target,
+            allow_external_target=bool(
+                pair.get("allow_external_target", allow_external_target)
+            ),
+        )
+        scoring = score_realtime_stack_probe_result(probe_result)
+        return opt.CandidateEvaluation(
+            candidate=candidate,
+            score=float(scoring["score"]),
+            reason=str(scoring["reason"]),
+            report=copy.deepcopy(probe_result),
+            metadata={
+                "candidate_patch": copy.deepcopy(candidate.patch),
+                "patch": copy.deepcopy(candidate.patch),
+                "search_paths": list(candidate.metadata.get("search_paths", [])),
+                "metrics": copy.deepcopy(scoring["metrics"]),
+                "findings": copy.deepcopy(probe_result.get("findings", [])),
+                "report_summary": copy.deepcopy(probe_result.get("summary", {})),
+                "evaluation_score": float(scoring["score"]),
+                "evaluation_passed": bool(scoring["passed"]),
+            },
+        )
+
+    optimizer = optimizer_module.AgentOptimizer(
+        target=optimization_target,
+        evaluate_candidate=evaluate_candidate,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        auto_diagnose=False,
+    )
+    optimization_result = optimizer.optimize()
+    payload = _realtime_probe_optimization_payload(
+        name=name,
+        framework=framework,
+        threshold=threshold,
+        optimization_result=optimization_result,
+        metadata=metadata,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_realtime_stack_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def build_realtime_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    evaluation_config: Mapping[str, Any],
+    name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    framework: str = "livekit",
+    modality: str = "voice",
+    simulation_engine: str = "local_text",
+    metadata: Optional[Mapping[str, Any]] = None,
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+) -> dict[str, Any]:
+    """Promote a verified realtime probe optimization into a run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    pair = _plain_mapping(best_config.get("realtime_stack")) or best_config
+    realtime = _plain_mapping(pair.get("realtime"))
+    if not realtime:
+        raise ValueError("selected realtime stack is required")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    proof = _plain_mapping(
+        payload.get("realtime_stack_probe_proof")
+        or optimization.get("realtime_stack_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND:
+        raise ValueError("realtime_stack_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("realtime_stack_probe_proof must be passed")
+
+    from . import simulate as _agent_simulate
+
+    framework_key = str(realtime.get("framework") or framework)
+    environments = _realtime_environment_bundle(realtime, framework=framework_key)
+    includes_voice = any(environment["type"] == "voice" for environment in environments)
+    includes_streaming = any(
+        environment["type"] == "streaming_trace" for environment in environments
+    )
+    agent = _plain_mapping(pair.get("agent")) or _default_realtime_agent(
+        include_voice=includes_voice,
+        include_streaming=includes_streaming,
+    )
+    inferred_turns = _max_agent_response_count([agent], min_turns)
+    manifest_name = str(name or f"{payload.get('name') or 'realtime-stack-probe'}-run")
+    merged_metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_realtime_run_manifest_from_probe_optimization"
+        ),
+        "promoted_from_realtime_stack_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+            or proof.get("selected_candidate_id")
+        ),
+        "realtime_stack_probe_proof": copy.deepcopy(proof),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    manifest = _agent_simulate.build_task_run_manifest(
+        name=manifest_name,
+        agent=agent,
+        scenario=scenario or _default_realtime_scenario(manifest_name),
+        environments=environments,
+        required_env=required_env,
+        evaluation_config=evaluation_config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns if max_turns is not None else inferred_turns,
+        auto_execute_tools=auto_execute_tools,
+        modality=modality,
+        metadata=merged_metadata,
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_realtime_stack_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": merged_metadata["probe_selected_candidate_id"],
+        "realtime_stack_probe_proof_status": proof.get("status"),
+    }
+    return manifest
+
+
+def score_realtime_stack_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Score a realtime stack probe artifact into local optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    case_count = max(_as_int(summary.get("case_count")), 1)
+    case_pass_rate = _as_int(summary.get("passed_case_count")) / case_count
+    local_contract_quality = 1.0 if (
+        summary.get("local_executable_fixture") is True
+        and summary.get("requires_external_service") is False
+    ) else 0.0
+    voice_quality = 1.0 if (
+        summary.get("voice_present") is True
+        and _as_int(summary.get("sample_rate_hz"))
+        >= _as_int(summary.get("min_sample_rate_hz"))
+        and _as_int(summary.get("utterance_count")) > 0
+        and _as_int(summary.get("transcript_count")) > 0
+        and _as_int(summary.get("tts_count")) > 0
+        and _as_int(summary.get("frame_count")) > 0
+        and _as_int(summary.get("timing_stage_count"))
+        >= _as_int(summary.get("min_timing_stage_count"))
+        and _as_float(summary.get("snr_db")) >= 20.0
+        and _as_float(summary.get("mos")) >= 4.0
+        and _as_float(summary.get("jitter_ms")) <= 40.0
+        and _as_float(summary.get("packet_loss_pct")) <= 1.0
+        and _as_float(summary.get("clipping_ratio")) <= 0.03
+    ) else 0.0
+    streaming_quality = 1.0 if (
+        summary.get("streaming_trace_present") is True
+        and _as_int(summary.get("streaming_event_count")) > 0
+        and _as_int(summary.get("streaming_chunk_count")) > 0
+        and _as_int(summary.get("streaming_tool_delta_count")) > 0
+        and _as_int(summary.get("streaming_dropped_event_count")) == 0
+        and _as_int(summary.get("streaming_error_count")) == 0
+        and summary.get("streaming_completion_status") in {"completed", "done"}
+    ) else 0.0
+    routing_quality = 1.0 if (
+        summary.get("route_match") is True
+        and _as_int(summary.get("route_history_count")) > 0
+    ) else 0.0
+    tool_evidence = 1.0 if (
+        _as_int(summary.get("tool_call_count")) > 0
+        and _as_int(summary.get("successful_tool_call_count"))
+        >= _as_int(summary.get("tool_call_count"))
+    ) else 0.0
+    score = round(
+        (
+            case_pass_rate * 0.15
+            + local_contract_quality * 0.05
+            + voice_quality * 0.25
+            + streaming_quality * 0.25
+            + routing_quality * 0.2
+            + tool_evidence * 0.1
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.realtime-stack-probe-score.v1",
+        "score": score,
+        "passed": bool(result.get("passed")) and score >= 0.9,
+        "reason": (
+            "realtime stack probe passed with voice, routing, and streaming evidence"
+            if bool(result.get("passed")) and score >= 0.9
+            else "realtime stack probe did not close voice/streaming evidence"
+        ),
+        "metrics": {
+            "realtime_stack_probe_pass_rate": round(case_pass_rate, 6),
+            "realtime_stack_probe_local_contract_quality": local_contract_quality,
+            "realtime_stack_probe_voice_quality": voice_quality,
+            "realtime_stack_probe_streaming_quality": streaming_quality,
+            "realtime_stack_probe_routing_quality": routing_quality,
+            "realtime_stack_probe_tool_evidence": tool_evidence,
+            "realtime_stack_probe_score": score,
+        },
+        "summary": copy.deepcopy(dict(summary)),
+    }
+
+
+def _realtime_probe_stack_candidate(
+    candidate: Mapping[str, Any],
+    *,
+    framework: str,
+    target: str | None,
+    allow_external_target: bool,
+) -> dict[str, Any]:
+    realtime = copy.deepcopy(dict(candidate))
+    realtime.setdefault("framework", framework)
+    return {
+        "realtime": realtime,
+        "target": target,
+        "allow_external_target": allow_external_target,
+    }
+
+
+def _run_realtime_stack_probe_candidate(
+    *,
+    agent: Mapping[str, Any],
+    realtime: Mapping[str, Any],
+    framework: str,
+    target: str | None,
+    expected_route: str | None,
+    metadata: Optional[Mapping[str, Any]],
+    default_allow_external_target: bool,
+    allow_external_target: bool,
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        return _agent_simulate.run_realtime_stack_probe(
+            realtime,
+            agent=agent,
+            framework=framework,
+            target=target,
+            expected_route=expected_route,
+            metadata={
+                **copy.deepcopy(dict(metadata or {})),
+                **copy.deepcopy(dict(realtime.get("metadata") or {})),
+            },
+            allow_external_target=bool(
+                allow_external_target or default_allow_external_target
+            ),
+        )
+    except Exception as exc:
+        return _failed_realtime_stack_probe(
+            realtime=realtime,
+            framework=framework,
+            target=target,
+            error=exc,
+            metadata=metadata,
+        )
+
+
+def _failed_realtime_stack_probe(
+    *,
+    realtime: Mapping[str, Any],
+    framework: str,
+    target: str | None,
+    error: Exception,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        contract = _agent_simulate.realtime_stack_contract(
+            target=target,
+            framework=framework,
+            metadata=dict(metadata or {}),
+        )
+    except Exception:
+        contract = {
+            "kind": "agent-learning.realtime-stack-contract.v1",
+            "requires_external_service": False,
+            "local_executable_fixture": bool(realtime),
+        }
+    return {
+        "kind": "agent-learning.realtime-stack-probe.v1",
+        "status": "failed",
+        "passed": False,
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "contract": contract,
+        "summary": {
+            "case_count": 1,
+            "passed_case_count": 0,
+            "failed_case_count": 1,
+            "finding_count": 1,
+            "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+            "requires_external_service": bool(contract.get("requires_external_service")),
+        },
+        "realtime": copy.deepcopy(dict(realtime)),
+        "state": {},
+        "findings": [
+            {
+                "check": "realtime_stack_probe_exception",
+                "level": "error",
+                "message": str(error),
+                "observed": type(error).__name__,
+            }
+        ],
+    }
+
+
+def _realtime_probe_optimization_payload(
+    *,
+    name: str,
+    framework: str,
+    threshold: float,
+    optimization_result: Any,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
+    best_candidate = getattr(optimization_result, "best_candidate", None)
+    best_candidate_id = getattr(best_candidate, "id", None)
+    best_config = _json_plain(getattr(best_candidate, "config", {}) or {})
+    history = _realtime_probe_history(optimization_result)
+    search_paths = _unique_strings(
+        [
+            str(path)
+            for row in history
+            for path in _plain_list(row.get("search_paths"))
+            if str(path)
+        ]
+    )
+    metric_averages = _metric_averages_from_history(history)
+    passed = final_score >= float(threshold)
+    return {
+        "schema_version": "agent-learning.cli.v1",
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": final_score,
+            "optimization_passed": passed,
+            "evaluation_score": final_score,
+            "evaluation_passed": passed,
+            "metric_averages": metric_averages,
+            "threshold": float(threshold),
+            "total_iterations": getattr(optimization_result, "total_iterations", None),
+            "total_evaluations": getattr(optimization_result, "total_evaluations", None),
+            "best_candidate_id": best_candidate_id,
+            "search_paths": search_paths,
+            "framework": framework,
+        },
+        "optimization": {
+            "final_score": final_score,
+            "best_candidate_id": best_candidate_id,
+            "best_config": best_config,
+            "source_manifest": {
+                "name": name,
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_realtime_stack_probe",
+                    "task_kind": "realtime_stack_probe",
+                    "framework": framework,
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "history": history,
+            "manifest_optimization": {
+                "kind": "realtime_stack_probe_optimization",
+                "name": name,
+                "final_score": final_score,
+                "threshold": float(threshold),
+                "passed": passed,
+                "best_candidate_id": best_candidate_id,
+                "best_config": copy.deepcopy(best_config),
+                "search_paths": search_paths,
+                "metrics": metric_averages,
+                "history": copy.deepcopy(history),
+            },
+        },
+        "evaluation": {
+            "kind": "agent-learning.realtime-stack-probe-evaluation.v1",
+            "score": final_score,
+            "passed": passed,
+            "summary": {
+                "metric_averages": metric_averages,
+                "history_count": len(history),
+                "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
+            },
+        },
+    }
+
+
+def _realtime_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(optimization_result, "history", []) or []):
+        metadata = _plain_mapping(getattr(item, "metadata", {}) or {})
+        report = _json_plain(metadata.get("report") or {})
+        report_summary = _plain_mapping(metadata.get("report_summary"))
+        if not report_summary and isinstance(report, Mapping):
+            report_summary = _plain_mapping(report.get("summary"))
+        patch = _plain_mapping(metadata.get("patch") or metadata.get("candidate_patch"))
+        score = getattr(item, "average_score", None)
+        rows.append(
+            {
+                "candidate_id": getattr(item, "candidate_id", None),
+                "score": score,
+                "patch": patch,
+                "candidate_patch": patch,
+                "candidate_config": _json_plain(getattr(item, "candidate_config", {}) or {}),
+                "search_paths": list(metadata.get("search_paths") or []),
+                "metrics": _plain_mapping(metadata.get("metrics")),
+                "findings": _plain_list(metadata.get("findings")),
+                "evaluation_score": metadata.get("evaluation_score", score),
+                "evaluation_passed": metadata.get("evaluation_passed"),
+                "report": report,
+                "report_summary": report_summary,
+            }
+        )
+    return rows
+
+
+def _with_realtime_stack_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _realtime_stack_probe_proof(result, optimization)
+    result["realtime_stack_probe_proof"] = proof
+    optimization["realtime_stack_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["realtime_stack_probe_proof_status"] = proof["status"]
+    summary["realtime_stack_probe_proof_passed"] = proof["passed"]
+    summary["realtime_stack_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["realtime_stack_probe_proof_check_count"] = proof["check_count"]
+    summary["realtime_stack_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _realtime_stack_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    selected_summary = _plain_mapping(selected_report.get("summary"))
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    contract = _plain_mapping(selected_report.get("contract"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold")) or 0.9
+    checks = [
+        _proof_check(
+            "realtime_stack_probe_report_present",
+            passed=selected_report.get("kind") == "agent-learning.realtime-stack-probe.v1"
+            and selected_report.get("status") == "passed",
+            required=True,
+            reason="selected candidate carries a passing realtime stack probe",
+            evidence={"kind": selected_report.get("kind"), "status": selected_report.get("status")},
+        ),
+        _proof_check(
+            "realtime_stack_probe_local_contract_closed",
+            passed=contract.get("kind") == "agent-learning.realtime-stack-contract.v1"
+            and contract.get("requires_external_service") is False
+            and contract.get("local_executable_fixture") is True,
+            required=True,
+            reason="selected realtime stack contract is local and no-external-service",
+            evidence={"realtime_stack_contract": copy.deepcopy(contract)},
+        ),
+        _proof_check(
+            "realtime_stack_probe_voice_closed",
+            passed=_as_float(selected_metrics.get("realtime_stack_probe_voice_quality")) >= 1.0,
+            required=True,
+            reason="selected probe closes transcript, TTS, timing, and audio-quality evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "realtime_stack_probe_streaming_closed",
+            passed=_as_float(selected_metrics.get("realtime_stack_probe_streaming_quality")) >= 1.0,
+            required=True,
+            reason="selected probe closes streaming chunks, tool deltas, completion, and no-drop evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "realtime_stack_probe_route_tool_closed",
+            passed=_as_float(selected_metrics.get("realtime_stack_probe_routing_quality")) >= 1.0
+            and _as_float(selected_metrics.get("realtime_stack_probe_tool_evidence")) >= 1.0,
+            required=True,
+            reason="selected probe closes expected routing and tool execution evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "realtime_stack_probe_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("realtime_stack_probe_score")) >= threshold,
+            required=True,
+            reason="selected realtime probe metrics meet threshold",
+            evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
+        ),
+        _proof_check(
+            "realtime_stack_probe_patch_surface_present",
+            passed=bool(selected_patch) and "realtime_stack" in selected_patch,
+            required=True,
+            reason="optimizer selected a concrete realtime stack candidate",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "realtime_stack_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for realtime probe search",
+            evidence={"governance_status": governance.get("status")},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l2_native_realtime_stack_probe_verified"
+            if passed
+            else "realtime_stack_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "requires_external_service": False,
+        "evidence": {
+            "selected_report_summary": copy.deepcopy(selected_summary),
+            "selected_metrics": copy.deepcopy(selected_metrics),
+            "realtime_stack_contract": copy.deepcopy(contract),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
 def build_memory_optimization_manifest(
     *,
     name: str,
@@ -15225,6 +15855,7 @@ def _realtime_environment_bundle(
     framework: str,
 ) -> list[dict[str, Any]]:
     candidate_dict = copy.deepcopy(dict(candidate))
+    candidate_framework = str(candidate_dict.pop("framework", framework) or framework)
     explicit_environments = candidate_dict.pop("environments", None)
     if explicit_environments is not None:
         bundle = [copy.deepcopy(dict(item)) for item in explicit_environments]
@@ -15238,7 +15869,7 @@ def _realtime_environment_bundle(
             _typed_realtime_environment(
                 "voice",
                 candidate_dict.pop("voice"),
-                framework=framework,
+                framework=candidate_framework,
             )
         )
     streaming_data = candidate_dict.pop(
@@ -15250,7 +15881,7 @@ def _realtime_environment_bundle(
             _typed_realtime_environment(
                 "streaming_trace",
                 streaming_data,
-                framework=framework,
+                framework=candidate_framework,
             )
         )
     if candidate_dict:
@@ -25376,6 +26007,7 @@ __all__ = [
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
     "AGENT_LEARNING_MULTI_AGENT_ROOM_PROBE_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
+    "AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND",
     "AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_ATTACK_EVOLUTION_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND",
@@ -25416,6 +26048,7 @@ __all__ = [
     "build_agent_architecture_optimization_manifest",
     "build_persistent_state_redteam_optimization_manifest",
     "build_realtime_optimization_manifest",
+    "build_realtime_run_manifest_from_probe_optimization",
     "build_report_repair_optimization_manifest",
     "build_redteam_autogen_optimization_manifest",
     "build_redteam_causal_attribution_optimization_manifest",
@@ -25471,6 +26104,7 @@ __all__ = [
     "optimize_agent_architecture",
     "optimize_persistent_state_redteam",
     "optimize_realtime_stack",
+    "optimize_realtime_stack_probe",
     "optimize_report_repair",
     "optimize_redteam_autogen",
     "optimize_redteam_attack_evolution",
@@ -25499,6 +26133,7 @@ __all__ = [
     "score_framework_adapter_probe_result",
     "score_memory_layer_probe_result",
     "score_multi_agent_room_probe_result",
+    "score_realtime_stack_probe_result",
     "with_framework_adapter_matrix_proof",
     "with_framework_certification_proof",
     "with_framework_runtime_proof",
