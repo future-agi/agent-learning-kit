@@ -1474,6 +1474,46 @@ def test_sdk_evaluation_hook_probe_optimization_example_runs(tmp_path):
     assert hook["metric_name"] == "external_task_quality"
 
 
+def test_sdk_trinity_stack_probe_optimization_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_trinity_stack_probe_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_trinity_stack_probe_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-trinity-stack-probe-optimization.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        output_path.with_suffix(".manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["external_task_quality"] == pytest.approx(1.0)
+    assert metrics["world_contract_quality"] == pytest.approx(1.0)
+    assert metrics["agent_memory_lineage_quality"] == pytest.approx(1.0)
+    assert metrics["multi_agent_coordination_quality"] == pytest.approx(1.0)
+    assert manifest["required_env"] == []
+    assert manifest["metadata"]["promoted_from_trinity_stack_probe"] is True
+    assert manifest["metadata"]["trinity_stack_probe_proof_status"] == "passed"
+    hook = manifest["evaluation"]["agent_report"]["config"]["evaluation_hooks"][0]
+    assert hook["endpoint"].startswith("http://127.0.0.1:")
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+
+
 def test_sdk_realtime_stack_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_realtime_stack_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

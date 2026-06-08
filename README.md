@@ -740,6 +740,14 @@ promotes the selected stack into the normal `agent-learning.run.v1`
 orchestration simulation path. See
 `examples/sdk_orchestration_stack_probe_optimization.py` for an end-to-end
 probe, promotion, and evaluated run cookbook.
+To close the full local trinity boundary before a live evaluator is involved,
+`optimize.optimize_trinity_stack_probe()` first selects the orchestration stack,
+then probes the same selected agent through a localhost evaluation hook and
+emits `agent-learning.optimization.trinity-stack-probe-proof.v1`.
+`optimize.build_trinity_run_manifest_from_probe_optimization(...)` promotes that
+single selected agent/stack/evaluator contract into one run manifest. See
+`examples/sdk_trinity_stack_probe_optimization.py` for the composed local probe,
+promotion, and evaluated run cookbook.
 
 For direct, non-optimizer orchestration simulation,
 `simulate.build_orchestration_stack_run_manifest()` and
@@ -958,6 +966,9 @@ AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY=... \
 
 PYTHONPATH=src python examples/sdk_orchestration_stack_probe_optimization.py \
   artifacts/sdk-orchestration-stack-probe-optimization.json
+
+PYTHONPATH=src python examples/sdk_trinity_stack_probe_optimization.py \
+  artifacts/sdk-trinity-stack-probe-optimization.json
 
 PYTHONPATH=src python examples/sdk_memory_layer_probe_optimization.py \
   artifacts/sdk-memory-layer-probe-optimization.json

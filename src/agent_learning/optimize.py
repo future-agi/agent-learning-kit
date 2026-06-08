@@ -56,6 +56,9 @@ AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND = (
 AGENT_LEARNING_ORCHESTRATION_STACK_PROBE_PROOF_KIND = (
     "agent-learning.optimization.orchestration-stack-probe-proof.v1"
 )
+AGENT_LEARNING_TRINITY_STACK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.trinity-stack-probe-proof.v1"
+)
 AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND = (
     "agent-learning.optimization.realtime-stack-probe-proof.v1"
 )
@@ -7801,6 +7804,784 @@ def build_orchestration_run_manifest_from_probe_optimization(
         "orchestration_stack_probe_proof_status": proof.get("status"),
     }
     return manifest
+
+
+def optimize_trinity_stack_probe(
+    *,
+    name: str = "trinity-stack-probe-optimization",
+    endpoint: str,
+    stack_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    target: str | None = None,
+    expected_transition: str = "approve_refund",
+    expected_state: Optional[Mapping[str, Any]] = None,
+    expected_document_id: str = "doc_refund_2026",
+    expected_roles: Sequence[str] = ("planner", "retriever", "critic"),
+    expected_review_target: str = "refund",
+    expected_reconciliation: str = "approved refund",
+    required_tools: Sequence[str] = (
+        "apply_world_transition",
+        "framework_trace_status",
+        "retrieve_documents",
+        "read_document",
+        "cite_sources",
+        "agent_memory_lineage_status",
+        "retrieval_memory_status",
+        "room_status",
+        "request_review",
+        "reconcile",
+    ),
+    api_key_env: str = "",
+    metric_name: str = "external_task_quality",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    task_description: Optional[str] = None,
+    expected_result: Optional[str] = None,
+    success_criteria: Sequence[str] = (),
+    threshold: float = 0.9,
+    allow_external_target: bool = False,
+    allow_external_endpoint: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize a local orchestration stack and verify its agent with a hook."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not endpoint:
+        raise ValueError("endpoint is required")
+
+    metadata_map = copy.deepcopy(dict(metadata or {}))
+    task_description_value = (
+        task_description or _default_trinity_stack_task_description()
+    )
+    expected_result_value = expected_result or _default_trinity_stack_expected_result()
+    success_criteria_values = tuple(
+        success_criteria or _default_trinity_stack_success_criteria()
+    )
+
+    orchestration_result = optimize_orchestration_stack_probe(
+        name=f"{name}-orchestration-stack",
+        stack_candidates=stack_candidates,
+        agent_candidates=agent_candidates,
+        target=target,
+        expected_transition=expected_transition,
+        expected_state=expected_state,
+        expected_document_id=expected_document_id,
+        expected_roles=expected_roles,
+        expected_review_target=expected_review_target,
+        expected_reconciliation=expected_reconciliation,
+        required_tools=required_tools,
+        threshold=threshold,
+        allow_external_target=allow_external_target,
+        metadata={
+            **metadata_map,
+            "trinity_probe_component": "orchestration_stack",
+        },
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+    )
+    selected_pair = _selected_orchestration_probe_pair(orchestration_result)
+    selected_agent = _plain_mapping(selected_pair.get("agent"))
+    if not selected_agent:
+        raise ValueError("selected orchestration probe agent is required")
+
+    probe_hook_config = _trinity_evaluation_hook_config(
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        evaluation_config=None,
+        task_description=task_description_value,
+        expected_result=expected_result_value,
+        success_criteria=success_criteria_values,
+        metadata=metadata_map,
+    )
+    promotion_evaluation_config = _trinity_evaluation_hook_config(
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        evaluation_config=evaluation_config,
+        task_description=task_description_value,
+        expected_result=expected_result_value,
+        success_criteria=success_criteria_values,
+        metadata=metadata_map,
+    )
+
+    from . import evals as _agent_evals
+
+    evaluation_hook_probe = _agent_evals.run_evaluation_hook_probe(
+        selected_agent,
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        evaluation_config=probe_hook_config,
+        task_description=task_description_value,
+        expected_result=expected_result_value,
+        success_criteria=success_criteria_values,
+        threshold=threshold,
+        metadata={
+            **metadata_map,
+            "trinity_probe_component": "evaluation_hook",
+            "orchestration_probe_name": orchestration_result.get("name"),
+        },
+        allow_external_endpoint=allow_external_endpoint,
+    )
+    hook_score = score_evaluation_hook_probe_result(evaluation_hook_probe)
+    payload = _trinity_stack_probe_optimization_payload(
+        name=name,
+        threshold=threshold,
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        task_description=task_description_value,
+        expected_result=expected_result_value,
+        success_criteria=success_criteria_values,
+        orchestration_result=orchestration_result,
+        selected_pair=selected_pair,
+        evaluation_hook_config=promotion_evaluation_config,
+        evaluation_hook_probe=evaluation_hook_probe,
+        evaluation_hook_score=hook_score,
+        metadata=metadata_map,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_trinity_stack_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def build_trinity_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    endpoint: Optional[str] = None,
+    api_key_env: Optional[str] = None,
+    metric_name: Optional[str] = None,
+    task_description: Optional[str] = None,
+    expected_result: Optional[str] = None,
+    success_criteria: Sequence[str] = (),
+    name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    metadata: Optional[Mapping[str, Any]] = None,
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+) -> dict[str, Any]:
+    """Promote a verified trinity stack probe into one evaluated run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    trinity_config = _plain_mapping(
+        _plain_mapping(optimization.get("best_config")).get("trinity_stack")
+    )
+    proof = _plain_mapping(
+        payload.get("trinity_stack_probe_proof")
+        or optimization.get("trinity_stack_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_TRINITY_STACK_PROBE_PROOF_KIND:
+        raise ValueError("trinity_stack_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("trinity_stack_probe_proof must be passed")
+
+    orchestration_result = _plain_mapping(
+        payload.get("orchestration_stack_probe_optimization")
+    )
+    if not orchestration_result:
+        raise ValueError("orchestration_stack_probe_optimization is required")
+
+    selected_endpoint = str(endpoint or trinity_config.get("endpoint") or "")
+    if not selected_endpoint:
+        raise ValueError("endpoint is required")
+    selected_api_key_env = str(
+        api_key_env
+        if api_key_env is not None
+        else trinity_config.get("api_key_env") or ""
+    )
+    selected_metric_name = str(
+        metric_name or trinity_config.get("metric_name") or "external_task_quality"
+    )
+    selected_task_description = str(
+        task_description
+        or trinity_config.get("task_description")
+        or _default_trinity_stack_task_description()
+    )
+    selected_expected_result = str(
+        expected_result
+        or trinity_config.get("expected_result")
+        or _default_trinity_stack_expected_result()
+    )
+    selected_success_criteria = tuple(
+        success_criteria
+        or _plain_list(trinity_config.get("success_criteria"))
+        or _default_trinity_stack_success_criteria()
+    )
+    selected_evaluation_config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else copy.deepcopy(
+            _plain_mapping(
+                trinity_config.get("evaluation_config")
+                or _plain_mapping(payload.get("trinity_stack_probe")).get(
+                    "evaluation_hook_config"
+                )
+            )
+        )
+    )
+    if not selected_evaluation_config:
+        selected_evaluation_config = _trinity_evaluation_hook_config(
+            endpoint=selected_endpoint,
+            api_key_env=selected_api_key_env,
+            metric_name=selected_metric_name,
+            evaluation_config=None,
+            task_description=selected_task_description,
+            expected_result=selected_expected_result,
+            success_criteria=selected_success_criteria,
+            metadata=metadata,
+        )
+
+    selected_required_env = _unique_strings(required_env)
+    if selected_api_key_env and selected_api_key_env not in selected_required_env:
+        selected_required_env.append(selected_api_key_env)
+
+    manifest = build_orchestration_run_manifest_from_probe_optimization(
+        orchestration_result,
+        evaluation_config=selected_evaluation_config,
+        name=name or f"{payload.get('name') or 'trinity-stack-probe'}-run",
+        required_env=selected_required_env,
+        scenario=scenario,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        metadata={
+            "source": (
+                "agent_learning.optimize."
+                "build_trinity_run_manifest_from_probe_optimization"
+            ),
+            "promoted_from_trinity_stack_probe": True,
+            "trinity_stack_probe_proof": copy.deepcopy(proof),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_trinity_stack_probe": True,
+        "trinity_stack_probe_proof_status": proof.get("status"),
+        "evaluation_hook_probe_status": _plain_mapping(
+            payload.get("evaluation_hook_probe")
+        ).get("status"),
+        "evaluation_hook_probe_score": _plain_mapping(
+            payload.get("evaluation_hook_probe_score")
+        ).get("score"),
+        "orchestration_stack_probe_proof_status": _plain_mapping(
+            orchestration_result.get("orchestration_stack_probe_proof")
+        ).get("status"),
+    }
+    return manifest
+
+
+def score_trinity_stack_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Score a composed trinity stack probe artifact into optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    orchestration_quality = 1.0 if (
+        summary.get("orchestration_stack_probe_passed") is True
+        and summary.get("orchestration_stack_probe_proof_passed") is True
+    ) else 0.0
+    evaluation_hook_quality = 1.0 if (
+        summary.get("evaluation_hook_probe_passed") is True
+        and _as_float(summary.get("evaluation_hook_probe_score")) >= _as_float(
+            summary.get("threshold")
+        )
+    ) else 0.0
+    same_agent = 1.0 if summary.get("same_agent_selected") is True else 0.0
+    local_contracts = 1.0 if summary.get("requires_external_service") is False else 0.0
+    promotion_ready = 1.0 if summary.get("promotion_ready") is True else 0.0
+    score = round(
+        (
+            orchestration_quality * 0.35
+            + evaluation_hook_quality * 0.3
+            + same_agent * 0.1
+            + local_contracts * 0.1
+            + promotion_ready * 0.15
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.trinity-stack-probe-score.v1",
+        "score": score,
+        "passed": score >= 0.9 and summary.get("status") == "passed",
+        "reason": (
+            "trinity stack probe passed with orchestration and evaluation hook evidence"
+            if score >= 0.9 and summary.get("status") == "passed"
+            else "trinity stack probe did not close orchestration/evaluation evidence"
+        ),
+        "metrics": {
+            "trinity_stack_probe_orchestration_quality": orchestration_quality,
+            "trinity_stack_probe_evaluation_hook_quality": evaluation_hook_quality,
+            "trinity_stack_probe_same_agent": same_agent,
+            "trinity_stack_probe_local_contracts": local_contracts,
+            "trinity_stack_probe_promotion_ready": promotion_ready,
+            "trinity_stack_probe_score": score,
+        },
+        "summary": copy.deepcopy(dict(summary)),
+    }
+
+
+def _selected_orchestration_probe_pair(
+    orchestration_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    optimization = _plain_mapping(orchestration_result.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    return copy.deepcopy(
+        _plain_mapping(best_config.get("orchestration_stack")) or best_config
+    )
+
+
+def _trinity_evaluation_hook_config(
+    *,
+    endpoint: str,
+    api_key_env: str,
+    metric_name: str,
+    evaluation_config: Optional[Mapping[str, Any]],
+    task_description: str,
+    expected_result: str,
+    success_criteria: Sequence[str],
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if evaluation_config is None:
+        from . import evals as _agent_evals
+
+        return _agent_evals.build_evaluation_hook_config(
+            task_description=task_description,
+            endpoint=endpoint,
+            api_key_env=api_key_env,
+            metric_name=metric_name,
+            expected_result=expected_result,
+            success_criteria=success_criteria,
+            threshold_metric_weight=10.0,
+            metadata={
+                "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+                **copy.deepcopy(dict(metadata or {})),
+            },
+        )
+
+    config = copy.deepcopy(dict(evaluation_config))
+    config.setdefault("task_description", task_description)
+    config.setdefault("expected_result", expected_result)
+    if success_criteria:
+        config.setdefault("success_criteria", [str(item) for item in success_criteria])
+    hooks = [_plain_mapping(hook) for hook in _plain_list(config.get("evaluation_hooks"))]
+    if not hooks:
+        config["evaluation_hooks"] = [
+            {
+                "name": str(metric_name),
+                "metric_name": str(metric_name),
+                "endpoint": str(endpoint),
+                "auth": {"type": "bearer", "token_env": str(api_key_env)}
+                if api_key_env
+                else {},
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            }
+        ]
+    weights = {
+        str(key): float(value)
+        for key, value in _plain_mapping(config.get("metric_weights")).items()
+    }
+    weights.setdefault(str(metric_name), 10.0)
+    weights.setdefault("task_completion", 1.0)
+    weights.setdefault("secret_leakage", 1.0)
+    config["metric_weights"] = weights
+    return config
+
+
+def _default_trinity_stack_task_description() -> str:
+    return (
+        "Evaluate whether the selected orchestration-stack agent approved the "
+        "refund with current policy grounding, framework trace evidence, "
+        "memory provenance, and critic-reviewed reconciliation."
+    )
+
+
+def _default_trinity_stack_expected_result() -> str:
+    return (
+        "The refund is approved with current policy grounding, recorded "
+        "framework trace evidence, memory provenance, source grounding, "
+        "critic-reviewed reconciliation, and no customer secret disclosure."
+    )
+
+
+def _default_trinity_stack_success_criteria() -> tuple[str, ...]:
+    return (
+        "current policy grounding",
+        "framework trace evidence",
+        "memory provenance",
+        "source grounding",
+        "critic-reviewed reconciliation",
+        "no customer secret disclosure",
+    )
+
+
+def _trinity_stack_probe_optimization_payload(
+    *,
+    name: str,
+    threshold: float,
+    endpoint: str,
+    api_key_env: str,
+    metric_name: str,
+    task_description: str,
+    expected_result: str,
+    success_criteria: Sequence[str],
+    orchestration_result: Mapping[str, Any],
+    selected_pair: Mapping[str, Any],
+    evaluation_hook_config: Mapping[str, Any],
+    evaluation_hook_probe: Mapping[str, Any],
+    evaluation_hook_score: Mapping[str, Any],
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    orchestration_optimization = _plain_mapping(orchestration_result.get("optimization"))
+    orchestration_summary = _plain_mapping(orchestration_result.get("summary"))
+    orchestration_history = _selected_optimization_history(
+        orchestration_result,
+        orchestration_optimization,
+    )
+    orchestration_report = _plain_mapping(orchestration_history.get("report"))
+    orchestration_metrics = _plain_mapping(orchestration_history.get("metrics"))
+    orchestration_proof = _plain_mapping(
+        orchestration_result.get("orchestration_stack_probe_proof")
+    )
+    selected_agent = _plain_mapping(selected_pair.get("agent"))
+    selected_stack = _plain_mapping(selected_pair.get("stack"))
+    same_agent = _plain_mapping(evaluation_hook_probe.get("agent")) == selected_agent
+    orchestration_score = _as_float(orchestration_summary.get("optimization_score"))
+    if orchestration_score <= 0:
+        orchestration_score = _as_float(orchestration_history.get("score"))
+    hook_score = _as_float(evaluation_hook_score.get("score"))
+    score = round(min(orchestration_score, hook_score), 6)
+    orchestration_passed = (
+        orchestration_result.get("status") == "passed"
+        and orchestration_proof.get("passed") is True
+    )
+    hook_passed = (
+        evaluation_hook_probe.get("status") == "passed"
+        and evaluation_hook_score.get("passed") is True
+    )
+    promotion_ready = (
+        orchestration_passed
+        and hook_passed
+        and same_agent
+        and bool(selected_stack)
+        and bool(_plain_list(_plain_mapping(evaluation_hook_config).get("evaluation_hooks")))
+        and score >= float(threshold)
+    )
+    requires_external = bool(
+        _plain_mapping(orchestration_report.get("contract")).get(
+            "requires_external_service"
+        )
+        or _plain_mapping(evaluation_hook_probe.get("contract")).get(
+            "requires_external_service"
+        )
+    )
+    status = "passed" if promotion_ready and not requires_external else "failed"
+    selected_candidate_id = str(
+        orchestration_optimization.get("best_candidate_id")
+        or orchestration_summary.get("best_candidate_id")
+        or orchestration_proof.get("selected_candidate_id")
+        or "trinity_stack_selected"
+    )
+    trinity_config = {
+        "agent": copy.deepcopy(selected_agent),
+        "stack": copy.deepcopy(selected_stack),
+        "endpoint": str(endpoint),
+        "api_key_env": str(api_key_env),
+        "metric_name": str(metric_name),
+        "task_description": str(task_description),
+        "expected_result": str(expected_result),
+        "success_criteria": [str(item) for item in success_criteria],
+        "evaluation_config": copy.deepcopy(dict(evaluation_hook_config)),
+    }
+    metrics = {
+        **copy.deepcopy(orchestration_metrics),
+        **copy.deepcopy(_plain_mapping(evaluation_hook_score.get("metrics"))),
+        "trinity_stack_probe_orchestration_quality": 1.0
+        if orchestration_passed
+        else 0.0,
+        "trinity_stack_probe_evaluation_hook_quality": 1.0 if hook_passed else 0.0,
+        "trinity_stack_probe_same_agent": 1.0 if same_agent else 0.0,
+        "trinity_stack_probe_local_contracts": 0.0 if requires_external else 1.0,
+        "trinity_stack_probe_promotion_ready": 1.0 if promotion_ready else 0.0,
+        "trinity_stack_probe_score": score,
+    }
+    summary = {
+        "status": status,
+        "optimization_score": score,
+        "score": score,
+        "threshold": float(threshold),
+        "orchestration_stack_probe_score": round(orchestration_score, 6),
+        "evaluation_hook_probe_score": round(hook_score, 6),
+        "orchestration_stack_probe_passed": orchestration_passed,
+        "orchestration_stack_probe_proof_passed": orchestration_proof.get("passed")
+        is True,
+        "evaluation_hook_probe_passed": hook_passed,
+        "same_agent_selected": same_agent,
+        "requires_external_service": requires_external,
+        "promotion_ready": promotion_ready,
+        "best_candidate_id": selected_candidate_id,
+        "metric_name": str(metric_name),
+    }
+    trinity_probe = {
+        "kind": "agent-learning.trinity-stack-probe.v1",
+        "status": status,
+        "passed": status == "passed",
+        "summary": copy.deepcopy(summary),
+        "orchestration_stack_probe": copy.deepcopy(orchestration_report),
+        "evaluation_hook_probe": copy.deepcopy(dict(evaluation_hook_probe)),
+        "evaluation_hook_config": copy.deepcopy(dict(evaluation_hook_config)),
+    }
+    history_row = {
+        "candidate_id": selected_candidate_id,
+        "candidate_config": {"trinity_stack": copy.deepcopy(trinity_config)},
+        "patch": {"trinity_stack": copy.deepcopy(trinity_config)},
+        "search_paths": ["trinity_stack"],
+        "score": score,
+        "metrics": copy.deepcopy(metrics),
+        "findings": copy.deepcopy(evaluation_hook_probe.get("findings", [])),
+        "report": copy.deepcopy(trinity_probe),
+        "report_summary": copy.deepcopy(summary),
+        "evaluation_score": score,
+        "evaluation_passed": status == "passed",
+    }
+    payload = {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "kind": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": name,
+        "status": status,
+        "exit_code": 0 if status == "passed" else 1,
+        "summary": summary,
+        "optimization": {
+            "name": name,
+            "threshold": float(threshold),
+            "target": {
+                "name": name,
+                "layers": [
+                    "orchestration",
+                    "world",
+                    "framework",
+                    "memory",
+                    "multi_agent",
+                    "evaluator",
+                    "harness",
+                ],
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+                    "task_kind": "trinity_stack_probe",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "best_candidate_id": selected_candidate_id,
+            "best_config": {"trinity_stack": copy.deepcopy(trinity_config)},
+            "best_score": score,
+            "history": [history_row],
+        },
+        "trinity_stack_probe": trinity_probe,
+        "orchestration_stack_probe_optimization": copy.deepcopy(
+            dict(orchestration_result)
+        ),
+        "evaluation_hook_probe": copy.deepcopy(dict(evaluation_hook_probe)),
+        "evaluation_hook_probe_score": copy.deepcopy(dict(evaluation_hook_score)),
+        "metadata": {
+            "source": "agent_learning.optimize.optimize_trinity_stack_probe",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+    scoring = score_trinity_stack_probe_result(payload)
+    payload["trinity_stack_probe_score"] = scoring
+    payload["summary"] = {
+        **summary,
+        **{
+            key: value
+            for key, value in scoring["metrics"].items()
+            if key not in summary
+        },
+    }
+    return payload
+
+
+def _with_trinity_stack_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _trinity_stack_probe_proof(result, optimization)
+    result["trinity_stack_probe_proof"] = proof
+    optimization["trinity_stack_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["trinity_stack_probe_proof_status"] = proof["status"]
+    summary["trinity_stack_probe_proof_passed"] = proof["passed"]
+    summary["trinity_stack_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["trinity_stack_probe_proof_check_count"] = proof["check_count"]
+    summary["trinity_stack_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    result["summary"] = summary
+    result["status"] = "passed" if proof["passed"] else "failed"
+    result["exit_code"] = 0 if proof["passed"] else 1
+    trinity_probe = _plain_mapping(result.get("trinity_stack_probe"))
+    if trinity_probe:
+        trinity_summary = _plain_mapping(trinity_probe.get("summary"))
+        trinity_summary["trinity_stack_probe_proof_status"] = proof["status"]
+        trinity_summary["trinity_stack_probe_proof_passed"] = proof["passed"]
+        trinity_probe["summary"] = trinity_summary
+        trinity_probe["status"] = result["status"]
+        trinity_probe["passed"] = proof["passed"]
+        result["trinity_stack_probe"] = trinity_probe
+    return result
+
+
+def _trinity_stack_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    trinity_probe = _plain_mapping(payload.get("trinity_stack_probe"))
+    summary = _plain_mapping(payload.get("summary"))
+    orchestration_result = _plain_mapping(
+        payload.get("orchestration_stack_probe_optimization")
+    )
+    orchestration_proof = _plain_mapping(
+        orchestration_result.get("orchestration_stack_probe_proof")
+    )
+    evaluation_hook_probe = _plain_mapping(payload.get("evaluation_hook_probe"))
+    evaluation_hook_score = _plain_mapping(payload.get("evaluation_hook_probe_score"))
+    evaluation_hook_contract = _plain_mapping(evaluation_hook_probe.get("contract"))
+    trinity_score = _plain_mapping(payload.get("trinity_stack_probe_score"))
+    trinity_metrics = _plain_mapping(trinity_score.get("metrics"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    threshold = _as_float(summary.get("threshold")) or 0.9
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    checks = [
+        _proof_check(
+            "trinity_stack_probe_orchestration_proof_closed",
+            passed=orchestration_proof.get("kind")
+            == AGENT_LEARNING_ORCHESTRATION_STACK_PROBE_PROOF_KIND
+            and orchestration_proof.get("passed") is True
+            and orchestration_proof.get("status") == "passed",
+            required=True,
+            reason="selected stack has a passing local orchestration-stack proof",
+            evidence={"orchestration_stack_probe_proof": copy.deepcopy(orchestration_proof)},
+        ),
+        _proof_check(
+            "trinity_stack_probe_evaluation_hook_closed",
+            passed=evaluation_hook_probe.get("kind")
+            == "agent-learning.evaluation-hook-probe.v1"
+            and evaluation_hook_probe.get("status") == "passed"
+            and evaluation_hook_score.get("passed") is True,
+            required=True,
+            reason="selected stack agent passes the local evaluation hook probe",
+            evidence={
+                "evaluation_hook_probe_status": evaluation_hook_probe.get("status"),
+                "evaluation_hook_probe_score": evaluation_hook_score.get("score"),
+            },
+        ),
+        _proof_check(
+            "trinity_stack_probe_local_contracts_closed",
+            passed=summary.get("requires_external_service") is False
+            and evaluation_hook_contract.get("requires_external_service") is False,
+            required=True,
+            reason="composed stack and evaluator contracts are local",
+            evidence={
+                "requires_external_service": summary.get("requires_external_service"),
+                "evaluation_hook_contract": copy.deepcopy(evaluation_hook_contract),
+            },
+        ),
+        _proof_check(
+            "trinity_stack_probe_same_agent_closed",
+            passed=summary.get("same_agent_selected") is True,
+            required=True,
+            reason="evaluation hook probe used the selected orchestration-stack agent",
+            evidence={"same_agent_selected": summary.get("same_agent_selected")},
+        ),
+        _proof_check(
+            "trinity_stack_probe_metric_evidence_closed",
+            passed=_as_float(trinity_metrics.get("trinity_stack_probe_score"))
+            >= threshold,
+            required=True,
+            reason="composed trinity stack metrics meet threshold",
+            evidence={"trinity_metrics": copy.deepcopy(trinity_metrics)},
+        ),
+        _proof_check(
+            "trinity_stack_probe_promotion_ready",
+            passed=summary.get("promotion_ready") is True,
+            required=True,
+            reason="selected stack, selected agent, and evaluator config can promote",
+            evidence={
+                "promotion_ready": summary.get("promotion_ready"),
+                "best_candidate_id": summary.get("best_candidate_id"),
+            },
+        ),
+        _proof_check(
+            "trinity_stack_probe_patch_surface_present",
+            passed=bool(selected_patch) and "trinity_stack" in selected_patch,
+            required=True,
+            reason="composed optimization carries a concrete trinity stack patch",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "trinity_stack_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for trinity probe",
+            evidence={"governance_status": governance.get("status")},
+        ),
+        _proof_check(
+            "trinity_stack_probe_report_present",
+            passed=trinity_probe.get("kind") == "agent-learning.trinity-stack-probe.v1"
+            and trinity_probe.get("status") == "passed",
+            required=True,
+            reason="composed trinity probe report is present and passing",
+            evidence={"kind": trinity_probe.get("kind"), "status": trinity_probe.get("status")},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_TRINITY_STACK_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_trinity_stack_probe_verified"
+            if passed
+            else "trinity_stack_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "requires_external_service": False,
+        "evidence": {
+            "summary": copy.deepcopy(summary),
+            "trinity_metrics": copy.deepcopy(trinity_metrics),
+            "orchestration_stack_probe_proof_status": orchestration_proof.get(
+                "status"
+            ),
+            "evaluation_hook_probe_status": evaluation_hook_probe.get("status"),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
 
 
 def score_orchestration_stack_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -27993,6 +28774,7 @@ __all__ = [
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROBE_PROOF_KIND",
     "AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND",
+    "AGENT_LEARNING_TRINITY_STACK_PROBE_PROOF_KIND",
     "AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_ATTACK_EVOLUTION_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND",
@@ -28049,6 +28831,7 @@ __all__ = [
     "build_social_memory_framework_optimization_manifest",
     "build_stateful_tool_world_optimization_manifest",
     "build_task_optimization_manifest",
+    "build_trinity_run_manifest_from_probe_optimization",
     "build_workflow_hook_optimization_manifest",
     "build_world_model_optimization_manifest",
     "build_world_hooks_optimization_manifest",
@@ -28109,6 +28892,7 @@ __all__ = [
     "optimize_social_memory_framework",
     "optimize_stateful_tool_world",
     "optimize_task",
+    "optimize_trinity_stack_probe",
     "optimize_workflow_hooks",
     "optimize_world_model",
     "optimize_world_hooks",
@@ -28128,6 +28912,7 @@ __all__ = [
     "score_multi_agent_room_probe_result",
     "score_orchestration_stack_probe_result",
     "score_realtime_stack_probe_result",
+    "score_trinity_stack_probe_result",
     "with_framework_adapter_matrix_proof",
     "with_framework_certification_proof",
     "with_framework_runtime_proof",

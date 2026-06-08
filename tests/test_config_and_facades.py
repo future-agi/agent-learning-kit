@@ -382,6 +382,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_orchestration_stack_probe is not None
     assert optimize.score_orchestration_stack_probe_result is not None
     assert optimize.build_orchestration_run_manifest_from_probe_optimization is not None
+    assert optimize.optimize_trinity_stack_probe is not None
+    assert optimize.score_trinity_stack_probe_result is not None
+    assert optimize.build_trinity_run_manifest_from_probe_optimization is not None
     assert simulate.build_orchestration_stack_run_manifest is not None
     assert simulate.run_orchestration_stack_probe is not None
     assert optimize.build_world_framework_memory_optimization_manifest is not None
@@ -4498,6 +4501,95 @@ def test_optimize_orchestration_stack_probe_selects_and_promotes_strong_candidat
     assert state["world_contract"]["state"]["refund"]["status"] == "approved"
     assert state["retrieval_memory"]["citations"][0]["doc_ids"] == ["doc_refund_2026"]
     assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+
+
+def test_optimize_trinity_stack_probe_composes_stack_and_evaluator(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_trinity_stack_probe_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_trinity_stack_probe_optimization_for_test",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    orchestration_example = module._orchestration_example()
+
+    with module._local_trinity_evaluation_hook() as endpoint:
+        result = optimize.optimize_trinity_stack_probe(
+            name="sdk-trinity-stack-probe-optimization",
+            endpoint=endpoint,
+            stack_candidates=[
+                orchestration_example.weak_stack(),
+                orchestration_example.strong_stack(),
+            ],
+            agent_candidates=[
+                orchestration_example.weak_agent(),
+                orchestration_example.strong_agent(),
+            ],
+            evaluation_config=orchestration_example.evaluation_config(),
+            task_description=module.TASK_DESCRIPTION,
+            expected_result=module.EXPECTED_RESULT,
+            success_criteria=module.SUCCESS_CRITERIA,
+            metadata={"cookbook": "sdk-trinity-stack-probe-optimization"},
+        )
+
+        assert result["kind"] == "agent-learning.optimization.v1"
+        assert result["status"] == "passed"
+        assert result["summary"]["trinity_stack_probe_proof_passed"] is True
+        assert result["trinity_stack_probe_proof"]["kind"] == (
+            optimize.AGENT_LEARNING_TRINITY_STACK_PROBE_PROOF_KIND
+        )
+        assert result["trinity_stack_probe_proof"]["failed_check_ids"] == []
+        assert result["summary"]["same_agent_selected"] is True
+        assert result["summary"]["promotion_ready"] is True
+        assert result["summary"]["trinity_stack_probe_score"] == pytest.approx(1.0)
+        assert result["evaluation_hook_probe"]["summary"]["hook_score"] == pytest.approx(
+            1.0
+        )
+        assert result["orchestration_stack_probe_optimization"]["summary"][
+            "orchestration_stack_probe_proof_passed"
+        ] is True
+        best = result["optimization"]["best_config"]["trinity_stack"]
+        assert best["stack"]["name"] == "strong-orchestration-stack"
+        assert best["evaluation_config"]["evaluation_hooks"][0]["endpoint"] == endpoint
+
+        manifest = optimize.build_trinity_run_manifest_from_probe_optimization(
+            result,
+            name="promoted-trinity-stack-probe-run",
+            metadata={"cookbook": "sdk-trinity-stack-probe-optimization"},
+        )
+        assert manifest["version"] == "agent-learning.run.v1"
+        assert manifest["required_env"] == []
+        assert manifest["metadata"]["promoted_from_trinity_stack_probe"] is True
+        assert manifest["metadata"]["trinity_stack_probe_proof_status"] == "passed"
+        assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+            "world_contract",
+            "framework_trace",
+            "retrieval_memory",
+            "agent_memory_lineage",
+            "multi_agent_room",
+        ]
+        hook = manifest["evaluation"]["agent_report"]["config"][
+            "evaluation_hooks"
+        ][0]
+        assert hook["endpoint"] == endpoint
+        manifest_path = simulate.write_manifest_file(
+            manifest,
+            tmp_path / "promoted-trinity-stack-probe-run.json",
+        )
+        run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    metrics = run_result["summary"]["metric_averages"]
+    assert metrics["external_task_quality"] == pytest.approx(1.0)
+    assert metrics["world_contract_quality"] == pytest.approx(1.0)
+    assert metrics["agent_memory_lineage_quality"] == pytest.approx(1.0)
+    assert metrics["multi_agent_coordination_quality"] == pytest.approx(1.0)
 
 
 def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
