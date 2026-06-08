@@ -184,6 +184,8 @@ class AgentReportEvalConfig(BaseModel):
     orchestration_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_streaming_trace: List[str] = Field(default_factory=list)
     streaming_trace_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_realtime_trace: List[str] = Field(default_factory=list)
+    realtime_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_world_contract: List[str] = Field(default_factory=list)
     world_contract_quality: Dict[str, Any] = Field(default_factory=dict)
     world_hook_contract_quality: Dict[str, Any] = Field(default_factory=dict)
@@ -497,6 +499,8 @@ class AgentReportEvaluator:
                 _orchestration_flow_quality_metric(report_context, config),
                 _streaming_trace_coverage_metric(report_context, config),
                 _streaming_interaction_quality_metric(report_context, config),
+                *_realtime_trace_coverage_metrics(report_context, config),
+                *_realtime_trace_quality_metrics(report_context, config),
                 _world_contract_coverage_metric(report_context, config),
                 _world_contract_quality_metric(report_context, config),
                 *_world_hook_contract_quality_metrics(report_context, config),
@@ -9216,6 +9220,257 @@ def _streaming_interaction_quality_metric(
                 "summary": summary,
                 "state": state,
             },
+        },
+    )
+
+
+def _realtime_trace_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if (
+        not config.required_realtime_trace
+        and not _realtime_trace_payloads_from_context(context)
+    ):
+        return []
+    return [_realtime_trace_coverage_metric(context, config)]
+
+
+def _realtime_trace_coverage_metric(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> AgentReportMetricResult:
+    required = [
+        _normalize_realtime_trace_key(key)
+        for key in config.required_realtime_trace
+    ]
+    required = [key for key in required if key]
+    if not required:
+        return AgentReportMetricResult(
+            name="realtime_trace_coverage",
+            score=1.0,
+            reason="No required realtime trace keys provided.",
+        )
+    observed = _realtime_trace_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    return AgentReportMetricResult(
+        name="realtime_trace_coverage",
+        score=round(matched / len(set(required)), 4),
+        reason=(
+            "All required realtime trace evidence observed."
+            if not missing
+            else f"Missing realtime trace evidence: {', '.join(missing)}."
+        ),
+        details={
+            "required": sorted(set(required)),
+            "observed": sorted(observed),
+            "missing": missing,
+            "findings": [
+                {"type": "missing_realtime_trace_key", "key": key}
+                for key in missing
+            ],
+        },
+    )
+
+
+def _realtime_trace_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.realtime_trace_quality:
+        return []
+    return [_realtime_trace_quality_metric(context, config.realtime_trace_quality)]
+
+
+def _realtime_trace_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    summary = _realtime_trace_summary_from_payloads(
+        _realtime_trace_payloads_from_context(context)
+    )
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for tool in _string_list(requirements.get("required_tools") or requirements.get("tools")):
+        normalized = _normalize_protocol_name(tool)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_tool",
+            expected=normalized,
+            actual=sorted(summary["tool_names"]),
+            match=normalized in summary["tool_names"],
+            finding_type="realtime_tool_missing",
+        )
+    for frame_type in _string_list(requirements.get("required_frame_types") or requirements.get("frame_types")):
+        normalized = _normalize_realtime_trace_name(frame_type)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_frame_type",
+            expected=normalized,
+            actual=sorted(summary["frame_types"]),
+            match=normalized in summary["frame_types"],
+            finding_type="realtime_frame_type_missing",
+        )
+    for event_type in _string_list(requirements.get("required_event_types") or requirements.get("event_types")):
+        normalized = _normalize_realtime_trace_name(event_type)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_event_type",
+            expected=normalized,
+            actual=sorted(summary["event_types"]),
+            match=normalized in summary["event_types"],
+            finding_type="realtime_event_type_missing",
+        )
+    for category in _string_list(requirements.get("required_categories") or requirements.get("categories")):
+        normalized = _normalize_realtime_trace_key(category)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_category",
+            expected=normalized,
+            actual=sorted(summary["categories"]),
+            match=normalized in summary["categories"],
+            finding_type="realtime_category_missing",
+        )
+    for direction in _string_list(requirements.get("required_directions") or requirements.get("directions")):
+        normalized = _normalize_realtime_trace_key(direction)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_direction",
+            expected=normalized,
+            actual=sorted(summary["directions"]),
+            match=normalized in summary["directions"],
+            finding_type="realtime_direction_missing",
+        )
+    for modality in _string_list(requirements.get("required_modalities") or requirements.get("modalities")):
+        normalized = _normalize_realtime_trace_key(modality)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_modality",
+            expected=normalized,
+            actual=sorted(summary["modalities"]),
+            match=normalized in summary["modalities"],
+            finding_type="realtime_modality_missing",
+        )
+    for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
+        normalized = _normalize_realtime_trace_key(signal)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="required_signal",
+            expected=normalized,
+            actual=sorted(summary["signals"]),
+            match=normalized in summary["signals"],
+            finding_type="realtime_signal_missing",
+        )
+    for term in _string_list(
+        requirements.get("expected_transcript_contains")
+        or requirements.get("transcript_contains")
+    ):
+        transcripts = [str(item) for item in summary["transcripts"]]
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="transcript_contains",
+            expected=term,
+            actual=transcripts,
+            match=any(_text_contains(transcript, term) for transcript in transcripts),
+            finding_type="realtime_transcript_text_missing",
+        )
+    for requirement_key, summary_key, finding_type in (
+        ("min_frame_count", "frame_count", "realtime_frame_count_low"),
+        ("min_event_count", "event_count", "realtime_event_count_low"),
+        ("min_tool_call_count", "tool_call_count", "realtime_tool_call_count_low"),
+        ("min_tool_response_count", "tool_response_count", "realtime_tool_response_count_low"),
+        ("min_transcript_count", "transcript_count", "realtime_transcript_count_low"),
+        ("min_audio_frame_count", "audio_frame_count", "realtime_audio_frame_count_low"),
+        ("min_lifecycle_event_count", "lifecycle_event_count", "realtime_lifecycle_count_low"),
+        ("min_completion_count", "completion_count", "realtime_completion_count_low"),
+    ):
+        expected_min = _as_int(requirements.get(requirement_key))
+        if expected_min is None:
+            continue
+        actual = int(summary.get(summary_key) or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check=requirement_key,
+            expected=expected_min,
+            actual=actual,
+            match=actual >= expected_min,
+            finding_type=finding_type,
+        )
+    max_error_count = _as_int(requirements.get("max_error_count"))
+    if max_error_count is not None:
+        actual = int(summary.get("error_count") or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="max_error_count",
+            expected=max_error_count,
+            actual=actual,
+            match=actual <= max_error_count,
+            finding_type="realtime_error_threshold_exceeded",
+        )
+    max_interruption_count = _as_int(requirements.get("max_interruption_count"))
+    if max_interruption_count is not None:
+        actual = int(summary.get("interruption_count") or 0)
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="max_interruption_count",
+            expected=max_interruption_count,
+            actual=actual,
+            match=actual <= max_interruption_count,
+            finding_type="realtime_interruption_threshold_exceeded",
+        )
+    if requirements.get("require_completion") is not None:
+        required = bool(requirements.get("require_completion"))
+        actual = int(summary.get("completion_count") or 0) > 0
+        _append_protocol_quality_check(
+            checks,
+            findings,
+            metric="realtime_trace_quality",
+            check="require_completion",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="realtime_completion_missing",
+        )
+    if not checks:
+        return AgentReportMetricResult(
+            name="realtime_trace_quality",
+            score=1.0,
+            reason="No expected realtime trace checks provided.",
+        )
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="realtime_trace_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} realtime trace check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "summary": _protocol_summary_details(summary),
         },
     )
 
@@ -19922,6 +20177,8 @@ def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("streaming")
             if _framework_runtime_output_has_protocol_evidence(output):
                 observed.add("protocol")
+            if _framework_runtime_output_has_realtime_evidence(output):
+                observed.add("realtime")
     return observed
 
 
@@ -20067,6 +20324,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
             )
             if _framework_runtime_output_has_protocol_evidence(output):
                 signals.add("protocol")
+            if _framework_runtime_output_has_realtime_evidence(output):
+                signals.add("realtime")
 
     return {
         "invocation_count": len(invocations),
@@ -20118,6 +20377,24 @@ def _framework_runtime_output_has_protocol_evidence(output: Mapping[str, Any]) -
             value in {"mcp_tool_session", "a2a_protocol_trace"}
             or value.startswith("mcp_")
             or value.startswith("a2a_")
+        )
+        for value in normalized
+    )
+
+
+def _framework_runtime_output_has_realtime_evidence(output: Mapping[str, Any]) -> bool:
+    values = [
+        *_as_list(output.get("state_keys", [])),
+        *_as_list(output.get("event_types", [])),
+        *_as_list(output.get("artifact_types", [])),
+        *_as_list(output.get("metadata_keys", [])),
+    ]
+    normalized = {_normalize_framework_runtime_key(value) for value in values}
+    return any(
+        value
+        and (
+            value == "realtime_trace"
+            or value.startswith("realtime_")
         )
         for value in normalized
     )
@@ -27197,6 +27474,311 @@ def _normalize_framework_trace_key(key: str) -> str:
         "pagination": "export_pagination",
     }
     return aliases.get(normalized, normalized)
+
+
+def _realtime_trace_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("realtime_trace"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("realtime_trace"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    for artifact in _as_list(context.get("artifacts", [])):
+        artifact_dict = _as_dict(artifact)
+        metadata = _as_dict(artifact_dict.get("metadata"))
+        data = _as_dict(artifact_dict.get("data"))
+        if str(metadata.get("kind") or data.get("kind") or "").lower() in {
+            "realtime_trace",
+            "framework_realtime_trace",
+        }:
+            payloads.append(data)
+    for event in _as_list(context.get("events", [])):
+        event_dict = _as_dict(event)
+        event_type = str(event_dict.get("type") or "")
+        event_name = str(event_dict.get("name") or "")
+        metadata = _as_dict(event_dict.get("metadata"))
+        payload = _as_dict(event_dict.get("payload"))
+        if str(metadata.get("kind") or payload.get("kind") or "").lower() in {
+            "realtime_trace",
+            "framework_realtime_trace",
+        }:
+            payloads.append(payload)
+        elif (
+            _is_realtime_trace_event_type(event_type)
+            or _is_realtime_trace_event_type(event_name)
+        ):
+            payloads.append(
+                {
+                    "kind": "framework_realtime_trace",
+                    "events": [payload],
+                    "summary": {"event_types": [event_type]},
+                    "signals": [event_type, event_name],
+                }
+            )
+    return [payload for payload in payloads if payload]
+
+
+def _realtime_trace_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _realtime_trace_payloads_from_context(context):
+        observed.add("trace")
+        _merge_realtime_trace_payload(observed, payload)
+    return observed
+
+
+def _merge_realtime_trace_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    if not payload:
+        return
+    if str(payload.get("kind") or "").lower() in {
+        "framework_realtime_trace",
+        "realtime_trace",
+    }:
+        observed.add("trace")
+    summary = _as_dict(payload.get("summary"))
+    for signal in _as_list(payload.get("signals") or summary.get("signals")):
+        _add_realtime_trace_key(observed, str(signal))
+    for count_key, signal in {
+        "frame_count": "frame",
+        "event_count": "event",
+        "tool_call_count": "tool_call",
+        "tool_response_count": "tool_response",
+        "transcript_count": "transcript",
+        "audio_frame_count": "audio_frame",
+        "lifecycle_event_count": "lifecycle",
+        "interruption_count": "interruption",
+        "error_count": "error",
+        "completion_count": "completion",
+    }.items():
+        if (
+            (_as_int(summary.get(count_key)) or 0) > 0
+            or (_as_int(payload.get(count_key)) or 0) > 0
+        ):
+            observed.add(signal)
+            if signal in {"tool_call", "tool_response"}:
+                observed.add("tool")
+    for key in ("frame_types", "event_types", "categories", "directions", "modalities"):
+        for value in _as_list(payload.get(key) or summary.get(key)):
+            if key == "frame_types":
+                observed.add("frame_type")
+            elif key == "event_types":
+                observed.add("event_type")
+            _add_realtime_trace_key(observed, str(value))
+    for frame in _as_list(payload.get("frames")):
+        observed.add("frame")
+        _merge_realtime_trace_item(observed, _as_dict(frame), source="frame")
+    for event in _as_list(payload.get("events")):
+        observed.add("event")
+        _merge_realtime_trace_item(observed, _as_dict(event), source="event")
+    if _as_list(payload.get("transcripts")):
+        observed.add("transcript")
+    if _as_list(payload.get("tool_names")) or _as_list(summary.get("tool_names")):
+        observed.add("tool")
+
+
+def _merge_realtime_trace_item(
+    observed: set[str],
+    item: Mapping[str, Any],
+    *,
+    source: str,
+) -> None:
+    if not item:
+        return
+    observed.add(source)
+    if item.get("item_type") or item.get("type") or item.get("event"):
+        observed.add("frame_type" if source == "frame" else "event_type")
+    for key in ("kind", "category", "direction", "modality", "item_type", "type", "event"):
+        _add_realtime_trace_key(observed, str(item.get(key) or ""))
+    for signal in _as_list(item.get("signals")):
+        _add_realtime_trace_key(observed, str(signal))
+    if item.get("tool_name"):
+        observed.update({"tool", "tool_call"})
+    if item.get("text") or item.get("transcript"):
+        observed.add("transcript")
+    if item.get("sample_rate") or item.get("sample_rate_hz"):
+        observed.add("audio_frame")
+
+
+def _realtime_trace_summary_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "frame_count": 0,
+        "event_count": 0,
+        "tool_call_count": 0,
+        "tool_response_count": 0,
+        "transcript_count": 0,
+        "audio_frame_count": 0,
+        "lifecycle_event_count": 0,
+        "interruption_count": 0,
+        "error_count": 0,
+        "completion_count": 0,
+        "tool_names": set(),
+        "frame_types": set(),
+        "event_types": set(),
+        "categories": set(),
+        "directions": set(),
+        "modalities": set(),
+        "signals": set(),
+        "transcripts": [],
+    }
+    for payload in payloads:
+        payload_summary = _as_dict(payload.get("summary"))
+        for key in (
+            "frame_count",
+            "event_count",
+            "tool_call_count",
+            "tool_response_count",
+            "transcript_count",
+            "audio_frame_count",
+            "lifecycle_event_count",
+            "interruption_count",
+            "error_count",
+            "completion_count",
+        ):
+            summary[key] = max(
+                int(summary[key]),
+                int(_as_int(payload_summary.get(key)) or _as_int(payload.get(key)) or 0),
+            )
+        for target_key in (
+            "tool_names",
+            "frame_types",
+            "event_types",
+            "categories",
+            "directions",
+            "modalities",
+            "signals",
+        ):
+            source_values = _as_list(payload.get(target_key) or payload_summary.get(target_key))
+            for item in source_values:
+                normalized = (
+                    _normalize_realtime_trace_name(item)
+                    if target_key in {"frame_types", "event_types", "tool_names"}
+                    else _normalize_realtime_trace_key(item)
+                )
+                if normalized:
+                    summary[target_key].add(normalized)
+        for transcript in _as_list(payload.get("transcripts")):
+            transcript_dict = _as_dict(transcript)
+            text = str(transcript_dict.get("text") or transcript)
+            if text:
+                summary["transcripts"].append(text)
+        for frame in _as_list(payload.get("frames")):
+            _merge_realtime_trace_summary_item(summary, _as_dict(frame), source="frame")
+        for event in _as_list(payload.get("events")):
+            _merge_realtime_trace_summary_item(summary, _as_dict(event), source="event")
+    for key in ("frame_count", "event_count"):
+        item_key = "frames" if key == "frame_count" else "events"
+        count = max(
+            (len(_as_list(payload.get(item_key))) for payload in payloads),
+            default=0,
+        )
+        if count:
+            summary[key] = max(int(summary[key]), count)
+    return summary
+
+
+def _merge_realtime_trace_summary_item(
+    summary: Dict[str, Any],
+    item: Mapping[str, Any],
+    *,
+    source: str,
+) -> None:
+    if not item:
+        return
+    item_type = _normalize_realtime_trace_name(
+        item.get("item_type") or item.get("type") or item.get("event")
+    )
+    if item_type:
+        target = "frame_types" if source == "frame" else "event_types"
+        summary[target].add(item_type)
+        summary["signals"].add("frame_type" if source == "frame" else "event_type")
+    for target_key, item_key in (
+        ("categories", "category"),
+        ("directions", "direction"),
+        ("modalities", "modality"),
+        ("signals", "kind"),
+    ):
+        normalized = _normalize_realtime_trace_key(item.get(item_key))
+        if normalized:
+            summary[target_key].add(normalized)
+    for signal in _as_list(item.get("signals")):
+        normalized = _normalize_realtime_trace_key(signal)
+        if normalized:
+            summary["signals"].add(normalized)
+    tool_name = _normalize_realtime_trace_name(item.get("tool_name"))
+    if tool_name:
+        summary["tool_names"].add(tool_name)
+    text = str(item.get("text") or item.get("transcript") or "")
+    if text:
+        summary["transcripts"].append(text)
+
+
+def _normalize_realtime_trace_key(value: Any) -> str:
+    normalized = _normalize_protocol_key(value)
+    aliases = {
+        "realtime": "trace",
+        "realtime_trace": "trace",
+        "framework_realtime_trace": "trace",
+        "frame": "frame",
+        "frames": "frame",
+        "realtime_frame": "frame",
+        "event": "event",
+        "events": "event",
+        "session_event": "event",
+        "session_events": "event",
+        "audio": "audio_frame",
+        "audio_frame": "audio_frame",
+        "realtime_audio_frame": "audio_frame",
+        "transcript": "transcript",
+        "transcription": "transcript",
+        "realtime_transcript": "transcript",
+        "tool": "tool",
+        "tool_call": "tool_call",
+        "realtime_tool_call": "tool_call",
+        "tool_response": "tool_response",
+        "tool_result": "tool_response",
+        "realtime_tool_response": "tool_response",
+        "lifecycle": "lifecycle",
+        "realtime_lifecycle": "lifecycle",
+        "completion": "completion",
+        "complete": "completion",
+        "completed": "completion",
+        "realtime_completion": "completion",
+        "error": "error",
+        "realtime_error": "error",
+        "interruption": "interruption",
+        "interrupt": "interruption",
+        "realtime_interruption": "interruption",
+        "data": "data_frame",
+        "data_frame": "data_frame",
+        "control": "control_frame",
+        "control_frame": "control_frame",
+        "system": "system_frame",
+        "system_frame": "system_frame",
+        "direction": "direction",
+        "inbound": "inbound",
+        "outbound": "outbound",
+        "voice": "voice",
+        "video": "video",
+        "trace": "trace",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_realtime_trace_name(value: Any) -> str:
+    return _normalize_protocol_key(value)
+
+
+def _add_realtime_trace_key(observed: set[str], value: str) -> None:
+    normalized = _normalize_realtime_trace_key(value)
+    if normalized:
+        observed.add(normalized)
+
+
+def _is_realtime_trace_event_type(value: Any) -> bool:
+    normalized = _normalize_protocol_key(value)
+    return bool(normalized and normalized.startswith("realtime_"))
 
 
 def _mcp_tool_session_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:

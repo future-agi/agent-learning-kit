@@ -1833,11 +1833,60 @@ def test_sdk_framework_adapter_realtime_trace_example_runs(tmp_path):
     assert result["status"] == "passed"
     manifest = result["framework_adapter_realtime_trace_manifest"]
     assert manifest["agent"]["method"] == "run_session"
-    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
-        "framework_runtime_contract"
-    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == ["realtime_trace"]
-    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+    assert "realtime" in runtime_contract["required_signals"]
+    assert set(config["required_realtime_trace"]) >= {
+        "realtime_trace",
+        "trace",
+        "frame",
+        "event",
+        "tool",
+        "tool_call",
+        "tool_response",
+        "transcript",
+        "audio_frame",
+        "lifecycle",
+        "completion",
+        "frame_type",
+        "event_type",
+        "data_frame",
+        "control_frame",
+        "inbound",
+        "outbound",
+        "voice",
+    }
+    assert set(config["realtime_trace_quality"]["required_frame_types"]) >= {
+        "AudioRawFrame",
+        "FunctionCallFrame",
+        "FunctionCallResultFrame",
+        "TranscriptionFrame",
+    }
+    assert set(config["realtime_trace_quality"]["required_event_types"]) >= {
+        "agent_state_changed",
+        "tool_execution_started",
+        "tool_execution_completed",
+        "transcript_final",
+        "session_closed",
+    }
+    assert config["realtime_trace_quality"]["required_tools"] == [
+        "lookup_refund_policy"
+    ]
+    assert config["realtime_trace_quality"]["required_directions"] == [
+        "inbound",
+        "outbound",
+    ]
+    assert config["realtime_trace_quality"]["required_modalities"] == ["voice"]
+    assert config["metric_weights"]["realtime_trace_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["realtime_trace_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["realtime_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["realtime_trace_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert set(config["required_events"]) >= {
         "realtime_frame",
         "realtime_tool_call",
         "realtime_tool_response",

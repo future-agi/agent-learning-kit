@@ -1865,7 +1865,50 @@ def test_realtime_trace_framework_adapter_preserves_frames_and_session_events(tm
         "realtime_transcript",
         "realtime_lifecycle",
     }
-    assert set(runtime_contract["required_signals"]) >= {"event", "state", "tool"}
+    assert set(runtime_contract["required_signals"]) >= {
+        "event",
+        "realtime",
+        "state",
+        "tool",
+    }
+    assert set(config["required_realtime_trace"]) >= {
+        "realtime_trace",
+        "trace",
+        "frame",
+        "event",
+        "tool",
+        "tool_call",
+        "tool_response",
+        "transcript",
+        "audio_frame",
+        "lifecycle",
+        "completion",
+        "frame_type",
+        "event_type",
+        "data_frame",
+        "control_frame",
+        "inbound",
+        "outbound",
+        "voice",
+    }
+    assert config["realtime_trace_quality"]["required_tools"] == [
+        "lookup_refund_policy"
+    ]
+    assert set(config["realtime_trace_quality"]["required_frame_types"]) >= {
+        "AudioRawFrame",
+        "FunctionCallFrame",
+        "FunctionCallResultFrame",
+        "TranscriptionFrame",
+    }
+    assert set(config["realtime_trace_quality"]["required_event_types"]) >= {
+        "agent_state_changed",
+        "tool_execution_started",
+        "tool_execution_completed",
+        "transcript_final",
+        "session_closed",
+    }
+    assert config["metric_weights"]["realtime_trace_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["realtime_trace_quality"] == pytest.approx(4.0)
 
     manifest_path = simulate.write_manifest_file(
         manifest,
@@ -1878,6 +1921,12 @@ def test_realtime_trace_framework_adapter_preserves_frames_and_session_events(tm
         pytest.approx(1.0)
     )
     assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["realtime_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["realtime_trace_quality"] == (
         pytest.approx(1.0)
     )
     state = result["report"]["results"][0]["metadata"]["environment_state"]

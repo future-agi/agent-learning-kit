@@ -695,8 +695,11 @@ Realtime framework exports are normalized from local session traces. Pipecat-lik
 `frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
 artifact, `realtime_frame` / `realtime_tool_call` /
 `realtime_tool_response` / `realtime_transcript` / `realtime_lifecycle` events,
-and ordinary tool-call evidence, so voice adapters can be optimized without a
-hosted room. See `examples/sdk_framework_adapter_realtime_trace.py`.
+and ordinary tool-call evidence. Generated adapter eval configs can also require
+realtime coverage and quality gates for frames, session events, frame categories,
+directions, transcripts, audio frames, lifecycle events, completions, concrete
+frame/event types, and realtime tool calls/results. See
+`examples/sdk_framework_adapter_realtime_trace.py`.
 
 Framework memory exports normalize into the same evaluator-visible memory
 evidence as memory-layer probes. LangGraph-style checkpoints, Mem0/Zep-style

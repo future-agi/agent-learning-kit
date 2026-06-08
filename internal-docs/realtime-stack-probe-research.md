@@ -49,6 +49,10 @@ Keep realtime support local-first:
   keeps release proofs import-free while still preserving frame categories,
   directions, transcript turns, lifecycle changes, tool calls, and completion
   evidence.
+- Generated adapter-probe eval configs should include `required_realtime_trace`,
+  `realtime_trace_quality`, `realtime_trace_coverage`, and
+  `realtime_trace_quality` metric weights when the selected candidate emits
+  realtime trace evidence.
 - Require transcript, route call, TTS, audio frames, sample-rate closure, timing
   stages, audio quality, stream chunks, stream tool deltas, completion, and no
   dropped/error stream events before a probe is considered closed.

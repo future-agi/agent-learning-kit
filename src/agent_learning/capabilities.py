@@ -150,6 +150,8 @@ DEFAULT_METRICS = [
     "realtime_stack_probe_streaming_quality",
     "realtime_stack_probe_tool_evidence",
     "realtime_stack_probe_voice_quality",
+    "realtime_trace_coverage",
+    "realtime_trace_quality",
     "red_team_campaign_quality",
     "red_team_adaptive_loop_quality",
     "red_team_attack_evolution_coverage",

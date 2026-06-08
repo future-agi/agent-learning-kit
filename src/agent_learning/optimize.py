@@ -15791,6 +15791,22 @@ def build_framework_adapter_probe_evaluation_config(
     )
     if streaming_observed and not streaming_trace_signals:
         streaming_trace_signals = ["chunk"]
+    realtime_trace_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "realtime_trace_summary",
+    )
+    realtime_trace_observed = (
+        "realtime_trace" in state_keys
+        or bool(realtime_trace_summary)
+    )
+    realtime_trace_requirements = (
+        _framework_probe_realtime_trace_requirements(
+            framework,
+            realtime_trace_summary,
+        )
+        if realtime_trace_observed
+        else {}
+    )
     framework_trace_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_trace_summary",
@@ -15873,6 +15889,7 @@ def build_framework_adapter_probe_evaluation_config(
             "metadata",
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
+            *(["realtime"] if realtime_trace_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["tool"] if tool_names else []),
@@ -15887,6 +15904,7 @@ def build_framework_adapter_probe_evaluation_config(
             "framework adapter contract quality",
             *(["typed state evidence"] if runtime_state_keys else []),
             *(["streaming trace evidence"] if streaming_observed else []),
+            *(["realtime trace evidence"] if realtime_trace_observed else []),
             *(["framework trace evidence"] if framework_trace_observed else []),
             *(["orchestration trace evidence"] if orchestration_trace_observed else []),
             *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
@@ -15971,6 +15989,9 @@ def build_framework_adapter_probe_evaluation_config(
         metric_weights["tool_selection_accuracy"] = 4.0
     if streaming_observed:
         metric_weights["streaming_trace_coverage"] = 4.0
+    if realtime_trace_observed:
+        metric_weights["realtime_trace_coverage"] = 4.0
+        metric_weights["realtime_trace_quality"] = 4.0
     if framework_trace_observed:
         metric_weights["framework_trace_coverage"] = 4.0
     if orchestration_trace_observed:
@@ -16007,6 +16028,7 @@ def build_framework_adapter_probe_evaluation_config(
             "metadata",
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
+            *(["realtime"] if realtime_trace_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["tool"] if tool_names else []),
@@ -16019,6 +16041,13 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if streaming_observed:
         config["required_streaming_trace"] = streaming_trace_signals
+    if realtime_trace_observed:
+        config["required_realtime_trace"] = realtime_trace_requirements[
+            "required_realtime_trace"
+        ]
+        config["realtime_trace_quality"] = realtime_trace_requirements[
+            "realtime_trace_quality"
+        ]
     if framework_trace_observed:
         config["required_framework_trace"] = required_framework_trace
     if orchestration_trace_observed:
@@ -16130,6 +16159,93 @@ def _framework_probe_lifecycle_requirements(
     return {
         "required_framework_lifecycle": _unique_strings(required_lifecycle),
         "framework_lifecycle_quality": quality,
+    }
+
+
+def _framework_probe_realtime_trace_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required = ["realtime_trace", "trace"]
+    required.extend(_plain_list(summary.get("signals")))
+    signal_checks = (
+        ("frame_count", "frame"),
+        ("event_count", "event"),
+        ("tool_call_count", "tool_call"),
+        ("tool_response_count", "tool_response"),
+        ("transcript_count", "transcript"),
+        ("audio_frame_count", "audio_frame"),
+        ("lifecycle_event_count", "lifecycle"),
+        ("interruption_count", "interruption"),
+        ("error_count", "error"),
+        ("completion_count", "completion"),
+    )
+    for summary_key, signal in signal_checks:
+        if _as_int(summary.get(summary_key)) > 0:
+            required.append(signal)
+            if signal in {"tool_call", "tool_response"}:
+                required.append("tool")
+    if _plain_list(summary.get("frame_types")):
+        required.append("frame_type")
+    if _plain_list(summary.get("event_types")):
+        required.append("event_type")
+    for category in _plain_list(summary.get("categories")):
+        category_key = str(category).strip().lower().replace("-", "_").replace(" ", "_")
+        required.append(f"{category_key}_frame" if category_key != "event" else "event")
+    for direction in _plain_list(summary.get("directions")):
+        required.append(str(direction))
+    for modality in _plain_list(summary.get("modalities")):
+        required.append(str(modality))
+
+    quality: dict[str, Any] = {"framework": framework}
+    tool_names = _unique_strings(summary.get("tool_names"))
+    if tool_names:
+        quality["required_tools"] = tool_names
+    frame_types = _unique_strings(summary.get("frame_types"))
+    if frame_types:
+        quality["required_frame_types"] = frame_types
+    event_types = _unique_strings(summary.get("event_types"))
+    if event_types:
+        quality["required_event_types"] = event_types
+    categories = _unique_strings(summary.get("categories"))
+    if categories:
+        quality["required_categories"] = categories
+    directions = _unique_strings(summary.get("directions"))
+    if directions:
+        quality["required_directions"] = directions
+    modalities = _unique_strings(summary.get("modalities"))
+    if modalities:
+        quality["required_modalities"] = modalities
+    signals = _unique_strings(summary.get("signals"))
+    if signals:
+        quality["required_signals"] = signals
+    for summary_key, quality_key in (
+        ("frame_count", "min_frame_count"),
+        ("event_count", "min_event_count"),
+        ("tool_call_count", "min_tool_call_count"),
+        ("tool_response_count", "min_tool_response_count"),
+        ("transcript_count", "min_transcript_count"),
+        ("audio_frame_count", "min_audio_frame_count"),
+        ("lifecycle_event_count", "min_lifecycle_event_count"),
+        ("completion_count", "min_completion_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    if _as_int(summary.get("completion_count")) > 0:
+        quality["require_completion"] = True
+    interruption_count = _as_int(summary.get("interruption_count"))
+    if interruption_count >= 0:
+        quality["max_interruption_count"] = interruption_count
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+    return {
+        "required_realtime_trace": _unique_strings(
+            str(item) for item in required if str(item)
+        ),
+        "realtime_trace_quality": quality,
     }
 
 

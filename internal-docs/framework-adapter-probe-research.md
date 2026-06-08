@@ -146,8 +146,9 @@ Keep framework support local-first:
   and LiveKit-style session event exports should normalize into
   `realtime_trace` state, trace artifacts, `realtime_frame`,
   `realtime_tool_call`, `realtime_tool_response`, `realtime_transcript`, and
-  `realtime_lifecycle` events so voice adapters can be scored without a hosted
-  room or imported framework package.
+  `realtime_lifecycle` events plus selected-output-derived realtime
+  coverage/quality gates so voice adapters can be scored without a hosted room
+  or imported framework package.
 - Preserve framework memory trace semantics. Local framework outputs carrying
   LangGraph-style checkpoints, Mem0/Zep-style memory operations, memory records,
   stores, retrieval/search results, or memory governance policies should

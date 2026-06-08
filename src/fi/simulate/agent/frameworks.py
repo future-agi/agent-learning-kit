@@ -1578,6 +1578,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "orchestration_trace_summary": _probe_orchestration_trace_summary(
             state.get("orchestration_trace")
         ),
+        "realtime_trace_summary": _probe_realtime_trace_summary(
+            state.get("realtime_trace")
+        ),
         "mcp_tool_session_summary": _probe_mcp_tool_session_summary(
             state.get("mcp_tool_session")
         ),
@@ -1630,6 +1633,33 @@ def _probe_orchestration_trace_summary(value: Any) -> dict[str, Any]:
     ):
         if key not in summary and isinstance(trace.get(trace_key), list):
             summary[key] = len(trace.get(trace_key, []))
+    return summary
+
+
+def _probe_realtime_trace_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    for key in (
+        "signals",
+        "tool_names",
+        "frame_types",
+        "event_types",
+        "categories",
+        "directions",
+        "modalities",
+    ):
+        if trace.get(key):
+            summary[key] = sorted(str(item) for item in trace.get(key, []) if str(item))
+    for count_key, value_key in (
+        ("frame_count", "frames"),
+        ("event_count", "events"),
+    ):
+        if count_key not in summary and isinstance(trace.get(value_key), list):
+            summary[count_key] = len(trace.get(value_key, []))
     return summary
 
 
