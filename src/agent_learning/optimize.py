@@ -15868,6 +15868,37 @@ def build_framework_adapter_probe_evaluation_config(
         if a2a_protocol_observed
         else {}
     )
+    framework_memory_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "framework_memory_summary",
+    )
+    retrieval_memory_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "retrieval_memory_summary",
+    )
+    agent_memory_lineage_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "agent_memory_lineage_summary",
+    )
+    memory_trace_observed = (
+        "framework_memory" in state_keys
+        or "retrieval_memory" in state_keys
+        or "agent_memory_lineage" in state_keys
+        or any(str(event).startswith("framework_memory") for event in event_types)
+        or bool(framework_memory_summary)
+        or bool(retrieval_memory_summary)
+        or bool(agent_memory_lineage_summary)
+    )
+    memory_trace_requirements = (
+        _framework_probe_memory_requirements(
+            framework,
+            framework_memory_summary,
+            retrieval_memory_summary,
+            agent_memory_lineage_summary,
+        )
+        if memory_trace_observed
+        else {}
+    )
     lifecycle_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_lifecycle_summary",
@@ -15892,6 +15923,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["realtime"] if realtime_trace_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
+            *(["memory"] if memory_trace_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -15909,6 +15941,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["orchestration trace evidence"] if orchestration_trace_observed else []),
             *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
             *(["A2A protocol evidence"] if a2a_protocol_observed else []),
+            *(["memory lineage evidence"] if memory_trace_observed else []),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
             *(["artifact evidence"] if artifact_types else []),
@@ -16003,6 +16036,10 @@ def build_framework_adapter_probe_evaluation_config(
     if a2a_protocol_observed:
         metric_weights["a2a_protocol_coverage"] = 4.0
         metric_weights["a2a_protocol_quality"] = 4.0
+    if memory_trace_observed:
+        metric_weights["agent_memory_lineage_coverage"] = 4.0
+        metric_weights["agent_memory_lineage_quality"] = 4.0
+        metric_weights["retrieval_memory_attribution"] = 4.0
     if lifecycle_observed:
         metric_weights["framework_lifecycle_coverage"] = 4.0
         metric_weights["framework_lifecycle_quality"] = 4.0
@@ -16031,6 +16068,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["realtime"] if realtime_trace_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
+            *(["memory"] if memory_trace_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -16070,6 +16108,16 @@ def build_framework_adapter_probe_evaluation_config(
         ]
         config["a2a_protocol_quality"] = a2a_protocol_requirements[
             "a2a_protocol_quality"
+        ]
+    if memory_trace_observed:
+        config["required_agent_memory_lineage"] = memory_trace_requirements[
+            "required_agent_memory_lineage"
+        ]
+        config["agent_memory_lineage_quality"] = memory_trace_requirements[
+            "agent_memory_lineage_quality"
+        ]
+        config["required_retrieval_memory_trace"] = memory_trace_requirements[
+            "required_retrieval_memory_trace"
         ]
     if lifecycle_observed:
         config["required_framework_lifecycle"] = lifecycle_requirements[
@@ -16247,6 +16295,174 @@ def _framework_probe_realtime_trace_requirements(
         ),
         "realtime_trace_quality": quality,
     }
+
+
+def _framework_probe_memory_requirements(
+    framework: str,
+    framework_summary: Mapping[str, Any],
+    retrieval_summary: Mapping[str, Any],
+    lineage_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    framework_summary = _plain_mapping(framework_summary)
+    retrieval_summary = _plain_mapping(retrieval_summary)
+    lineage_summary = _plain_mapping(lineage_summary)
+
+    operation_types = _unique_strings(
+        [
+            *_plain_list(framework_summary.get("operation_types")),
+            *_plain_list(lineage_summary.get("operation_types")),
+        ]
+    )
+    policy_keys = _unique_strings(
+        [
+            *_plain_list(framework_summary.get("policy_keys")),
+            *_plain_list(lineage_summary.get("policy_keys")),
+        ]
+    )
+    required_lineage = [
+        "agent_memory_lineage",
+        "memory_lineage",
+        "memory",
+        "provenance",
+    ]
+    lineage_checks = (
+        ("has_target", "target"),
+        ("has_stores", "store"),
+        ("has_memory_records", "memory_record"),
+        ("has_operations", "operation"),
+        ("has_lineage", "lineage"),
+        ("has_source_attribution", "source_attribution"),
+        ("has_tenant_isolation", "tenant_isolation"),
+        ("has_audit", "audit"),
+        ("has_retention_policy", "retention_policy"),
+        ("has_deletion_policy", "deletion_policy"),
+        ("has_redaction", "redaction"),
+        ("has_canaries", "canary"),
+        ("has_observability", "observability"),
+        ("has_artifacts", "artifact"),
+    )
+    for flag, signal in lineage_checks:
+        if lineage_summary.get(flag):
+            required_lineage.append(signal)
+    for operation_type in operation_types:
+        required_lineage.extend([operation_type, f"{operation_type}_operation"])
+    required_lineage.extend(policy_keys)
+
+    quality: dict[str, Any] = {"framework": framework}
+    count_checks = (
+        ("store_count", "min_store_count"),
+        ("memory_count", "min_memory_count"),
+        ("operation_count", "min_operation_count"),
+        ("attributed_memory_count", "min_attributed_memories"),
+        ("read_operation_count", "min_read_operations"),
+        ("write_operation_count", "min_write_operations"),
+        ("recall_operation_count", "min_recall_operations"),
+        ("observability_hook_count", "min_observability_hooks"),
+        ("artifact_count", "min_artifact_count"),
+    )
+    for summary_key, quality_key in count_checks:
+        count = _as_int(lineage_summary.get(summary_key))
+        if count <= 0 and summary_key in {
+            "store_count",
+            "memory_count",
+            "operation_count",
+        }:
+            count = _as_int(framework_summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    for operation_type, quality_key in (
+        ("read", "min_read_operations"),
+        ("write", "min_write_operations"),
+        ("recall", "min_recall_operations"),
+    ):
+        if operation_type in operation_types and quality_key not in quality:
+            quality[quality_key] = 1
+    for summary_key, quality_key in (
+        ("unattributed_memory_count", "max_unattributed_memories"),
+        ("poisoned_memory_count", "max_poisoned_memories"),
+        ("open_poisoning_count", "max_open_poisoning"),
+        ("isolation_violation_count", "max_isolation_violations"),
+        ("retention_violation_count", "max_retention_violations"),
+        ("policy_violation_count", "max_policy_violations"),
+        ("blocking_gap_count", "max_blocking_gaps"),
+    ):
+        quality[quality_key] = _as_int(lineage_summary.get(summary_key))
+    for flag, signal in lineage_checks:
+        if lineage_summary.get(flag):
+            quality[f"require_{signal}s" if signal == "store" else f"require_{signal}"] = True
+    if quality.pop("require_memory_record", None):
+        quality["require_memory_records"] = True
+    if quality.pop("require_operation", None):
+        quality["require_operations"] = True
+    if quality.pop("require_canary", None):
+        quality["require_canaries"] = True
+    if quality.pop("require_artifact", None):
+        quality["require_artifacts"] = True
+    if policy_keys:
+        quality["required_policies"] = policy_keys
+    if operation_types:
+        quality["required_operation_types"] = operation_types
+    required_evidence = [
+        signal
+        for _, signal in lineage_checks
+        if signal not in {"target"} and lineage_summary.get(_framework_memory_flag(signal))
+    ]
+    if required_evidence:
+        quality["required_evidence"] = _unique_strings(required_evidence)
+    required_signals = _unique_strings(
+        [
+            "agent_memory_lineage",
+            "memory_lineage",
+            "memory",
+            "provenance",
+            *required_evidence,
+        ]
+    )
+    if required_signals:
+        quality["required_signals"] = required_signals
+
+    required_retrieval = ["retrieval_memory", "trace"]
+    if _as_int(retrieval_summary.get("query_count")) > 0:
+        required_retrieval.append("query")
+    if _as_int(retrieval_summary.get("document_count")) > 0:
+        required_retrieval.append("document")
+    if (
+        _as_int(retrieval_summary.get("citation_count")) > 0
+        or _plain_list(retrieval_summary.get("citation_doc_ids"))
+    ):
+        required_retrieval.extend(["citation", "attribution"])
+    if (
+        bool(retrieval_summary.get("require_current"))
+        or _as_int(retrieval_summary.get("current_document_count")) > 0
+    ):
+        required_retrieval.append("freshness")
+    if _as_int(retrieval_summary.get("memory_write_count")) > 0:
+        required_retrieval.append("memory_write")
+
+    return {
+        "required_agent_memory_lineage": _unique_strings(required_lineage),
+        "agent_memory_lineage_quality": quality,
+        "required_retrieval_memory_trace": _unique_strings(required_retrieval),
+    }
+
+
+def _framework_memory_flag(signal: str) -> str:
+    flags = {
+        "store": "has_stores",
+        "memory_record": "has_memory_records",
+        "operation": "has_operations",
+        "lineage": "has_lineage",
+        "source_attribution": "has_source_attribution",
+        "tenant_isolation": "has_tenant_isolation",
+        "audit": "has_audit",
+        "retention_policy": "has_retention_policy",
+        "deletion_policy": "has_deletion_policy",
+        "redaction": "has_redaction",
+        "canary": "has_canaries",
+        "observability": "has_observability",
+        "artifact": "has_artifacts",
+    }
+    return flags.get(signal, signal)
 
 
 def _framework_probe_trace_requirements(

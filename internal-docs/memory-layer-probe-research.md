@@ -54,7 +54,11 @@ Keep memory support local-first:
   explicit checkpoint, memory operation, store, memory record, retrieval/search,
   and governance-policy fields into `framework_memory`, `retrieval_memory`, and
   `agent_memory_lineage` state so framework optimization and memory-layer
-  evaluation use the same proof shape.
+  evaluation use the same proof shape. Generated adapter-probe eval configs
+  should derive `required_agent_memory_lineage`,
+  `agent_memory_lineage_quality`, and `required_retrieval_memory_trace` from
+  the selected output and weight `agent_memory_lineage_coverage`,
+  `agent_memory_lineage_quality`, and `retrieval_memory_attribution`.
 - Require current-document citations, freshness checks, source attribution,
   audited read/write/recall operations, tenant isolation, audit, retention,
   deletion, redaction, canaries, observability, and artifacts before a probe is

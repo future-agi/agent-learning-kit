@@ -1932,20 +1932,67 @@ def test_sdk_framework_adapter_memory_trace_example_runs(tmp_path):
     assert result["status"] == "passed"
     manifest = result["framework_adapter_memory_trace_manifest"]
     assert manifest["agent"]["method"] == "ainvoke"
-    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
-        "framework_runtime_contract"
-    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == [
         "agent_memory_lineage",
         "framework_memory",
         "retrieval_memory",
     ]
-    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+    assert set(runtime_contract["required_signals"]) >= {"event", "memory", "state"}
+    assert set(config["required_events"]) >= {
         "framework_memory_operation",
         "framework_memory_checkpoint",
         "framework_memory_retrieval",
         "framework_memory_record",
     }
+    assert set(config["required_agent_memory_lineage"]) >= {
+        "agent_memory_lineage",
+        "memory_lineage",
+        "memory",
+        "provenance",
+        "source_attribution",
+        "tenant_isolation",
+        "audit",
+        "retention_policy",
+        "deletion_policy",
+        "redaction",
+        "canary",
+        "observability",
+        "artifact",
+    }
+    memory_quality = config["agent_memory_lineage_quality"]
+    assert memory_quality["required_operation_types"] == [
+        "read",
+        "recall",
+        "update",
+        "write",
+    ]
+    assert memory_quality["required_policies"] == [
+        "audit",
+        "canary",
+        "deletion",
+        "redaction",
+        "retention",
+        "tenant_isolation",
+    ]
+    assert set(config["required_retrieval_memory_trace"]) >= {
+        "retrieval_memory",
+        "trace",
+        "query",
+        "document",
+        "citation",
+        "attribution",
+        "freshness",
+        "memory_write",
+    }
+    assert config["metric_weights"]["agent_memory_lineage_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["agent_memory_lineage_quality"] == pytest.approx(4.0)
+    assert config["metric_weights"]["retrieval_memory_attribution"] == pytest.approx(4.0)
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["agent_memory_lineage_coverage"] == pytest.approx(1.0)
+    assert metrics["agent_memory_lineage_quality"] == pytest.approx(1.0)
+    assert metrics["retrieval_memory_attribution"] == pytest.approx(1.0)
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     memory = state["framework_memory"]
     assert memory["operation_types"] == ["read", "recall", "update", "write"]

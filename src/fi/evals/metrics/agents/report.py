@@ -20179,6 +20179,8 @@ def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("protocol")
             if _framework_runtime_output_has_realtime_evidence(output):
                 observed.add("realtime")
+            if _framework_runtime_output_has_memory_evidence(output):
+                observed.add("memory")
     return observed
 
 
@@ -20326,6 +20328,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
                 signals.add("protocol")
             if _framework_runtime_output_has_realtime_evidence(output):
                 signals.add("realtime")
+            if _framework_runtime_output_has_memory_evidence(output):
+                signals.add("memory")
 
     return {
         "invocation_count": len(invocations),
@@ -20395,6 +20399,32 @@ def _framework_runtime_output_has_realtime_evidence(output: Mapping[str, Any]) -
         and (
             value == "realtime_trace"
             or value.startswith("realtime_")
+        )
+        for value in normalized
+    )
+
+
+def _framework_runtime_output_has_memory_evidence(output: Mapping[str, Any]) -> bool:
+    values = [
+        *_as_list(output.get("state_keys", [])),
+        *_as_list(output.get("event_types", [])),
+        *_as_list(output.get("artifact_types", [])),
+        *_as_list(output.get("metadata_keys", [])),
+    ]
+    normalized = {_normalize_framework_runtime_key(value) for value in values}
+    return any(
+        value
+        and (
+            value
+            in {
+                "framework_memory",
+                "retrieval_memory",
+                "agent_memory_lineage",
+                "memory_lineage",
+                "memory_provenance",
+            }
+            or value.startswith("framework_memory")
+            or value.startswith("memory_")
         )
         for value in normalized
     )
@@ -28335,6 +28365,10 @@ def _append_protocol_quality_check(
 
 def _retrieval_memory_observed(context: Mapping[str, Any]) -> set[str]:
     observed: set[str] = set()
+    for payload in _retrieval_memory_state_payloads_from_context(context):
+        observed.update({"retrieval_memory", "trace"})
+        _merge_retrieval_memory_payload(observed, payload)
+
     for artifact in _as_list(context.get("artifacts", [])):
         artifact_type = str(_get(artifact, "type", "") or "").lower()
         if artifact_type != "trace":
@@ -28360,7 +28394,7 @@ def _retrieval_memory_observed(context: Mapping[str, Any]) -> set[str]:
 
 
 def _retrieval_memory_traces(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    traces: List[Dict[str, Any]] = []
+    traces: List[Dict[str, Any]] = _retrieval_memory_state_payloads_from_context(context)
     for artifact in _as_list(context.get("artifacts", [])):
         artifact_type = str(_get(artifact, "type", "") or "").lower()
         if artifact_type != "trace":
@@ -28370,6 +28404,27 @@ def _retrieval_memory_traces(context: Mapping[str, Any]) -> List[Dict[str, Any]]
         if _looks_like_retrieval_memory_trace(data, metadata):
             traces.append(data)
     return traces
+
+
+def _retrieval_memory_state_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    final_state = _extract_final_state(context)
+    state_payload = _as_dict(final_state.get("retrieval_memory"))
+    if state_payload:
+        payloads.append(state_payload)
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    metadata_payload = _as_dict(metadata_state.get("retrieval_memory"))
+    if metadata_payload:
+        payloads.append(metadata_payload)
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        key = json.dumps(payload, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(payload)
+    return deduped
 
 
 def _retrieval_documents_by_id(

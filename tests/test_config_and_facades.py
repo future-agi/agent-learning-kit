@@ -2000,7 +2000,59 @@ def test_framework_memory_adapter_preserves_lineage_and_retrieval_state(tmp_path
         "framework_memory_retrieval",
         "framework_memory_record",
     }
-    assert set(runtime_contract["required_signals"]) >= {"event", "state"}
+    assert set(runtime_contract["required_signals"]) >= {"event", "memory", "state"}
+    assert set(config["required_framework_runtime"]) >= {
+        "framework_runtime",
+        "memory",
+        "state",
+    }
+    assert set(config["required_agent_memory_lineage"]) >= {
+        "agent_memory_lineage",
+        "memory_lineage",
+        "memory",
+        "provenance",
+        "source_attribution",
+        "tenant_isolation",
+        "audit",
+        "retention_policy",
+        "deletion_policy",
+        "redaction",
+        "canary",
+        "observability",
+        "artifact",
+    }
+    memory_quality = config["agent_memory_lineage_quality"]
+    assert memory_quality["min_store_count"] == 1
+    assert memory_quality["min_memory_count"] == 1
+    assert memory_quality["min_operation_count"] == 4
+    assert memory_quality["min_attributed_memories"] == 1
+    assert memory_quality["required_operation_types"] == [
+        "read",
+        "recall",
+        "update",
+        "write",
+    ]
+    assert memory_quality["required_policies"] == [
+        "audit",
+        "canary",
+        "deletion",
+        "redaction",
+        "retention",
+        "tenant_isolation",
+    ]
+    assert set(config["required_retrieval_memory_trace"]) >= {
+        "retrieval_memory",
+        "trace",
+        "query",
+        "document",
+        "citation",
+        "attribution",
+        "freshness",
+        "memory_write",
+    }
+    assert config["metric_weights"]["agent_memory_lineage_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["agent_memory_lineage_quality"] == pytest.approx(4.0)
+    assert config["metric_weights"]["retrieval_memory_attribution"] == pytest.approx(4.0)
 
     manifest_path = simulate.write_manifest_file(
         manifest,
@@ -2010,6 +2062,15 @@ def test_framework_memory_adapter_preserves_lineage_and_retrieval_state(tmp_path
 
     assert result["status"] == "passed"
     assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["agent_memory_lineage_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["agent_memory_lineage_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["retrieval_memory_attribution"] == (
         pytest.approx(1.0)
     )
     state = result["report"]["results"][0]["metadata"]["environment_state"]

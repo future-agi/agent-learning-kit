@@ -706,7 +706,9 @@ evidence as memory-layer probes. LangGraph-style checkpoints, Mem0/Zep-style
 memory operations/searches, memory records, stores, and policies become
 `framework_memory`, `retrieval_memory`, and `agent_memory_lineage` state plus
 `framework_memory_operation`, `framework_memory_checkpoint`,
-`framework_memory_retrieval`, and `framework_memory_record` events. See
+`framework_memory_retrieval`, and `framework_memory_record` events. Generated
+adapter eval configs derive memory-lineage coverage/quality and retrieval-memory
+attribution gates from that selected output. See
 `examples/sdk_framework_adapter_memory_trace.py`.
 
 Browser/CUA framework exports normalize into evaluator-visible computer-use

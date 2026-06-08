@@ -1581,6 +1581,15 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "realtime_trace_summary": _probe_realtime_trace_summary(
             state.get("realtime_trace")
         ),
+        "framework_memory_summary": _probe_framework_memory_summary(
+            state.get("framework_memory")
+        ),
+        "retrieval_memory_summary": _probe_retrieval_memory_summary(
+            state.get("retrieval_memory")
+        ),
+        "agent_memory_lineage_summary": _probe_agent_memory_lineage_summary(
+            state.get("agent_memory_lineage")
+        ),
         "mcp_tool_session_summary": _probe_mcp_tool_session_summary(
             state.get("mcp_tool_session")
         ),
@@ -1663,6 +1672,267 @@ def _probe_realtime_trace_summary(value: Any) -> dict[str, Any]:
     return summary
 
 
+def _probe_framework_memory_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    for count_key, value_key in (
+        ("operation_count", "operations"),
+        ("checkpoint_count", "checkpoints"),
+        ("memory_count", "memories"),
+        ("retrieval_count", "retrievals"),
+        ("store_count", "stores"),
+    ):
+        if count_key not in summary and isinstance(trace.get(value_key), list):
+            summary[count_key] = len(trace.get(value_key, []))
+        elif count_key not in summary and trace.get(count_key) is not None:
+            summary[count_key] = trace.get(count_key)
+    policies = dict(trace.get("policies") or {}) if isinstance(trace.get("policies"), Mapping) else {}
+    if "policy_count" not in summary:
+        summary["policy_count"] = len(policies) or trace.get("policy_count", 0)
+    for key in ("operation_types", "source_ids", "namespaces", "retrieval_doc_ids"):
+        if trace.get(key):
+            summary[key] = sorted(str(item) for item in trace.get(key, []) if str(item))
+    policy_keys = trace.get("policy_keys") or list(policies.keys())
+    if policy_keys:
+        summary["policy_keys"] = sorted(str(item) for item in policy_keys if str(item))
+    return summary
+
+
+def _probe_retrieval_memory_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    documents = [
+        dict(item)
+        for item in (trace.get("documents") or [])
+        if isinstance(item, Mapping)
+    ]
+    queries = [
+        dict(item)
+        for item in (trace.get("queries") or [])
+        if isinstance(item, Mapping)
+    ]
+    citations = [
+        dict(item)
+        for item in (trace.get("citations") or [])
+        if isinstance(item, Mapping)
+    ]
+    memory_writes = [
+        dict(item)
+        for item in (trace.get("memory_writes") or [])
+        if isinstance(item, Mapping)
+    ]
+    summary.setdefault("document_count", len(documents))
+    summary.setdefault("query_count", len(queries))
+    summary.setdefault("citation_count", len(citations))
+    summary.setdefault("memory_write_count", len(memory_writes))
+    summary.setdefault(
+        "current_document_count",
+        len([document for document in documents if document.get("current") is not False]),
+    )
+    doc_ids = sorted(
+        {
+            str(
+                document.get("id")
+                or document.get("doc_id")
+                or document.get("source")
+                or ""
+            )
+            for document in documents
+            if document.get("id") or document.get("doc_id") or document.get("source")
+        }
+    )
+    cited_doc_ids = sorted(
+        {
+            str(doc_id)
+            for citation in citations
+            for doc_id in _probe_list(citation.get("doc_ids"))
+            if str(doc_id)
+        }
+    )
+    if doc_ids:
+        summary["document_ids"] = doc_ids
+    if cited_doc_ids:
+        summary["citation_doc_ids"] = cited_doc_ids
+    if trace.get("require_current") is not None:
+        summary["require_current"] = bool(trace.get("require_current"))
+    return summary
+
+
+def _probe_agent_memory_lineage_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    stores = _probe_mappings(trace.get("stores"))
+    memories = _probe_mappings(trace.get("memories"))
+    operations = _probe_mappings(trace.get("operations"))
+    lineage = _probe_mappings(trace.get("lineage"))
+    policies = dict(trace.get("policies") or {}) if isinstance(trace.get("policies"), Mapping) else {}
+    poison_tests = _probe_mappings(trace.get("poison_tests") or trace.get("poisoning_tests"))
+    isolation_tests = _probe_mappings(trace.get("isolation_tests"))
+    retention_tests = _probe_mappings(trace.get("retention_tests") or trace.get("deletion_tests"))
+    observability = (
+        dict(trace.get("observability"))
+        if isinstance(trace.get("observability"), Mapping)
+        else {}
+    )
+    artifacts = _probe_mappings(trace.get("artifacts"))
+    operation_type_values = [
+        operation_type
+        for operation_type in (
+            _probe_memory_key(
+                operation.get("operation")
+                or operation.get("type")
+                or operation.get("op")
+            )
+            for operation in operations
+        )
+        if operation_type
+    ]
+    operation_types = sorted(set(operation_type_values))
+    policy_keys = sorted(_probe_memory_key(key) for key in policies if _probe_memory_key(key))
+    attributed_memories = [
+        memory
+        for memory in memories
+        if _probe_list(
+            memory.get("source_ids")
+            or memory.get("sources")
+            or memory.get("doc_ids")
+        )
+    ]
+    unattributed_memories = [
+        str(memory.get("id") or memory.get("key") or index)
+        for index, memory in enumerate(memories, start=1)
+        if not _probe_list(
+            memory.get("source_ids")
+            or memory.get("sources")
+            or memory.get("doc_ids")
+        )
+        and str(memory.get("status") or "active").lower() not in {"deleted", "expired", "blocked"}
+    ]
+    poison_good = {"passed", "blocked", "mitigated", "contained", "accepted"}
+    isolation_good = {"passed", "blocked", "mitigated", "contained"}
+    retention_good = {"passed", "deleted", "expired", "purged", "mitigated"}
+    poisoning_failures = [
+        test
+        for test in poison_tests
+        if _probe_memory_key(test.get("status")) not in poison_good
+    ]
+    isolation_violations = [
+        test
+        for test in isolation_tests
+        if _probe_memory_key(test.get("status")) not in isolation_good
+    ]
+    retention_violations = [
+        test
+        for test in retention_tests
+        if _probe_memory_key(test.get("status")) not in retention_good
+    ]
+    policy_violations = [
+        operation
+        for operation in operations
+        if _probe_memory_key(operation.get("status")) in {"policy_violation", "violation", "failed_policy"}
+        or _probe_memory_key(operation.get("policy_decision")) in {"violation", "failed", "bypassed"}
+    ]
+    summary.setdefault("store_count", len(stores))
+    summary.setdefault("memory_count", len(memories))
+    summary.setdefault("operation_count", len(operations))
+    summary.setdefault("lineage_count", len(lineage))
+    summary.setdefault("policy_count", len(policies))
+    summary.setdefault("artifact_count", len(artifacts))
+    summary.setdefault("observability_hook_count", _probe_observability_count(observability))
+    summary.setdefault("attributed_memory_count", len(attributed_memories))
+    summary.setdefault("unattributed_memory_count", len(unattributed_memories))
+    summary.setdefault("poisoned_memory_count", 0)
+    summary.setdefault("open_poisoning_count", len(poisoning_failures))
+    summary.setdefault("isolation_violation_count", len(isolation_violations))
+    summary.setdefault("retention_violation_count", len(retention_violations))
+    summary.setdefault("policy_violation_count", len(policy_violations))
+    for operation_type in ("read", "write", "update", "delete", "recall"):
+        summary.setdefault(
+            f"{operation_type}_operation_count",
+            operation_type_values.count(operation_type),
+        )
+    summary.setdefault("has_target", bool(trace.get("target")))
+    summary.setdefault("has_stores", bool(stores))
+    summary.setdefault("has_memory_records", bool(memories))
+    summary.setdefault("has_operations", bool(operations))
+    summary.setdefault("has_lineage", bool(lineage))
+    summary.setdefault("has_source_attribution", bool(attributed_memories) and not unattributed_memories)
+    summary.setdefault(
+        "has_tenant_isolation",
+        "tenant_isolation" in policy_keys or bool(isolation_tests),
+    )
+    summary.setdefault("has_audit", "audit" in policy_keys)
+    summary.setdefault(
+        "has_retention_policy",
+        any(key in policy_keys for key in ("retention", "retention_policy")),
+    )
+    summary.setdefault(
+        "has_deletion_policy",
+        any(key in policy_keys for key in ("deletion", "deletion_policy")),
+    )
+    summary.setdefault("has_redaction", "redaction" in policy_keys)
+    summary.setdefault("has_canaries", "canary" in policy_keys or bool(poison_tests))
+    summary.setdefault("has_observability", bool(observability))
+    summary.setdefault("has_artifacts", bool(artifacts))
+    if operation_types:
+        summary["operation_types"] = operation_types
+    if policy_keys:
+        summary["policy_keys"] = policy_keys
+    observed_evidence = {
+        signal
+        for flag, signal in (
+            ("has_target", "target"),
+            ("has_stores", "store"),
+            ("has_memory_records", "memory_record"),
+            ("has_operations", "operation"),
+            ("has_lineage", "lineage"),
+            ("has_source_attribution", "source_attribution"),
+            ("has_tenant_isolation", "tenant_isolation"),
+            ("has_audit", "audit"),
+            ("has_retention_policy", "retention_policy"),
+            ("has_deletion_policy", "deletion_policy"),
+            ("has_redaction", "redaction"),
+            ("has_canaries", "canary"),
+            ("has_observability", "observability"),
+            ("has_artifacts", "artifact"),
+        )
+        if summary.get(flag)
+    }
+    observed_evidence.update(f"{operation_type}_operation" for operation_type in operation_types)
+    observed_signals = {
+        *observed_evidence,
+        *operation_types,
+        *policy_keys,
+        "agent_memory_lineage",
+        "memory_lineage",
+        "memory_provenance",
+        "memory",
+        "provenance",
+    }
+    summary.setdefault("observed_evidence", sorted(observed_evidence))
+    summary.setdefault("observed_signals", sorted(observed_signals))
+    summary.setdefault("blocking_gap_count", 0)
+    return summary
+
+
 def _probe_mcp_tool_session_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
     summary = trace.get("summary")
@@ -1685,6 +1955,36 @@ def _probe_artifact_evidence(artifact: Mapping[str, Any]) -> dict[str, Any]:
         "role": str(artifact.get("role") or ""),
         "metadata": dict(metadata) if isinstance(metadata, Mapping) else {},
     }
+
+
+def _probe_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _probe_mappings(value: Any) -> list[dict[str, Any]]:
+    return [dict(item) for item in _probe_list(value) if isinstance(item, Mapping)]
+
+
+def _probe_memory_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _probe_observability_count(observability: Mapping[str, Any]) -> int:
+    count = 0
+    for value in observability.values():
+        if isinstance(value, Mapping):
+            count += len(value)
+        elif isinstance(value, (list, tuple, set)):
+            count += len([item for item in value if item])
+        elif value:
+            count += 1
+    return count
 
 
 def _probe_summary(

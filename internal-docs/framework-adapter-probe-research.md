@@ -154,7 +154,9 @@ Keep framework support local-first:
   stores, retrieval/search results, or memory governance policies should
   normalize into `framework_memory`, `retrieval_memory`, and
   `agent_memory_lineage` state plus `framework_memory_*` events so framework
-  adapters and memory-layer evals share the same evidence path.
+  adapters and memory-layer evals share the same evidence path, including
+  selected-output-derived memory lineage/retrieval gates in generated adapter
+  eval configs.
 - Preserve framework browser/CUA trace semantics. Local framework outputs
   carrying browser/computer-use actions, DOM/screenshot snapshots, Playwright-
   like trace fields, storage/runtime/network evidence, mutation packs,
