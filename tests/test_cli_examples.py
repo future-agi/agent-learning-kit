@@ -1971,6 +1971,63 @@ def test_sdk_framework_adapter_browser_cua_trace_example_runs(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_sdk_framework_adapter_workflow_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_workflow_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_workflow_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-workflow-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_workflow_trace_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_state_keys"] == ["workflow_trace"]
+    assert runtime_contract["required_tools"] == ["policy_lookup"]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    }
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    workflow = state["workflow_trace"]
+    assert workflow["node_count"] == 4
+    assert workflow["edge_count"] == 3
+    assert workflow["step_count"] == 4
+    assert workflow["checkpoint_count"] == 2
+    assert workflow["route_decision_count"] == 1
+    assert workflow["interrupt_count"] == 1
+    assert workflow["replay_count"] == 1
+    assert workflow["tool_names"] == ["policy_lookup"]
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["policy_lookup"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    } <= set(output["event_types"])
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

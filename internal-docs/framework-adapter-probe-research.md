@@ -155,6 +155,12 @@ Keep framework support local-first:
   `browser_cua` state, browser trace/screenshot artifacts, `browser_*` events,
   and browser tool calls so computer-use agents can be optimized through the
   same framework adapter path.
+- Preserve workflow graph execution semantics. Local framework outputs carrying
+  graph nodes/edges, workflow steps, checkpoints, state history, route
+  decisions, interrupts, replay, or step-level tool evidence should normalize
+  into `workflow_trace` state, workflow trace artifacts, `workflow_*` events,
+  and ordinary tool calls so LangGraph, CrewAI Flow, LlamaIndex Workflow, and
+  similar orchestrators can be optimized through the same adapter path.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

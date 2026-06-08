@@ -690,6 +690,13 @@ mutation packs, screenshot diffs, and prompt-injection surfaces become
 ordinary `browser_click` tool calls. See
 `examples/sdk_framework_adapter_browser_cua_trace.py`.
 
+Workflow graph framework exports normalize durable execution semantics.
+LangGraph-style nodes, edges, checkpoints, state history, interrupts, and replay,
+CrewAI Flow-style routes/state, and LlamaIndex workflow step/event traces become
+`workflow_trace` state, a workflow trace artifact, `workflow_*` events, and
+ordinary tool calls from step-level tool evidence. See
+`examples/sdk_framework_adapter_workflow_trace.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1316,6 +1323,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_memory_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_browser_cua_trace.py \
   artifacts/sdk-framework-adapter-browser-cua-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_workflow_trace.py \
+  artifacts/sdk-framework-adapter-workflow-trace.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

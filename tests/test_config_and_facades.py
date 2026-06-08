@@ -2082,6 +2082,203 @@ def test_browser_cua_framework_adapter_preserves_visual_action_trace(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_workflow_framework_adapter_preserves_graph_execution_trace(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_workflow_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_workflow_trace_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "langgraph",
+        module.LocalLangGraphWorkflowAgent(),
+        target=module.TARGET,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=6,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("execute_task", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["workflow_trace"]
+    assert runtime_contract["required_tools"] == ["policy_lookup"]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_events"]) >= {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    }
+    assert set(runtime_contract["required_signals"]) >= {
+        "artifact",
+        "event",
+        "state",
+        "tool",
+    }
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-workflow-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    workflow = state["workflow_trace"]
+    assert workflow["node_count"] == 4
+    assert workflow["edge_count"] == 3
+    assert workflow["step_count"] == 4
+    assert workflow["checkpoint_count"] == 2
+    assert workflow["route_decision_count"] == 1
+    assert workflow["interrupt_count"] == 1
+    assert workflow["replay_count"] == 1
+    assert workflow["write_count"] == 1
+    assert workflow["tool_call_count"] == 1
+    assert workflow["tool_names"] == ["policy_lookup"]
+    assert workflow["has_replay"] is True
+    assert workflow["has_interrupts"] is True
+    assert workflow["has_routes"] is True
+    assert workflow["final_state_keys"] == ["approval", "decision", "policy_result"]
+    assert workflow["topology"]["entry_nodes"] == ["intake"]
+    assert workflow["topology"]["terminal_nodes"] == ["finalize"]
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert output["tool_names"] == ["policy_lookup"]
+    assert "workflow_trace" in output["state_keys"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    } <= set(output["event_types"])
+
+
+def test_workflow_framework_adapter_accepts_nested_trace_export():
+    from agent_learning import simulate
+
+    class NestedWorkflowAgent:
+        def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+            assert payload["metadata"]["framework"] == "langgraph"
+            return {
+                "content": "Nested workflow trace approved refund.",
+                "workflow_trace": {
+                    "framework": "langgraph",
+                    "workflow_id": "nested-workflow",
+                    "thread_id": "thread-nested",
+                    "nodes": [{"id": "start"}, {"id": "finish"}],
+                    "edges": [{"source": "start", "target": "finish"}],
+                    "steps": [
+                        {
+                            "id": "nested-step",
+                            "node": "start",
+                            "status": "completed",
+                            "tool_calls": [
+                                {
+                                    "id": "nested-tool-1",
+                                    "name": "nested_policy_lookup",
+                                    "arguments": {"case_id": "nested"},
+                                }
+                            ],
+                        }
+                    ],
+                    "checkpoints": [
+                        {
+                            "checkpoint_id": "nested-checkpoint",
+                            "thread_id": "thread-nested",
+                            "state": {"decision": "approved refund"},
+                        }
+                    ],
+                    "route_decisions": [
+                        {
+                            "source": "start",
+                            "target": "finish",
+                            "selected": "finish",
+                        }
+                    ],
+                    "interrupts": [
+                        {
+                            "id": "nested-interrupt",
+                            "node": "start",
+                            "reason": "approval",
+                            "resolved": True,
+                        }
+                    ],
+                    "replay": [
+                        {
+                            "id": "nested-replay",
+                            "from_checkpoint": "nested-checkpoint",
+                            "rerun_nodes": ["finish"],
+                        }
+                    ],
+                    "final_state": {"decision": "approved refund"},
+                },
+            }
+
+    wrapper = simulate.wrap_agent(
+        NestedWorkflowAgent(),
+        method="run",
+        input_mode="dict",
+        metadata={"framework": "langgraph"},
+    )
+    response = asyncio.run(
+        wrapper.call(
+            simulate.AgentInput(
+                thread_id="nested-workflow-thread",
+                messages=[{"role": "user", "content": "Approve refund."}],
+                new_message={"role": "user", "content": "Approve refund."},
+                metadata={"framework": "langgraph"},
+            )
+        )
+    )
+
+    assert response.content == "Nested workflow trace approved refund."
+    workflow = response.state["workflow_trace"]
+    assert workflow["node_count"] == 2
+    assert workflow["edge_count"] == 1
+    assert workflow["step_count"] == 1
+    assert workflow["checkpoint_count"] == 1
+    assert workflow["route_decision_count"] == 1
+    assert workflow["interrupt_count"] == 1
+    assert workflow["replay_count"] == 1
+    assert workflow["tool_names"] == ["nested_policy_lookup"]
+    assert response.tool_calls[0]["name"] == "nested_policy_lookup"
+    assert {"trace"} == {artifact.type for artifact in response.artifacts}
+    assert {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    } <= {event.type for event in response.events}
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

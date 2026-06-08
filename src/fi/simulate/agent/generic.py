@@ -435,12 +435,14 @@ class GenericAgentWrapper(AgentWrapper):
         provider_tool_calls = _provider_tool_calls(raw)
         history_tool_calls = _message_history_tool_calls(raw)
         realtime_tool_calls = _realtime_tool_calls(raw)
+        workflow_tool_calls = _workflow_trace_tool_calls(raw)
         browser_tool_calls = _browser_cua_tool_calls(raw)
         return [
             *(tool_calls or []),
             *provider_tool_calls,
             *history_tool_calls,
             *realtime_tool_calls,
+            *workflow_tool_calls,
             *browser_tool_calls,
         ] or None
 
@@ -515,6 +517,9 @@ class GenericAgentWrapper(AgentWrapper):
         realtime_state = _realtime_trace_state(raw)
         if realtime_state:
             state.setdefault("realtime_trace", realtime_state)
+        workflow_state = _workflow_trace_state(raw)
+        if workflow_state:
+            state.setdefault("workflow_trace", workflow_state)
         memory_state = _framework_memory_state(raw)
         if memory_state:
             state.setdefault("framework_memory", memory_state)
@@ -563,6 +568,19 @@ class GenericAgentWrapper(AgentWrapper):
                     },
                 )
             )
+        workflow_state = _workflow_trace_state(raw)
+        if workflow_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=_workflow_trace_payload(raw),
+                    metadata={
+                        "kind": "workflow_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
         browser_state = _browser_cua_state(raw)
         if browser_state:
             artifacts.append(
@@ -606,6 +624,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_message_history_events(raw))
         events.extend(_message_history_coordination_events(raw))
         events.extend(_realtime_trace_events(raw))
+        events.extend(_workflow_trace_events(raw))
         events.extend(_framework_memory_events(raw))
         events.extend(_browser_cua_events(raw))
         return events
@@ -1189,6 +1208,663 @@ def _reconciliation_payload_from_message(
         "message_type": str(message.get("type") or message.get("kind") or ""),
         "content": _message_content(message),
     }
+
+
+def _workflow_trace_state(raw: Any) -> Dict[str, Any]:
+    if not _has_workflow_trace_shape(raw):
+        return {}
+    trace = _workflow_trace_payload(raw)
+    nodes = _plain_list(trace.get("nodes"))
+    edges = _plain_list(trace.get("edges"))
+    steps = _plain_list(trace.get("steps"))
+    checkpoints = _plain_list(trace.get("checkpoints"))
+    routes = _plain_list(trace.get("route_decisions"))
+    interrupts = _plain_list(trace.get("interrupts"))
+    replay = _plain_list(trace.get("replay"))
+    writes = _plain_list(trace.get("writes"))
+    final_state = _plain_mapping(trace.get("final_state"))
+    tool_calls = _workflow_trace_tool_calls(raw)
+    step_statuses = sorted(
+        {
+            str(_plain_mapping(step).get("status") or "")
+            for step in steps
+            if _plain_mapping(step).get("status")
+        }
+    )
+    return {
+        "kind": "framework_workflow_trace",
+        "workflow_id": str(trace.get("workflow_id") or ""),
+        "thread_id": str(trace.get("thread_id") or ""),
+        "run_id": str(trace.get("run_id") or ""),
+        "framework": str(trace.get("framework") or ""),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "step_count": len(steps),
+        "checkpoint_count": len(checkpoints),
+        "route_decision_count": len(routes),
+        "interrupt_count": len(interrupts),
+        "replay_count": len(replay),
+        "write_count": len(writes),
+        "tool_call_count": len(tool_calls),
+        "tool_names": sorted(
+            {str(call.get("name") or "") for call in tool_calls if call.get("name")}
+        ),
+        "step_statuses": step_statuses,
+        "final_state_keys": sorted(str(key) for key in final_state),
+        "has_replay": bool(replay),
+        "has_interrupts": bool(interrupts),
+        "has_routes": bool(routes),
+        "nodes": nodes,
+        "edges": edges,
+        "steps": steps,
+        "checkpoints": checkpoints,
+        "route_decisions": routes,
+        "interrupts": interrupts,
+        "replay": replay,
+        "writes": writes,
+        "topology": _workflow_trace_topology(nodes, edges),
+        "final_state": final_state,
+        "summary": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "step_count": len(steps),
+            "checkpoint_count": len(checkpoints),
+            "route_decision_count": len(routes),
+            "interrupt_count": len(interrupts),
+            "replay_count": len(replay),
+            "tool_call_count": len(tool_calls),
+        },
+    }
+
+
+def _workflow_trace_payload(raw: Any) -> Dict[str, Any]:
+    explicit_trace = _workflow_explicit_trace(raw)
+    nodes = _workflow_trace_nodes(raw, explicit_trace=explicit_trace)
+    edges = _workflow_trace_edges(raw, explicit_trace=explicit_trace)
+    steps = _workflow_trace_steps(raw, explicit_trace=explicit_trace)
+    checkpoints = _workflow_trace_checkpoints(raw, explicit_trace=explicit_trace)
+    routes = _workflow_trace_routes(raw, explicit_trace=explicit_trace)
+    interrupts = _workflow_trace_interrupts(raw, explicit_trace=explicit_trace)
+    replay = _workflow_trace_replay(raw, explicit_trace=explicit_trace)
+    writes = _workflow_trace_writes(raw, explicit_trace=explicit_trace)
+    final_state = (
+        _plain_mapping(_workflow_trace_field(raw, "final_state"))
+        or _plain_mapping(_workflow_trace_field(raw, "workflow_state"))
+        or _plain_mapping(_workflow_trace_field(raw, "flow_state"))
+        or _plain_mapping(explicit_trace.get("final_state"))
+        or _plain_mapping(explicit_trace.get("state"))
+    )
+    return {
+        "kind": "workflow_trace",
+        "framework": str(
+            _workflow_trace_field(raw, "framework")
+            or explicit_trace.get("framework")
+            or ""
+        ),
+        "workflow_id": str(
+            _workflow_trace_field(raw, "workflow_id")
+            or _workflow_trace_field(raw, "flow_id")
+            or explicit_trace.get("workflow_id")
+            or explicit_trace.get("flow_id")
+            or ""
+        ),
+        "thread_id": str(
+            _workflow_trace_field(raw, "thread_id")
+            or explicit_trace.get("thread_id")
+            or ""
+        ),
+        "run_id": str(
+            _workflow_trace_field(raw, "run_id")
+            or explicit_trace.get("run_id")
+            or ""
+        ),
+        "nodes": nodes,
+        "edges": edges,
+        "steps": steps,
+        "events": _workflow_trace_named_events(raw, explicit_trace=explicit_trace),
+        "checkpoints": checkpoints,
+        "route_decisions": routes,
+        "interrupts": interrupts,
+        "replay": replay,
+        "writes": writes,
+        "state_snapshots": _workflow_trace_state_snapshots(
+            raw,
+            explicit_trace=explicit_trace,
+        ),
+        "final_state": final_state,
+        "topology": _workflow_trace_topology(nodes, edges),
+        "trace_import": {
+            "source": "framework_adapter_output",
+            "provider": str(
+                _workflow_trace_field(raw, "trace_provider")
+                or explicit_trace.get("trace_provider")
+                or "framework_workflow_trace"
+            ),
+        },
+    }
+
+
+def _workflow_trace_events(raw: Any) -> List[SimulationEvent]:
+    if not _has_workflow_trace_shape(raw):
+        return []
+    trace = _workflow_trace_payload(raw)
+    events: List[SimulationEvent] = []
+    for index, step in enumerate(_plain_list(trace.get("steps")), start=1):
+        step_dict = _plain_mapping(step)
+        events.append(
+            SimulationEvent(
+                type="workflow_step",
+                name=str(step_dict.get("name") or step_dict.get("node") or f"step_{index}"),
+                payload={**step_dict, "sequence": index},
+                metadata={"kind": "workflow_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, route in enumerate(_plain_list(trace.get("route_decisions")), start=1):
+        route_dict = _plain_mapping(route)
+        events.append(
+            SimulationEvent(
+                type="workflow_route",
+                name=str(route_dict.get("name") or route_dict.get("source") or f"route_{index}"),
+                payload={**route_dict, "sequence": index},
+                metadata={"kind": "workflow_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, checkpoint in enumerate(_plain_list(trace.get("checkpoints")), start=1):
+        checkpoint_dict = _plain_mapping(checkpoint)
+        events.append(
+            SimulationEvent(
+                type="workflow_checkpoint",
+                name=str(
+                    checkpoint_dict.get("id")
+                    or checkpoint_dict.get("checkpoint_id")
+                    or f"checkpoint_{index}"
+                ),
+                payload={**checkpoint_dict, "sequence": index},
+                metadata={"kind": "workflow_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, interrupt in enumerate(_plain_list(trace.get("interrupts")), start=1):
+        interrupt_dict = _plain_mapping(interrupt)
+        events.append(
+            SimulationEvent(
+                type="workflow_interrupt",
+                name=str(interrupt_dict.get("node") or interrupt_dict.get("id") or f"interrupt_{index}"),
+                payload={**interrupt_dict, "sequence": index},
+                metadata={"kind": "workflow_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, replay in enumerate(_plain_list(trace.get("replay")), start=1):
+        replay_dict = _plain_mapping(replay)
+        events.append(
+            SimulationEvent(
+                type="workflow_replay",
+                name=str(replay_dict.get("id") or f"replay_{index}"),
+                payload={**replay_dict, "sequence": index},
+                metadata={"kind": "workflow_trace", "source": "framework_adapter_output"},
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="workflow_trace",
+            name="framework_workflow_trace",
+            payload=trace,
+            metadata={"kind": "workflow_trace", "source": "framework_adapter_output"},
+        )
+    )
+    return events
+
+
+def _workflow_trace_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    if not _has_workflow_trace_shape(raw):
+        return []
+    calls: List[Dict[str, Any]] = []
+    for step_index, step in enumerate(_workflow_trace_steps(raw), start=1):
+        step_dict = _plain_mapping(step)
+        step_call_values = [
+            *_plain_list(step_dict.get("tool_calls")),
+            *_plain_list(step_dict.get("tools")),
+        ]
+        if step_dict.get("tool_name") not in (None, "", [], {}):
+            step_call_values.append(
+                {
+                    "id": step_dict.get("tool_call_id") or f"workflow_tool_{step_index}",
+                    "name": step_dict.get("tool_name"),
+                    "arguments": step_dict.get("tool_arguments") or {},
+                }
+            )
+        for call_index, call in enumerate(step_call_values, start=1):
+            call_dict = _plain_mapping(call)
+            name = str(
+                call_dict.get("name")
+                or call_dict.get("tool")
+                or _plain_mapping(call_dict.get("function")).get("name")
+                or ""
+            )
+            if not name:
+                continue
+            arguments = (
+                _plain_mapping(call_dict.get("arguments"))
+                or _plain_mapping(call_dict.get("args"))
+                or _plain_mapping(_plain_mapping(call_dict.get("function")).get("arguments"))
+            )
+            calls.append(
+                {
+                    "id": str(
+                        call_dict.get("id")
+                        or call_dict.get("call_id")
+                        or f"{name}_{step_index}_{call_index}"
+                    ),
+                    "name": name,
+                    "arguments": arguments,
+                    "function": {"name": name, "arguments": arguments},
+                }
+            )
+    return calls
+
+
+def _has_workflow_trace_shape(raw: Any) -> bool:
+    raw_mapping = _object_mapping(raw)
+    names = (
+        "workflow_trace",
+        "graph_trace",
+        "orchestration_trace",
+        "workflow_steps",
+        "workflow_events",
+        "workflow_nodes",
+        "workflow_edges",
+        "workflow_checkpoints",
+        "workflow_replay",
+        "graph_nodes",
+        "graph_edges",
+        "graph_steps",
+        "graph_events",
+        "graph_checkpoints",
+        "state_history",
+        "route_decisions",
+        "router_decisions",
+        "interrupts",
+        "flow_state",
+        "flow_id",
+    )
+    if raw_mapping is not None:
+        return any(raw_mapping.get(name) not in (None, "", [], {}) for name in names)
+    return any(
+        hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+        for name in names
+    )
+
+
+def _workflow_explicit_trace(raw: Any) -> Dict[str, Any]:
+    for name in ("workflow_trace", "graph_trace", "orchestration_trace"):
+        trace = _plain_mapping(_workflow_trace_field(raw, name))
+        if trace:
+            return trace
+    return {}
+
+
+def _workflow_trace_nodes(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_nodes")),
+        *_plain_list(_workflow_trace_field(raw, "graph_nodes")),
+        *_plain_list(trace.get("nodes")),
+        *_plain_list(trace.get("graph_nodes")),
+    ]
+    return [
+        _normalize_workflow_node(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item) or str(item)
+    ]
+
+
+def _workflow_trace_edges(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_edges")),
+        *_plain_list(_workflow_trace_field(raw, "graph_edges")),
+        *_plain_list(trace.get("edges")),
+        *_plain_list(trace.get("graph_edges")),
+    ]
+    return [
+        _normalize_workflow_edge(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item) or str(item)
+    ]
+
+
+def _workflow_trace_steps(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_steps")),
+        *_plain_list(_workflow_trace_field(raw, "graph_steps")),
+        *_plain_list(trace.get("steps")),
+        *_plain_list(trace.get("workflow_steps")),
+    ]
+    return [
+        _normalize_workflow_step(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_checkpoints(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_checkpoints")),
+        *_plain_list(_workflow_trace_field(raw, "graph_checkpoints")),
+        *_plain_list(trace.get("checkpoints")),
+        *_plain_list(trace.get("workflow_checkpoints")),
+    ]
+    return [
+        _normalize_workflow_checkpoint(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_routes(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "route_decisions")),
+        *_plain_list(_workflow_trace_field(raw, "router_decisions")),
+        *_plain_list(trace.get("route_decisions")),
+        *_plain_list(trace.get("router_decisions")),
+    ]
+    return [
+        _normalize_workflow_route(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_interrupts(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "interrupts")),
+        *_plain_list(_workflow_trace_field(raw, "workflow_interrupts")),
+        *_plain_list(trace.get("interrupts")),
+    ]
+    return [
+        _normalize_workflow_interrupt(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_replay(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_replay")),
+        *_plain_list(_workflow_trace_field(raw, "replay")),
+        *_plain_list(trace.get("replay")),
+        *_plain_list(trace.get("workflow_replay")),
+    ]
+    return [
+        _normalize_workflow_replay(item, index=index)
+        for index, item in enumerate(values, start=1)
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_writes(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_writes")),
+        *_plain_list(_workflow_trace_field(raw, "pending_writes")),
+        *_plain_list(trace.get("writes")),
+        *_plain_list(trace.get("pending_writes")),
+    ]
+    return [
+        _plain_mapping(item)
+        for item in values
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_named_events(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "workflow_events")),
+        *_plain_list(_workflow_trace_field(raw, "graph_events")),
+        *_plain_list(trace.get("events")),
+        *_plain_list(trace.get("workflow_events")),
+    ]
+    return [
+        _plain_mapping(item)
+        for item in values
+        if _plain_mapping(item)
+    ]
+
+
+def _workflow_trace_state_snapshots(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace) or _workflow_explicit_trace(raw)
+    values = [
+        *_plain_list(_workflow_trace_field(raw, "state_history")),
+        *_plain_list(_workflow_trace_field(raw, "state_snapshots")),
+        *_plain_list(trace.get("state_history")),
+        *_plain_list(trace.get("state_snapshots")),
+    ]
+    return [
+        _plain_mapping(item)
+        for item in values
+        if _plain_mapping(item)
+    ]
+
+
+def _normalize_workflow_node(item: Any, *, index: int) -> Dict[str, Any]:
+    if not isinstance(item, Mapping) and not _object_mapping(item):
+        node_id = str(item)
+        return {
+            "id": node_id or f"node_{index}",
+            "name": node_id or f"node_{index}",
+            "type": "node",
+            "metadata": {},
+        }
+    node = _plain_mapping(item)
+    node_id = str(
+        node.get("id")
+        or node.get("node_id")
+        or node.get("name")
+        or f"node_{index}"
+    )
+    return {
+        "id": node_id,
+        "name": str(node.get("name") or node_id),
+        "type": str(node.get("type") or node.get("kind") or "node"),
+        "role": str(node.get("role") or ""),
+        "input_keys": [str(key) for key in _plain_list(node.get("input_keys"))],
+        "output_keys": [str(key) for key in _plain_list(node.get("output_keys"))],
+        "metadata": _plain_mapping(node.get("metadata")),
+    }
+
+
+def _normalize_workflow_edge(item: Any, *, index: int) -> Dict[str, Any]:
+    if not isinstance(item, Mapping) and not _object_mapping(item):
+        parts = [part.strip() for part in str(item).replace("->", ":").split(":")]
+        source = parts[0] if parts else ""
+        target = parts[1] if len(parts) > 1 else ""
+        return {
+            "id": f"edge_{index}",
+            "source": source,
+            "target": target,
+            "condition": "",
+            "label": "",
+        }
+    edge = _plain_mapping(item)
+    return {
+        "id": str(edge.get("id") or f"edge_{index}"),
+        "source": str(edge.get("source") or edge.get("from") or edge.get("start") or ""),
+        "target": str(edge.get("target") or edge.get("to") or edge.get("end") or ""),
+        "condition": str(edge.get("condition") or edge.get("route") or ""),
+        "label": str(edge.get("label") or edge.get("name") or ""),
+        "metadata": _plain_mapping(edge.get("metadata")),
+    }
+
+
+def _normalize_workflow_step(item: Any, *, index: int) -> Dict[str, Any]:
+    step = _plain_mapping(item)
+    node = str(step.get("node") or step.get("node_id") or step.get("name") or "")
+    return {
+        "id": str(step.get("id") or step.get("step_id") or f"step_{index}"),
+        "name": str(step.get("name") or node or f"step_{index}"),
+        "node": node,
+        "event_type": str(step.get("event_type") or step.get("event") or ""),
+        "status": str(step.get("status") or step.get("outcome") or "completed"),
+        "superstep": _as_int_or_zero(step.get("superstep") or step.get("turn") or index),
+        "input": _plain_value(step.get("input") or step.get("inputs") or {}),
+        "output": _plain_value(step.get("output") or step.get("outputs") or {}),
+        "state_delta": _plain_mapping(step.get("state_delta") or step.get("writes")),
+        "tool_calls": [
+            _plain_mapping(call)
+            for call in _plain_list(step.get("tool_calls"))
+            if _plain_mapping(call)
+        ],
+        "tool_name": str(step.get("tool_name") or ""),
+        "duration_ms": _as_int_or_zero(step.get("duration_ms") or step.get("elapsed_ms")),
+        "metadata": _plain_mapping(step.get("metadata")),
+    }
+
+
+def _normalize_workflow_checkpoint(item: Any, *, index: int) -> Dict[str, Any]:
+    checkpoint = _plain_mapping(item)
+    state = _plain_mapping(checkpoint.get("state") or checkpoint.get("values"))
+    return {
+        "id": str(checkpoint.get("id") or checkpoint.get("checkpoint_id") or f"checkpoint_{index}"),
+        "checkpoint_id": str(
+            checkpoint.get("checkpoint_id")
+            or checkpoint.get("id")
+            or f"checkpoint_{index}"
+        ),
+        "thread_id": str(checkpoint.get("thread_id") or ""),
+        "namespace": str(
+            checkpoint.get("namespace")
+            or checkpoint.get("checkpoint_ns")
+            or checkpoint.get("ns")
+            or ""
+        ),
+        "superstep": _as_int_or_zero(checkpoint.get("superstep") or index),
+        "next_nodes": [str(node) for node in _plain_list(checkpoint.get("next_nodes"))],
+        "state_keys": sorted(str(key) for key in state),
+        "pending_writes": _plain_list(
+            checkpoint.get("pending_writes") or checkpoint.get("writes")
+        ),
+        "metadata": _plain_mapping(checkpoint.get("metadata")),
+    }
+
+
+def _normalize_workflow_route(item: Any, *, index: int) -> Dict[str, Any]:
+    route = _plain_mapping(item)
+    return {
+        "id": str(route.get("id") or f"route_{index}"),
+        "source": str(route.get("source") or route.get("from") or route.get("node") or ""),
+        "target": str(route.get("target") or route.get("to") or route.get("selected") or ""),
+        "condition": str(route.get("condition") or route.get("route") or ""),
+        "selected": str(route.get("selected") or route.get("target") or ""),
+        "reason": str(route.get("reason") or ""),
+        "metadata": _plain_mapping(route.get("metadata")),
+    }
+
+
+def _normalize_workflow_interrupt(item: Any, *, index: int) -> Dict[str, Any]:
+    interrupt = _plain_mapping(item)
+    return {
+        "id": str(interrupt.get("id") or f"interrupt_{index}"),
+        "node": str(interrupt.get("node") or interrupt.get("node_id") or ""),
+        "reason": str(interrupt.get("reason") or interrupt.get("message") or ""),
+        "resumable": bool(interrupt.get("resumable", True)),
+        "resolved": bool(interrupt.get("resolved", False)),
+        "metadata": _plain_mapping(interrupt.get("metadata")),
+    }
+
+
+def _normalize_workflow_replay(item: Any, *, index: int) -> Dict[str, Any]:
+    replay = _plain_mapping(item)
+    return {
+        "id": str(replay.get("id") or f"replay_{index}"),
+        "from_checkpoint": str(replay.get("from_checkpoint") or replay.get("checkpoint_id") or ""),
+        "to_checkpoint": str(replay.get("to_checkpoint") or ""),
+        "skipped_nodes": [str(node) for node in _plain_list(replay.get("skipped_nodes"))],
+        "rerun_nodes": [str(node) for node in _plain_list(replay.get("rerun_nodes"))],
+        "reason": str(replay.get("reason") or ""),
+        "metadata": _plain_mapping(replay.get("metadata")),
+    }
+
+
+def _workflow_trace_topology(
+    nodes: Sequence[Any],
+    edges: Sequence[Any],
+) -> Dict[str, Any]:
+    node_ids = [
+        str(_plain_mapping(node).get("id") or "")
+        for node in nodes
+        if _plain_mapping(node).get("id")
+    ]
+    adjacency: Dict[str, List[str]] = {}
+    inbound: set[str] = set()
+    outbound: set[str] = set()
+    for edge in edges:
+        edge_dict = _plain_mapping(edge)
+        source = str(edge_dict.get("source") or "")
+        target = str(edge_dict.get("target") or "")
+        if not source or not target:
+            continue
+        adjacency.setdefault(source, []).append(target)
+        outbound.add(source)
+        inbound.add(target)
+    return {
+        "node_ids": node_ids,
+        "edge_count": len(edges),
+        "entry_nodes": sorted(node for node in node_ids if node not in inbound),
+        "terminal_nodes": sorted(node for node in node_ids if node not in outbound),
+        "adjacency": {key: sorted(values) for key, values in adjacency.items()},
+    }
+
+
+def _workflow_trace_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
 
 
 def _browser_cua_state(raw: Any) -> Dict[str, Any]:
@@ -3786,3 +4462,10 @@ def _plain_value(value: Any) -> Any:
     if mapping is not None:
         return mapping
     return value
+
+
+def _as_int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
