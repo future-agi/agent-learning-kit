@@ -1902,6 +1902,93 @@ def test_realtime_trace_framework_adapter_preserves_frames_and_session_events(tm
     } <= set(output["event_types"])
 
 
+def test_framework_memory_adapter_preserves_lineage_and_retrieval_state(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_memory_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_memory_trace_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "langgraph",
+        module.LocalFrameworkMemoryGraph(),
+        target=module.TARGET,
+        method_candidates=["run", "ainvoke"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=6,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("ainvoke", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "ainvoke"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == [
+        "agent_memory_lineage",
+        "framework_memory",
+        "retrieval_memory",
+    ]
+    assert set(config["required_events"]) >= {
+        "framework_memory_operation",
+        "framework_memory_checkpoint",
+        "framework_memory_retrieval",
+        "framework_memory_record",
+    }
+    assert set(runtime_contract["required_signals"]) >= {"event", "state"}
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-memory-trace-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    memory = state["framework_memory"]
+    assert memory["operation_count"] == 4
+    assert memory["checkpoint_count"] == 1
+    assert memory["memory_count"] == 1
+    assert memory["retrieval_count"] == 1
+    assert memory["operation_types"] == ["read", "recall", "update", "write"]
+    assert memory["source_ids"] == ["refund_policy_doc"]
+    assert "tenant_refunds" in memory["namespaces"]
+    retrieval = state["retrieval_memory"]
+    assert retrieval["documents"][0]["id"] == "refund_policy_doc"
+    assert retrieval["citations"][0]["doc_ids"] == ["refund_policy_doc"]
+    lineage = state["agent_memory_lineage"]
+    assert lineage["stores"][0]["id"] == "langgraph_store"
+    assert lineage["memories"][0]["source_ids"] == ["refund_policy_doc"]
+    assert lineage["policies"]["tenant_isolation"]["status"] == "enforced"
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert {
+        "agent_memory_lineage",
+        "framework_memory",
+        "retrieval_memory",
+    } <= set(output["state_keys"])
+    assert {
+        "framework_memory_operation",
+        "framework_memory_checkpoint",
+        "framework_memory_retrieval",
+        "framework_memory_record",
+    } <= set(output["event_types"])
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

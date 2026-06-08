@@ -1863,6 +1863,59 @@ def test_sdk_framework_adapter_realtime_trace_example_runs(tmp_path):
     } <= event_types
 
 
+def test_sdk_framework_adapter_memory_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_memory_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_memory_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-memory-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_memory_trace_manifest"]
+    assert manifest["agent"]["method"] == "ainvoke"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_state_keys"] == [
+        "agent_memory_lineage",
+        "framework_memory",
+        "retrieval_memory",
+    ]
+    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+        "framework_memory_operation",
+        "framework_memory_checkpoint",
+        "framework_memory_retrieval",
+        "framework_memory_record",
+    }
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    memory = state["framework_memory"]
+    assert memory["operation_types"] == ["read", "recall", "update", "write"]
+    assert memory["checkpoint_count"] == 1
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == [
+        "refund_policy_doc"
+    ]
+    assert state["agent_memory_lineage"]["stores"][0]["id"] == "langgraph_store"
+    event_types = set(
+        state["framework_runtime"]["invocations"][0]["output"]["event_types"]
+    )
+    assert {
+        "framework_memory_operation",
+        "framework_memory_checkpoint",
+        "framework_memory_retrieval",
+        "framework_memory_record",
+    } <= event_types
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

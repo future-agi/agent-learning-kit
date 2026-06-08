@@ -2,7 +2,7 @@ import inspect
 import json
 import time
 from dataclasses import asdict, is_dataclass
-from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Union
 
 from fi.simulate.agent.wrapper import (
     AgentInput,
@@ -474,6 +474,9 @@ class GenericAgentWrapper(AgentWrapper):
             plain = _plain_value(value)
             if isinstance(plain, Mapping):
                 return dict(plain)
+        memory_updates = _framework_memory_updates(raw)
+        if memory_updates:
+            return memory_updates
         return None
 
     def _extract_state(self, raw: Any) -> Dict[str, Any]:
@@ -510,6 +513,15 @@ class GenericAgentWrapper(AgentWrapper):
         realtime_state = _realtime_trace_state(raw)
         if realtime_state:
             state.setdefault("realtime_trace", realtime_state)
+        memory_state = _framework_memory_state(raw)
+        if memory_state:
+            state.setdefault("framework_memory", memory_state)
+            retrieval_memory = _framework_memory_retrieval_memory(raw)
+            if retrieval_memory:
+                state.setdefault("retrieval_memory", retrieval_memory)
+            agent_memory_lineage = _framework_memory_agent_lineage(raw)
+            if agent_memory_lineage:
+                state.setdefault("agent_memory_lineage", agent_memory_lineage)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -533,6 +545,19 @@ class GenericAgentWrapper(AgentWrapper):
                     },
                 )
             )
+        memory_state = _framework_memory_state(raw)
+        if memory_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=memory_state,
+                    metadata={
+                        "kind": "framework_memory",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
         return artifacts
 
     def _extract_events(self, raw: Any) -> List[SimulationEvent]:
@@ -547,6 +572,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_message_history_events(raw))
         events.extend(_message_history_coordination_events(raw))
         events.extend(_realtime_trace_events(raw))
+        events.extend(_framework_memory_events(raw))
         return events
 
 
@@ -1128,6 +1154,690 @@ def _reconciliation_payload_from_message(
         "message_type": str(message.get("type") or message.get("kind") or ""),
         "content": _message_content(message),
     }
+
+
+def _framework_memory_state(raw: Any) -> Dict[str, Any]:
+    if not _has_framework_memory_shape(raw):
+        return {}
+    operations = _framework_memory_operations(raw)
+    checkpoints = _framework_memory_checkpoints(raw)
+    memories = _framework_memory_records(raw)
+    retrievals = _framework_memory_retrievals(raw)
+    stores = _framework_memory_stores(raw)
+    policies = _framework_memory_policies(raw)
+    if not any((operations, checkpoints, memories, retrievals, stores, policies)):
+        return {}
+
+    operation_types = sorted(
+        {
+            _memory_key(operation.get("operation") or operation.get("type") or operation.get("op"))
+            for operation in operations
+            if _memory_key(operation.get("operation") or operation.get("type") or operation.get("op"))
+        }
+    )
+    namespaces = sorted(
+        {
+            str(
+                item.get("namespace")
+                or item.get("tenant")
+                or item.get("user_id")
+                or item.get("thread_id")
+                or ""
+            )
+            for item in [*operations, *checkpoints, *memories, *retrievals, *stores]
+            if (
+                item.get("namespace")
+                or item.get("tenant")
+                or item.get("user_id")
+                or item.get("thread_id")
+            )
+        }
+    )
+    thread_ids = sorted(
+        {
+            str(item.get("thread_id") or "")
+            for item in [*operations, *checkpoints, *retrievals]
+            if item.get("thread_id")
+        }
+    )
+    source_ids = sorted(
+        {
+            str(source_id)
+            for memory in memories
+            for source_id in _plain_list(
+                memory.get("source_ids")
+                or memory.get("sources")
+                or memory.get("doc_ids")
+            )
+            if str(source_id)
+        }
+    )
+    retrieval_doc_ids = sorted(
+        {
+            str(document.get("id") or document.get("doc_id") or document.get("key") or "")
+            for retrieval in retrievals
+            for document in _list_of_mappings(retrieval.get("documents") or retrieval.get("results"))
+            if document.get("id") or document.get("doc_id") or document.get("key")
+        }
+    )
+    policy_keys = sorted(_memory_key(key) for key in policies if _memory_key(key))
+    signals = sorted(
+        {
+            "memory",
+            "framework_memory",
+            *(operation_types or []),
+            *(["checkpoint"] if checkpoints else []),
+            *(["retrieval"] if retrievals else []),
+            *(["memory_record"] if memories else []),
+            *(["store"] if stores else []),
+            *(["policy"] if policies else []),
+            *(["source_attribution"] if source_ids else []),
+        }
+    )
+    return {
+        "kind": "framework_memory_trace",
+        "operation_count": len(operations),
+        "checkpoint_count": len(checkpoints),
+        "memory_count": len(memories),
+        "retrieval_count": len(retrievals),
+        "store_count": len(stores),
+        "policy_count": len(policies),
+        "operation_types": operation_types,
+        "namespaces": namespaces,
+        "thread_ids": thread_ids,
+        "source_ids": source_ids,
+        "retrieval_doc_ids": retrieval_doc_ids,
+        "policy_keys": policy_keys,
+        "signals": signals,
+        "stores": stores,
+        "memories": memories,
+        "operations": operations,
+        "checkpoints": checkpoints,
+        "retrievals": retrievals,
+        "policies": policies,
+        "summary": {
+            "operation_count": len(operations),
+            "checkpoint_count": len(checkpoints),
+            "memory_count": len(memories),
+            "retrieval_count": len(retrievals),
+            "store_count": len(stores),
+            "has_read": "read" in operation_types or "search" in operation_types,
+            "has_write": "write" in operation_types or "add" in operation_types,
+            "has_recall": "recall" in operation_types or bool(retrievals),
+            "has_update": "update" in operation_types,
+            "has_delete": "delete" in operation_types,
+            "has_checkpoint": bool(checkpoints),
+            "has_source_attribution": bool(source_ids),
+            "has_policy": bool(policies),
+        },
+    }
+
+
+def _framework_memory_events(raw: Any) -> List[SimulationEvent]:
+    if not _has_framework_memory_shape(raw):
+        return []
+    events: List[SimulationEvent] = []
+    for index, operation in enumerate(_framework_memory_operations(raw), start=1):
+        operation_type = _memory_key(
+            operation.get("operation") or operation.get("type") or operation.get("op")
+        ) or "memory_operation"
+        events.append(
+            SimulationEvent(
+                type="framework_memory_operation",
+                name=operation_type,
+                payload={**operation, "sequence": index},
+                metadata={"kind": "framework_memory", "operation": operation_type},
+            )
+        )
+    for index, checkpoint in enumerate(_framework_memory_checkpoints(raw), start=1):
+        name = str(
+            checkpoint.get("id")
+            or checkpoint.get("checkpoint_id")
+            or checkpoint.get("thread_id")
+            or f"checkpoint_{index}"
+        )
+        events.append(
+            SimulationEvent(
+                type="framework_memory_checkpoint",
+                name=name,
+                payload={**checkpoint, "sequence": index},
+                metadata={"kind": "framework_memory", "memory": "checkpoint"},
+            )
+        )
+    for index, retrieval in enumerate(_framework_memory_retrievals(raw), start=1):
+        name = str(retrieval.get("query") or retrieval.get("id") or f"retrieval_{index}")
+        events.append(
+            SimulationEvent(
+                type="framework_memory_retrieval",
+                name=name,
+                payload={**retrieval, "sequence": index},
+                metadata={"kind": "framework_memory", "memory": "retrieval"},
+            )
+        )
+    for index, memory in enumerate(_framework_memory_records(raw), start=1):
+        name = str(memory.get("id") or memory.get("key") or f"memory_{index}")
+        events.append(
+            SimulationEvent(
+                type="framework_memory_record",
+                name=name,
+                payload={**memory, "sequence": index},
+                metadata={"kind": "framework_memory", "memory": "record"},
+            )
+        )
+    return events
+
+
+def _framework_memory_updates(raw: Any) -> Dict[str, Any]:
+    operations = _framework_memory_operations(raw)
+    if not operations:
+        return {}
+    writes = [
+        operation
+        for operation in operations
+        if _memory_key(operation.get("operation") or operation.get("type") or operation.get("op"))
+        in {"add", "write", "remember", "save", "put", "upsert", "set"}
+    ]
+    updates = [
+        operation
+        for operation in operations
+        if _memory_key(operation.get("operation") or operation.get("type") or operation.get("op"))
+        == "update"
+    ]
+    deletes = [
+        operation
+        for operation in operations
+        if _memory_key(operation.get("operation") or operation.get("type") or operation.get("op"))
+        in {"delete", "forget", "remove", "purge"}
+    ]
+    if not writes and not updates and not deletes:
+        return {}
+    return {
+        "framework_memory": {
+            "write_count": len(writes),
+            "update_count": len(updates),
+            "delete_count": len(deletes),
+            "writes": writes,
+            "updates": updates,
+            "deletes": deletes,
+        }
+    }
+
+
+def _framework_memory_retrieval_memory(raw: Any) -> Dict[str, Any]:
+    retrievals = _framework_memory_retrievals(raw)
+    memories = _framework_memory_records(raw)
+    if not retrievals and not memories:
+        return {}
+    documents: List[Dict[str, Any]] = []
+    queries: List[Dict[str, Any]] = []
+    citations: List[Dict[str, Any]] = []
+    for index, retrieval in enumerate(retrievals, start=1):
+        query = str(retrieval.get("query") or retrieval.get("input") or f"memory retrieval {index}")
+        docs = [
+            _framework_memory_document(document, index=doc_index)
+            for doc_index, document in enumerate(
+                _plain_list(retrieval.get("documents") or retrieval.get("results")),
+                start=1,
+            )
+        ]
+        docs = [doc for doc in docs if doc]
+        documents.extend(docs)
+        queries.append(
+            {
+                "query": query,
+                "documents": [str(doc.get("id")) for doc in docs if doc.get("id")],
+            }
+        )
+        cited_ids = [
+            str(doc_id)
+            for doc_id in _plain_list(retrieval.get("doc_ids") or retrieval.get("source_ids"))
+            if str(doc_id)
+        ] or [str(doc.get("id")) for doc in docs if doc.get("id")]
+        if cited_ids:
+            citations.append(
+                {
+                    "claim": str(retrieval.get("claim") or query),
+                    "doc_ids": cited_ids,
+                    "freshness_checked": bool(retrieval.get("freshness_checked", True)),
+                }
+            )
+    for index, memory in enumerate(memories, start=1):
+        source_ids = [
+            str(item)
+            for item in _plain_list(
+                memory.get("source_ids") or memory.get("sources") or memory.get("doc_ids")
+            )
+            if str(item)
+        ]
+        if not source_ids:
+            continue
+        citations.append(
+            {
+                "claim": str(memory.get("content") or memory.get("value") or f"memory {index}"),
+                "doc_ids": source_ids,
+                "freshness_checked": True,
+            }
+        )
+    return {
+        "documents": _dedupe_framework_memory_documents(documents),
+        "queries": queries,
+        "citations": citations,
+        "memory_writes": [
+            {
+                "key": str(memory.get("id") or memory.get("key") or index),
+                "value": str(memory.get("content") or memory.get("value") or ""),
+            }
+            for index, memory in enumerate(memories, start=1)
+        ],
+        "require_current": True,
+    }
+
+
+def _framework_memory_agent_lineage(raw: Any) -> Dict[str, Any]:
+    state = _framework_memory_state(raw)
+    if not state:
+        return {}
+    stores = _framework_memory_stores(raw) or [
+        {
+            "id": "framework_memory",
+            "type": "framework",
+            "tenant": next(iter(state.get("namespaces") or ["default"]), "default"),
+        }
+    ]
+    memories = [
+        {
+            "id": str(memory.get("id") or memory.get("key") or index),
+            "store": str(memory.get("store") or stores[0].get("id") or "framework_memory"),
+            "status": str(memory.get("status") or "active"),
+            "source_ids": _plain_list(
+                memory.get("source_ids") or memory.get("sources") or memory.get("doc_ids")
+            ),
+            "tenant": str(
+                memory.get("namespace")
+                or memory.get("tenant")
+                or stores[0].get("tenant")
+                or "default"
+            ),
+        }
+        for index, memory in enumerate(_framework_memory_records(raw), start=1)
+    ]
+    operations = [
+        {
+            "id": str(operation.get("id") or f"memory_operation_{index}"),
+            "operation": _memory_key(
+                operation.get("operation") or operation.get("type") or operation.get("op")
+            )
+            or "operation",
+            "store": str(operation.get("store") or stores[0].get("id") or "framework_memory"),
+            "memory_id": str(
+                operation.get("memory_id")
+                or operation.get("key")
+                or operation.get("id")
+                or f"memory_{index}"
+            ),
+            "status": str(operation.get("status") or "allowed"),
+            "policy_decision": str(operation.get("policy_decision") or "allowed"),
+            "trace_id": str(operation.get("trace_id") or operation.get("span_id") or ""),
+            "evidence": _plain_value(operation.get("evidence") or {}),
+        }
+        for index, operation in enumerate(_framework_memory_operations(raw), start=1)
+    ]
+    lineage_edges = [
+        {
+            "from": str(source_id),
+            "to": str(memory.get("id") or memory.get("key") or index),
+            "type": "source_attribution",
+        }
+        for index, memory in enumerate(_framework_memory_records(raw), start=1)
+        for source_id in _plain_list(
+            memory.get("source_ids") or memory.get("sources") or memory.get("doc_ids")
+        )
+        if str(source_id)
+    ]
+    policies = _framework_memory_policies(raw)
+    return {
+        "target": {
+            "agent": "framework-adapter",
+            "tenant": next(iter(state.get("namespaces") or ["default"]), "default"),
+        },
+        "stores": stores,
+        "memories": memories,
+        "operations": operations,
+        "checkpoints": _framework_memory_checkpoints(raw),
+        "lineage": lineage_edges,
+        "policies": policies,
+        "poison_tests": _framework_memory_named_tests(raw, "poison"),
+        "isolation_tests": _framework_memory_named_tests(raw, "isolation"),
+        "retention_tests": _framework_memory_named_tests(raw, "retention"),
+        "observability": _framework_memory_observability(raw),
+        "artifacts": _framework_memory_audit_artifacts(raw),
+        "required_evidence": [
+            "source_attribution",
+            "tenant_isolation",
+            "audit",
+            "retention_policy",
+            "deletion_policy",
+            "redaction",
+            "canary",
+        ],
+        "required_signals": [
+            "memory_lineage",
+            "source_attribution",
+            "tenant_isolation",
+            "audit",
+        ],
+    }
+
+
+def _has_framework_memory_shape(raw: Any) -> bool:
+    raw_mapping = _object_mapping(raw)
+    names = (
+        "memory_trace",
+        "memory_operations",
+        "memoryOperations",
+        "memory_ops",
+        "memory_records",
+        "memoryRecords",
+        "memory_searches",
+        "memorySearches",
+        "memory_retrievals",
+        "memoryRetrievals",
+        "memory_stores",
+        "memoryStores",
+        "checkpoints",
+        "checkpoint_writes",
+        "thread_checkpoints",
+        "graph_checkpoints",
+        "retrievals",
+    )
+    if raw_mapping is not None:
+        return any(raw_mapping.get(name) not in (None, "", [], {}) for name in names)
+    return any(
+        hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+        for name in names
+    )
+
+
+def _framework_memory_operations(raw: Any) -> List[Dict[str, Any]]:
+    explicit = _extract_list_field(
+        raw,
+        (
+            "memory_operations",
+            "memoryOperations",
+            "memory_ops",
+            "memoryOps",
+        ),
+    )
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    trace_operations = _list_of_mappings(trace.get("operations")) if trace else []
+    return [
+        _normalize_framework_memory_operation(item, index=index)
+        for index, item in enumerate([*(explicit or []), *trace_operations], start=1)
+    ]
+
+
+def _framework_memory_checkpoints(raw: Any) -> List[Dict[str, Any]]:
+    checkpoints = _extract_list_field(
+        raw,
+        (
+            "checkpoints",
+            "checkpoint_writes",
+            "thread_checkpoints",
+            "graph_checkpoints",
+        ),
+    )
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    trace_checkpoints = _list_of_mappings(trace.get("checkpoints")) if trace else []
+    return [
+        _normalize_framework_memory_checkpoint(item, index=index)
+        for index, item in enumerate([*(checkpoints or []), *trace_checkpoints], start=1)
+    ]
+
+
+def _framework_memory_records(raw: Any) -> List[Dict[str, Any]]:
+    memories = _extract_list_field(
+        raw,
+        (
+            "memory_records",
+            "memoryRecords",
+            "memories",
+        ),
+    )
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    trace_memories = _list_of_mappings(trace.get("memories")) if trace else []
+    return [
+        _normalize_framework_memory_record(item, index=index)
+        for index, item in enumerate([*(memories or []), *trace_memories], start=1)
+    ]
+
+
+def _framework_memory_retrievals(raw: Any) -> List[Dict[str, Any]]:
+    retrievals = _extract_list_field(
+        raw,
+        (
+            "memory_searches",
+            "memorySearches",
+            "memory_retrievals",
+            "memoryRetrievals",
+            "retrievals",
+        ),
+    )
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    trace_retrievals = _list_of_mappings(trace.get("retrievals")) if trace else []
+    return [
+        _normalize_framework_memory_retrieval(item, index=index)
+        for index, item in enumerate([*(retrievals or []), *trace_retrievals], start=1)
+    ]
+
+
+def _framework_memory_stores(raw: Any) -> List[Dict[str, Any]]:
+    stores = _extract_list_field(raw, ("memory_stores", "memoryStores"))
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    trace_stores = _list_of_mappings(trace.get("stores")) if trace else []
+    return [
+        _normalize_framework_memory_store(item, index=index)
+        for index, item in enumerate([*(stores or []), *trace_stores], start=1)
+    ]
+
+
+def _framework_memory_policies(raw: Any) -> Dict[str, Any]:
+    for name in ("memory_policies", "memoryPolicies"):
+        value = _object_mapping(_framework_memory_field(raw, name))
+        if value:
+            return value
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    if trace:
+        return _plain_mapping(trace.get("policies"))
+    return {}
+
+
+def _framework_memory_named_tests(raw: Any, family: str) -> List[Dict[str, Any]]:
+    names = {
+        "poison": ("poison_tests", "poisoning_tests", "memory_poison_tests"),
+        "isolation": ("isolation_tests", "memory_isolation_tests"),
+        "retention": ("retention_tests", "deletion_tests", "memory_retention_tests"),
+    }.get(family, ())
+    values: List[Dict[str, Any]] = []
+    for name in names:
+        values.extend(_extract_list_field(raw, (name,)) or [])
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    if trace:
+        for name in names:
+            values.extend(_list_of_mappings(trace.get(name)))
+    return values
+
+
+def _framework_memory_observability(raw: Any) -> Dict[str, Any]:
+    for name in ("memory_observability", "observability"):
+        value = _object_mapping(_framework_memory_field(raw, name))
+        if value:
+            return value
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    if trace:
+        return _plain_mapping(trace.get("observability"))
+    return {}
+
+
+def _framework_memory_audit_artifacts(raw: Any) -> List[Dict[str, Any]]:
+    values: List[Dict[str, Any]] = []
+    for name in ("memory_artifacts", "audit_artifacts"):
+        values.extend(_extract_list_field(raw, (name,)) or [])
+    trace = _object_mapping(_framework_memory_field(raw, "memory_trace"))
+    if trace:
+        values.extend(_list_of_mappings(trace.get("artifacts")))
+    return values
+
+
+def _framework_memory_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
+
+
+def _normalize_framework_memory_operation(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    operation = _memory_key(item.get("operation") or item.get("type") or item.get("op"))
+    return {
+        "id": str(item.get("id") or item.get("operation_id") or f"memory_operation_{index}"),
+        "operation": operation or "operation",
+        "memory_id": str(item.get("memory_id") or item.get("key") or item.get("id") or ""),
+        "key": str(item.get("key") or item.get("memory_id") or item.get("id") or ""),
+        "namespace": str(item.get("namespace") or item.get("tenant") or item.get("user_id") or ""),
+        "thread_id": str(item.get("thread_id") or ""),
+        "status": str(item.get("status") or "allowed"),
+        "policy_decision": str(item.get("policy_decision") or "allowed"),
+        "trace_id": str(item.get("trace_id") or item.get("span_id") or ""),
+        "value": _plain_value(item.get("value") or item.get("content") or item.get("text") or ""),
+        "source_ids": _plain_list(item.get("source_ids") or item.get("sources") or item.get("doc_ids")),
+        "evidence": _plain_value(item.get("evidence") or {}),
+    }
+
+
+def _normalize_framework_memory_checkpoint(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    return {
+        "id": str(item.get("id") or item.get("checkpoint_id") or f"checkpoint_{index}"),
+        "checkpoint_id": str(item.get("checkpoint_id") or item.get("id") or f"checkpoint_{index}"),
+        "thread_id": str(item.get("thread_id") or item.get("thread") or ""),
+        "namespace": str(item.get("namespace") or item.get("tenant") or ""),
+        "state_keys": [
+            str(key)
+            for key in _plain_list(item.get("state_keys") or item.get("keys"))
+            if str(key)
+        ],
+        "status": str(item.get("status") or "saved"),
+        "trace_id": str(item.get("trace_id") or item.get("span_id") or ""),
+    }
+
+
+def _normalize_framework_memory_record(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    return {
+        "id": str(item.get("id") or item.get("key") or f"memory_{index}"),
+        "key": str(item.get("key") or item.get("id") or f"memory_{index}"),
+        "store": str(item.get("store") or item.get("store_id") or "framework_memory"),
+        "namespace": str(item.get("namespace") or item.get("tenant") or item.get("user_id") or ""),
+        "content": str(item.get("content") or item.get("value") or item.get("text") or ""),
+        "status": str(item.get("status") or "active"),
+        "source_ids": _plain_list(item.get("source_ids") or item.get("sources") or item.get("doc_ids")),
+        "metadata": _plain_mapping(item.get("metadata")),
+    }
+
+
+def _normalize_framework_memory_retrieval(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    return {
+        "id": str(item.get("id") or f"retrieval_{index}"),
+        "query": str(item.get("query") or item.get("input") or ""),
+        "namespace": str(item.get("namespace") or item.get("tenant") or item.get("user_id") or ""),
+        "thread_id": str(item.get("thread_id") or ""),
+        "documents": [
+            _framework_memory_document(document, index=doc_index)
+            for doc_index, document in enumerate(
+                _plain_list(item.get("documents") or item.get("results")),
+                start=1,
+            )
+        ],
+        "doc_ids": _plain_list(item.get("doc_ids") or item.get("source_ids")),
+        "freshness_checked": bool(item.get("freshness_checked", True)),
+        "status": str(item.get("status") or "returned"),
+    }
+
+
+def _normalize_framework_memory_store(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    return {
+        "id": str(item.get("id") or item.get("name") or f"memory_store_{index}"),
+        "type": str(item.get("type") or item.get("kind") or "framework"),
+        "tenant": str(item.get("tenant") or item.get("namespace") or "default"),
+        "namespace": str(item.get("namespace") or item.get("tenant") or "default"),
+    }
+
+
+def _framework_memory_document(value: Any, *, index: int) -> Dict[str, Any]:
+    item = _object_mapping(value)
+    if not item:
+        return {
+            "id": f"doc_{index}",
+            "content": str(value),
+            "current": True,
+        }
+    return {
+        "id": str(item.get("id") or item.get("doc_id") or item.get("key") or f"doc_{index}"),
+        "title": str(item.get("title") or item.get("name") or ""),
+        "content": str(item.get("content") or item.get("text") or item.get("value") or ""),
+        "current": bool(item.get("current", True)),
+    }
+
+
+def _dedupe_framework_memory_documents(
+    documents: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for document in documents:
+        doc_id = str(document.get("id") or "")
+        if doc_id and doc_id in seen:
+            continue
+        if doc_id:
+            seen.add(doc_id)
+        deduped.append(dict(document))
+    return deduped
+
+
+def _plain_mapping(value: Any) -> Dict[str, Any]:
+    mapping = _object_mapping(value)
+    return dict(mapping or {})
+
+
+def _plain_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return [_plain_value(item) for item in value]
+    return [_plain_value(value)]
+
+
+def _memory_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _realtime_trace_state(raw: Any) -> Dict[str, Any]:

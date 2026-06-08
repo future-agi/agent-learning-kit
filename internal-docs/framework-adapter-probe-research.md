@@ -142,6 +142,12 @@ Keep framework support local-first:
   `realtime_tool_call`, `realtime_tool_response`, `realtime_transcript`, and
   `realtime_lifecycle` events so voice adapters can be scored without a hosted
   room or imported framework package.
+- Preserve framework memory trace semantics. Local framework outputs carrying
+  LangGraph-style checkpoints, Mem0/Zep-style memory operations, memory records,
+  stores, retrieval/search results, or memory governance policies should
+  normalize into `framework_memory`, `retrieval_memory`, and
+  `agent_memory_lineage` state plus `framework_memory_*` events so framework
+  adapters and memory-layer evals share the same evidence path.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

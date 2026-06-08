@@ -22,6 +22,10 @@ simulation path.
   operations through structured CLI/API outputs. Probe implication: a local
   memory layer probe should normalize CRUD/search evidence without assuming one
   vendor-specific method name. Source: https://docs.mem0.ai/platform/cli
+- Zep exposes high-level session memory with `memory.add`/`memory.get` and
+  lower-level graph retrieval for custom memory context. Probe implication:
+  framework memory outputs should preserve session/thread ids, graph/search
+  documents, and context provenance. Source: https://help.getzep.com/v2/memory
 - LoCoMo evaluates very long-term conversational memory across multi-session
   question answering, summarization, and multimodal dialogue. Probe implication:
   retrieval evidence alone is too weak; simulations need source attribution,
@@ -46,6 +50,11 @@ Keep memory support local-first:
 - Emit `retrieval_memory` and `agent_memory_lineage` environments so existing
   `retrieval_memory_attribution`, `agent_memory_lineage_quality`, and
   `memory_integrity` metrics can score the promoted run.
+- When memory evidence comes back through a framework adapter, normalize
+  explicit checkpoint, memory operation, store, memory record, retrieval/search,
+  and governance-policy fields into `framework_memory`, `retrieval_memory`, and
+  `agent_memory_lineage` state so framework optimization and memory-layer
+  evaluation use the same proof shape.
 - Require current-document citations, freshness checks, source attribution,
   audited read/write/recall operations, tenant isolation, audit, retention,
   deletion, redaction, canaries, observability, and artifacts before a probe is

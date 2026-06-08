@@ -674,6 +674,14 @@ artifact, `realtime_frame` / `realtime_tool_call` /
 and ordinary tool-call evidence, so voice adapters can be optimized without a
 hosted room. See `examples/sdk_framework_adapter_realtime_trace.py`.
 
+Framework memory exports normalize into the same evaluator-visible memory
+evidence as memory-layer probes. LangGraph-style checkpoints, Mem0/Zep-style
+memory operations/searches, memory records, stores, and policies become
+`framework_memory`, `retrieval_memory`, and `agent_memory_lineage` state plus
+`framework_memory_operation`, `framework_memory_checkpoint`,
+`framework_memory_retrieval`, and `framework_memory_record` events. See
+`examples/sdk_framework_adapter_memory_trace.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1294,6 +1302,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_handoff_transcript.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_realtime_trace.py \
   artifacts/sdk-framework-adapter-realtime-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_memory_trace.py \
+  artifacts/sdk-framework-adapter-memory-trace.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \
