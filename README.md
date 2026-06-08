@@ -716,7 +716,9 @@ evidence. Browser-use/OpenAI-computer-use-style actions, DOM/screenshot
 snapshots, Playwright-like trace fields, storage/runtime/network logs,
 mutation packs, screenshot diffs, and prompt-injection surfaces become
 `browser_cua` state, browser trace/screenshot artifacts, `browser_*` events, and
-ordinary `browser_click` tool calls. See
+ordinary `browser_click` tool calls. Generated adapter eval configs derive
+browser trace, action outcome, grounding, and mutation-resilience gates from the
+selected output. See
 `examples/sdk_framework_adapter_browser_cua_trace.py`.
 
 Workflow graph framework exports normalize durable execution semantics.

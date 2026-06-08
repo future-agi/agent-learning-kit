@@ -1590,6 +1590,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "agent_memory_lineage_summary": _probe_agent_memory_lineage_summary(
             state.get("agent_memory_lineage")
         ),
+        "browser_cua_summary": _probe_browser_cua_summary(
+            state.get("browser_cua")
+        ),
         "mcp_tool_session_summary": _probe_mcp_tool_session_summary(
             state.get("mcp_tool_session")
         ),
@@ -1933,6 +1936,178 @@ def _probe_agent_memory_lineage_summary(value: Any) -> dict[str, Any]:
     return summary
 
 
+def _probe_browser_cua_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    snapshots = _probe_mappings(trace.get("snapshots"))
+    actions = _probe_mappings(trace.get("action_replay") or trace.get("actions"))
+    screenshots = _probe_mappings(trace.get("screenshots"))
+    regions = dict(trace.get("regions") or {}) if isinstance(trace.get("regions"), Mapping) else {}
+    network_log = _probe_mappings(trace.get("network_log"))
+    runtime_events = _probe_mappings(trace.get("runtime_events"))
+    performance_entries = _probe_mappings(trace.get("performance_entries"))
+    prompt_injections = _probe_mappings(trace.get("prompt_injections"))
+    mutation_pack = (
+        dict(trace.get("mutation_pack"))
+        if isinstance(trace.get("mutation_pack"), Mapping)
+        else {}
+    )
+    mutations = _probe_mappings(
+        mutation_pack.get("mutations")
+        or trace.get("browser_mutations")
+        or trace.get("mutations")
+    )
+    for count_key, count in (
+        ("snapshot_count", len(snapshots)),
+        ("action_count", len(actions)),
+        ("screenshot_count", len(screenshots)),
+        ("region_count", len(regions)),
+        ("network_request_count", len(network_log)),
+        ("runtime_event_count", len(runtime_events)),
+        ("performance_entry_count", len(performance_entries)),
+        ("prompt_injection_surface_count", len(prompt_injections)),
+        ("mutation_count", len(mutations)),
+    ):
+        summary.setdefault(count_key, trace.get(count_key, count))
+    for count_key in (
+        "successful_action_count",
+        "blocked_action_count",
+        "matched_action_count",
+        "prompt_injection_touched_count",
+        "screenshot_diff_count",
+    ):
+        if trace.get(count_key) is not None:
+            summary[count_key] = trace.get(count_key)
+    summary.setdefault(
+        "stale_action_count",
+        len([action for action in actions if action.get("stale_screenshot")]),
+    )
+    summary.setdefault(
+        "dom_snapshot_count",
+        len([snapshot for snapshot in snapshots if snapshot.get("dom")]),
+    )
+    summary.setdefault(
+        "screenshot_snapshot_count",
+        len(
+            [
+                snapshot
+                for snapshot in snapshots
+                if snapshot.get("screenshot_uri") or snapshot.get("screenshot_path")
+            ]
+        ),
+    )
+    summary["layout_shift_present"] = bool(
+        trace.get("layout_shift_present")
+        or trace.get("layout_shift_distribution")
+    )
+    summary["storage_present"] = bool(trace.get("storage_present"))
+    action_types = trace.get("action_types") or [
+        action.get("action") or action.get("type")
+        for action in actions
+        if action.get("action") or action.get("type")
+    ]
+    tool_names = trace.get("tool_names") or [
+        action.get("tool") or action.get("tool_name")
+        for action in actions
+        if action.get("tool") or action.get("tool_name")
+    ]
+    mutation_ids = [
+        mutation.get("id") or mutation.get("name")
+        for mutation in mutations
+        if mutation.get("id") or mutation.get("name")
+    ]
+    mutation_types = [
+        mutation.get("type") or mutation.get("kind")
+        for mutation in mutations
+        if mutation.get("type") or mutation.get("kind")
+    ]
+    region_ids = [
+        *list(regions.keys()),
+        *[
+            region.get("id") or region.get("name")
+            for region in regions.values()
+            if isinstance(region, Mapping) and (region.get("id") or region.get("name"))
+        ],
+    ]
+    prompt_injection_ids = [
+        injection.get("id") or injection.get("selector")
+        for injection in prompt_injections
+        if injection.get("id") or injection.get("selector")
+    ]
+    summary["action_types"] = sorted(str(item) for item in action_types if str(item))
+    summary["tool_names"] = sorted(str(item) for item in tool_names if str(item))
+    summary["mutation_ids"] = sorted(str(item) for item in mutation_ids if str(item))
+    summary["mutation_types"] = sorted(str(item) for item in mutation_types if str(item))
+    summary["region_ids"] = sorted(str(item) for item in region_ids if str(item))
+    summary["prompt_injection_ids"] = sorted(
+        str(item) for item in prompt_injection_ids if str(item)
+    )
+    layout_distribution = (
+        dict(trace.get("layout_shift_distribution"))
+        if isinstance(trace.get("layout_shift_distribution"), Mapping)
+        else {}
+    )
+    layout_values = [
+        _probe_float(layout_distribution.get(key))
+        for key in ("max", "p95", "score", "value")
+    ]
+    layout_values = [value for value in layout_values if value is not None]
+    if layout_values:
+        summary["max_layout_shift_score"] = max(layout_values)
+    performance_durations = [
+        _probe_float(entry.get("duration_ms") or entry.get("duration"))
+        for entry in performance_entries
+    ]
+    performance_durations = [value for value in performance_durations if value is not None]
+    if performance_durations:
+        summary["max_performance_duration_ms"] = max(performance_durations)
+    compact_actions = []
+    for action in actions[:5]:
+        compact_action = {
+            key: action.get(key)
+            for key in (
+                "id",
+                "tool",
+                "tool_name",
+                "action",
+                "selector",
+                "success",
+                "matched",
+                "blocked",
+                "mutation_id",
+                "mutation_type",
+            )
+            if action.get(key) not in (None, "", [], {})
+        }
+        region = action.get("region")
+        if isinstance(region, Mapping):
+            compact_action["region"] = {
+                key: region.get(key)
+                for key in ("id", "name", "selector", "x", "y", "width", "height")
+                if region.get(key) not in (None, "", [], {})
+            }
+        if compact_action:
+            compact_actions.append(compact_action)
+    if compact_actions:
+        summary["actions"] = compact_actions
+    if runtime_events:
+        summary["runtime_events"] = [
+            {
+                key: event.get(key)
+                for key in ("id", "name", "type", "level", "message")
+                if event.get(key) not in (None, "", [], {})
+            }
+            for event in runtime_events[:5]
+        ]
+    return summary
+
+
 def _probe_mcp_tool_session_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
     summary = trace.get("summary")
@@ -1985,6 +2160,19 @@ def _probe_observability_count(observability: Mapping[str, Any]) -> int:
         elif value:
             count += 1
     return count
+
+
+def _probe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _probe_summary(

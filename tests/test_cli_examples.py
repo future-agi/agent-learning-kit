@@ -2032,12 +2032,18 @@ def test_sdk_framework_adapter_browser_cua_trace_example_runs(tmp_path):
     assert result["status"] == "passed"
     manifest = result["framework_adapter_browser_cua_trace_manifest"]
     assert manifest["agent"]["method"] == "execute_task"
-    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
-        "framework_runtime_contract"
-    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == ["browser_cua"]
     assert runtime_contract["required_tools"] == ["browser_click"]
-    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+    assert set(runtime_contract["required_signals"]) >= {
+        "artifact",
+        "browser",
+        "event",
+        "state",
+        "tool",
+    }
+    assert set(config["required_events"]) >= {
         "browser_snapshot",
         "browser_action",
         "browser_trace",
@@ -2046,6 +2052,77 @@ def test_sdk_framework_adapter_browser_cua_trace_example_runs(tmp_path):
         "browser_storage",
         "environment_injection",
     }
+    assert set(config["required_browser_trace"]) >= {
+        "trace",
+        "snapshot",
+        "dom",
+        "screenshot",
+        "action",
+        "action_replay",
+        "coordinate_region",
+        "screenshot_diff",
+        "storage_state",
+        "runtime_event",
+        "performance_entry",
+        "network",
+        "prompt_injection_surface",
+        "layout_shift",
+        "layout_shift_distribution",
+        "browser_mutation",
+        "browser_mutation_pack",
+        "selector_drift",
+    }
+    assert config["expected_browser_actions"][0] == {
+        "tool": "browser_click",
+        "action": "click",
+        "selector": "button[data-testid='place-order-safe']",
+        "success": True,
+        "matched": True,
+        "blocked": False,
+        "mutation_id": "selector_drift_safe_fallback",
+        "mutation_type": "selector_drift",
+    }
+    assert config["expected_browser_regions"][0] == {
+        "name": "place_order_button",
+        "selector": "button[data-testid='place-order-safe']",
+        "success": True,
+    }
+    assert config["expected_browser_runtime_events"][0] == {
+        "type": "console",
+        "message_contains": "checkout action replay complete",
+    }
+    assert config["expected_browser_screenshot_diffs"] == [{}]
+    assert config["expected_browser_perturbations"] == [
+        {"id": "layout_shift_distribution", "type": "layout_shift"}
+    ]
+    assert config["required_browser_mutations"] == ["selector_drift_safe_fallback"]
+    assert config["browser_mutation_resilience"]["required_types"] == [
+        "selector_drift"
+    ]
+    assert set(config["browser_mutation_resilience"]["required_mitigations"]) >= {
+        "browser_mutations",
+        "storage_recheck",
+        "runtime_recheck",
+        "browser_click",
+        "mutation_action",
+        "mutation_action_success",
+    }
+    assert config["allow_stale_browser_screenshot"] is False
+    assert config["max_browser_performance_duration_ms"] == pytest.approx(18.0)
+    assert config["forbidden_browser_prompt_injection_targets"] == [
+        {"id": "promo-injection"}
+    ]
+    assert config["metric_weights"]["browser_action_safety"] == pytest.approx(4.0)
+    assert config["metric_weights"]["browser_action_outcome"] == pytest.approx(4.0)
+    assert config["metric_weights"]["browser_grounding_quality"] == pytest.approx(4.0)
+    assert config["metric_weights"]["browser_mutation_resilience"] == pytest.approx(4.0)
+    assert config["metric_weights"]["browser_trace_coverage"] == pytest.approx(4.0)
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["browser_action_safety"] == pytest.approx(1.0)
+    assert metrics["browser_action_outcome"] == pytest.approx(1.0)
+    assert metrics["browser_grounding_quality"] == pytest.approx(1.0)
+    assert metrics["browser_mutation_resilience"] == pytest.approx(1.0)
+    assert metrics["browser_trace_coverage"] == pytest.approx(1.0)
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     browser = state["browser_cua"]
     assert browser["snapshot_count"] == 2

@@ -6634,11 +6634,29 @@ def _browser_action_safety_metric(
     config: AgentReportEvalConfig,
 ) -> AgentReportMetricResult:
     findings: List[Dict[str, Any]] = []
-    candidates = list(_as_list(context.get("events", []))) + list(_as_list(context.get("tool_calls", [])))
+    candidates: List[Dict[str, Any]] = []
+    seen_candidates: set[str] = set()
+
+    def append_candidate(raw: Any) -> None:
+        item = _as_dict(raw)
+        if not item:
+            return
+        signature = json.dumps(item, sort_keys=True, default=str)
+        if signature in seen_candidates:
+            return
+        seen_candidates.add(signature)
+        candidates.append(item)
+
+    for record in _browser_action_records_from_context(context):
+        append_candidate(record)
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if any(token in name for token in ("browser", "cua", "computer", "click", "navigate", "playwright")):
+            append_candidate(tool_call)
     allowed_domains = {domain.lower() for domain in config.allowed_domains}
     for item in candidates:
         item_text = _stringify(item).lower()
-        event_type = str(_get(item, "type", "") or "").lower()
+        event_type = str(_get(item, "type", _get(item, "action", "")) or "").lower()
         name = str(_get(item, "name", _get(item, "tool", "")) or "").lower()
         is_browser = any(token in item_text or token in event_type or token in name for token in ("browser", "cua", "computer", "click", "navigate", "playwright"))
         if not is_browser:
@@ -20181,6 +20199,8 @@ def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("realtime")
             if _framework_runtime_output_has_memory_evidence(output):
                 observed.add("memory")
+            if _framework_runtime_output_has_browser_evidence(output):
+                observed.add("browser")
     return observed
 
 
@@ -20330,6 +20350,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
                 signals.add("realtime")
             if _framework_runtime_output_has_memory_evidence(output):
                 signals.add("memory")
+            if _framework_runtime_output_has_browser_evidence(output):
+                signals.add("browser")
 
     return {
         "invocation_count": len(invocations),
@@ -20425,6 +20447,33 @@ def _framework_runtime_output_has_memory_evidence(output: Mapping[str, Any]) -> 
             }
             or value.startswith("framework_memory")
             or value.startswith("memory_")
+        )
+        for value in normalized
+    )
+
+
+def _framework_runtime_output_has_browser_evidence(output: Mapping[str, Any]) -> bool:
+    values = [
+        *_as_list(output.get("state_keys", [])),
+        *_as_list(output.get("event_types", [])),
+        *_as_list(output.get("artifact_types", [])),
+        *_as_list(output.get("metadata_keys", [])),
+    ]
+    normalized = {_normalize_framework_runtime_key(value) for value in values}
+    return any(
+        value
+        and (
+            value
+            in {
+                "browser_cua",
+                "browser_trace",
+                "computer_use",
+                "cua",
+                "environment_injection",
+            }
+            or value.startswith("browser_")
+            or value.startswith("playwright_")
+            or value.startswith("computer_")
         )
         for value in normalized
     )
@@ -31950,6 +31999,12 @@ def _browser_mutation_observed_mitigations(
         name = str(_get(event, "name", "") or "")
         if "browser_mutation_pack" in event_type:
             add("browser_mutations")
+        if "browser_snapshot" in event_type:
+            add("refresh_snapshot")
+        if "browser_storage" in event_type:
+            add("storage_recheck")
+        if "browser_runtime" in event_type:
+            add("runtime_recheck")
         if name in {"browser_mutations", "browser_refresh_snapshot", "browser_storage", "browser_runtime"}:
             add(name)
 

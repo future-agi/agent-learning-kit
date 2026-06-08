@@ -15899,6 +15899,24 @@ def build_framework_adapter_probe_evaluation_config(
         if memory_trace_observed
         else {}
     )
+    browser_cua_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "browser_cua_summary",
+    )
+    browser_cua_observed = (
+        "browser_cua" in state_keys
+        or any(str(event).startswith("browser_") for event in event_types)
+        or "environment_injection" in event_types
+        or bool(browser_cua_summary)
+    )
+    browser_cua_requirements = (
+        _framework_probe_browser_cua_requirements(
+            framework,
+            browser_cua_summary,
+        )
+        if browser_cua_observed
+        else {}
+    )
     lifecycle_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_lifecycle_summary",
@@ -15924,6 +15942,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["memory"] if memory_trace_observed else []),
+            *(["browser"] if browser_cua_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -15942,6 +15961,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
             *(["A2A protocol evidence"] if a2a_protocol_observed else []),
             *(["memory lineage evidence"] if memory_trace_observed else []),
+            *(["browser/CUA evidence"] if browser_cua_observed else []),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
             *(["artifact evidence"] if artifact_types else []),
@@ -16040,6 +16060,12 @@ def build_framework_adapter_probe_evaluation_config(
         metric_weights["agent_memory_lineage_coverage"] = 4.0
         metric_weights["agent_memory_lineage_quality"] = 4.0
         metric_weights["retrieval_memory_attribution"] = 4.0
+    if browser_cua_observed:
+        metric_weights["browser_action_safety"] = 4.0
+        metric_weights["browser_action_outcome"] = 4.0
+        metric_weights["browser_grounding_quality"] = 4.0
+        metric_weights["browser_mutation_resilience"] = 4.0
+        metric_weights["browser_trace_coverage"] = 4.0
     if lifecycle_observed:
         metric_weights["framework_lifecycle_coverage"] = 4.0
         metric_weights["framework_lifecycle_quality"] = 4.0
@@ -16069,6 +16095,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["memory"] if memory_trace_observed else []),
+            *(["browser"] if browser_cua_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -16119,6 +16146,8 @@ def build_framework_adapter_probe_evaluation_config(
         config["required_retrieval_memory_trace"] = memory_trace_requirements[
             "required_retrieval_memory_trace"
         ]
+    if browser_cua_observed:
+        config.update(browser_cua_requirements)
     if lifecycle_observed:
         config["required_framework_lifecycle"] = lifecycle_requirements[
             "required_framework_lifecycle"
@@ -16463,6 +16492,149 @@ def _framework_memory_flag(signal: str) -> str:
         "artifact": "has_artifacts",
     }
     return flags.get(signal, signal)
+
+
+def _framework_probe_browser_cua_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required_trace = ["trace"]
+    if _as_int(summary.get("snapshot_count")) > 0:
+        required_trace.append("snapshot")
+    if _as_int(summary.get("dom_snapshot_count")) > 0:
+        required_trace.append("dom")
+    if _as_int(summary.get("screenshot_count")) > 0 or _as_int(summary.get("screenshot_snapshot_count")) > 0:
+        required_trace.append("screenshot")
+    if _as_int(summary.get("action_count")) > 0:
+        required_trace.extend(["action", "action_replay"])
+    if _as_int(summary.get("region_count")) > 0:
+        required_trace.append("coordinate_region")
+    if _as_int(summary.get("screenshot_diff_count")) > 0:
+        required_trace.append("screenshot_diff")
+    if _as_int(summary.get("network_request_count")) > 0:
+        required_trace.append("network")
+    if bool(summary.get("storage_present")):
+        required_trace.append("storage_state")
+    if _as_int(summary.get("runtime_event_count")) > 0:
+        required_trace.append("runtime_event")
+    if _as_int(summary.get("performance_entry_count")) > 0:
+        required_trace.append("performance_entry")
+    if _as_int(summary.get("prompt_injection_surface_count")) > 0:
+        required_trace.append("prompt_injection_surface")
+    if bool(summary.get("layout_shift_present")):
+        required_trace.extend(["layout_shift", "layout_shift_distribution"])
+    if _as_int(summary.get("mutation_count")) > 0:
+        required_trace.extend(["browser_mutation", "browser_mutation_pack"])
+    required_trace.extend(_plain_list(summary.get("mutation_types")))
+
+    actions = [_plain_mapping(item) for item in _plain_list(summary.get("actions"))]
+    expected_actions: list[dict[str, Any]] = []
+    expected_regions: list[dict[str, Any]] = []
+    for action in actions:
+        spec: dict[str, Any] = {}
+        tool = str(action.get("tool") or action.get("tool_name") or "")
+        if tool:
+            spec["tool"] = tool
+        for key in ("action", "selector", "success", "matched", "blocked"):
+            if action.get(key) not in (None, "", [], {}):
+                spec[key] = action[key]
+        if action.get("mutation_id"):
+            spec["mutation_id"] = str(action["mutation_id"])
+        if action.get("mutation_type"):
+            spec["mutation_type"] = str(action["mutation_type"])
+        if spec:
+            expected_actions.append(spec)
+
+        region = _plain_mapping(action.get("region"))
+        region_spec: dict[str, Any] = {}
+        if region.get("id") or region.get("name"):
+            region_spec["name"] = str(region.get("id") or region.get("name"))
+        if region.get("selector") or action.get("selector"):
+            region_spec["selector"] = str(region.get("selector") or action.get("selector"))
+        if action.get("success") is not None:
+            region_spec["success"] = bool(action.get("success"))
+        if region_spec:
+            expected_regions.append(region_spec)
+
+    runtime_events = [
+        _plain_mapping(item)
+        for item in _plain_list(summary.get("runtime_events"))
+        if _plain_mapping(item)
+    ]
+    expected_runtime_events: list[dict[str, Any]] = []
+    for event in runtime_events:
+        spec: dict[str, Any] = {}
+        if event.get("type"):
+            spec["type"] = str(event["type"])
+        if event.get("level"):
+            spec["level"] = str(event["level"])
+        if event.get("message"):
+            spec["message_contains"] = str(event["message"])
+        if spec:
+            expected_runtime_events.append(spec)
+
+    mutation_ids = _unique_strings(summary.get("mutation_ids"))
+    mutation_types = _unique_strings(summary.get("mutation_types"))
+    tool_names = _unique_strings(summary.get("tool_names"))
+    mitigations: list[str] = []
+    if _as_int(summary.get("mutation_count")) > 0:
+        mitigations.append("browser_mutations")
+    if bool(summary.get("storage_present")):
+        mitigations.append("storage_recheck")
+    if _as_int(summary.get("runtime_event_count")) > 0 or _as_int(summary.get("performance_entry_count")) > 0:
+        mitigations.append("runtime_recheck")
+    mitigations.extend(tool_names)
+    if any(action.get("mutation_id") for action in actions):
+        mitigations.append("mutation_action")
+    if any(action.get("mutation_id") and action.get("success") is True for action in actions):
+        mitigations.append("mutation_action_success")
+
+    config: dict[str, Any] = {
+        "required_browser_trace": _unique_strings(required_trace),
+        "expected_browser_actions": expected_actions[:5],
+        "expected_browser_regions": expected_regions[:5],
+        "expected_browser_runtime_events": expected_runtime_events[:5],
+        "forbidden_browser_runtime_events": [{"level": "error"}],
+        "allow_stale_browser_screenshot": _as_int(summary.get("stale_action_count")) > 0,
+    }
+    if _as_int(summary.get("screenshot_diff_count")) > 0:
+        config["expected_browser_screenshot_diffs"] = [{}]
+    if bool(summary.get("layout_shift_present")):
+        config["expected_browser_perturbations"] = [
+            {"id": "layout_shift_distribution", "type": "layout_shift"}
+        ]
+    max_layout_shift = _as_float(summary.get("max_layout_shift_score"))
+    if max_layout_shift > 0:
+        config["max_browser_layout_shift_score"] = max_layout_shift
+    max_performance = _as_float(summary.get("max_performance_duration_ms"))
+    if max_performance > 0:
+        config["max_browser_performance_duration_ms"] = max_performance
+    prompt_ids = _unique_strings(summary.get("prompt_injection_ids"))
+    if prompt_ids:
+        config["forbidden_browser_prompt_injection_targets"] = [
+            {"id": prompt_id} for prompt_id in prompt_ids[:5]
+        ]
+    if mutation_ids:
+        config["required_browser_mutations"] = mutation_ids
+    mutation_resilience: dict[str, Any] = {
+        "framework": framework,
+        "required_types": mutation_types,
+        "required_mitigations": _unique_strings(mitigations),
+        "expected_actions": [
+            action
+            for action in expected_actions[:5]
+            if action.get("mutation_id") or action.get("mutation_type")
+        ],
+        "forbidden_runtime_events": [{"level": "error"}],
+        "max_runtime_errors": 0,
+    }
+    config["browser_mutation_resilience"] = {
+        key: value
+        for key, value in mutation_resilience.items()
+        if value not in (None, "", [], {})
+    }
+    return config
 
 
 def _framework_probe_trace_requirements(

@@ -163,7 +163,9 @@ Keep framework support local-first:
   screenshot diffs, or prompt-injection surfaces should normalize into
   `browser_cua` state, browser trace/screenshot artifacts, `browser_*` events,
   and browser tool calls so computer-use agents can be optimized through the
-  same framework adapter path.
+  same framework adapter path, with selected-output-derived browser trace,
+  action outcome, grounding, and mutation-resilience gates in generated adapter
+  eval configs.
 - Preserve workflow graph execution semantics. Local framework outputs carrying
   graph nodes/edges, workflow steps, checkpoints, state history, route
   decisions, interrupts, replay, or step-level tool evidence should normalize

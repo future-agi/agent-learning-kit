@@ -48,7 +48,13 @@ Keep browser/CUA support local-first:
   actions, DOM/screenshot snapshots, Playwright-like trace fields,
   storage/runtime/network logs, mutation packs, screenshot diffs, and
   prompt-injection surfaces into `browser_cua` state, browser trace/screenshot
-  artifacts, browser events, and browser tool calls before promotion.
+  artifacts, browser events, and browser tool calls before promotion. Generated
+  adapter-probe eval configs should derive `required_browser_trace`,
+  `expected_browser_actions`, `expected_browser_regions`,
+  `browser_mutation_resilience`, and prompt-injection avoidance gates from the
+  selected output and weight `browser_trace_coverage`,
+  `browser_action_outcome`, `browser_grounding_quality`, and
+  `browser_mutation_resilience`.
 - Require refreshed snapshot evidence, safe selector fallback, coordinate-region
   grounding, action replay, mutation-pack and screenshot-diff evidence,
   storage/runtime/performance/network verification, layout-shift evidence, and
