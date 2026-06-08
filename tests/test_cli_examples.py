@@ -1485,6 +1485,37 @@ def test_sdk_framework_adapter_one_call_run_example_runs(tmp_path):
     assert manifest["evaluation"]["enabled"] is True
 
 
+def test_sdk_framework_adapter_trinity_suite_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_trinity_suite.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_trinity_suite",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-trinity-suite.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.suite.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["capability_gate_passed"] is True
+    assert result["summary"]["framework_coverage_passed"] is True
+    assert result["summary"]["passed_count"] == 2
+    workspace = result["framework_adapter_trinity_workspace"]
+    assert Path(workspace["paths"]["suite"]).exists()
+    children = {child["id"]: child for child in result["children"]}
+    assert children["optimized-framework-run"]["status"] == "passed"
+    assert children["framework-red-team"]["status"] == "passed"
+    assert children["framework-red-team"]["summary"]["metric_averages"][
+        "red_team_campaign_quality"
+    ] == pytest.approx(1.0)
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

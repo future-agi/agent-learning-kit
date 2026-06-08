@@ -612,6 +612,14 @@ If you want the SDK to execute the promoted manifest immediately, call async
 `framework_adapter_run_manifest` for audit or CI storage. See
 `examples/sdk_framework_adapter_one_call_run.py`.
 
+For a focused trinity gate around a local framework adapter, use
+`suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
+optimized framework run manifest, a red-team campaign manifest pinned to the
+same adapter contract/proof, and an `agent-learning.suite.v1` wrapper with
+`run` plus `redteam` jobs. See
+`examples/sdk_framework_adapter_trinity_suite.py` for the full
+target-to-suite workflow.
+
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
 native gate alongside runtime and trace metrics, so an HTTP target or

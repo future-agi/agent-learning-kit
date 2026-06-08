@@ -447,8 +447,10 @@ def test_facades_expose_unified_agent_learning_modules():
     assert suite.build_suite_manifest is not None
     assert suite.build_optimization_lifecycle_plan is not None
     assert suite.build_regression_artifact_suite_manifest is not None
+    assert suite.build_framework_adapter_trinity_suite_manifest is not None
     assert suite.build_trinity_suite_manifest is not None
     assert suite.run_optimization_lifecycle_file is not None
+    assert suite.write_framework_adapter_trinity_suite_workspace is not None
     assert suite.write_suite_file is not None
     assert suite.AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND == (
         "agent-learning.optimization-lifecycle.v1"
@@ -1516,6 +1518,68 @@ def test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs(tm
     assert manifest["agent"]["metadata"]["framework_adapter_probe_proof"][
         "status"
     ] == "passed"
+
+
+def test_framework_adapter_trinity_suite_workspace_runs(tmp_path):
+    from agent_learning import suite
+
+    target = (
+        f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
+        ":LocalRefundOrchestrator"
+    )
+    workspace = suite.write_framework_adapter_trinity_suite_workspace(
+        name="framework-adapter-trinity-suite",
+        framework="custom_refund_orchestrator",
+        target=target,
+        directory=tmp_path / "framework-adapter-trinity",
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        discovery_max_candidates=4,
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit framework evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+        redteam_attacks=["prompt_injection", "credential_exfiltration"],
+        redteam_surfaces=["instruction", "tool"],
+        metadata={"suite": "framework-adapter-trinity-suite"},
+    )
+
+    suite_manifest = workspace["suite"]
+    assert suite_manifest["jobs"][0]["command"] == "run"
+    assert suite_manifest["jobs"][1]["command"] == "redteam"
+    assert suite_manifest["required_capabilities"]["commands"] == ["run", "redteam"]
+    assert suite_manifest["required_capabilities"]["frameworks"] == [
+        "custom_refund_orchestrator"
+    ]
+    assert workspace["run_manifest"]["agent"]["method"] == "execute_task"
+    assert workspace["redteam_manifest"]["redteam"]["target"]["framework"] == (
+        "custom_refund_orchestrator"
+    )
+    assert Path(workspace["paths"]["suite"]).exists()
+    assert Path(workspace["paths"]["run"]).exists()
+    assert Path(workspace["paths"]["redteam"]).exists()
+
+    result = suite.run_suite_file(workspace["paths"]["suite"])
+
+    assert result["status"] == "passed"
+    assert result["summary"]["capability_gate_passed"] is True
+    assert result["summary"]["framework_coverage_passed"] is True
+    assert result["summary"]["passed_count"] == 2
+    children = {child["id"]: child for child in result["children"]}
+    assert children["optimized-framework-run"]["status"] == "passed"
+    assert children["framework-red-team"]["status"] == "passed"
+    assert children["optimized-framework-run"]["summary"]["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert children["framework-red-team"]["summary"]["metric_averages"][
+        "red_team_campaign_quality"
+    ] == pytest.approx(1.0)
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(

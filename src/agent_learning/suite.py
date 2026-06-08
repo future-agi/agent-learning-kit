@@ -498,6 +498,246 @@ def build_trinity_suite_manifest(
     )
 
 
+def build_framework_adapter_trinity_suite_manifest(
+    *,
+    name: str,
+    run_path: str | Path,
+    redteam_path: str | Path,
+    required_env: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    metadata: Optional[Mapping[str, Any]] = None,
+    outputs: Optional[Mapping[str, Any]] = None,
+    threshold: Optional[float] = None,
+    fail_fast: bool = True,
+) -> dict[str, Any]:
+    """Build a focused suite for framework simulation, eval, and red-team gates."""
+
+    if not name:
+        raise ValueError("name is required")
+    suite_name = str(name)
+    frameworks = _unique_strings(required_frameworks)
+    required_capabilities: dict[str, list[str]] = {
+        "commands": ["run", "redteam"],
+        "result_kinds": [
+            "agent-learning.run.v1",
+            "agent-learning.redteam.v1",
+        ],
+        "metrics": [
+            "framework_runtime_contract",
+            "framework_adapter_contract_quality",
+            "adversarial_resilience",
+            "red_team_campaign_quality",
+        ],
+    }
+    if frameworks:
+        required_capabilities["frameworks"] = frameworks
+    return build_suite_manifest(
+        name=suite_name,
+        required_env=required_env,
+        jobs=[
+            {
+                "id": "optimized-framework-run",
+                "command": "run",
+                "path": _suite_path_text(run_path),
+                "name": f"{suite_name}-run",
+            },
+            {
+                "id": "framework-red-team",
+                "command": "redteam",
+                "path": _suite_path_text(redteam_path),
+                "name": f"{suite_name}-redteam",
+            },
+        ],
+        required_capabilities=required_capabilities,
+        outputs=outputs,
+        threshold=threshold,
+        fail_fast=fail_fast,
+        metadata={
+            "source": "agent_learning.suite.build_framework_adapter_trinity_suite_manifest",
+            "task_kind": "framework_adapter_trinity_suite",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+
+def write_framework_adapter_trinity_suite_workspace(
+    *,
+    name: str,
+    framework: str,
+    target: str,
+    directory: str | Path,
+    adapter_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Any = None,
+    agent_factory: Any = None,
+    cases: Sequence[Mapping[str, Any]] = (),
+    target_base_dir: str | Path = ".",
+    target_factory: Optional[bool] = None,
+    method_candidates: Optional[Sequence[str | None]] = None,
+    input_mode_candidates: Optional[Sequence[str]] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    framework_trace: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    auto_evaluation_config: bool = True,
+    threshold: float = 0.9,
+    trace_runtime: bool = True,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    discovery_max_candidates: Optional[int] = 8,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+    factory: Optional[bool] = None,
+    min_turns: int = 1,
+    max_turns: int = 1,
+    redteam_attacks: Sequence[str] = ("prompt_injection", "credential_exfiltration"),
+    redteam_surfaces: Sequence[str] = ("instruction", "tool"),
+    redteam_taxonomies: Sequence[str] = ("owasp_llm_top_10", "owasp_agentic_ai"),
+    redteam_channels: Sequence[str] = ("chat",),
+    redteam_providers: Sequence[str] = ("local_cli",),
+    redteam_agent: Optional[Mapping[str, Any]] = None,
+    redteam_config: Optional[Mapping[str, Any]] = None,
+    redteam_overrides: Optional[Mapping[str, Any]] = None,
+    canaries: Sequence[Any] = (),
+    blocked_tools: Sequence[str] = (),
+    redteam_min_turns: int = 3,
+    redteam_max_turns: int = 3,
+) -> dict[str, Any]:
+    """Write a runnable framework adapter run+red-team suite workspace."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not target:
+        raise ValueError("target is required")
+
+    workspace = Path(directory).expanduser().resolve()
+    manifests_dir = workspace / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    selected_target = _suite_local_target_text(target, base_dir=target_base_dir)
+    suite_metadata = copy.deepcopy(dict(metadata or {}))
+
+    from agent_learning import optimize, redteam
+
+    run_manifest = optimize.build_framework_run_manifest_from_local_adapter(
+        name=f"{name}-run",
+        framework=framework,
+        target=selected_target,
+        adapter_candidates=adapter_candidates,
+        agent=agent,
+        agent_factory=agent_factory,
+        cases=cases,
+        target_base_dir=target_base_dir,
+        target_factory=target_factory,
+        method_candidates=method_candidates,
+        input_mode_candidates=input_mode_candidates,
+        required_env=required_env,
+        scenario=scenario,
+        framework_trace=framework_trace,
+        evaluation_config=evaluation_config,
+        auto_evaluation_config=auto_evaluation_config,
+        threshold=threshold,
+        trace_runtime=trace_runtime,
+        allow_external_target=allow_external_target,
+        metadata={
+            "suite": name,
+            "suite_role": "optimized_framework_run",
+            **suite_metadata,
+        },
+        discovery_max_candidates=discovery_max_candidates,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        factory=factory,
+        min_turns=min_turns,
+        max_turns=max_turns,
+    )
+    run_path = _write_suite_json(
+        run_manifest,
+        manifests_dir / "optimized-framework-run.json",
+    )
+
+    agent_config = copy.deepcopy(dict(run_manifest.get("agent") or {}))
+    agent_metadata = copy.deepcopy(dict(agent_config.get("metadata") or {}))
+    redteam_manifest = redteam.build_redteam_manifest(
+        name=f"{name}-redteam",
+        attacks=redteam_attacks,
+        surfaces=redteam_surfaces,
+        taxonomies=redteam_taxonomies,
+        channels=redteam_channels,
+        providers=redteam_providers,
+        frameworks=[framework],
+        required_env=required_env,
+        target={
+            "agent": run_manifest.get("name") or f"{name}-run",
+            "framework": framework,
+            "adapter_target": selected_target,
+            "framework_adapter_contract": copy.deepcopy(
+                agent_metadata.get("framework_adapter_probe_contract")
+                or agent_metadata.get("framework_adapter_contract")
+            ),
+            "framework_adapter_probe_proof_status": (
+                copy.deepcopy(
+                    dict(agent_metadata.get("framework_adapter_probe_proof") or {})
+                ).get("status")
+            ),
+            "framework_adapter_discovery_used": bool(
+                agent_metadata.get("framework_adapter_discovery_used")
+            ),
+            "suite": name,
+        },
+        agent=redteam_agent,
+        redteam=redteam_overrides,
+        evaluation_config=redteam_config,
+        threshold=threshold,
+        canaries=canaries,
+        blocked_tools=blocked_tools,
+        min_turns=redteam_min_turns,
+        max_turns=redteam_max_turns,
+    )
+    redteam_path = _write_suite_json(
+        redteam_manifest,
+        manifests_dir / "framework-redteam.json",
+    )
+
+    suite_manifest = build_framework_adapter_trinity_suite_manifest(
+        name=name,
+        run_path=Path("manifests") / run_path.name,
+        redteam_path=Path("manifests") / redteam_path.name,
+        required_env=required_env,
+        required_frameworks=[framework],
+        threshold=threshold,
+        metadata={
+            "source": "agent_learning.suite.write_framework_adapter_trinity_suite_workspace",
+            "framework": framework,
+            "target": selected_target,
+            **suite_metadata,
+        },
+    )
+    suite_path = write_suite_file(suite_manifest, workspace / "suite.json")
+    return {
+        "kind": "agent-learning.framework-adapter-trinity-workspace.v1",
+        "status": "passed",
+        "name": str(name),
+        "summary": {
+            "framework": framework,
+            "target": selected_target,
+            "suite_job_count": len(suite_manifest["jobs"]),
+            "run_manifest": str(run_path),
+            "redteam_manifest": str(redteam_path),
+            "suite_manifest": str(suite_path),
+        },
+        "paths": {
+            "workspace": str(workspace),
+            "suite": str(suite_path),
+            "run": str(run_path),
+            "redteam": str(redteam_path),
+        },
+        "suite": suite_manifest,
+        "run_manifest": run_manifest,
+        "redteam_manifest": redteam_manifest,
+    }
+
+
 def build_regression_artifact_suite_manifest(
     *,
     name: str,
@@ -895,6 +1135,16 @@ def write_suite_file(manifest: Mapping[str, Any], path: str | Path) -> Path:
         encoding="utf-8",
     )
     return suite_path
+
+
+def _write_suite_json(payload: Mapping[str, Any], path: str | Path) -> Path:
+    output_path = Path(path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(dict(payload), indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return output_path
 
 
 def run_suite_file(
@@ -3331,6 +3581,25 @@ def _suite_path_text(path: str | Path) -> str:
     return str(path)
 
 
+def _suite_local_target_text(target: str | Path, *, base_dir: str | Path = ".") -> str:
+    target_text = str(target)
+    module_name, separator, attribute_path = target_text.partition(":")
+    if (
+        separator
+        and attribute_path
+        and (
+            module_name.endswith(".py")
+            or "/" in module_name
+            or "\\" in module_name
+        )
+    ):
+        module_path = Path(module_name).expanduser()
+        if not module_path.is_absolute():
+            module_path = Path(base_dir).expanduser() / module_path
+        return f"{module_path.resolve()}:{attribute_path}"
+    return target_text
+
+
 def _unique_strings(values: Sequence[Any]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -3695,6 +3964,7 @@ __all__ = [
     "SuiteError",
     "SuiteOptimizationOptions",
     "SuiteRunOptions",
+    "build_framework_adapter_trinity_suite_manifest",
     "build_optimization_lifecycle_plan",
     "build_regression_artifact_suite_manifest",
     "build_suite_manifest",
@@ -3715,5 +3985,6 @@ __all__ = [
     "verify_trust_certificate",
     "verify_trust_certificate_file",
     "validate_suite_env",
+    "write_framework_adapter_trinity_suite_workspace",
     "write_suite_file",
 ]
