@@ -345,6 +345,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.build_framework_optimization_manifest is not None
     assert optimize.build_framework_adapter_probe_evaluation_config is not None
     assert optimize.build_framework_run_manifest_from_local_adapter is not None
+    assert optimize.run_framework_adapter_from_local_adapter is not None
     assert optimize.optimize_framework_adapter is not None
     assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
     assert optimize.optimize_multi_agent_framework_handoff is not None
@@ -1469,6 +1470,52 @@ def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes(
     assert manifest["evaluation"]["agent_report"]["config"][
         "framework_runtime_contract"
     ]["required_tools"] == ["framework_trace_status"]
+
+
+def test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs(tmp_path):
+    from agent_learning import optimize
+
+    target = (
+        f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
+        ":LocalRefundOrchestrator"
+    )
+    result = asyncio.run(
+        optimize.run_framework_adapter_from_local_adapter(
+            name="one-call-framework-adapter-direct-run",
+            framework="custom_refund_orchestrator",
+            target=target,
+            method_candidates=["run", "execute_task"],
+            input_mode_candidates=["text", "dict", "agent_input"],
+            discovery_max_candidates=4,
+            cases=[
+                {
+                    "id": "refund-status",
+                    "input": "Approve the refund and emit framework evidence.",
+                    "expected_contains": ["approved refund"],
+                    "required_tools": ["framework_trace_status"],
+                    "required_events": ["framework_trace"],
+                    "required_state_keys": ["framework_runtime"],
+                }
+            ],
+            auto_evaluation_config=True,
+            manifest_path=tmp_path / "one-call-framework-adapter-direct-run.json",
+            metadata={"suite": "one-call-framework-adapter-direct-run"},
+        )
+    )
+
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["framework_adapter_direct_run"] is True
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    manifest = result["framework_adapter_run_manifest"]
+    assert manifest["agent"]["target"] == target
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["metadata"]["framework_adapter_probe_proof"][
+        "status"
+    ] == "passed"
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(

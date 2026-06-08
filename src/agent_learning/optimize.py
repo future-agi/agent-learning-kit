@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import importlib
 import importlib.util
@@ -15380,6 +15381,105 @@ def build_framework_run_manifest_from_local_adapter(
     )
 
 
+async def run_framework_adapter_from_local_adapter(
+    *,
+    name: str,
+    framework: str,
+    target: str,
+    adapter_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Any = None,
+    agent_factory: Optional[Callable[[], Any]] = None,
+    cases: Sequence[Mapping[str, Any]] = (),
+    target_base_dir: str | Path = ".",
+    target_factory: Optional[bool] = None,
+    method_candidates: Optional[Sequence[str | None]] = None,
+    input_mode_candidates: Optional[Sequence[str]] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    framework_trace: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    auto_evaluation_config: bool = True,
+    threshold: float = 0.9,
+    trace_runtime: bool = True,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    discovery_max_candidates: Optional[int] = 8,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+    factory: Optional[bool] = None,
+    min_turns: int = 1,
+    max_turns: int = 1,
+    manifest_path: str | Path | None = None,
+    result_name: Optional[str] = None,
+    no_eval: Optional[bool] = None,
+    dry_run: Optional[bool] = None,
+    include_manifest: bool = True,
+) -> dict[str, Any]:
+    """Optimize, promote, and run a local framework adapter in one SDK call."""
+
+    manifest = await asyncio.to_thread(
+        build_framework_run_manifest_from_local_adapter,
+        name=name,
+        framework=framework,
+        target=target,
+        adapter_candidates=adapter_candidates,
+        agent=agent,
+        agent_factory=agent_factory,
+        cases=cases,
+        target_base_dir=target_base_dir,
+        target_factory=target_factory,
+        method_candidates=method_candidates,
+        input_mode_candidates=input_mode_candidates,
+        required_env=required_env,
+        scenario=scenario,
+        framework_trace=framework_trace,
+        evaluation_config=evaluation_config,
+        auto_evaluation_config=auto_evaluation_config,
+        threshold=threshold,
+        trace_runtime=trace_runtime,
+        allow_external_target=allow_external_target,
+        metadata=metadata,
+        discovery_max_candidates=discovery_max_candidates,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        factory=factory,
+        min_turns=min_turns,
+        max_turns=max_turns,
+    )
+    selected_manifest_path = (
+        Path(manifest_path).expanduser()
+        if manifest_path is not None
+        else Path(target_base_dir).expanduser() / f"{name}.manifest.json"
+    )
+
+    from . import simulate as _agent_simulate
+
+    result = await _agent_simulate.run_manifest(
+        manifest,
+        manifest_path=selected_manifest_path,
+        name=result_name,
+        threshold=threshold,
+        no_eval=no_eval,
+        dry_run=dry_run,
+    )
+    payload = copy.deepcopy(dict(result))
+    summary = _plain_mapping(payload.get("summary"))
+    summary["framework_adapter_direct_run"] = True
+    summary["framework_adapter_manifest_name"] = manifest.get("name")
+    summary["framework_adapter_manifest_target"] = _plain_mapping(
+        manifest.get("agent")
+    ).get("target")
+    payload["summary"] = summary
+    payload["metadata"] = {
+        **_plain_mapping(payload.get("metadata")),
+        "source": "agent_learning.optimize.run_framework_adapter_from_local_adapter",
+        "framework_adapter_direct_run": True,
+    }
+    if include_manifest:
+        payload["framework_adapter_run_manifest"] = copy.deepcopy(manifest)
+    return payload
+
+
 def build_framework_run_manifest_from_probe_optimization(
     optimization_result: Mapping[str, Any],
     *,
@@ -29373,6 +29473,7 @@ __all__ = [
     "optimize_external_agent_adapter",
     "optimize_framework_adapter_matrix",
     "optimize_framework_adapter_probe",
+    "run_framework_adapter_from_local_adapter",
     "optimize_framework_certification",
     "optimize_framework_import_repair",
     "optimize_long_horizon_redteam",

@@ -606,6 +606,12 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_one_call_promotion.py` for the full local
 target-to-evaluated-run flow.
 
+If you want the SDK to execute the promoted manifest immediately, call async
+`optimize.run_framework_adapter_from_local_adapter(...)`; it returns the normal
+`agent-learning.run.v1` result plus the generated
+`framework_adapter_run_manifest` for audit or CI storage. See
+`examples/sdk_framework_adapter_one_call_run.py`.
+
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
 native gate alongside runtime and trace metrics, so an HTTP target or
