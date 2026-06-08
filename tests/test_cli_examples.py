@@ -1268,6 +1268,32 @@ def test_sdk_framework_adapter_probe_example_runs(tmp_path):
     ] == result["contract"]
 
 
+def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_probe_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_probe_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-probe-optimization.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["framework_adapter_probe_proof_passed"] is True
+    assert result["optimization_governance"]["status"] == "passed"
+    best_adapter = result["optimization"]["best_config"]["adapter"]
+    assert best_adapter["method"] == "execute_task"
+    assert best_adapter["input_mode"] == "dict"
+    assert result["framework_adapter_probe_proof"]["failed_check_ids"] == []
+
+
 def test_world_framework_memory_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,

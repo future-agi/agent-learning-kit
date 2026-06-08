@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from ._facade import optional_module
@@ -25,6 +25,9 @@ AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
 )
 AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND = (
     "agent-learning.optimization.framework-adapter-matrix-proof.v1"
+)
+AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.framework-adapter-probe-proof.v1"
 )
 AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND = (
     "agent-learning.optimization.framework-runtime-proof.v1"
@@ -10511,6 +10514,635 @@ def optimize_framework_adapter(
         name=result_name,
         dry_run=dry_run,
     )
+
+
+def optimize_framework_adapter_probe(
+    *,
+    name: str,
+    framework: str,
+    adapter_candidates: Sequence[Mapping[str, Any]],
+    agent: Any = None,
+    agent_factory: Optional[Callable[[], Any]] = None,
+    cases: Sequence[Mapping[str, Any]] = (),
+    target: str | None = None,
+    threshold: float = 0.9,
+    trace_runtime: bool = True,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize framework adapter method/input candidates with local probes.
+
+    This is the direct SDK path before a user has a full simulation manifest:
+    pass a local framework object or factory, candidate adapter specs, and probe
+    cases. The helper runs ``simulate.run_framework_adapter_probe`` for each
+    candidate and returns a normal ``agent-learning.optimization.v1`` artifact
+    with candidate lineage, optimizer governance, and a probe-specific proof.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    if not adapter_candidates:
+        raise ValueError("adapter_candidates must contain at least one candidate")
+    if agent is None and agent_factory is None:
+        raise ValueError("agent or agent_factory is required")
+
+    candidate_configs = [
+        _framework_probe_candidate_config(
+            candidate,
+            target=target,
+            trace_runtime=trace_runtime,
+            allow_external_target=allow_external_target,
+        )
+        for candidate in adapter_candidates
+    ]
+    first_config = candidate_configs[0]
+    opt = _opt()
+    optimizer_module = optional_module("fi.opt.optimizers", _OPTIMIZE_EXTRA)
+    optimization_target = opt.OptimizationTarget(
+        name=name,
+        layers=["framework", "integration", "harness", "evaluator"],
+        base_config={
+            "framework": framework,
+            "target": target,
+            "adapter": copy.deepcopy(first_config),
+        },
+        search_space={"adapter": copy.deepcopy(candidate_configs)},
+        metadata={
+            "source": "agent_learning.optimize.optimize_framework_adapter_probe",
+            "task_kind": "framework_adapter_probe",
+            "framework": framework,
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+    def evaluate_candidate(candidate: Any) -> Any:
+        adapter = _plain_mapping(_plain_mapping(candidate.config).get("adapter"))
+        probe_result = _run_framework_probe_candidate(
+            framework=framework,
+            agent=agent_factory() if agent_factory is not None else agent,
+            adapter=adapter,
+            cases=cases,
+            target=target,
+            metadata=metadata,
+            default_trace_runtime=trace_runtime,
+            default_allow_external_target=allow_external_target,
+        )
+        scoring = score_framework_adapter_probe_result(
+            probe_result,
+            require_tool_evidence=_probe_requires_tool_evidence(adapter, cases),
+        )
+        return opt.CandidateEvaluation(
+            candidate=candidate,
+            score=float(scoring["score"]),
+            reason=str(scoring["reason"]),
+            report=copy.deepcopy(probe_result),
+            metadata={
+                "candidate_patch": copy.deepcopy(candidate.patch),
+                "patch": copy.deepcopy(candidate.patch),
+                "search_paths": list(candidate.metadata.get("search_paths", [])),
+                "metrics": copy.deepcopy(scoring["metrics"]),
+                "findings": copy.deepcopy(probe_result.get("findings", [])),
+                "report_summary": copy.deepcopy(probe_result.get("summary", {})),
+                "evaluation_score": float(scoring["score"]),
+                "evaluation_passed": bool(scoring["passed"]),
+            },
+        )
+
+    optimizer = optimizer_module.AgentOptimizer(
+        target=optimization_target,
+        evaluate_candidate=evaluate_candidate,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        auto_diagnose=False,
+    )
+    optimization_result = optimizer.optimize()
+    payload = _framework_probe_optimization_payload(
+        name=name,
+        framework=framework,
+        target=target,
+        threshold=threshold,
+        optimization_result=optimization_result,
+        metadata=metadata,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_framework_adapter_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def score_framework_adapter_probe_result(
+    result: Mapping[str, Any],
+    *,
+    require_tool_evidence: bool = False,
+) -> dict[str, Any]:
+    """Score a framework-adapter probe artifact into local optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    contract = _plain_mapping(result.get("contract"))
+    case_count = max(_as_int(summary.get("case_count")), 1)
+    passed_cases = _as_int(summary.get("passed_case_count"))
+    runtime_traces = _as_int(summary.get("runtime_trace_count"))
+    tool_calls = _as_int(summary.get("tool_call_count"))
+    finding_count = len(_plain_list(result.get("findings")))
+    case_pass_rate = passed_cases / case_count
+    runtime_trace_coverage = min(1.0, runtime_traces / case_count)
+    local_contract_quality = 1.0 if (
+        contract.get("kind") == "agent-learning.framework-adapter-contract.v1"
+        and contract.get("requires_external_service") is False
+        and contract.get("local_executable_fixture") is True
+        and contract.get("trace_runtime") is True
+    ) else 0.0
+    tool_evidence = 1.0 if not require_tool_evidence or tool_calls > 0 else 0.0
+    finding_quality = 1.0 if finding_count == 0 else 0.0
+    score = round(
+        (
+            case_pass_rate * 0.4
+            + runtime_trace_coverage * 0.2
+            + local_contract_quality * 0.2
+            + tool_evidence * 0.1
+            + finding_quality * 0.1
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.framework-adapter-probe-score.v1",
+        "score": score,
+        "passed": bool(result.get("passed")) and score >= 0.9,
+        "reason": (
+            "probe passed with local runtime trace evidence"
+            if bool(result.get("passed")) and score >= 0.9
+            else "probe did not close all local adapter evidence checks"
+        ),
+        "metrics": {
+            "framework_adapter_probe_pass_rate": round(case_pass_rate, 6),
+            "framework_adapter_probe_runtime_trace_coverage": round(
+                runtime_trace_coverage,
+                6,
+            ),
+            "framework_adapter_probe_local_contract_quality": local_contract_quality,
+            "framework_adapter_probe_tool_evidence": tool_evidence,
+            "framework_adapter_probe_finding_quality": finding_quality,
+            "framework_adapter_probe_score": score,
+        },
+        "summary": {
+            "case_count": case_count,
+            "passed_case_count": passed_cases,
+            "runtime_trace_count": runtime_traces,
+            "tool_call_count": tool_calls,
+            "finding_count": finding_count,
+            "require_tool_evidence": bool(require_tool_evidence),
+        },
+    }
+
+
+def _framework_probe_candidate_config(
+    candidate: Mapping[str, Any],
+    *,
+    target: str | None,
+    trace_runtime: bool,
+    allow_external_target: bool,
+) -> dict[str, Any]:
+    config = copy.deepcopy(dict(candidate))
+    config.setdefault("target", target)
+    config.setdefault("trace_runtime", trace_runtime)
+    config.setdefault("allow_external_target", allow_external_target)
+    return config
+
+
+def _run_framework_probe_candidate(
+    *,
+    framework: str,
+    agent: Any,
+    adapter: Mapping[str, Any],
+    cases: Sequence[Mapping[str, Any]],
+    target: str | None,
+    metadata: Optional[Mapping[str, Any]],
+    default_trace_runtime: bool,
+    default_allow_external_target: bool,
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    adapter_metadata = {
+        **copy.deepcopy(dict(metadata or {})),
+        **copy.deepcopy(dict(adapter.get("metadata") or {})),
+    }
+    adapter_cases = adapter.get("cases")
+    if adapter_cases is None:
+        adapter_cases = cases
+    try:
+        return _agent_simulate.run_framework_adapter_probe(
+            framework,
+            agent,
+            cases=list(adapter_cases or []),
+            target=str(adapter.get("target") or target or ""),
+            method=adapter.get("method"),
+            input_mode=adapter.get("input_mode"),
+            system_prompt=adapter.get("system_prompt"),
+            output_key=adapter.get("output_key"),
+            metadata=adapter_metadata,
+            trace_runtime=bool(adapter.get("trace_runtime", default_trace_runtime)),
+            allow_external_target=bool(
+                adapter.get("allow_external_target", default_allow_external_target)
+            ),
+        )
+    except Exception as exc:
+        return _failed_framework_adapter_probe(
+            framework=framework,
+            adapter=adapter,
+            target=target,
+            cases=list(adapter_cases or []),
+            error=exc,
+            metadata=adapter_metadata,
+        )
+
+
+def _failed_framework_adapter_probe(
+    *,
+    framework: str,
+    adapter: Mapping[str, Any],
+    target: str | None,
+    cases: Sequence[Mapping[str, Any]],
+    error: Exception,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    method = adapter.get("method")
+    input_mode = adapter.get("input_mode")
+    selected_target = str(adapter.get("target") or target or "")
+    try:
+        contract = _agent_simulate.framework_adapter_contract(
+            framework,
+            target=selected_target or None,
+            method=method,
+            input_mode=input_mode,
+            trace_runtime=bool(adapter.get("trace_runtime", True)),
+            metadata=dict(metadata),
+        )
+    except Exception:
+        contract = {
+            "kind": "agent-learning.framework-adapter-contract.v1",
+            "framework": framework,
+            "method": str(method or "auto"),
+            "input_mode": str(input_mode or "auto"),
+            "requires_external_service": False,
+            "local_executable_fixture": bool(selected_target),
+        }
+    message = str(error)
+    return {
+        "kind": "agent-learning.framework-adapter-probe.v1",
+        "status": "failed",
+        "passed": False,
+        "framework": framework,
+        "method": str(method or contract.get("method") or "auto"),
+        "input_mode": str(input_mode or contract.get("input_mode") or "auto"),
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "allow_external_target": bool(adapter.get("allow_external_target", False)),
+        "contract": contract,
+        "summary": {
+            "case_count": max(len(cases), 1),
+            "passed_case_count": 0,
+            "failed_case_count": max(len(cases), 1),
+            "runtime_trace_count": 0,
+            "tool_call_count": 0,
+            "framework": framework,
+            "method": str(method or contract.get("method") or "auto"),
+            "input_mode": str(input_mode or contract.get("input_mode") or "auto"),
+            "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+            "requires_external_service": bool(contract.get("requires_external_service")),
+            "trace_runtime": bool(contract.get("trace_runtime")),
+        },
+        "cases": [],
+        "findings": [
+            {
+                "case_id": "probe_setup",
+                "check": "framework_adapter_probe_exception",
+                "level": "error",
+                "message": message,
+                "expected": "local adapter probe executes",
+                "observed": type(error).__name__,
+            }
+        ],
+    }
+
+
+def _probe_requires_tool_evidence(
+    adapter: Mapping[str, Any],
+    cases: Sequence[Mapping[str, Any]],
+) -> bool:
+    candidate_cases = adapter.get("cases")
+    active_cases = candidate_cases if candidate_cases is not None else cases
+    for case in active_cases or []:
+        if _plain_list(_plain_mapping(case).get("required_tools")):
+            return True
+    return bool(_plain_list(adapter.get("required_tools")))
+
+
+def _framework_probe_optimization_payload(
+    *,
+    name: str,
+    framework: str,
+    target: str | None,
+    threshold: float,
+    optimization_result: Any,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
+    best_candidate = getattr(optimization_result, "best_candidate", None)
+    best_candidate_id = getattr(best_candidate, "id", None)
+    best_config = _json_plain(getattr(best_candidate, "config", {}) or {})
+    history = _framework_probe_history(optimization_result)
+    search_paths = _unique_strings(
+        [
+            *[
+                str(path)
+                for path in _plain_list(
+                    _plain_mapping(getattr(optimization_result, "metadata", {})).get(
+                        "search_paths"
+                    )
+                )
+                if str(path)
+            ],
+            *[
+                str(path)
+                for row in history
+                for path in _plain_list(row.get("search_paths"))
+                if str(path)
+            ],
+        ]
+    )
+    metric_averages = _metric_averages_from_history(history)
+    passed = final_score >= float(threshold)
+    evaluation = {
+        "kind": "agent-learning.framework-adapter-probe-evaluation.v1",
+        "score": final_score,
+        "passed": passed,
+        "summary": {
+            "metric_averages": metric_averages,
+            "history_count": len(history),
+            "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
+        },
+    }
+    return {
+        "schema_version": "agent-learning.cli.v1",
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": final_score,
+            "optimization_passed": passed,
+            "evaluation_score": final_score,
+            "evaluation_passed": passed,
+            "metric_averages": metric_averages,
+            "threshold": float(threshold),
+            "total_iterations": getattr(optimization_result, "total_iterations", None),
+            "total_evaluations": getattr(optimization_result, "total_evaluations", None),
+            "best_candidate_id": best_candidate_id,
+            "search_paths": search_paths,
+            "framework": framework,
+        },
+        "optimization": {
+            "final_score": final_score,
+            "best_candidate_id": best_candidate_id,
+            "best_config": best_config,
+            "source_manifest": {
+                "name": name,
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_framework_adapter_probe",
+                    "task_kind": "framework_adapter_probe",
+                    "framework": framework,
+                    "target": target,
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "history": history,
+            "manifest_optimization": {
+                "kind": "framework_adapter_probe_optimization",
+                "name": name,
+                "final_score": final_score,
+                "threshold": float(threshold),
+                "passed": passed,
+                "best_candidate_id": best_candidate_id,
+                "best_config": copy.deepcopy(best_config),
+                "search_paths": search_paths,
+                "metrics": metric_averages,
+                "history": copy.deepcopy(history),
+            },
+        },
+        "evaluation": evaluation,
+    }
+
+
+def _framework_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(optimization_result, "history", []) or []):
+        metadata = _plain_mapping(getattr(item, "metadata", {}) or {})
+        report = _json_plain(metadata.get("report") or {})
+        report_summary = _plain_mapping(metadata.get("report_summary"))
+        if not report_summary and isinstance(report, Mapping):
+            report_summary = _plain_mapping(report.get("summary"))
+        patch = _plain_mapping(metadata.get("patch") or metadata.get("candidate_patch"))
+        metrics = _plain_mapping(metadata.get("metrics"))
+        score = getattr(item, "average_score", None)
+        rows.append(
+            {
+                "candidate_id": getattr(item, "candidate_id", None),
+                "score": score,
+                "patch": patch,
+                "candidate_patch": patch,
+                "candidate_config": _json_plain(getattr(item, "candidate_config", {}) or {}),
+                "search_paths": list(metadata.get("search_paths") or []),
+                "metrics": metrics,
+                "findings": _plain_list(metadata.get("findings")),
+                "evaluation_score": metadata.get("evaluation_score", score),
+                "evaluation_passed": metadata.get("evaluation_passed"),
+                "report": report,
+                "report_summary": report_summary,
+            }
+        )
+    return rows
+
+
+def _metric_averages_from_history(history: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    buckets: dict[str, list[float]] = {}
+    for row in history:
+        for name, value in _plain_mapping(row.get("metrics")).items():
+            numeric = _as_float(value)
+            buckets.setdefault(str(name), []).append(float(numeric))
+    return {
+        name: round(sum(values) / len(values), 6)
+        for name, values in sorted(buckets.items())
+        if values
+    }
+
+
+def _with_framework_adapter_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _framework_adapter_probe_proof(result, optimization)
+    result["framework_adapter_probe_proof"] = proof
+    optimization["framework_adapter_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["framework_adapter_probe_proof_status"] = proof["status"]
+    summary["framework_adapter_probe_proof_passed"] = proof["passed"]
+    summary["framework_adapter_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["framework_adapter_probe_proof_check_count"] = proof["check_count"]
+    summary["framework_adapter_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["framework_adapter_probe_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _framework_adapter_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(payload.get("summary"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    adapter = _plain_mapping(best_config.get("adapter"))
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    selected_report_summary = _plain_mapping(selected_report.get("summary"))
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    contract = _plain_mapping(selected_report.get("contract"))
+    threshold = _as_float(summary.get("threshold")) or 0.9
+    selected_score = _as_float(selected_history.get("score"))
+    runtime_trace_count = _as_int(selected_report_summary.get("runtime_trace_count"))
+    case_count = max(_as_int(selected_report_summary.get("case_count")), 1)
+    checks = [
+        _proof_check(
+            "framework_adapter_probe_report_present",
+            passed=selected_report.get("kind")
+            == "agent-learning.framework-adapter-probe.v1"
+            and selected_report.get("status") == "passed",
+            required=True,
+            reason="selected candidate carries a passing framework adapter probe",
+            evidence={
+                "kind": selected_report.get("kind"),
+                "status": selected_report.get("status"),
+            },
+        ),
+        _proof_check(
+            "framework_adapter_probe_local_contract_closed",
+            passed=contract.get("kind")
+            == "agent-learning.framework-adapter-contract.v1"
+            and contract.get("requires_external_service") is False
+            and contract.get("local_executable_fixture") is True
+            and contract.get("trace_runtime") is True,
+            required=True,
+            reason="selected probe contract is local, traced, and no-external-service",
+            evidence={"framework_adapter_contract": copy.deepcopy(contract)},
+        ),
+        _proof_check(
+            "framework_adapter_probe_runtime_trace_closed",
+            passed=runtime_trace_count >= case_count,
+            required=True,
+            reason="each selected probe case produced framework runtime trace evidence",
+            evidence={
+                "runtime_trace_count": runtime_trace_count,
+                "case_count": case_count,
+            },
+        ),
+        _proof_check(
+            "framework_adapter_probe_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("framework_adapter_probe_score"))
+            >= threshold
+            and _as_float(
+                selected_metrics.get(
+                    "framework_adapter_probe_runtime_trace_coverage"
+                )
+            )
+            >= 1.0
+            and _as_float(
+                selected_metrics.get("framework_adapter_probe_local_contract_quality")
+            )
+            >= 1.0,
+            required=True,
+            reason="selected probe closes score, runtime-trace, and local-contract metrics",
+            evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
+        ),
+        _proof_check(
+            "framework_adapter_probe_patch_surface_present",
+            passed=bool(selected_patch) and "adapter" in selected_patch,
+            required=True,
+            reason="optimizer selected a concrete adapter candidate, not prompt-only text",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "framework_adapter_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for probe search",
+            evidence={
+                "governance_status": governance.get("status"),
+                "failed_check_ids": governance.get("failed_check_ids"),
+            },
+        ),
+        _proof_check(
+            "framework_adapter_probe_selected_score_threshold_closed",
+            passed=selected_score >= threshold,
+            required=True,
+            reason="selected adapter probe score meets the configured threshold",
+            evidence={"selected_score": selected_score, "threshold": threshold},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l2_native_framework_adapter_probe_verified"
+            if passed
+            else "framework_adapter_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "framework": summary.get("framework") or best_config.get("framework"),
+        "method": adapter.get("method"),
+        "input_mode": adapter.get("input_mode"),
+        "requires_external_service": False,
+        "evidence": {
+            "adapter": copy.deepcopy(adapter),
+            "selected_report_summary": copy.deepcopy(selected_report_summary),
+            "selected_metrics": copy.deepcopy(selected_metrics),
+            "framework_adapter_contract": copy.deepcopy(contract),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _json_plain(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return {str(key): _json_plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_plain(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_plain(item) for item in value]
+    return copy.deepcopy(value)
 
 
 def _framework_agent_candidate(
@@ -23371,6 +24003,7 @@ def __dir__() -> list[str]:
 __all__ = [
     *_OPTIMIZE_EXPORTS,
     "AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND",
+    "AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
@@ -23447,6 +24080,7 @@ __all__ = [
     "optimize_evaluation_hooks",
     "optimize_external_agent_adapter",
     "optimize_framework_adapter_matrix",
+    "optimize_framework_adapter_probe",
     "optimize_framework_certification",
     "optimize_framework_import_repair",
     "optimize_long_horizon_redteam",
@@ -23490,6 +24124,7 @@ __all__ = [
     "problem_from_eval_suite_file",
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
+    "score_framework_adapter_probe_result",
     "with_framework_adapter_matrix_proof",
     "with_framework_certification_proof",
     "with_framework_runtime_proof",

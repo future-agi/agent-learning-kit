@@ -624,6 +624,8 @@ def test_optimize_facade_exposes_advanced_governance_surfaces():
     assert optimize.check_agent_deployment_promotion is not None
     assert optimize.check_agent_deployment_rollback is not None
     assert optimize.research_note_for is not None
+    assert optimize.optimize_framework_adapter_probe is not None
+    assert optimize.score_framework_adapter_probe_result is not None
 
     candidate = optimize.AgentCandidate.from_config(
         {
@@ -1062,6 +1064,87 @@ def test_sdk_framework_adapter_optimization_example_runs(monkeypatch, tmp_path):
     )
     assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
     assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
+
+
+def test_optimize_framework_adapter_probe_selects_working_adapter():
+    from agent_learning import optimize
+
+    class LocalRefundOrchestrator:
+        def run(self, text):
+            return "Adapter probe did not emit tool evidence."
+
+        async def execute_task(self, payload):
+            assert payload["metadata"]["framework"] == "custom_refund_orchestrator"
+            return {
+                "content": "Adapter probe approved refund with trace evidence.",
+                "tool_calls": [
+                    {
+                        "id": "framework_status",
+                        "name": "framework_trace_status",
+                        "arguments": {"status": "passed"},
+                    }
+                ],
+                "events": [
+                    {
+                        "type": "framework_trace",
+                        "name": "execute_task",
+                        "payload": {"framework": "custom_refund_orchestrator"},
+                    }
+                ],
+            }
+
+    result = optimize.optimize_framework_adapter_probe(
+        name="sdk-framework-adapter-probe-optimization",
+        framework="custom_refund_orchestrator",
+        target="framework_shims.py:build_custom_refund_orchestrator",
+        agent=LocalRefundOrchestrator(),
+        adapter_candidates=[
+            {"method": "run", "input_mode": "text"},
+            {"method": "execute_task", "input_mode": "dict"},
+        ],
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit framework evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.9
+    assert result["summary"]["candidate_lineage_count"] == 2
+    assert result["summary"]["optimizer_governance_passed"] is True
+    assert result["summary"]["framework_adapter_probe_proof_passed"] is True
+    assert result["optimization_governance"]["status"] == "passed"
+
+    best_config = result["optimization"]["best_config"]
+    assert best_config["adapter"]["method"] == "execute_task"
+    assert best_config["adapter"]["input_mode"] == "dict"
+    assert result["framework_adapter_probe_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND
+    )
+    assert result["framework_adapter_probe_proof"]["assurance_level"] == (
+        "l2_native_framework_adapter_probe_verified"
+    )
+    assert result["framework_adapter_probe_proof"]["failed_check_ids"] == []
+
+    history_by_method = {
+        item["candidate_config"]["adapter"]["method"]: item
+        for item in result["optimization"]["history"]
+    }
+    assert history_by_method["run"]["score"] < history_by_method["execute_task"]["score"]
+    assert history_by_method["execute_task"]["report"]["status"] == "passed"
+    assert history_by_method["execute_task"]["metrics"][
+        "framework_adapter_probe_runtime_trace_coverage"
+    ] == pytest.approx(1.0)
+    assert history_by_method["execute_task"]["metrics"][
+        "framework_adapter_probe_local_contract_quality"
+    ] == pytest.approx(1.0)
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(

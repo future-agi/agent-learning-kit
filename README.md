@@ -525,6 +525,36 @@ result = simulate.run_framework_adapter_probe(
 assert result["status"] == "passed"
 ```
 
+When several adapter shapes are plausible, run the same probe through
+AgentOptimizer before building a full manifest:
+
+```python
+from agent_learning import optimize
+
+result = optimize.optimize_framework_adapter_probe(
+    name="my-adapter-probe-search",
+    framework="custom_refund_orchestrator",
+    target="framework_shims.py:build_custom_refund_orchestrator",
+    agent_factory=LocalRefundOrchestrator,
+    adapter_candidates=[
+        {"method": "run", "input_mode": "text"},
+        {"method": "execute_task", "input_mode": "dict"},
+    ],
+    cases=[
+        {
+            "id": "refund-status",
+            "input": "Approve the refund and emit adapter evidence.",
+            "expected_contains": ["approved refund"],
+            "required_tools": ["framework_trace_status"],
+            "required_events": ["framework_trace"],
+            "required_state_keys": ["framework_runtime"],
+        }
+    ],
+)
+assert result["optimization"]["best_config"]["adapter"]["method"] == "execute_task"
+assert result["framework_adapter_probe_proof"]["status"] == "passed"
+```
+
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
 native gate alongside runtime and trace metrics, so an HTTP target or

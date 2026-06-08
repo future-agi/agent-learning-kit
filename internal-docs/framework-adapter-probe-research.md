@@ -74,3 +74,8 @@ Keep framework support local-first:
 - Emit evidence that can be scored by `framework_adapter_contract_quality`,
   `framework_runtime_contract`, tool metrics, report cards, and optimizer proof
   gates.
+- When several adapter shapes are plausible, search method/input-mode candidates
+  with `optimize.optimize_framework_adapter_probe()` first. This keeps early
+  framework onboarding local and cheap, then promotes the selected adapter into a
+  full simulation manifest, framework certification, or framework-runtime
+  optimization.
