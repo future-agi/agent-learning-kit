@@ -2167,9 +2167,54 @@ def test_sdk_framework_adapter_workflow_trace_example_runs(tmp_path):
     runtime_contract = manifest["evaluation"]["agent_report"]["config"][
         "framework_runtime_contract"
     ]
+    config = manifest["evaluation"]["agent_report"]["config"]
     assert runtime_contract["required_state_keys"] == ["workflow_trace"]
     assert runtime_contract["required_tools"] == ["policy_lookup"]
     assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert "workflow" in runtime_contract["required_signals"]
+    assert "workflow" in config["required_framework_runtime"]
+    assert set(config["required_workflow_trace"]) >= {
+        "workflow_trace",
+        "trace",
+        "graph",
+        "node",
+        "edge",
+        "step",
+        "checkpoint",
+        "route",
+        "interrupt",
+        "replay",
+        "write",
+        "state",
+        "tool",
+        "tool_call",
+        "final_state",
+        "topology",
+        "framework",
+    }
+    workflow_quality = config["workflow_trace_quality"]
+    assert workflow_quality["min_node_count"] == 4
+    assert workflow_quality["min_edge_count"] == 3
+    assert workflow_quality["min_step_count"] == 4
+    assert workflow_quality["min_checkpoint_count"] == 2
+    assert workflow_quality["min_route_decision_count"] == 1
+    assert workflow_quality["min_interrupt_count"] == 1
+    assert workflow_quality["min_replay_count"] == 1
+    assert workflow_quality["min_write_count"] == 1
+    assert workflow_quality["min_tool_call_count"] == 1
+    assert workflow_quality["required_tools"] == ["policy_lookup"]
+    assert set(workflow_quality["required_final_state_keys"]) == {
+        "approval",
+        "decision",
+        "policy_result",
+    }
+    assert workflow_quality["require_replay"] is True
+    assert workflow_quality["require_interrupts"] is True
+    assert workflow_quality["require_routes"] is True
+    assert workflow_quality["require_topology"] is True
+    metric_weights = config["metric_weights"]
+    assert metric_weights["workflow_trace_coverage"] == pytest.approx(4.0)
+    assert metric_weights["workflow_graph_quality"] == pytest.approx(4.0)
     assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
         "workflow_step",
         "workflow_route",
@@ -2188,6 +2233,9 @@ def test_sdk_framework_adapter_workflow_trace_example_runs(tmp_path):
     assert workflow["interrupt_count"] == 1
     assert workflow["replay_count"] == 1
     assert workflow["tool_names"] == ["policy_lookup"]
+    metric_averages = result["summary"]["metric_averages"]
+    assert metric_averages["workflow_trace_coverage"] == pytest.approx(1.0)
+    assert metric_averages["workflow_graph_quality"] == pytest.approx(1.0)
     output = state["framework_runtime"]["invocations"][0]["output"]
     assert output["tool_names"] == ["policy_lookup"]
     assert {"trace"} <= set(output["artifact_types"])

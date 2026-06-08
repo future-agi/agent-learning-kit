@@ -50,4 +50,5 @@ shape using a local LangGraph-style adapter. The selected adapter must emit:
 - one route decision, one resolved interrupt, and one replay,
 - final workflow state proving an approved refund decision,
 - evaluator-visible `workflow_trace` state, `workflow_*` events, a trace
-  artifact, and ordinary tool-call evidence.
+  artifact, ordinary tool-call evidence, and generated workflow trace coverage
+  plus graph-quality gates.

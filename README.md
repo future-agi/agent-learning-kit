@@ -725,7 +725,9 @@ Workflow graph framework exports normalize durable execution semantics.
 LangGraph-style nodes, edges, checkpoints, state history, interrupts, and replay,
 CrewAI Flow-style routes/state, and LlamaIndex workflow step/event traces become
 `workflow_trace` state, a workflow trace artifact, `workflow_*` events, and
-ordinary tool calls from step-level tool evidence. See
+ordinary tool calls from step-level tool evidence. Generated adapter eval
+configs derive workflow trace coverage and graph-quality gates from the
+selected output. See
 `examples/sdk_framework_adapter_workflow_trace.py`.
 
 Orchestration framework exports normalize multi-agent control semantics.

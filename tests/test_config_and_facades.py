@@ -2320,6 +2320,51 @@ def test_workflow_framework_adapter_preserves_graph_execution_trace(tmp_path):
     assert runtime_contract["required_state_keys"] == ["workflow_trace"]
     assert runtime_contract["required_tools"] == ["policy_lookup"]
     assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert "workflow" in runtime_contract["required_signals"]
+    assert "workflow" in config["required_framework_runtime"]
+    assert set(config["required_workflow_trace"]) >= {
+        "workflow_trace",
+        "trace",
+        "graph",
+        "node",
+        "edge",
+        "step",
+        "checkpoint",
+        "route",
+        "interrupt",
+        "replay",
+        "write",
+        "state",
+        "tool",
+        "tool_call",
+        "final_state",
+        "topology",
+        "framework",
+    }
+    workflow_quality = config["workflow_trace_quality"]
+    assert workflow_quality["min_node_count"] == 4
+    assert workflow_quality["min_edge_count"] == 3
+    assert workflow_quality["min_step_count"] == 4
+    assert workflow_quality["min_checkpoint_count"] == 2
+    assert workflow_quality["min_route_decision_count"] == 1
+    assert workflow_quality["min_interrupt_count"] == 1
+    assert workflow_quality["min_replay_count"] == 1
+    assert workflow_quality["min_write_count"] == 1
+    assert workflow_quality["min_tool_call_count"] == 1
+    assert workflow_quality["required_tools"] == ["policy_lookup"]
+    assert set(workflow_quality["required_final_state_keys"]) == {
+        "approval",
+        "decision",
+        "policy_result",
+    }
+    assert workflow_quality["required_entry_nodes"] == ["intake"]
+    assert workflow_quality["required_terminal_nodes"] == ["finalize"]
+    assert workflow_quality["require_replay"] is True
+    assert workflow_quality["require_interrupts"] is True
+    assert workflow_quality["require_routes"] is True
+    assert workflow_quality["require_topology"] is True
+    assert config["metric_weights"]["workflow_trace_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["workflow_graph_quality"] == pytest.approx(4.0)
     assert set(config["required_events"]) >= {
         "workflow_step",
         "workflow_route",
@@ -2346,6 +2391,12 @@ def test_workflow_framework_adapter_preserves_graph_execution_trace(tmp_path):
         pytest.approx(1.0)
     )
     assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["workflow_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["workflow_graph_quality"] == (
         pytest.approx(1.0)
     )
     state = result["report"]["results"][0]["metadata"]["environment_state"]

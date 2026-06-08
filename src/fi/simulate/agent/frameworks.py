@@ -1578,6 +1578,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "orchestration_trace_summary": _probe_orchestration_trace_summary(
             state.get("orchestration_trace")
         ),
+        "workflow_trace_summary": _probe_workflow_trace_summary(
+            state.get("workflow_trace")
+        ),
         "realtime_trace_summary": _probe_realtime_trace_summary(
             state.get("realtime_trace")
         ),
@@ -1645,6 +1648,96 @@ def _probe_orchestration_trace_summary(value: Any) -> dict[str, Any]:
     ):
         if key not in summary and isinstance(trace.get(trace_key), list):
             summary[key] = len(trace.get(trace_key, []))
+    return summary
+
+
+def _probe_workflow_trace_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    for count_key, trace_key in (
+        ("node_count", "nodes"),
+        ("edge_count", "edges"),
+        ("step_count", "steps"),
+        ("checkpoint_count", "checkpoints"),
+        ("route_decision_count", "route_decisions"),
+        ("interrupt_count", "interrupts"),
+        ("replay_count", "replay"),
+        ("write_count", "writes"),
+        ("state_snapshot_count", "state_snapshots"),
+    ):
+        if count_key not in summary and isinstance(trace.get(trace_key), list):
+            summary[count_key] = len(trace.get(trace_key, []))
+        elif count_key not in summary and trace.get(count_key) is not None:
+            summary[count_key] = trace.get(count_key)
+    if "tool_call_count" not in summary and trace.get("tool_call_count") is not None:
+        summary["tool_call_count"] = trace.get("tool_call_count")
+
+    nodes = _probe_mappings(trace.get("nodes"))
+    steps = _probe_mappings(trace.get("steps"))
+    checkpoints = _probe_mappings(trace.get("checkpoints"))
+    routes = _probe_mappings(trace.get("route_decisions"))
+    interrupts = _probe_mappings(trace.get("interrupts"))
+    replay = _probe_mappings(trace.get("replay"))
+    topology = dict(trace.get("topology") or {}) if isinstance(trace.get("topology"), Mapping) else {}
+    final_state = (
+        dict(trace.get("final_state"))
+        if isinstance(trace.get("final_state"), Mapping)
+        else {}
+    )
+
+    node_names = [
+        node.get("name") or node.get("id")
+        for node in nodes
+        if node.get("name") or node.get("id")
+    ]
+    step_names = [
+        step.get("name") or step.get("node") or step.get("id")
+        for step in steps
+        if step.get("name") or step.get("node") or step.get("id")
+    ]
+    tool_names = [
+        *[str(item) for item in _probe_list(trace.get("tool_names")) if str(item)],
+        *[
+            str(call.get("name") or call.get("tool") or "")
+            for step in steps
+            for call in _probe_mappings(step.get("tool_calls"))
+            if call.get("name") or call.get("tool")
+        ],
+    ]
+    final_state_keys = trace.get("final_state_keys") or list(final_state.keys())
+
+    for key, values in (
+        ("node_names", node_names),
+        ("step_names", step_names),
+        ("checkpoint_ids", [item.get("id") or item.get("checkpoint_id") for item in checkpoints]),
+        ("route_targets", [item.get("target") or item.get("selected") for item in routes]),
+        ("interrupt_nodes", [item.get("node") or item.get("id") for item in interrupts]),
+        ("replay_ids", [item.get("id") or item.get("replay_id") for item in replay]),
+        ("tool_names", tool_names),
+        ("step_statuses", trace.get("step_statuses")),
+        ("final_state_keys", final_state_keys),
+    ):
+        cleaned = sorted({str(item) for item in _probe_list(values) if str(item)})
+        if cleaned:
+            summary[key] = cleaned
+
+    for key in ("entry_nodes", "terminal_nodes"):
+        values = sorted(str(item) for item in _probe_list(topology.get(key)) if str(item))
+        if values:
+            summary[key] = values
+    for key in ("has_replay", "has_interrupts", "has_routes"):
+        if trace.get(key) is not None:
+            summary[key] = bool(trace.get(key))
+    if topology:
+        summary["has_topology"] = True
+    if trace.get("framework"):
+        summary["framework"] = str(trace.get("framework"))
     return summary
 
 

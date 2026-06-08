@@ -15836,6 +15836,23 @@ def build_framework_adapter_probe_evaluation_config(
         if orchestration_trace_observed
         else {}
     )
+    workflow_trace_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "workflow_trace_summary",
+    )
+    workflow_trace_observed = (
+        "workflow_trace" in state_keys
+        or any(str(event).startswith("workflow_") for event in event_types)
+        or bool(workflow_trace_summary)
+    )
+    workflow_requirements = (
+        _framework_probe_workflow_requirements(
+            framework,
+            workflow_trace_summary,
+        )
+        if workflow_trace_observed
+        else {}
+    )
     mcp_tool_session_summary = _framework_probe_first_response_mapping(
         selected_report,
         "mcp_tool_session_summary",
@@ -15940,6 +15957,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming"] if streaming_observed else []),
             *(["realtime"] if realtime_trace_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
+            *(["workflow"] if workflow_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["memory"] if memory_trace_observed else []),
             *(["browser"] if browser_cua_observed else []),
@@ -15958,6 +15976,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["realtime trace evidence"] if realtime_trace_observed else []),
             *(["framework trace evidence"] if framework_trace_observed else []),
             *(["orchestration trace evidence"] if orchestration_trace_observed else []),
+            *(["workflow graph evidence"] if workflow_trace_observed else []),
             *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
             *(["A2A protocol evidence"] if a2a_protocol_observed else []),
             *(["memory lineage evidence"] if memory_trace_observed else []),
@@ -16050,6 +16069,9 @@ def build_framework_adapter_probe_evaluation_config(
     if orchestration_trace_observed:
         metric_weights["orchestration_trace_coverage"] = 4.0
         metric_weights["orchestration_flow_quality"] = 4.0
+    if workflow_trace_observed:
+        metric_weights["workflow_trace_coverage"] = 4.0
+        metric_weights["workflow_graph_quality"] = 4.0
     if mcp_tool_session_observed:
         metric_weights["mcp_tool_session_coverage"] = 4.0
         metric_weights["mcp_tool_session_quality"] = 4.0
@@ -16093,6 +16115,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming"] if streaming_observed else []),
             *(["realtime"] if realtime_trace_observed else []),
             *(["orchestration"] if orchestration_trace_observed else []),
+            *(["workflow"] if workflow_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
             *(["memory"] if memory_trace_observed else []),
             *(["browser"] if browser_cua_observed else []),
@@ -16121,6 +16144,13 @@ def build_framework_adapter_probe_evaluation_config(
         ]
         config["orchestration_trace_quality"] = orchestration_requirements[
             "orchestration_trace_quality"
+        ]
+    if workflow_trace_observed:
+        config["required_workflow_trace"] = workflow_requirements[
+            "required_workflow_trace"
+        ]
+        config["workflow_trace_quality"] = workflow_requirements[
+            "workflow_trace_quality"
         ]
     if mcp_tool_session_observed:
         config["required_mcp_tool_session"] = mcp_tool_session_requirements[
@@ -16738,6 +16768,92 @@ def _framework_probe_orchestration_requirements(
             str(item) for item in required_trace if str(item)
         ),
         "orchestration_trace_quality": quality,
+    }
+
+
+def _framework_probe_workflow_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required_trace = ["workflow_trace", "trace"]
+    count_signals = (
+        ("node_count", "node"),
+        ("edge_count", "edge"),
+        ("step_count", "step"),
+        ("checkpoint_count", "checkpoint"),
+        ("route_decision_count", "route"),
+        ("interrupt_count", "interrupt"),
+        ("replay_count", "replay"),
+        ("write_count", "write"),
+        ("state_snapshot_count", "state_snapshot"),
+        ("tool_call_count", "tool_call"),
+    )
+    for summary_key, signal in count_signals:
+        if _as_int(summary.get(summary_key)) > 0:
+            required_trace.append(signal)
+            if signal in {"node", "edge"}:
+                required_trace.append("graph")
+            if signal in {"checkpoint", "write", "state_snapshot"}:
+                required_trace.append("state")
+            if signal == "tool_call":
+                required_trace.append("tool")
+    if _plain_list(summary.get("final_state_keys")):
+        required_trace.extend(["final_state", "state"])
+    if bool(summary.get("has_topology")) or _plain_list(summary.get("entry_nodes")) or _plain_list(summary.get("terminal_nodes")):
+        required_trace.append("topology")
+    if framework:
+        required_trace.append("framework")
+
+    quality: dict[str, Any] = {"framework": framework}
+    for summary_key, quality_key in (
+        ("node_count", "min_node_count"),
+        ("edge_count", "min_edge_count"),
+        ("step_count", "min_step_count"),
+        ("checkpoint_count", "min_checkpoint_count"),
+        ("route_decision_count", "min_route_decision_count"),
+        ("interrupt_count", "min_interrupt_count"),
+        ("replay_count", "min_replay_count"),
+        ("write_count", "min_write_count"),
+        ("state_snapshot_count", "min_state_snapshot_count"),
+        ("tool_call_count", "min_tool_call_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    for summary_key, quality_key in (
+        ("node_names", "required_nodes"),
+        ("step_names", "required_steps"),
+        ("tool_names", "required_tools"),
+        ("step_statuses", "required_step_statuses"),
+        ("final_state_keys", "required_final_state_keys"),
+        ("entry_nodes", "required_entry_nodes"),
+        ("terminal_nodes", "required_terminal_nodes"),
+    ):
+        values = _unique_strings(summary.get(summary_key))
+        if values:
+            quality[quality_key] = values
+    if bool(summary.get("has_replay")) or _as_int(summary.get("replay_count")) > 0:
+        quality["require_replay"] = True
+    if bool(summary.get("has_interrupts")) or _as_int(summary.get("interrupt_count")) > 0:
+        quality["require_interrupts"] = True
+    if bool(summary.get("has_routes")) or _as_int(summary.get("route_decision_count")) > 0:
+        quality["require_routes"] = True
+    if bool(summary.get("has_topology")) or _plain_list(summary.get("entry_nodes")) or _plain_list(summary.get("terminal_nodes")):
+        quality["require_topology"] = True
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+
+    return {
+        "required_workflow_trace": _unique_strings(
+            str(item) for item in required_trace if str(item)
+        ),
+        "workflow_trace_quality": {
+            key: value
+            for key, value in quality.items()
+            if value not in (None, "", [], {})
+        },
     }
 
 
