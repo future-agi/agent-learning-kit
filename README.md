@@ -1193,6 +1193,10 @@ PYTHONPATH=src python examples/sdk_browser_cua_probe_optimization.py \
 PYTHONPATH=src python examples/sdk_evaluation_hook_probe_optimization.py \
   artifacts/sdk-evaluation-hook-probe-optimization.json
 
+AGENT_LEARNING_SDK_OPENENV_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_openenv_environment_optimization.py \
+  artifacts/sdk-openenv-environment-optimization.json
+
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
   artifacts/sdk-artifact-optimization.json
@@ -1641,7 +1645,9 @@ sandbox metadata, and contained failure-injection evidence. The same contract
 can be searched through `optimize.build_openenv_optimization_manifest()` and
 `optimize.optimize_openenv()`, which compare weak, partial, and verified
 environment bundles using `openenv_quality` and `openenv_coverage` report
-metrics.
+metrics. `examples/sdk_openenv_environment_optimization.py` is the runnable
+AgentOptimizer cookbook, and `agent-learn release-check` now verifies that this
+local optimizer path selects the verified OpenEnv replay bundle.
 
 The `sdk_framework_adapter_openenv_trace.py` example covers the adapter side of
 the same contract: a local framework returns a plain OpenEnv/Gymnasium-style

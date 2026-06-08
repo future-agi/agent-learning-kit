@@ -227,6 +227,10 @@ Current checkpoint:
   voice/streaming trace simulation, plus a static OpenEnv framework-adapter
   manifest that requires OpenEnv runtime state, events, artifacts, coverage, and
   quality gates.
+- OpenEnv optimizer readiness is now an executable release-check gate:
+  `examples/sdk_openenv_environment_optimization.py` runs local AgentOptimizer
+  bundle search over weak, partial, and verified OpenEnv replays and must select
+  the verified replay with `openenv_coverage=1.0` and `openenv_quality=1.0`.
 
 Acceptance gates:
 
@@ -253,9 +257,10 @@ Next implementation focus:
   OpenEnv by proving cross-framework simulation, eval, red-team, memory,
   browser/CUA, realtime, protocol, multi-agent, replay, optimizer, and
   regression-promotion gates in one artifact.
-- Back that target with the executable `OpenEnvEnvironment` adapter,
+- Keep backing that target with the executable `OpenEnvEnvironment` adapter,
   `openenv_quality`/`openenv_coverage` report gates, SDK cookbook manifests,
-  and agent-opt OpenEnv bundle search before using the claim in release notes.
+  and the release-checked agent-opt OpenEnv bundle search before using the claim
+  in release notes.
 - Extend that target through framework adapters: local framework/provider
   outputs that return OpenEnv/Gymnasium-style reset, step, state, reward/done,
   sandbox, or failure-injection traces must normalize into evaluator-visible

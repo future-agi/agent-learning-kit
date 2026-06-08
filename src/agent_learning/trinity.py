@@ -374,6 +374,7 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
+    "examples/sdk_openenv_environment_optimization.py",
     "examples/sdk_realtime_voice_optimization.py",
 ]
 
@@ -516,6 +517,22 @@ V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
 V1_TRINITY_STACK_PROBE_PROOF_KIND = (
     "agent-learning.optimization.trinity-stack-probe-proof.v1"
 )
+
+V1_OPENENV_OPTIMIZER_FILES = [
+    "examples/sdk_openenv_environment_optimization.py",
+    "internal-docs/openenv-environment-adapter-research.md",
+]
+
+V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES = [
+    "weak_openenv_reset_step_only",
+    "partial_openenv_no_failure_injection",
+    "verified_openenv_replay",
+]
+
+V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
+    "openenv_coverage",
+    "openenv_quality",
+]
 
 V1_REQUIRED_EVIDENCE_COMPONENTS = [
     "tool_coverage",
@@ -857,6 +874,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_provider_contract,
     )
+    openenv_optimizer = _release_openenv_optimizer_status(root)
+    _append_release_check(
+        checks,
+        check_id="openenv_optimizer_readiness",
+        passed=(
+            not openenv_optimizer["missing_files"]
+            and not openenv_optimizer["manifest_errors"]
+            and not openenv_optimizer["optimization_errors"]
+            and not openenv_optimizer["metric_errors"]
+            and not openenv_optimizer["errors"]
+        ),
+        milestone="M6",
+        evidence=openenv_optimizer,
+    )
     trinity_stack_probe = _release_trinity_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -972,6 +1003,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_provider_manifest_contracts": copy.deepcopy(
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
         ),
+        "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
         "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_trinity_stack_probe_environment_types": list(
             V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
@@ -2809,6 +2841,245 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_OPENENV_OPTIMIZER_FILES)
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    if not missing_files:
+        example_path = root / "examples/sdk_openenv_environment_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_openenv_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            manifest = module.build_manifest(required_env=())
+            result = module.run(required_env=())
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+            manifest = {}
+            result = {}
+
+        if manifest:
+            optimization = _as_mapping(manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            scoring = _as_mapping(optimization.get("scoring"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = _as_list(search_space.get("simulation.environments"))
+            profiles: list[str] = []
+            environment_types: list[str] = []
+            for candidate in candidates:
+                environments = [
+                    item for item in _as_list(candidate) if isinstance(item, Mapping)
+                ]
+                if not environments:
+                    continue
+                environment = _as_mapping(environments[0])
+                data = _as_mapping(environment.get("data"))
+                metadata = _as_mapping(data.get("metadata"))
+                if environment.get("type"):
+                    environment_types.append(str(environment.get("type")))
+                if metadata.get("candidate_profile"):
+                    profiles.append(str(metadata.get("candidate_profile")))
+            target_metadata = _as_mapping(target.get("metadata"))
+            research_urls = sorted(
+                str(source.get("url"))
+                for source in _as_list(target_metadata.get("research_sources"))
+                if isinstance(source, Mapping) and source.get("url")
+            )
+            evidence.update(
+                {
+                    "manifest_version": manifest.get("version"),
+                    "manifest_required_env": list(manifest.get("required_env") or []),
+                    "manifest_scoring_layers": list(scoring.get("layers") or []),
+                    "manifest_candidate_count": len(candidates),
+                    "manifest_candidate_environment_types": environment_types,
+                    "manifest_candidate_profiles": profiles,
+                    "manifest_research_urls": research_urls,
+                }
+            )
+            if manifest.get("version") != "agent-learning.optimization.v1":
+                manifest_errors.append(
+                    {
+                        "field": "version",
+                        "expected": "agent-learning.optimization.v1",
+                        "observed": manifest.get("version"),
+                    }
+                )
+            if manifest.get("required_env") not in (None, []):
+                manifest_errors.append(
+                    {
+                        "field": "required_env",
+                        "expected": [],
+                        "observed": manifest.get("required_env"),
+                    }
+                )
+            if scoring.get("layers") != ["openenv"]:
+                manifest_errors.append(
+                    {
+                        "field": "optimization.scoring.layers",
+                        "expected": ["openenv"],
+                        "observed": scoring.get("layers"),
+                    }
+                )
+            missing_profiles = sorted(
+                set(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES) - set(profiles)
+            )
+            if missing_profiles:
+                manifest_errors.append(
+                    {
+                        "field": "optimization.target.search_space",
+                        "expected": list(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES),
+                        "observed": profiles,
+                        "missing": missing_profiles,
+                    }
+                )
+            if "openenv" not in set(environment_types):
+                manifest_errors.append(
+                    {
+                        "field": "optimization.target.search_space.environment.type",
+                        "expected": "openenv",
+                        "observed": environment_types,
+                    }
+                )
+
+        if result:
+            summary = _as_mapping(result.get("summary"))
+            optimization = _as_mapping(result.get("optimization"))
+            histories = [
+                item for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history: Mapping[str, Any] = {}
+            best_score = -1.0
+            for history in histories:
+                score = _float_or_zero(history.get("score"))
+                if score > best_score:
+                    best_score = score
+                    best_history = history
+            best_config = _as_mapping(optimization.get("best_config"))
+            best_simulation = _as_mapping(best_config.get("simulation"))
+            best_environments = [
+                item for item in _as_list(best_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            best_environment = (
+                _as_mapping(best_environments[0]) if best_environments else {}
+            )
+            best_data = _as_mapping(best_environment.get("data"))
+            best_metadata = _as_mapping(best_data.get("metadata"))
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            best_profile = str(best_metadata.get("candidate_profile") or "")
+            evidence.update(
+                {
+                    "result_kind": result.get("kind"),
+                    "result_status": result.get("status"),
+                    "optimization_score": summary.get("optimization_score"),
+                    "evaluation_score": summary.get("evaluation_score"),
+                    "total_iterations": summary.get("total_iterations"),
+                    "candidate_lineage_count": summary.get(
+                        "candidate_lineage_count"
+                    ),
+                    "candidate_lineage_selected_score_delta": summary.get(
+                        "candidate_lineage_selected_score_delta"
+                    ),
+                    "best_history_score": best_history.get("score"),
+                    "best_candidate_profile": best_profile,
+                    "best_environment_type": best_environment.get("type"),
+                    "best_metrics": {
+                        metric: best_metrics.get(metric)
+                        for metric in V1_OPENENV_OPTIMIZER_REQUIRED_METRICS
+                    },
+                }
+            )
+            result_expectations = {
+                "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+                "status": (result.get("status"), "passed"),
+            }
+            for field, (observed, expected) in result_expectations.items():
+                if observed != expected:
+                    optimization_errors.append(
+                        {
+                            "field": field,
+                            "expected": expected,
+                            "observed": observed,
+                        }
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < 1.0:
+                optimization_errors.append(
+                    {
+                        "field": "summary.optimization_score",
+                        "expected": 1.0,
+                        "observed": summary.get("optimization_score"),
+                    }
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                optimization_errors.append(
+                    {
+                        "field": "summary.evaluation_score",
+                        "expected": 1.0,
+                        "observed": summary.get("evaluation_score"),
+                    }
+                )
+            if best_environment.get("type") != "openenv":
+                optimization_errors.append(
+                    {
+                        "field": "optimization.best_config.simulation.environments.type",
+                        "expected": "openenv",
+                        "observed": best_environment.get("type"),
+                    }
+                )
+            if best_profile != "verified_openenv_replay":
+                optimization_errors.append(
+                    {
+                        "field": (
+                            "optimization.best_config.simulation.environments."
+                            "data.metadata.candidate_profile"
+                        ),
+                        "expected": "verified_openenv_replay",
+                        "observed": best_profile,
+                    }
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < len(
+                V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+            ):
+                optimization_errors.append(
+                    {
+                        "field": "summary.candidate_lineage_count",
+                        "expected": f">={len(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES)}",
+                        "observed": summary.get("candidate_lineage_count"),
+                    }
+                )
+            for metric in V1_OPENENV_OPTIMIZER_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    metric_errors.append(
+                        {
+                            "field": f"optimization.history.best.metrics.{metric}",
+                            "expected": 1.0,
+                            "observed": best_metrics.get(metric),
+                        }
+                    )
+
+    return {
+        "required_files": list(V1_OPENENV_OPTIMIZER_FILES),
+        "required_profiles": list(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES),
+        "required_metrics": list(V1_OPENENV_OPTIMIZER_REQUIRED_METRICS),
+        "missing_files": missing_files,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
+
+
 def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_TRINITY_STACK_PROBE_FILES)
     optimization_errors: list[dict[str, Any]] = []
@@ -3124,6 +3395,19 @@ def _int_or_zero(value: Any) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _float_or_zero(value: Any) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 def _release_external_value_findings(

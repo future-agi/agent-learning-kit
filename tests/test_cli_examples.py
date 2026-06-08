@@ -61,6 +61,51 @@ def test_sdk_openenv_environment_simulation_example_runs(tmp_path):
     ] == "openenv"
 
 
+def test_sdk_openenv_environment_optimization_example_runs(tmp_path):
+    module = _load_example_module("sdk_openenv_environment_optimization.py")
+
+    manifest = module.build_manifest(required_env=())
+    assert manifest["name"] == "sdk-openenv-environment-optimization"
+    assert manifest["required_env"] == []
+    assert manifest["optimization"]["scoring"]["layers"] == ["openenv"]
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert [
+        candidate[0]["data"]["metadata"]["candidate_profile"]
+        for candidate in candidates
+    ] == [
+        "weak_openenv_reset_step_only",
+        "partial_openenv_no_failure_injection",
+        "verified_openenv_replay",
+    ]
+
+    output_path = tmp_path / "sdk-openenv-environment-optimization.json"
+    result = module.run(output_path, required_env=())
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["candidate_lineage_count"] == 3
+    best_config = result["optimization"]["best_config"]
+    best_environment = best_config["simulation"]["environments"][0]
+    assert best_environment["type"] == "openenv"
+    assert best_environment["data"]["metadata"]["candidate_profile"] == (
+        "verified_openenv_replay"
+    )
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert best_history["patch"].keys() == {"simulation.environments"}
+    assert best_history["score"] == pytest.approx(1.0)
+    assert best_history["metrics"]["openenv_coverage"] == pytest.approx(1.0)
+    assert best_history["metrics"]["openenv_quality"] == pytest.approx(1.0)
+
+
 def test_sdk_framework_adapter_openenv_trace_example_runs(tmp_path):
     module = _load_example_module("sdk_framework_adapter_openenv_trace.py")
 

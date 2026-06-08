@@ -15169,6 +15169,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
+    assert payload["required_openenv_optimizer_files"] == (
+        trinity.V1_OPENENV_OPTIMIZER_FILES
+    )
     assert payload["required_trinity_stack_probe_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES
     )
@@ -15201,6 +15204,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "harness_diagnosis_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
+        "openenv_optimizer_readiness",
         "trinity_stack_probe_readiness",
         "package_metadata",
     }
@@ -15572,6 +15576,45 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_manifest["agent_type"] == "scripted"
     assert realtime_manifest["frameworks"] == ["livekit"]
     assert realtime_manifest["missing_environment_types"] == []
+    openenv_optimizer = checks["openenv_optimizer_readiness"]["evidence"]
+    assert openenv_optimizer["required_files"] == trinity.V1_OPENENV_OPTIMIZER_FILES
+    assert openenv_optimizer["required_profiles"] == (
+        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+    )
+    assert openenv_optimizer["required_metrics"] == (
+        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert openenv_optimizer["missing_files"] == []
+    assert openenv_optimizer["manifest_errors"] == []
+    assert openenv_optimizer["optimization_errors"] == []
+    assert openenv_optimizer["metric_errors"] == []
+    assert openenv_optimizer["errors"] == []
+    openenv_optimizer_evidence = openenv_optimizer["evidence"]
+    assert openenv_optimizer_evidence["manifest_version"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert openenv_optimizer_evidence["manifest_required_env"] == []
+    assert openenv_optimizer_evidence["manifest_scoring_layers"] == ["openenv"]
+    assert openenv_optimizer_evidence["manifest_candidate_count"] == 3
+    assert openenv_optimizer_evidence["manifest_candidate_profiles"] == (
+        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+    )
+    assert openenv_optimizer_evidence["result_kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert openenv_optimizer_evidence["result_status"] == "passed"
+    assert openenv_optimizer_evidence["optimization_score"] == pytest.approx(1.0)
+    assert openenv_optimizer_evidence["evaluation_score"] == pytest.approx(1.0)
+    assert openenv_optimizer_evidence["candidate_lineage_count"] == 3
+    assert openenv_optimizer_evidence["best_history_score"] == pytest.approx(1.0)
+    assert openenv_optimizer_evidence["best_environment_type"] == "openenv"
+    assert openenv_optimizer_evidence["best_candidate_profile"] == (
+        "verified_openenv_replay"
+    )
+    assert openenv_optimizer_evidence["best_metrics"] == {
+        "openenv_coverage": pytest.approx(1.0),
+        "openenv_quality": pytest.approx(1.0),
+    }
     trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
     assert trinity_stack_probe["required_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES

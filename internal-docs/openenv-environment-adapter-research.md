@@ -53,3 +53,7 @@ The executable OpenEnv bar should prove more than action success:
 - V1 release-check now includes OpenEnv and Gymnasium in the native framework
   adapter contract matrix and validates `examples/framework_openenv_manifest.json`
   for OpenEnv runtime state, events, artifacts, coverage, and quality gates.
+- `examples/sdk_openenv_environment_optimization.py` is now a release-checked
+  AgentOptimizer cookbook: local release-check runs the weak/partial/verified
+  OpenEnv bundle search without external env and requires the verified replay
+  candidate plus `openenv_coverage` and `openenv_quality` scores of 1.0.
