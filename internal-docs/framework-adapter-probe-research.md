@@ -131,6 +131,11 @@ Keep framework support local-first:
   message-history objects, tool-call request events, and tool-call execution
   events should normalize into ordinary tool calls, tool responses, transcript
   events, and `message_history` state.
+- Preserve framework coordination semantics from transcripts. Messages carrying
+  `handoff_to`, `recipient`, review, or reconciliation fields should normalize
+  into `framework_handoff`, `framework_review`, and
+  `framework_reconciliation` events plus `framework_handoffs` state so
+  multi-agent framework handoffs can be scored without a separate parser.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

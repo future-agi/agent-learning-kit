@@ -487,6 +487,9 @@ class GenericAgentWrapper(AgentWrapper):
         history_state = _message_history_state(raw)
         if history_state:
             state.setdefault("message_history", history_state)
+        handoff_state = _message_history_handoff_state(raw)
+        if handoff_state:
+            state.setdefault("framework_handoffs", handoff_state)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -509,6 +512,7 @@ class GenericAgentWrapper(AgentWrapper):
                 continue
         events.extend(_provider_events(raw))
         events.extend(_message_history_events(raw))
+        events.extend(_message_history_coordination_events(raw))
         return events
 
 
@@ -887,6 +891,209 @@ def _message_history_events(raw: Any) -> List[SimulationEvent]:
             )
         )
     return events
+
+
+def _message_history_coordination_events(raw: Any) -> List[SimulationEvent]:
+    state = _message_history_handoff_state(raw)
+    if not state:
+        return []
+    events: List[SimulationEvent] = []
+    for index, handoff in enumerate(state.get("handoffs", []), start=1):
+        handoff_dict = dict(handoff)
+        events.append(
+            SimulationEvent(
+                type="framework_handoff",
+                name=str(
+                    handoff_dict.get("name")
+                    or f"{handoff_dict.get('from', '')}->{handoff_dict.get('to', '')}"
+                ),
+                payload={**handoff_dict, "sequence": index},
+                metadata={"kind": "framework_coordination", "coordination": "handoff"},
+            )
+        )
+    for index, review in enumerate(state.get("reviews", []), start=1):
+        review_dict = dict(review)
+        events.append(
+            SimulationEvent(
+                type="framework_review",
+                name=str(review_dict.get("name") or review_dict.get("reviewer") or "review"),
+                payload={**review_dict, "sequence": index},
+                metadata={"kind": "framework_coordination", "coordination": "review"},
+            )
+        )
+    for index, reconciliation in enumerate(state.get("reconciliations", []), start=1):
+        reconciliation_dict = dict(reconciliation)
+        events.append(
+            SimulationEvent(
+                type="framework_reconciliation",
+                name=str(
+                    reconciliation_dict.get("name")
+                    or reconciliation_dict.get("accepted_source")
+                    or "reconciliation"
+                ),
+                payload={**reconciliation_dict, "sequence": index},
+                metadata={
+                    "kind": "framework_coordination",
+                    "coordination": "reconciliation",
+                },
+            )
+        )
+    return events
+
+
+def _message_history_handoff_state(raw: Any) -> Dict[str, Any]:
+    messages = _message_history(raw)
+    if not messages:
+        return {}
+    handoffs: List[Dict[str, Any]] = []
+    reviews: List[Dict[str, Any]] = []
+    reconciliations: List[Dict[str, Any]] = []
+    participants: set[str] = set()
+
+    for index, message in enumerate(messages, start=1):
+        source = str(
+            message.get("source")
+            or message.get("speaker")
+            or message.get("name")
+            or message.get("role")
+            or ""
+        )
+        if source:
+            participants.add(source)
+        target = str(message.get("handoff_to") or message.get("recipient") or "")
+        if target:
+            participants.add(target)
+        if _is_handoff_message(message):
+            handoffs.append(
+                {
+                    "index": index,
+                    "name": str(message.get("name") or "framework_handoff"),
+                    "from": str(message.get("handoff_from") or source),
+                    "to": target,
+                    "task": str(message.get("task") or _message_content(message)),
+                    "reason": str(message.get("reason") or message.get("rationale") or ""),
+                    "message_type": str(
+                        message.get("type") or message.get("kind") or message.get("role") or ""
+                    ),
+                }
+            )
+        review = _review_payload_from_message(message, index=index, source=source)
+        if review:
+            reviewer = str(review.get("reviewer") or "")
+            if reviewer:
+                participants.add(reviewer)
+            review_target = str(review.get("target") or "")
+            if review_target:
+                participants.add(review_target)
+            reviews.append(review)
+        reconciliation = _reconciliation_payload_from_message(
+            message,
+            index=index,
+            source=source,
+        )
+        if reconciliation:
+            accepted_source = str(reconciliation.get("accepted_source") or "")
+            if accepted_source:
+                participants.add(accepted_source)
+            reconciliations.append(reconciliation)
+
+    if not handoffs and not reviews and not reconciliations:
+        return {}
+    return {
+        "handoff_count": len(handoffs),
+        "review_count": len(reviews),
+        "reconciliation_count": len(reconciliations),
+        "participants": sorted(participants),
+        "handoffs": handoffs,
+        "reviews": reviews,
+        "reconciliations": reconciliations,
+    }
+
+
+def _is_handoff_message(message: Mapping[str, Any]) -> bool:
+    if message.get("handoff_to") or message.get("recipient"):
+        return True
+    message_type = str(message.get("type") or message.get("kind") or "").lower()
+    name = str(message.get("name") or "").lower()
+    return "handoff" in message_type or "handoff" in name
+
+
+def _review_payload_from_message(
+    message: Mapping[str, Any],
+    *,
+    index: int,
+    source: str,
+) -> Dict[str, Any]:
+    review = _object_mapping(message.get("review"))
+    if review:
+        payload = {
+            "index": index,
+            "name": str(message.get("name") or review.get("name") or "framework_review"),
+            "reviewer": str(review.get("reviewer") or review.get("by") or source),
+            "target": str(review.get("target") or review.get("target_agent") or ""),
+            "status": str(review.get("status") or review.get("verdict") or ""),
+            "message_type": str(message.get("type") or message.get("kind") or ""),
+        }
+        if review.get("notes") not in (None, "", [], {}):
+            payload["notes"] = _plain_value(review.get("notes"))
+        return payload
+    if not (
+        message.get("review_target")
+        or message.get("reviewer")
+        or "review" in str(message.get("type") or message.get("kind") or "").lower()
+        or "review" in str(message.get("name") or "").lower()
+    ):
+        return {}
+    return {
+        "index": index,
+        "name": str(message.get("name") or "framework_review"),
+        "reviewer": str(message.get("reviewer") or source),
+        "target": str(message.get("review_target") or message.get("target") or ""),
+        "status": str(message.get("review_status") or message.get("status") or ""),
+        "message_type": str(message.get("type") or message.get("kind") or ""),
+        "content": _message_content(message),
+    }
+
+
+def _reconciliation_payload_from_message(
+    message: Mapping[str, Any],
+    *,
+    index: int,
+    source: str,
+) -> Dict[str, Any]:
+    reconciliation = _object_mapping(message.get("reconciliation"))
+    if reconciliation:
+        payload = {
+            "index": index,
+            "name": str(
+                message.get("name")
+                or reconciliation.get("name")
+                or "framework_reconciliation"
+            ),
+            "source": source,
+            "accepted_source": str(reconciliation.get("accepted_source") or ""),
+            "status": str(reconciliation.get("status") or reconciliation.get("verdict") or ""),
+            "message_type": str(message.get("type") or message.get("kind") or ""),
+        }
+        if reconciliation.get("notes") not in (None, "", [], {}):
+            payload["notes"] = _plain_value(reconciliation.get("notes"))
+        return payload
+    if not (
+        message.get("accepted_source")
+        or message.get("reconciliation_status")
+        or "reconciliation" in str(message.get("type") or message.get("kind") or "").lower()
+        or "reconciliation" in str(message.get("name") or "").lower()
+    ):
+        return {}
+    return {
+        "index": index,
+        "name": str(message.get("name") or "framework_reconciliation"),
+        "source": source,
+        "accepted_source": str(message.get("accepted_source") or ""),
+        "status": str(message.get("reconciliation_status") or message.get("status") or ""),
+        "message_type": str(message.get("type") or message.get("kind") or ""),
+        "content": _message_content(message),
+    }
 
 
 def _message_history_state(raw: Any) -> Dict[str, Any]:

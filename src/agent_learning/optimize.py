@@ -15772,6 +15772,9 @@ def build_framework_adapter_probe_evaluation_config(
     state_keys = _unique_strings(
         _framework_probe_response_values(selected_report, "state_keys")
     )
+    event_types = _unique_strings(
+        _framework_probe_response_values(selected_report, "event_types")
+    )
     runtime_state_keys = [
         key
         for key in state_keys
@@ -15796,6 +15799,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
             *(["tool"] if tool_names else []),
+            *(["event"] if event_types else []),
         ]
     )
     criteria = _unique_strings(
@@ -15806,6 +15810,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["typed state evidence"] if runtime_state_keys else []),
             *(["streaming trace evidence"] if streaming_observed else []),
             *(["tool evidence"] if tool_names else []),
+            *(["event evidence"] if event_types else []),
         ]
     )
     contract_capabilities = _unique_strings(contract.get("capabilities"))
@@ -15892,6 +15897,7 @@ def build_framework_adapter_probe_evaluation_config(
         ),
         "required_tools": tool_names,
         "available_tools": tool_names,
+        "required_events": event_types,
         "success_criteria": criteria,
         "required_framework_runtime": [
             "framework_runtime",
@@ -15902,6 +15908,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["state"] if runtime_state_keys else []),
             *(["streaming"] if streaming_observed else []),
             *(["tool"] if tool_names else []),
+            *(["event"] if event_types else []),
         ],
         "framework_runtime_contract": runtime_contract,
         "framework_adapter_contract_quality": contract_quality,

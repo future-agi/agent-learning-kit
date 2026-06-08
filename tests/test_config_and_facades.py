@@ -1737,6 +1737,88 @@ def test_message_history_framework_adapter_preserves_transcript_evidence(tmp_pat
     assert runtime["summary"]["input_keys"] == ["task"]
 
 
+def test_handoff_transcript_framework_adapter_preserves_coordination(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = (
+        PROJECT_ROOT / "examples" / "sdk_framework_adapter_handoff_transcript.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_handoff_transcript_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "openai_agents",
+        module.LocalHandoffTeam(),
+        target=module.TARGET,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=4,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("execute_task", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == [
+        "framework_handoffs",
+        "message_history",
+    ]
+    assert set(config["required_events"]) >= {
+        "framework_handoff",
+        "framework_review",
+        "framework_reconciliation",
+    }
+    assert "event" in config["required_framework_runtime"]
+    assert set(runtime_contract["required_signals"]) >= {"event", "state"}
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-handoff-transcript-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    coordination = state["framework_handoffs"]
+    assert coordination["handoff_count"] == 2
+    assert coordination["review_count"] == 1
+    assert coordination["reconciliation_count"] == 1
+    assert coordination["participants"] == [
+        "critic_agent",
+        "retrieval_agent",
+        "triage_agent",
+    ]
+    assert {handoff["to"] for handoff in coordination["handoffs"]} == {
+        "critic_agent",
+        "retrieval_agent",
+    }
+    assert coordination["reviews"][0]["status"] == "passed"
+    assert coordination["reconciliations"][0]["accepted_source"] == "retrieval_agent"
+    runtime = state["framework_runtime"]
+    event_types = set(runtime["invocations"][0]["output"]["event_types"])
+    assert {
+        "framework_handoff",
+        "framework_review",
+        "framework_reconciliation",
+    } <= event_types
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

@@ -1766,6 +1766,53 @@ def test_sdk_framework_adapter_message_history_example_runs(tmp_path):
     assert "ToolCallRequestEvent" in output["event_types"]
 
 
+def test_sdk_framework_adapter_handoff_transcript_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_handoff_transcript.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_handoff_transcript",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-handoff-transcript.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_handoff_transcript_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_state_keys"] == [
+        "framework_handoffs",
+        "message_history",
+    ]
+    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+        "framework_handoff",
+        "framework_review",
+        "framework_reconciliation",
+    }
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    coordination = state["framework_handoffs"]
+    assert coordination["handoff_count"] == 2
+    assert coordination["review_count"] == 1
+    assert coordination["reconciliation_count"] == 1
+    event_types = set(
+        state["framework_runtime"]["invocations"][0]["output"]["event_types"]
+    )
+    assert {
+        "framework_handoff",
+        "framework_review",
+        "framework_reconciliation",
+    } <= event_types
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

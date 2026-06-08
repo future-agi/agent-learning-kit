@@ -661,6 +661,12 @@ embedded tool-call request/execution events become normal `tool_calls`,
 framework transcripts can be optimized and scored without hand-written
 post-processing. See `examples/sdk_framework_adapter_message_history.py`.
 
+Framework handoff transcripts get a compact coordination view. Messages with
+`handoff_to`/`recipient`, review fields, or reconciliation fields also emit
+`framework_handoff`, `framework_review`, and `framework_reconciliation` events
+plus `framework_handoffs` state with participants, handoffs, reviews, and
+reconciliations. See `examples/sdk_framework_adapter_handoff_transcript.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1275,6 +1281,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_provider_response.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_message_history.py \
   artifacts/sdk-framework-adapter-message-history.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_handoff_transcript.py \
+  artifacts/sdk-framework-adapter-handoff-transcript.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \
