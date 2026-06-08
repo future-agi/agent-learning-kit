@@ -15172,6 +15172,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_openenv_optimizer_files"] == (
         trinity.V1_OPENENV_OPTIMIZER_FILES
     )
+    assert payload["required_framework_optimizer_files"] == (
+        trinity.V1_FRAMEWORK_OPTIMIZER_FILES
+    )
+    assert payload["required_framework_optimizer_contracts"] == (
+        trinity.V1_FRAMEWORK_OPTIMIZER_CONTRACTS
+    )
     assert payload["required_protocol_adapter_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES
     )
@@ -15223,6 +15229,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
         "openenv_optimizer_readiness",
+        "framework_optimizer_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "stateful_framework_adapter_readiness",
@@ -15637,6 +15644,139 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert openenv_optimizer_evidence["best_metrics"] == {
         "openenv_coverage": pytest.approx(1.0),
         "openenv_quality": pytest.approx(1.0),
+    }
+    framework_optimizer = checks["framework_optimizer_readiness"]["evidence"]
+    assert framework_optimizer["required_files"] == (
+        trinity.V1_FRAMEWORK_OPTIMIZER_FILES
+    )
+    assert framework_optimizer["required_contracts"] == (
+        trinity.V1_FRAMEWORK_OPTIMIZER_CONTRACTS
+    )
+    assert framework_optimizer["missing_files"] == []
+    assert framework_optimizer["manifest_errors"] == []
+    assert framework_optimizer["optimization_errors"] == []
+    assert framework_optimizer["metric_errors"] == []
+    assert framework_optimizer["proof_errors"] == []
+    assert framework_optimizer["errors"] == []
+    framework_optimizations = {
+        item["surface"]: item for item in framework_optimizer["optimizations"]
+    }
+
+    custom_optimizer = framework_optimizations["custom_framework_adapter"]
+    assert custom_optimizer["result_kind"] == "agent-learning.optimization.v1"
+    assert custom_optimizer["result_status"] == "passed"
+    assert custom_optimizer["optimization_score"] >= 0.95
+    assert custom_optimizer["evaluation_score"] == pytest.approx(1.0)
+    assert custom_optimizer["history_count"] == 2
+    assert custom_optimizer["candidate_lineage_count"] == 2
+    assert custom_optimizer["search_paths"] == ["agent"]
+    assert custom_optimizer["best_patch_keys"] == ["agent"]
+    assert custom_optimizer["best_agent"] == {
+        "framework": "custom_refund_orchestrator",
+        "input_mode": "dict",
+        "method": "execute_task",
+        "type": "framework",
+    }
+    assert custom_optimizer["best_metrics"] == {
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_runtime_coverage": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    assert custom_optimizer["optimizer_trace"] == "AgentOptimizer"
+    assert "framework_runtime_proof" in custom_optimizer["proof_keys"]
+
+    social_optimizer = framework_optimizations["social_memory_framework"]
+    assert social_optimizer["optimization_score"] >= 0.95
+    assert social_optimizer["evaluation_score"] == pytest.approx(1.0)
+    assert social_optimizer["history_count"] == 4
+    assert social_optimizer["candidate_lineage_count"] == 4
+    assert social_optimizer["search_paths"] == ["agent", "simulation.environments"]
+    assert social_optimizer["best_patch_keys"] == [
+        "agent",
+        "simulation.environments",
+    ]
+    assert social_optimizer["best_agent"]["method"] == "execute_task"
+    assert social_optimizer["best_agent"]["input_mode"] == "dict"
+    assert social_optimizer["best_environment_types"] == ["framework_trace"]
+    assert social_optimizer["optimizer_trace"] == "AgentSocialMemoryOptimizer"
+    assert social_optimizer["best_metrics"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert social_optimizer["best_metrics"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert "framework_runtime_proof" in social_optimizer["proof_keys"]
+
+    world_optimizer = framework_optimizations["world_framework_memory"]
+    assert world_optimizer["optimization_score"] >= 0.9
+    assert world_optimizer["evaluation_score"] == pytest.approx(1.0)
+    assert world_optimizer["history_count"] == 2
+    assert world_optimizer["best_environment_types"] == [
+        "world_orchestration_replay",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    assert world_optimizer["best_metrics"] == {
+        "framework_trace_coverage": pytest.approx(1.0),
+        "orchestration_flow_quality": pytest.approx(1.0),
+        "world_contract_quality": pytest.approx(1.0),
+        "retrieval_context_quality": pytest.approx(1.0),
+        "agent_memory_lineage_quality": pytest.approx(1.0),
+        "retrieval_memory_attribution": pytest.approx(1.0),
+        "multi_agent_coordination_quality": pytest.approx(1.0),
+    }
+
+    handoff_optimizer = framework_optimizations["multi_agent_framework_handoff"]
+    assert handoff_optimizer["optimization_score"] >= 0.99
+    assert handoff_optimizer["evaluation_score"] == pytest.approx(1.0)
+    assert handoff_optimizer["history_count"] == 3
+    assert handoff_optimizer["best_environment_types"] == [
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "framework_trace",
+        "multi_agent_room",
+    ]
+    assert handoff_optimizer["best_metrics"] == {
+        "framework_trace_coverage": pytest.approx(1.0),
+        "framework_transcript_quality": pytest.approx(1.0),
+        "multi_agent_coordination_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    assert handoff_optimizer["optimizer_trace"] == "AgentEvolutionOptimizer"
+    assert "multi_agent_coordination_proof" in handoff_optimizer["proof_keys"]
+
+    cert_optimizer = framework_optimizations["framework_certification"]
+    assert cert_optimizer["optimization_score"] >= 0.98
+    assert cert_optimizer["evaluation_score"] == pytest.approx(1.0)
+    assert cert_optimizer["best_environment_types"] == [
+        "framework_lifecycle",
+        "framework_capability",
+        "framework_probe",
+        "framework_portability",
+    ]
+    assert cert_optimizer["best_metrics"] == {
+        "framework_lifecycle_quality": pytest.approx(1.0),
+        "framework_capability_coverage": pytest.approx(1.0),
+        "framework_probe_quality": pytest.approx(1.0),
+        "framework_portability_quality": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    assert "framework_certification_proof" in cert_optimizer["proof_keys"]
+
+    import_optimizer = framework_optimizations["framework_import_repair"]
+    assert import_optimizer["optimization_score"] == pytest.approx(1.0)
+    assert import_optimizer["evaluation_score"] == pytest.approx(1.0)
+    assert import_optimizer["history_count"] == 3
+    assert import_optimizer["best_environment_types"] == ["framework_import"]
+    assert import_optimizer["best_metrics"] == {
+        "framework_import_coverage": pytest.approx(1.0),
+        "framework_import_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
     }
     protocol_adapter = checks["protocol_adapter_readiness"]["evidence"]
     assert protocol_adapter["required_files"] == (

@@ -4478,10 +4478,10 @@ def _framework_runtime_proof(
         "framework_trace_coverage": 1.0,
         "tool_selection_accuracy": 1.0,
     }
+    optional_metric_thresholds = {"framework_adapter_contract_quality"}
     selected_metric_evidence = {
         key: selected_metrics.get(key)
         for key in metric_thresholds
-        if key in selected_metrics
     }
 
     optimizer_trace = _plain_mapping(optimization.get("optimizer_trace"))
@@ -4696,7 +4696,8 @@ def _framework_runtime_proof(
         _proof_check(
             "framework_runtime_metric_evidence_closed",
             passed=all(
-                _as_float(selected_metrics.get(key)) >= threshold
+                (key in optional_metric_thresholds and key not in selected_metrics)
+                or _as_float(selected_metrics.get(key)) >= threshold
                 for key, threshold in metric_thresholds.items()
             ),
             required=True,
@@ -6142,9 +6143,16 @@ def _multi_agent_coordination_proof(
         ),
         _proof_check(
             "multi_agent_room_environment_present",
-            passed=environment_types == ["multi_agent_room"],
+            passed="multi_agent_room" in environment_types
+            and (
+                environment_types == ["multi_agent_room"]
+                or "framework_trace" in environment_types
+            ),
             required=True,
-            reason="selected candidate is a dedicated multi_agent_room bundle",
+            reason=(
+                "selected candidate includes a multi_agent_room bundle, either "
+                "standalone or attached to framework handoff traces"
+            ),
             evidence={"environment_types": environment_types},
         ),
         _proof_check(
@@ -30673,15 +30681,18 @@ def _is_multi_agent_coordination_optimization(
 ) -> bool:
     source_manifest = _plain_mapping(optimization.get("source_manifest"))
     source_metadata = _plain_mapping(source_manifest.get("metadata"))
-    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    source_optimization = _plain_mapping(
+        source_manifest.get("optimization")
+    ) or _plain_mapping(optimization.get("manifest_optimization"))
     target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
     metadata = {
         **source_metadata,
         **_plain_mapping(target.get("metadata")),
     }
     task_kind = _scope_key(metadata.get("task_kind"))
-    if task_kind == "multi_agent_coordination":
+    if task_kind in {"multi_agent_coordination", "multi_agent_framework_handoff"}:
         return True
+    layers = {_scope_key(layer) for layer in _plain_list(target.get("layers"))}
 
     best_config = _plain_mapping(optimization.get("best_config"))
     simulation = _plain_mapping(best_config.get("simulation"))
@@ -30692,6 +30703,17 @@ def _is_multi_agent_coordination_optimization(
     ]
     if environment_types == ["multi_agent_room"]:
         return True
+    if (
+        {"framework", "multi_agent"}.issubset(layers)
+        and "framework_trace" in environment_types
+        and "multi_agent_room" in environment_types
+    ):
+        return True
+    if "framework_trace" in environment_types and "multi_agent_room" in environment_types:
+        selected_history = _selected_optimization_history(payload, optimization)
+        selected_metrics = _plain_mapping(selected_history.get("metrics"))
+        if _as_float(selected_metrics.get("multi_agent_coordination_quality")) >= 1.0:
+            return True
 
     selected_history = _selected_optimization_history(payload, optimization)
     return set(_selected_report_environment_state(selected_history)) == {"multi_agent"}

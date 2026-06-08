@@ -77,10 +77,12 @@ CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, and
 A2A, requires local fixture targets with no external service dependency, and
 validates representative text, voice, CUA, realtime, browser/CUA, memory,
 workflow, orchestration, lifecycle, protocol, and OpenEnv framework manifests.
-It also runs the composed trinity-stack probe readiness gate, proving that the
-selected orchestration stack agent can pass a localhost task evaluator and
-promote into one run manifest with world, framework, retrieval, memory,
-multi-agent, and evaluation-hook evidence.
+It also runs framework optimizer readiness for custom adapters, social-memory
+synthesis, world/framework/memory stacks, multi-agent framework handoffs,
+framework certification, and framework import repair. The composed
+trinity-stack probe readiness gate proves that the selected orchestration stack
+agent can pass a localhost task evaluator and promote into one run manifest with
+world, framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -380,9 +382,17 @@ lineage, and multi-agent review evidence.
 The SDK-native wrapper is
 `optimize.build_world_framework_memory_optimization_manifest()` /
 `optimize.optimize_world_framework_memory()`; it searches agent behavior and a
-coherent `simulation.environments` bundle, emits the same orchestration-stack
-proof, and stays local unless the caller explicitly supplies external
-environment wiring.
+coherent `simulation.environments` bundle, emits orchestration-stack evidence,
+and stays local unless the caller explicitly supplies external environment
+wiring.
+
+`agent-learn release-check` now treats framework optimization as executable V1
+readiness. The gate runs the custom framework adapter, social-memory framework,
+world/framework/memory, multi-agent framework handoff, framework certification,
+and framework import-repair optimizer cookbooks locally. It requires the
+selected best candidates to match the expected adapter methods, environment
+bundles, candidate lineage, metrics, optimizer traces, and native proof payloads
+for the covered surfaces.
 
 The `agent_learning_suite.json` example is the promptfoo-style CI entrypoint:
 one manifest runs simulation, the nested multi-framework adapter suite,

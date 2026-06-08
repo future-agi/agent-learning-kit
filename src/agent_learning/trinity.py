@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -262,6 +263,9 @@ V1_REQUIRED_EXAMPLES = [
     "examples/agent_integration_optimization.json",
     "examples/world_model_optimization.json",
     "examples/world_framework_memory_optimization.json",
+    "examples/custom_framework_optimization.json",
+    "examples/social_memory_framework_optimization.json",
+    "examples/multi_agent_framework_handoff_optimization.json",
     "examples/sdk_world_hooks_optimization.py",
     "examples/sdk_optimizer_portfolio_optimization.py",
     "examples/sdk_framework_certification_optimization.py",
@@ -371,6 +375,10 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/voice_streaming_realtime_manifest.json",
     "examples/voice_streaming_realtime_optimization.json",
     "examples/agent_integration_optimization.json",
+    "examples/world_framework_memory_optimization.json",
+    "examples/custom_framework_optimization.json",
+    "examples/social_memory_framework_optimization.json",
+    "examples/multi_agent_framework_handoff_optimization.json",
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
     "examples/sdk_framework_adapter_realtime_trace.py",
@@ -544,6 +552,185 @@ V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES = [
 V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
     "openenv_coverage",
     "openenv_quality",
+]
+
+V1_FRAMEWORK_OPTIMIZER_FILES = [
+    "examples/custom_framework_optimization.json",
+    "examples/social_memory_framework_optimization.json",
+    "examples/world_framework_memory_optimization.json",
+    "examples/multi_agent_framework_handoff_optimization.json",
+    "examples/framework_certification_optimization.json",
+    "examples/framework_import_repair_optimization.json",
+    "internal-docs/framework-optimizer-readiness-research.md",
+]
+
+V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
+    {
+        "surface": "custom_framework_adapter",
+        "path": "examples/custom_framework_optimization.json",
+        "required_env": ["AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY"],
+        "required_layers": ["framework", "harness", "evaluator"],
+        "required_search_paths": ["agent"],
+        "required_best_patch_keys": ["agent"],
+        "expected_best_agent": {
+            "type": "framework",
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+        },
+        "required_optimizer": "AgentOptimizer",
+        "min_optimization_score": 0.95,
+        "min_evaluation_score": 1.0,
+        "min_history_count": 2,
+        "min_candidate_lineage_count": 2,
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_runtime_coverage": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_proofs": ["framework_runtime_proof"],
+    },
+    {
+        "surface": "social_memory_framework",
+        "path": "examples/social_memory_framework_optimization.json",
+        "required_env": ["AGENT_LEARNING_SOCIAL_MEMORY_OPT_EXAMPLE_KEY"],
+        "required_layers": ["framework", "orchestration", "memory", "evaluator"],
+        "required_search_paths": ["agent", "simulation.environments"],
+        "required_best_patch_keys": ["agent", "simulation.environments"],
+        "expected_best_agent": {
+            "type": "framework",
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+        },
+        "required_best_environment_types": ["framework_trace"],
+        "required_optimizer": "AgentSocialMemoryOptimizer",
+        "min_optimization_score": 0.95,
+        "min_evaluation_score": 1.0,
+        "min_history_count": 4,
+        "min_candidate_lineage_count": 4,
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_runtime_coverage": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_proofs": ["framework_runtime_proof"],
+    },
+    {
+        "surface": "world_framework_memory",
+        "path": "examples/world_framework_memory_optimization.json",
+        "required_env": ["AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY"],
+        "required_layers": [
+            "harness",
+            "framework",
+            "memory",
+            "multi_agent",
+            "evaluator",
+        ],
+        "required_search_paths": ["simulation.environments"],
+        "required_best_patch_keys": ["simulation.environments"],
+        "required_best_environment_types": [
+            "world_orchestration_replay",
+            "framework_trace",
+            "retrieval_memory",
+            "agent_memory_lineage",
+            "multi_agent_room",
+        ],
+        "required_optimizer": "AgentOptimizer",
+        "min_optimization_score": 0.9,
+        "min_evaluation_score": 1.0,
+        "min_history_count": 2,
+        "min_candidate_lineage_count": 2,
+        "required_metrics": {
+            "framework_trace_coverage": 1.0,
+            "orchestration_flow_quality": 1.0,
+            "world_contract_quality": 1.0,
+            "retrieval_context_quality": 1.0,
+            "agent_memory_lineage_quality": 1.0,
+            "retrieval_memory_attribution": 1.0,
+            "multi_agent_coordination_quality": 1.0,
+        },
+    },
+    {
+        "surface": "multi_agent_framework_handoff",
+        "path": "examples/multi_agent_framework_handoff_optimization.json",
+        "required_env": [
+            "AGENT_LEARNING_MULTI_AGENT_FRAMEWORK_HANDOFF_OPT_EXAMPLE_KEY"
+        ],
+        "required_layers": ["framework", "multi_agent", "orchestration", "memory"],
+        "required_search_paths": ["simulation.environments"],
+        "required_best_patch_keys": ["simulation.environments"],
+        "required_best_environment_types": [
+            "framework_trace",
+            "framework_trace",
+            "framework_trace",
+            "framework_trace",
+            "multi_agent_room",
+        ],
+        "required_optimizer": "AgentEvolutionOptimizer",
+        "min_optimization_score": 0.99,
+        "min_evaluation_score": 1.0,
+        "min_history_count": 3,
+        "min_candidate_lineage_count": 3,
+        "required_metrics": {
+            "framework_trace_coverage": 1.0,
+            "framework_transcript_quality": 1.0,
+            "multi_agent_coordination_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_proofs": ["multi_agent_coordination_proof"],
+    },
+    {
+        "surface": "framework_certification",
+        "path": "examples/framework_certification_optimization.json",
+        "required_env": ["AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY"],
+        "required_layers": ["framework", "integration", "harness", "evaluator"],
+        "required_search_paths": ["simulation.environments"],
+        "required_best_patch_keys": ["simulation.environments"],
+        "required_best_environment_types": [
+            "framework_lifecycle",
+            "framework_capability",
+            "framework_probe",
+            "framework_portability",
+        ],
+        "required_optimizer": "AgentOptimizer",
+        "min_optimization_score": 0.98,
+        "min_evaluation_score": 1.0,
+        "min_history_count": 2,
+        "min_candidate_lineage_count": 2,
+        "required_metrics": {
+            "framework_lifecycle_quality": 1.0,
+            "framework_capability_coverage": 1.0,
+            "framework_probe_quality": 1.0,
+            "framework_portability_quality": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_proofs": ["framework_certification_proof"],
+    },
+    {
+        "surface": "framework_import_repair",
+        "path": "examples/framework_import_repair_optimization.json",
+        "required_env": [
+            "AGENT_LEARNING_FRAMEWORK_IMPORT_REPAIR_OPT_EXAMPLE_KEY"
+        ],
+        "required_layers": ["framework", "integration", "evaluator"],
+        "required_search_paths": ["simulation.environments"],
+        "required_best_patch_keys": ["simulation.environments"],
+        "required_best_environment_types": ["framework_import"],
+        "required_optimizer": "AgentOptimizer",
+        "min_optimization_score": 1.0,
+        "min_evaluation_score": 1.0,
+        "min_history_count": 3,
+        "min_candidate_lineage_count": 3,
+        "required_metrics": {
+            "framework_import_coverage": 1.0,
+            "framework_import_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
 ]
 
 V1_PROTOCOL_ADAPTER_FILES = [
@@ -1310,6 +1497,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=openenv_optimizer,
     )
+    framework_optimizer = _release_framework_optimizer_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_optimizer_readiness",
+        passed=(
+            not framework_optimizer["missing_files"]
+            and not framework_optimizer["manifest_errors"]
+            and not framework_optimizer["optimization_errors"]
+            and not framework_optimizer["metric_errors"]
+            and not framework_optimizer["proof_errors"]
+            and not framework_optimizer["errors"]
+        ),
+        milestone="M6",
+        evidence=framework_optimizer,
+    )
     protocol_adapter = _release_protocol_adapter_status(root)
     _append_release_check(
         checks,
@@ -1474,6 +1676,10 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
         ),
         "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
+        "required_framework_optimizer_files": list(V1_FRAMEWORK_OPTIMIZER_FILES),
+        "required_framework_optimizer_contracts": copy.deepcopy(
+            V1_FRAMEWORK_OPTIMIZER_CONTRACTS
+        ),
         "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
         "required_protocol_adapter_contracts": copy.deepcopy(
             V1_PROTOCOL_ADAPTER_CONTRACTS
@@ -3566,6 +3772,442 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_framework_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_FRAMEWORK_OPTIMIZER_FILES)
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    optimizations: list[dict[str, Any]] = []
+
+    if not missing_files:
+        try:
+            from agent_learning import optimize
+        except Exception as exc:
+            errors.append({"path": "agent_learning.optimize", "error": str(exc)})
+            optimize = None  # type: ignore[assignment]
+
+        if optimize is not None:
+            for contract in V1_FRAMEWORK_OPTIMIZER_CONTRACTS:
+                surface = str(contract["surface"])
+                relative_path = str(contract["path"])
+                example_path = root / relative_path
+                manifest: Mapping[str, Any] = {}
+                result: Mapping[str, Any] = {}
+
+                try:
+                    manifest = json.loads(example_path.read_text(encoding="utf-8"))
+                    result = _release_run_with_local_env(
+                        _as_list(contract.get("required_env")),
+                        lambda path=example_path: optimize.optimize_manifest_file(path),
+                    )
+                except Exception as exc:
+                    errors.append({"surface": surface, "path": relative_path, "error": str(exc)})
+
+                if manifest:
+                    _append_framework_optimizer_manifest_errors(
+                        manifest_errors,
+                        surface=surface,
+                        path=relative_path,
+                        manifest=manifest,
+                        contract=contract,
+                    )
+
+                if result:
+                    record = _framework_optimizer_record(result, contract)
+                    record["surface"] = surface
+                    record["path"] = relative_path
+                    optimizations.append(record)
+                    _append_framework_optimizer_result_errors(
+                        optimization_errors,
+                        metric_errors,
+                        proof_errors,
+                        surface=surface,
+                        path=relative_path,
+                        result=result,
+                        contract=contract,
+                        record=record,
+                    )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_OPTIMIZER_FILES),
+        "required_contracts": copy.deepcopy(V1_FRAMEWORK_OPTIMIZER_CONTRACTS),
+        "missing_files": missing_files,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "proof_errors": proof_errors,
+        "errors": errors,
+        "optimizations": optimizations,
+    }
+
+
+def _release_run_with_local_env(
+    required_env: Sequence[Any],
+    callback: Any,
+) -> Any:
+    env_names = [str(name) for name in required_env if str(name)]
+    previous = {name: os.environ.get(name) for name in env_names}
+    try:
+        for name in env_names:
+            os.environ.setdefault(name, f"agent-learning-release-local-{name.lower()}")
+        return callback()
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _append_framework_optimizer_manifest_errors(
+    errors: list[dict[str, Any]],
+    *,
+    surface: str,
+    path: str,
+    manifest: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    if manifest.get("version") != "agent-learning.optimization.v1":
+        errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "version",
+                "expected": "agent-learning.optimization.v1",
+                "observed": manifest.get("version"),
+            }
+        )
+
+    required_env = [str(item) for item in _as_list(contract.get("required_env"))]
+    observed_env = [str(item) for item in _as_list(manifest.get("required_env"))]
+    if sorted(observed_env) != sorted(required_env):
+        errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "required_env",
+                "expected": required_env,
+                "observed": observed_env,
+            }
+        )
+
+    optimization = _as_mapping(manifest.get("optimization"))
+    target = _as_mapping(optimization.get("target"))
+    layers = {str(item) for item in _as_list(target.get("layers"))}
+    missing_layers = sorted({str(item) for item in _as_list(contract.get("required_layers"))} - layers)
+    if missing_layers:
+        errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "optimization.target.layers",
+                "expected": _as_list(contract.get("required_layers")),
+                "observed": sorted(layers),
+                "missing": missing_layers,
+            }
+        )
+
+    search_space = _as_mapping(target.get("search_space"))
+    missing_search_paths = sorted(
+        {str(item) for item in _as_list(contract.get("required_search_paths"))}
+        - set(str(key) for key in search_space)
+    )
+    if missing_search_paths:
+        errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "optimization.target.search_space",
+                "expected": _as_list(contract.get("required_search_paths")),
+                "observed": sorted(str(key) for key in search_space),
+                "missing": missing_search_paths,
+            }
+        )
+
+
+def _framework_optimizer_record(
+    result: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _as_mapping(result.get("summary"))
+    optimization = _as_mapping(result.get("optimization"))
+    histories = [
+        item for item in _as_list(optimization.get("history")) if isinstance(item, Mapping)
+    ]
+    best_history: Mapping[str, Any] = {}
+    best_score = -1.0
+    for history in histories:
+        score = _float_or_zero(history.get("score"))
+        if score > best_score:
+            best_score = score
+            best_history = history
+
+    best_config = _as_mapping(optimization.get("best_config"))
+    best_agent = _as_mapping(best_config.get("agent"))
+    best_simulation = _as_mapping(best_config.get("simulation"))
+    best_environments = [
+        item for item in _as_list(best_simulation.get("environments"))
+        if isinstance(item, Mapping)
+    ]
+    best_metrics = _as_mapping(best_history.get("metrics"))
+    search_paths = [str(item) for item in _as_list(summary.get("search_paths"))]
+    required_metrics = _as_mapping(contract.get("required_metrics"))
+    proof_keys = sorted(
+        {
+            key
+            for source in (result, optimization)
+            for key in source
+            if str(key).endswith("_proof") or str(key).endswith("_trace")
+        }
+    )
+
+    return {
+        "result_kind": result.get("kind"),
+        "result_status": result.get("status"),
+        "optimization_score": summary.get("optimization_score"),
+        "evaluation_score": summary.get("evaluation_score"),
+        "history_count": len(histories),
+        "candidate_lineage_count": summary.get("candidate_lineage_count"),
+        "search_paths": sorted(
+            set(search_paths)
+            & {str(item) for item in _as_list(contract.get("required_search_paths"))}
+        ),
+        "search_path_count": len(search_paths),
+        "best_history_score": best_history.get("score"),
+        "best_patch_keys": sorted(str(key) for key in _as_mapping(best_history.get("patch"))),
+        "best_agent": {
+            key: best_agent.get(key)
+            for key in sorted(_as_mapping(contract.get("expected_best_agent")))
+        },
+        "best_environment_types": [
+            str(environment.get("type")) for environment in best_environments
+        ],
+        "best_metrics": {
+            str(metric): best_metrics.get(metric) for metric in required_metrics
+        },
+        "optimizer_trace": _as_mapping(optimization.get("optimizer_trace")).get(
+            "optimizer"
+        ),
+        "proof_keys": proof_keys,
+    }
+
+
+def _append_framework_optimizer_result_errors(
+    optimization_errors: list[dict[str, Any]],
+    metric_errors: list[dict[str, Any]],
+    proof_errors: list[dict[str, Any]],
+    *,
+    surface: str,
+    path: str,
+    result: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> None:
+    if result.get("kind") != "agent-learning.optimization.v1":
+        optimization_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "kind",
+                "expected": "agent-learning.optimization.v1",
+                "observed": result.get("kind"),
+            }
+        )
+    if result.get("status") != "passed":
+        optimization_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "status",
+                "expected": "passed",
+                "observed": result.get("status"),
+            }
+        )
+
+    summary = _as_mapping(result.get("summary"))
+    optimization = _as_mapping(result.get("optimization"))
+    histories = [
+        item for item in _as_list(optimization.get("history")) if isinstance(item, Mapping)
+    ]
+    best_history = max(histories, key=lambda item: _float_or_zero(item.get("score")), default={})
+    best_metrics = _as_mapping(best_history.get("metrics"))
+
+    _append_framework_optimizer_minimum_error(
+        optimization_errors,
+        surface=surface,
+        path=path,
+        field="summary.optimization_score",
+        observed=summary.get("optimization_score"),
+        minimum=contract.get("min_optimization_score"),
+    )
+    _append_framework_optimizer_minimum_error(
+        optimization_errors,
+        surface=surface,
+        path=path,
+        field="summary.evaluation_score",
+        observed=summary.get("evaluation_score"),
+        minimum=contract.get("min_evaluation_score"),
+    )
+    _append_framework_optimizer_minimum_error(
+        optimization_errors,
+        surface=surface,
+        path=path,
+        field="optimization.history",
+        observed=len(histories),
+        minimum=contract.get("min_history_count"),
+    )
+    _append_framework_optimizer_minimum_error(
+        optimization_errors,
+        surface=surface,
+        path=path,
+        field="summary.candidate_lineage_count",
+        observed=summary.get("candidate_lineage_count"),
+        minimum=contract.get("min_candidate_lineage_count"),
+    )
+
+    search_paths = {str(item) for item in _as_list(summary.get("search_paths"))}
+    missing_search_paths = sorted(
+        {str(item) for item in _as_list(contract.get("required_search_paths"))}
+        - search_paths
+    )
+    if missing_search_paths:
+        optimization_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "summary.search_paths",
+                "expected": _as_list(contract.get("required_search_paths")),
+                "observed": sorted(search_paths),
+                "missing": missing_search_paths,
+            }
+        )
+
+    missing_patch_keys = sorted(
+        {str(item) for item in _as_list(contract.get("required_best_patch_keys"))}
+        - set(str(key) for key in _as_list(record.get("best_patch_keys")))
+    )
+    if missing_patch_keys:
+        optimization_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "optimization.best_history.patch",
+                "expected": _as_list(contract.get("required_best_patch_keys")),
+                "observed": record.get("best_patch_keys"),
+                "missing": missing_patch_keys,
+            }
+        )
+
+    expected_agent = _as_mapping(contract.get("expected_best_agent"))
+    best_config = _as_mapping(optimization.get("best_config"))
+    best_agent = _as_mapping(best_config.get("agent"))
+    for field, expected in expected_agent.items():
+        if best_agent.get(field) != expected:
+            optimization_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"optimization.best_config.agent.{field}",
+                    "expected": expected,
+                    "observed": best_agent.get(field),
+                }
+            )
+
+    expected_environment_types = [
+        str(item) for item in _as_list(contract.get("required_best_environment_types"))
+    ]
+    if expected_environment_types and record.get("best_environment_types") != expected_environment_types:
+        optimization_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "optimization.best_config.simulation.environments.type",
+                "expected": expected_environment_types,
+                "observed": record.get("best_environment_types"),
+            }
+        )
+
+    expected_optimizer = str(contract.get("required_optimizer") or "")
+    if expected_optimizer and record.get("optimizer_trace") != expected_optimizer:
+        optimization_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "optimization.optimizer_trace.optimizer",
+                "expected": expected_optimizer,
+                "observed": record.get("optimizer_trace"),
+            }
+        )
+
+    for metric, minimum in _as_mapping(contract.get("required_metrics")).items():
+        observed = best_metrics.get(metric)
+        if _float_or_zero(observed) < float(minimum):
+            metric_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"optimization.history.best.metrics.{metric}",
+                    "expected": f">={minimum}",
+                    "observed": observed,
+                }
+            )
+
+    for proof_key in [str(item) for item in _as_list(contract.get("required_proofs"))]:
+        proof = _as_mapping(result.get(proof_key)) or _as_mapping(
+            optimization.get(proof_key)
+        )
+        if not proof:
+            proof_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": proof_key,
+                    "expected": "present",
+                    "observed": None,
+                }
+            )
+            continue
+        if proof.get("status") != "passed" or proof.get("passed") is not True:
+            proof_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": proof_key,
+                    "expected": {"status": "passed", "passed": True},
+                    "observed": {
+                        "status": proof.get("status"),
+                        "passed": proof.get("passed"),
+                    },
+                }
+            )
+
+
+def _append_framework_optimizer_minimum_error(
+    errors: list[dict[str, Any]],
+    *,
+    surface: str,
+    path: str,
+    field: str,
+    observed: Any,
+    minimum: Any,
+) -> None:
+    if minimum is None:
+        return
+    if _float_or_zero(observed) >= float(minimum):
+        return
+    errors.append(
+        {
+            "surface": surface,
+            "path": path,
+            "field": field,
+            "expected": f">={minimum}",
+            "observed": observed,
+        }
+    )
+
+
 def _release_protocol_adapter_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_PROTOCOL_ADAPTER_FILES)
     adapter_errors: list[dict[str, Any]] = []
@@ -4684,6 +5326,8 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
     "V1_BROWSER_REALTIME_ADAPTER_CONTRACTS",
     "V1_BROWSER_REALTIME_ADAPTER_FILES",
+    "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
+    "V1_FRAMEWORK_OPTIMIZER_FILES",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
