@@ -73,9 +73,9 @@ rendered `harness_diagnosis` card, diagnosis actions, rollout plan, proof, and
 2026 research lineage without calling hosted optimizer/eval services.
 Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
-CrewAI, PydanticAI, LiveKit, Pipecat, OpenEnv, and Gymnasium, requires local
-fixture targets with no external service dependency, and validates
-representative text, voice, realtime, and OpenEnv framework manifests. It also
+CrewAI, PydanticAI, LiveKit, Pipecat, OpenEnv, Gymnasium, MCP, and A2A, requires
+local fixture targets with no external service dependency, and validates
+representative text, voice, realtime, protocol, and OpenEnv framework manifests. It also
 runs the composed trinity-stack probe readiness gate, proving that the selected
 orchestration stack agent can pass a localhost task evaluator and promote into
 one run manifest with world, framework, retrieval, memory, multi-agent, and
@@ -688,6 +688,9 @@ status updates, task artifact updates, or protocol artifacts become
 adapter eval configs can also require A2A coverage and quality gates for agent
 cards, skills, messages, tasks, artifacts, status updates, terminal tasks, roles,
 and states. See `examples/sdk_framework_adapter_a2a_protocol_trace.py`.
+`agent-learn release-check` runs this cookbook locally and requires the selected
+`send_message(dict)` adapter to emit A2A state, events, artifacts, and passing
+coverage/quality metrics.
 
 MCP client/server sessions normalize protocol-native tool evidence. Outputs
 carrying MCP `tools/list`, `tools/call`, resource, JSON-RPC, or `{tools, calls}`
@@ -695,7 +698,10 @@ exports become `mcp_tool_session` state, a trace artifact, `mcp_*` events,
 ordinary tool calls, and tool responses. Generated adapter eval configs can also
 require MCP coverage and quality gates for servers, sessions, schemas,
 resources, tool calls, tool results, and tool names. See
-`examples/sdk_framework_adapter_mcp_tool_session.py`.
+`examples/sdk_framework_adapter_mcp_tool_session.py`. `agent-learn
+release-check` runs this cookbook locally and requires the selected
+`execute_task(dict)` adapter to emit MCP session state, tool schemas,
+calls/results, resources, artifacts, and passing coverage/quality metrics.
 
 OpenEnv/Gymnasium-style framework outputs normalize into environment replay
 evidence. Local adapters can return `openenv`, `open_env`, reset/step
@@ -784,8 +790,8 @@ local `agent-learning.framework-adapter-contract.v1` per framework, rejects
 HTTP/HTTPS targets by default, and carries a `contract_quality_gate` that
 `framework_adapter_contract_quality` can score with plural requirements such as
 `required_frameworks`. The default matrix covers LangChain, LangGraph,
-LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, Pipecat, OpenEnv, and
-Gymnasium without importing or calling those packages.
+LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, Pipecat, OpenEnv,
+Gymnasium, MCP, and A2A without importing or calling those packages.
 `simulate.build_framework_adapter_matrix_run_manifest()` turns the same matrix
 into a normal local run artifact. `optimize.optimize_framework_adapter_matrix()`
 then searches weak versus verified matrix candidates through AgentOptimizer,

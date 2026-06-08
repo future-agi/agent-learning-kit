@@ -61,3 +61,8 @@ adapter emits a local MCP session with `tools/list`, two `tools/call`
 request/result pairs, and a resource, and the generated eval config requires
 the resulting tools, events, trace artifact, `mcp_tool_session` state, and
 protocol-specific coverage/quality metrics.
+
+V1 release-check now runs the same cookbook as `protocol_adapter_readiness` and
+requires the selected `execute_task(dict)` adapter, `mcp_tool_session` state,
+required MCP event types, protocol artifacts, and
+`mcp_tool_session_coverage` / `mcp_tool_session_quality` scores of 1.0.

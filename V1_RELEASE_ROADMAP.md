@@ -217,7 +217,7 @@ Current checkpoint:
 - `agent-learn release-check` now builds
   `agent-learning.framework-adapter-contract-matrix.v1` for LangChain,
   LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI, LiveKit,
-  Pipecat, OpenEnv, and Gymnasium.
+  Pipecat, OpenEnv, Gymnasium, MCP, and A2A.
 - The gate requires local executable fixture targets, `trace_runtime`, text and
   voice modality coverage, `in_process` transport, no external service
   dependency, no external targets, and no HTTP/WebSocket values in
@@ -231,6 +231,11 @@ Current checkpoint:
   `examples/sdk_openenv_environment_optimization.py` runs local AgentOptimizer
   bundle search over weak, partial, and verified OpenEnv replays and must select
   the verified replay with `openenv_coverage=1.0` and `openenv_quality=1.0`.
+- Protocol adapter readiness is now an executable release-check gate:
+  `examples/sdk_framework_adapter_mcp_tool_session.py` and
+  `examples/sdk_framework_adapter_a2a_protocol_trace.py` must run locally,
+  select the protocol-native adapter methods, emit MCP/A2A state, events, and
+  artifacts, and pass protocol coverage/quality metrics.
 
 Acceptance gates:
 
@@ -271,6 +276,10 @@ Next implementation focus:
   fidelity, sandbox escape evidence, and optimizer recovery loops across
   representative framework, provider, protocol, browser, voice, and multi-agent
   fixtures before calling the framework materially more robust.
+- Keep protocol adapters on the same local-first bar: MCP and A2A release gates
+  should prove protocol state, tool/task records, artifacts, generated eval
+  gates, and no external service dependency before expanding to additional
+  protocol transports.
 
 ### M7: Release Packaging And Proof
 

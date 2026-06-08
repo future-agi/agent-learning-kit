@@ -15172,6 +15172,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_openenv_optimizer_files"] == (
         trinity.V1_OPENENV_OPTIMIZER_FILES
     )
+    assert payload["required_protocol_adapter_files"] == (
+        trinity.V1_PROTOCOL_ADAPTER_FILES
+    )
+    assert payload["required_protocol_adapter_contracts"] == (
+        trinity.V1_PROTOCOL_ADAPTER_CONTRACTS
+    )
     assert payload["required_trinity_stack_probe_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES
     )
@@ -15205,6 +15211,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
         "openenv_optimizer_readiness",
+        "protocol_adapter_readiness",
         "trinity_stack_probe_readiness",
         "package_metadata",
     }
@@ -15496,7 +15503,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert framework_provider["observed_frameworks"] == (
         trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
     )
-    assert {"openenv", "gymnasium"} <= set(framework_provider["observed_frameworks"])
+    assert {"openenv", "gymnasium", "mcp", "a2a"} <= set(
+        framework_provider["observed_frameworks"]
+    )
     assert set(framework_provider["observed_modalities"]) == {"text", "voice"}
     assert framework_provider["observed_transports"] == ["in_process"]
     assert framework_provider["observed_target_schemes"] == (
@@ -15615,6 +15624,89 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "openenv_coverage": pytest.approx(1.0),
         "openenv_quality": pytest.approx(1.0),
     }
+    protocol_adapter = checks["protocol_adapter_readiness"]["evidence"]
+    assert protocol_adapter["required_files"] == (
+        trinity.V1_PROTOCOL_ADAPTER_FILES
+    )
+    assert protocol_adapter["required_contracts"] == (
+        trinity.V1_PROTOCOL_ADAPTER_CONTRACTS
+    )
+    assert protocol_adapter["missing_files"] == []
+    assert protocol_adapter["adapter_errors"] == []
+    assert protocol_adapter["event_errors"] == []
+    assert protocol_adapter["artifact_errors"] == []
+    assert protocol_adapter["metric_errors"] == []
+    assert protocol_adapter["summary_errors"] == []
+    assert protocol_adapter["errors"] == []
+    protocol_adapters = {
+        adapter["protocol"]: adapter for adapter in protocol_adapter["adapters"]
+    }
+    mcp_adapter = protocol_adapters["mcp"]
+    assert mcp_adapter["result_kind"] == "agent-learning.run.v1"
+    assert mcp_adapter["result_status"] == "passed"
+    assert mcp_adapter["agent_framework"] == "mcp"
+    assert mcp_adapter["agent_method"] == "execute_task"
+    assert mcp_adapter["agent_input_mode"] == "dict"
+    assert mcp_adapter["trace_runtime"] is True
+    assert "mcp_tool_session" in mcp_adapter["state_keys"]
+    assert {
+        "mcp_server",
+        "mcp_tool_schema",
+        "mcp_resource",
+        "mcp_tool_call",
+        "mcp_tool_result",
+        "mcp_tool_session",
+    } <= set(mcp_adapter["event_types"])
+    assert {"mcp_tool_session", "framework_runtime"} <= set(
+        mcp_adapter["artifact_kinds"]
+    )
+    assert mcp_adapter["metrics"] == {
+        "mcp_tool_session_coverage": pytest.approx(1.0),
+        "mcp_tool_session_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert mcp_adapter["summary"]["server_count"] == 1
+    assert mcp_adapter["summary"]["schema_count"] == 2
+    assert mcp_adapter["summary"]["call_count"] == 2
+    assert mcp_adapter["summary"]["result_count"] == 2
+    assert mcp_adapter["summary"]["resource_count"] == 1
+    assert mcp_adapter["summary"]["error_count"] == 0
+    assert set(mcp_adapter["summary"]["tool_names"]) == {
+        "refund_policy_lookup",
+        "refund_status",
+    }
+
+    a2a_adapter = protocol_adapters["a2a"]
+    assert a2a_adapter["result_kind"] == "agent-learning.run.v1"
+    assert a2a_adapter["result_status"] == "passed"
+    assert a2a_adapter["agent_framework"] == "a2a"
+    assert a2a_adapter["agent_method"] == "send_message"
+    assert a2a_adapter["agent_input_mode"] == "dict"
+    assert a2a_adapter["trace_runtime"] is True
+    assert "a2a_protocol_trace" in a2a_adapter["state_keys"]
+    assert {
+        "a2a_agent_card",
+        "a2a_message_send",
+        "a2a_task_status",
+        "a2a_task_artifact",
+        "a2a_artifact",
+        "a2a_protocol_trace",
+    } <= set(a2a_adapter["event_types"])
+    assert {"a2a_protocol_trace", "a2a_artifact", "framework_runtime"} <= set(
+        a2a_adapter["artifact_kinds"]
+    )
+    assert a2a_adapter["metrics"] == {
+        "a2a_protocol_coverage": pytest.approx(1.0),
+        "a2a_protocol_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert a2a_adapter["summary"]["agent_card_count"] == 1
+    assert a2a_adapter["summary"]["task_count"] == 1
+    assert a2a_adapter["summary"]["artifact_count"] == 1
+    assert a2a_adapter["summary"]["protocol_event_count"] == 5
+    assert a2a_adapter["summary"]["terminal_task_count"] == 1
+    assert a2a_adapter["summary"]["error_count"] == 0
+    assert a2a_adapter["summary"]["states"] == ["completed"]
     trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
     assert trinity_stack_probe["required_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES

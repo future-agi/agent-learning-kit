@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -370,6 +371,8 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/voice_streaming_realtime_manifest.json",
     "examples/voice_streaming_realtime_optimization.json",
     "examples/agent_integration_optimization.json",
+    "examples/sdk_framework_adapter_mcp_tool_session.py",
+    "examples/sdk_framework_adapter_a2a_protocol_trace.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -390,6 +393,8 @@ V1_FRAMEWORK_PROVIDER_FRAMEWORKS = [
     "pipecat",
     "openenv",
     "gymnasium",
+    "mcp",
+    "a2a",
 ]
 
 V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES = ["text", "voice"]
@@ -532,6 +537,91 @@ V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES = [
 V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
     "openenv_coverage",
     "openenv_quality",
+]
+
+V1_PROTOCOL_ADAPTER_FILES = [
+    "examples/sdk_framework_adapter_mcp_tool_session.py",
+    "examples/sdk_framework_adapter_a2a_protocol_trace.py",
+    "internal-docs/mcp-tool-session-adapter-research.md",
+    "internal-docs/a2a-protocol-adapter-research.md",
+]
+
+V1_PROTOCOL_ADAPTER_CONTRACTS = [
+    {
+        "protocol": "mcp",
+        "path": "examples/sdk_framework_adapter_mcp_tool_session.py",
+        "manifest_key": "framework_adapter_mcp_tool_session_manifest",
+        "framework": "mcp",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "state_key": "mcp_tool_session",
+        "coverage_metric": "mcp_tool_session_coverage",
+        "quality_metric": "mcp_tool_session_quality",
+        "required_events": [
+            "mcp_server",
+            "mcp_tool_schema",
+            "mcp_resource",
+            "mcp_tool_call",
+            "mcp_tool_result",
+            "mcp_tool_session",
+        ],
+        "required_artifact_kinds": ["mcp_tool_session", "framework_runtime"],
+        "summary_minimums": {
+            "server_count": 1,
+            "schema_count": 2,
+            "resource_count": 1,
+            "call_count": 2,
+            "result_count": 2,
+            "tool_count": 2,
+            "tool_response_count": 2,
+        },
+        "summary_maximums": {"error_count": 0},
+        "summary_contains": {
+            "server_names": ["refund-tools"],
+            "tool_names": ["refund_policy_lookup", "refund_status"],
+        },
+    },
+    {
+        "protocol": "a2a",
+        "path": "examples/sdk_framework_adapter_a2a_protocol_trace.py",
+        "manifest_key": "framework_adapter_a2a_protocol_trace_manifest",
+        "framework": "a2a",
+        "method": "send_message",
+        "input_mode": "dict",
+        "state_key": "a2a_protocol_trace",
+        "coverage_metric": "a2a_protocol_coverage",
+        "quality_metric": "a2a_protocol_quality",
+        "required_events": [
+            "a2a_agent_card",
+            "a2a_message_send",
+            "a2a_task_status",
+            "a2a_task_artifact",
+            "a2a_artifact",
+            "a2a_protocol_trace",
+        ],
+        "required_artifact_kinds": [
+            "a2a_protocol_trace",
+            "a2a_artifact",
+            "framework_runtime",
+        ],
+        "summary_minimums": {
+            "agent_card_count": 1,
+            "message_count": 3,
+            "task_count": 1,
+            "artifact_count": 1,
+            "protocol_event_count": 5,
+            "status_update_count": 3,
+            "artifact_update_count": 1,
+            "terminal_task_count": 1,
+        },
+        "summary_maximums": {"error_count": 0},
+        "summary_contains": {
+            "agent_names": ["refund-review-agent"],
+            "skill_names": ["refund_review"],
+            "roles": ["agent", "user"],
+            "states": ["completed"],
+        },
+    },
 ]
 
 V1_REQUIRED_EVIDENCE_COMPONENTS = [
@@ -888,6 +978,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=openenv_optimizer,
     )
+    protocol_adapter = _release_protocol_adapter_status(root)
+    _append_release_check(
+        checks,
+        check_id="protocol_adapter_readiness",
+        passed=(
+            not protocol_adapter["missing_files"]
+            and not protocol_adapter["adapter_errors"]
+            and not protocol_adapter["event_errors"]
+            and not protocol_adapter["artifact_errors"]
+            and not protocol_adapter["metric_errors"]
+            and not protocol_adapter["summary_errors"]
+            and not protocol_adapter["errors"]
+        ),
+        milestone="M6",
+        evidence=protocol_adapter,
+    )
     trinity_stack_probe = _release_trinity_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -1004,6 +1110,10 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
         ),
         "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
+        "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
+        "required_protocol_adapter_contracts": copy.deepcopy(
+            V1_PROTOCOL_ADAPTER_CONTRACTS
+        ),
         "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_trinity_stack_probe_environment_types": list(
             V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
@@ -3077,6 +3187,254 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
         "metric_errors": metric_errors,
         "errors": errors,
         "evidence": evidence,
+    }
+
+
+def _release_protocol_adapter_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_PROTOCOL_ADAPTER_FILES)
+    adapter_errors: list[dict[str, Any]] = []
+    event_errors: list[dict[str, Any]] = []
+    artifact_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    summary_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    adapters: list[dict[str, Any]] = []
+
+    if not missing_files:
+        for contract in V1_PROTOCOL_ADAPTER_CONTRACTS:
+            protocol = str(contract["protocol"])
+            relative_path = str(contract["path"])
+            example_path = root / relative_path
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"agent_learning_release_protocol_{protocol}",
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                with tempfile.TemporaryDirectory(
+                    prefix=f"agent-learning-{protocol}-"
+                ) as tmpdir:
+                    result = module.run(Path(tmpdir) / f"{protocol}.json")
+            except Exception as exc:
+                errors.append({"path": relative_path, "protocol": protocol, "error": str(exc)})
+                continue
+
+            manifest = _as_mapping(result.get(str(contract["manifest_key"])))
+            agent = _as_mapping(manifest.get("agent"))
+            evaluation = _as_mapping(manifest.get("evaluation"))
+            agent_report = _as_mapping(evaluation.get("agent_report"))
+            eval_config = _as_mapping(agent_report.get("config"))
+            metric_weights = _as_mapping(eval_config.get("metric_weights"))
+            runtime_contract = _as_mapping(
+                eval_config.get("framework_runtime_contract")
+            )
+            summary = _as_mapping(result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report = _as_mapping(result.get("report"))
+            cases = [item for item in _as_list(report.get("results")) if isinstance(item, Mapping)]
+            case = _as_mapping(cases[0]) if cases else {}
+            metadata = _as_mapping(case.get("metadata"))
+            environment_state = _as_mapping(metadata.get("environment_state"))
+            state_key = str(contract["state_key"])
+            protocol_state = _as_mapping(environment_state.get(state_key))
+            protocol_summary = _as_mapping(protocol_state.get("summary"))
+            events = [item for item in _as_list(case.get("events")) if isinstance(item, Mapping)]
+            event_types = sorted({str(event.get("type") or "") for event in events if event.get("type")})
+            artifacts = [
+                item for item in _as_list(case.get("artifacts")) if isinstance(item, Mapping)
+            ]
+            artifact_kinds = sorted(
+                {
+                    str(_as_mapping(artifact.get("metadata")).get("kind") or "")
+                    for artifact in artifacts
+                    if _as_mapping(artifact.get("metadata")).get("kind")
+                }
+            )
+            coverage_metric = str(contract["coverage_metric"])
+            quality_metric = str(contract["quality_metric"])
+            record = {
+                "protocol": protocol,
+                "path": relative_path,
+                "result_kind": result.get("kind"),
+                "result_status": result.get("status"),
+                "manifest_version": manifest.get("version"),
+                "agent_framework": agent.get("framework"),
+                "agent_method": agent.get("method"),
+                "agent_input_mode": agent.get("input_mode"),
+                "trace_runtime": agent.get("trace_runtime"),
+                "required_env": list(manifest.get("required_env") or []),
+                "runtime_required_state_keys": list(
+                    runtime_contract.get("required_state_keys") or []
+                ),
+                "metric_weights": sorted(str(key) for key in metric_weights),
+                "state_keys": sorted(str(key) for key in environment_state),
+                "event_types": event_types,
+                "artifact_kinds": artifact_kinds,
+                "metrics": {
+                    coverage_metric: metric_averages.get(coverage_metric),
+                    quality_metric: metric_averages.get(quality_metric),
+                    "framework_runtime_contract": metric_averages.get(
+                        "framework_runtime_contract"
+                    ),
+                },
+                "summary": protocol_summary,
+            }
+            adapters.append(record)
+
+            expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.run.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "manifest.version": (manifest.get("version"), "agent-learning.run.v1"),
+                "agent.framework": (agent.get("framework"), contract["framework"]),
+                "agent.method": (agent.get("method"), contract["method"]),
+                "agent.input_mode": (agent.get("input_mode"), contract["input_mode"]),
+                "agent.trace_runtime": (agent.get("trace_runtime"), True),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    adapter_errors.append(
+                        {
+                            "protocol": protocol,
+                            "path": relative_path,
+                            "field": field,
+                            "expected": expected,
+                            "observed": observed,
+                        }
+                    )
+            if manifest.get("required_env") not in (None, []):
+                adapter_errors.append(
+                    {
+                        "protocol": protocol,
+                        "path": relative_path,
+                        "field": "required_env",
+                        "expected": [],
+                        "observed": manifest.get("required_env"),
+                    }
+                )
+            if state_key not in environment_state:
+                adapter_errors.append(
+                    {
+                        "protocol": protocol,
+                        "path": relative_path,
+                        "field": "environment_state",
+                        "expected": state_key,
+                        "observed": sorted(str(key) for key in environment_state),
+                    }
+                )
+            if state_key not in set(runtime_contract.get("required_state_keys") or []):
+                adapter_errors.append(
+                    {
+                        "protocol": protocol,
+                        "path": relative_path,
+                        "field": (
+                            "evaluation.agent_report.config."
+                            "framework_runtime_contract.required_state_keys"
+                        ),
+                        "expected": state_key,
+                        "observed": runtime_contract.get("required_state_keys"),
+                    }
+                )
+            missing_metric_weights = sorted(
+                {coverage_metric, quality_metric} - set(str(key) for key in metric_weights)
+            )
+            if missing_metric_weights:
+                adapter_errors.append(
+                    {
+                        "protocol": protocol,
+                        "path": relative_path,
+                        "field": "evaluation.agent_report.config.metric_weights",
+                        "missing": missing_metric_weights,
+                    }
+                )
+
+            missing_events = sorted(set(contract["required_events"]) - set(event_types))
+            if missing_events:
+                event_errors.append(
+                    {
+                        "protocol": protocol,
+                        "path": relative_path,
+                        "required": list(contract["required_events"]),
+                        "observed": event_types,
+                        "missing": missing_events,
+                    }
+                )
+            missing_artifacts = sorted(
+                set(contract["required_artifact_kinds"]) - set(artifact_kinds)
+            )
+            if missing_artifacts:
+                artifact_errors.append(
+                    {
+                        "protocol": protocol,
+                        "path": relative_path,
+                        "required": list(contract["required_artifact_kinds"]),
+                        "observed": artifact_kinds,
+                        "missing": missing_artifacts,
+                    }
+                )
+            for metric in (coverage_metric, quality_metric, "framework_runtime_contract"):
+                if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                    metric_errors.append(
+                        {
+                            "protocol": protocol,
+                            "path": relative_path,
+                            "metric": metric,
+                            "expected": 1.0,
+                            "observed": metric_averages.get(metric),
+                        }
+                    )
+            for field, minimum in _as_mapping(contract.get("summary_minimums")).items():
+                if _float_or_zero(protocol_summary.get(field)) < float(minimum):
+                    summary_errors.append(
+                        {
+                            "protocol": protocol,
+                            "path": relative_path,
+                            "field": f"summary.{field}",
+                            "expected": f">={minimum}",
+                            "observed": protocol_summary.get(field),
+                        }
+                    )
+            for field, maximum in _as_mapping(contract.get("summary_maximums")).items():
+                if _float_or_zero(protocol_summary.get(field)) > float(maximum):
+                    summary_errors.append(
+                        {
+                            "protocol": protocol,
+                            "path": relative_path,
+                            "field": f"summary.{field}",
+                            "expected": f"<={maximum}",
+                            "observed": protocol_summary.get(field),
+                        }
+                    )
+            for field, required_values in _as_mapping(contract.get("summary_contains")).items():
+                observed_values = {str(item) for item in _as_list(protocol_summary.get(field))}
+                missing_values = sorted(
+                    {str(item) for item in _as_list(required_values)} - observed_values
+                )
+                if missing_values:
+                    summary_errors.append(
+                        {
+                            "protocol": protocol,
+                            "path": relative_path,
+                            "field": f"summary.{field}",
+                            "required": list(required_values),
+                            "observed": sorted(observed_values),
+                            "missing": missing_values,
+                        }
+                    )
+
+    return {
+        "required_files": list(V1_PROTOCOL_ADAPTER_FILES),
+        "required_contracts": copy.deepcopy(V1_PROTOCOL_ADAPTER_CONTRACTS),
+        "missing_files": missing_files,
+        "adapter_errors": adapter_errors,
+        "event_errors": event_errors,
+        "artifact_errors": artifact_errors,
+        "metric_errors": metric_errors,
+        "summary_errors": summary_errors,
+        "errors": errors,
+        "adapters": adapters,
     }
 
 

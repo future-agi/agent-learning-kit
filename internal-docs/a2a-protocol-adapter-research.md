@@ -56,3 +56,8 @@ adapter emits an Agent Card, one `SendMessage` record, task status updates, a
 task artifact update, and a final task with a structured decision artifact. The
 generated eval config requires the resulting events, trace/json artifacts, and
 `a2a_protocol_trace` state, plus protocol-specific coverage/quality metrics.
+
+V1 release-check now runs the same cookbook as `protocol_adapter_readiness` and
+requires the selected `send_message(dict)` adapter, `a2a_protocol_trace` state,
+required A2A event types, protocol/json artifacts, and
+`a2a_protocol_coverage` / `a2a_protocol_quality` scores of 1.0.
