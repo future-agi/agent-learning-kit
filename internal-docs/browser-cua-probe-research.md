@@ -44,6 +44,11 @@ Keep browser/CUA support local-first:
 - Reject explicit HTTP/HTTPS probe targets and remote trace sources by default.
 - Allow HTTPS URLs inside local fixtures, because the checkout replay uses
   `https://shop.example.test/...` without contacting a live service.
+- For framework adapter outputs, normalize explicit browser/computer-use
+  actions, DOM/screenshot snapshots, Playwright-like trace fields,
+  storage/runtime/network logs, mutation packs, screenshot diffs, and
+  prompt-injection surfaces into `browser_cua` state, browser trace/screenshot
+  artifacts, browser events, and browser tool calls before promotion.
 - Require refreshed snapshot evidence, safe selector fallback, coordinate-region
   grounding, action replay, mutation-pack and screenshot-diff evidence,
   storage/runtime/performance/network verification, layout-shift evidence, and

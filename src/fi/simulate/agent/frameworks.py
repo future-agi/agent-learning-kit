@@ -1558,6 +1558,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "event_types": sorted({str(event.get("type") or "") for event in events}),
         "artifact_count": len(artifacts),
         "artifact_types": sorted({str(artifact.get("type") or "") for artifact in artifacts}),
+        "artifact_evidence": [
+            _probe_artifact_evidence(artifact) for artifact in artifacts
+        ],
         "state_keys": sorted(str(key) for key in state),
         "metadata_keys": sorted(str(key) for key in metadata),
         "streaming": bool(streaming_trace or metadata.get("streaming")),
@@ -1569,6 +1572,18 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "streaming_trace_summary": dict(
             dict(streaming_trace).get("summary") or {}
         ),
+    }
+
+
+def _probe_artifact_evidence(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = artifact.get("metadata")
+    return {
+        "type": str(artifact.get("type") or ""),
+        "uri": str(artifact.get("uri") or ""),
+        "path": str(artifact.get("path") or ""),
+        "mime_type": str(artifact.get("mime_type") or ""),
+        "role": str(artifact.get("role") or ""),
+        "metadata": dict(metadata) if isinstance(metadata, Mapping) else {},
     }
 
 

@@ -1352,6 +1352,9 @@ def test_typed_framework_adapter_output_preserves_structured_state(tmp_path):
         "typed_output"
     ]
     assert "state" in config["framework_runtime_contract"]["required_signals"]
+    assert config["required_artifact_types"] == []
+    assert "artifact" not in config["framework_runtime_contract"]["required_signals"]
+    assert "required_artifact_types" not in config["framework_runtime_contract"]
 
     manifest_path = simulate.write_manifest_file(
         manifest,
@@ -1986,6 +1989,96 @@ def test_framework_memory_adapter_preserves_lineage_and_retrieval_state(tmp_path
         "framework_memory_checkpoint",
         "framework_memory_retrieval",
         "framework_memory_record",
+    } <= set(output["event_types"])
+
+
+def test_browser_cua_framework_adapter_preserves_visual_action_trace(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_browser_cua_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_browser_cua_trace_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "browser_use",
+        module.LocalBrowserUseAgent(),
+        target=module.TARGET,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=6,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("execute_task", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["browser_cua"]
+    assert runtime_contract["required_tools"] == ["browser_click"]
+    assert set(config["required_events"]) >= {
+        "browser_snapshot",
+        "browser_action",
+        "browser_trace",
+        "browser_network",
+        "browser_runtime",
+        "browser_storage",
+        "environment_injection",
+    }
+    assert set(runtime_contract["required_signals"]) >= {"artifact", "event", "state", "tool"}
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-browser-cua-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    browser = state["browser_cua"]
+    assert browser["snapshot_count"] == 2
+    assert browser["action_count"] == 1
+    assert browser["successful_action_count"] == 1
+    assert browser["blocked_action_count"] == 0
+    assert browser["matched_action_count"] == 1
+    assert browser["screenshot_count"] == 2
+    assert browser["region_count"] == 1
+    assert browser["prompt_injection_surface_count"] == 1
+    assert browser["prompt_injection_touched_count"] == 0
+    assert browser["mutation_count"] == 1
+    assert browser["layout_shift_present"] is True
+    assert browser["storage_present"] is True
+    assert browser["tool_names"] == ["browser_click"]
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert output["tool_names"] == ["browser_click"]
+    assert "browser_cua" in output["state_keys"]
+    assert {"screenshot", "trace"} <= set(output["artifact_types"])
+    assert {
+        "browser_snapshot",
+        "browser_action",
+        "browser_trace",
+        "browser_network",
+        "browser_runtime",
+        "browser_storage",
+        "environment_injection",
     } <= set(output["event_types"])
 
 

@@ -682,6 +682,14 @@ memory operations/searches, memory records, stores, and policies become
 `framework_memory_retrieval`, and `framework_memory_record` events. See
 `examples/sdk_framework_adapter_memory_trace.py`.
 
+Browser/CUA framework exports normalize into evaluator-visible computer-use
+evidence. Browser-use/OpenAI-computer-use-style actions, DOM/screenshot
+snapshots, Playwright-like trace fields, storage/runtime/network logs,
+mutation packs, screenshot diffs, and prompt-injection surfaces become
+`browser_cua` state, browser trace/screenshot artifacts, `browser_*` events, and
+ordinary `browser_click` tool calls. See
+`examples/sdk_framework_adapter_browser_cua_trace.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1305,6 +1313,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_realtime_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_memory_trace.py \
   artifacts/sdk-framework-adapter-memory-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_browser_cua_trace.py \
+  artifacts/sdk-framework-adapter-browser-cua-trace.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

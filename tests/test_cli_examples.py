@@ -1916,6 +1916,61 @@ def test_sdk_framework_adapter_memory_trace_example_runs(tmp_path):
     } <= event_types
 
 
+def test_sdk_framework_adapter_browser_cua_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_browser_cua_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_browser_cua_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-browser-cua-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_browser_cua_trace_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_state_keys"] == ["browser_cua"]
+    assert runtime_contract["required_tools"] == ["browser_click"]
+    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+        "browser_snapshot",
+        "browser_action",
+        "browser_trace",
+        "browser_network",
+        "browser_runtime",
+        "browser_storage",
+        "environment_injection",
+    }
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    browser = state["browser_cua"]
+    assert browser["snapshot_count"] == 2
+    assert browser["action_count"] == 1
+    assert browser["successful_action_count"] == 1
+    assert browser["prompt_injection_touched_count"] == 0
+    assert browser["tool_names"] == ["browser_click"]
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["browser_click"]
+    assert {"screenshot", "trace"} <= set(output["artifact_types"])
+    assert {
+        "browser_snapshot",
+        "browser_action",
+        "browser_trace",
+        "browser_network",
+        "browser_runtime",
+        "browser_storage",
+        "environment_injection",
+    } <= set(output["event_types"])
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

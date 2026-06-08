@@ -15775,6 +15775,7 @@ def build_framework_adapter_probe_evaluation_config(
     event_types = _unique_strings(
         _framework_probe_response_values(selected_report, "event_types")
     )
+    artifact_types = _framework_probe_output_artifact_types(selected_report)
     runtime_state_keys = [
         key
         for key in state_keys
@@ -15800,6 +15801,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming"] if streaming_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
+            *(["artifact"] if artifact_types else []),
         ]
     )
     criteria = _unique_strings(
@@ -15811,6 +15813,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming trace evidence"] if streaming_observed else []),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
+            *(["artifact evidence"] if artifact_types else []),
         ]
     )
     contract_capabilities = _unique_strings(contract.get("capabilities"))
@@ -15841,6 +15844,8 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if tool_names:
         runtime_contract["required_tools"] = tool_names
+    if artifact_types:
+        runtime_contract["required_artifact_types"] = artifact_types
     if input_key:
         runtime_contract["input_key"] = input_key
         runtime_contract["call_style"] = "keyword"
@@ -15898,6 +15903,7 @@ def build_framework_adapter_probe_evaluation_config(
         "required_tools": tool_names,
         "available_tools": tool_names,
         "required_events": event_types,
+        "required_artifact_types": artifact_types,
         "success_criteria": criteria,
         "required_framework_runtime": [
             "framework_runtime",
@@ -15909,6 +15915,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming"] if streaming_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
+            *(["artifact"] if artifact_types else []),
         ],
         "framework_runtime_contract": runtime_contract,
         "framework_adapter_contract_quality": contract_quality,
@@ -15929,6 +15936,43 @@ def _framework_probe_response_values(
         response = _plain_mapping(case_dict.get("response"))
         values.extend(str(item) for item in _plain_list(response.get(key)) if str(item))
     return values
+
+
+def _framework_probe_output_artifact_types(
+    selected_report: Mapping[str, Any],
+) -> list[str]:
+    values: list[str] = []
+    for case in _plain_list(selected_report.get("cases")):
+        case_dict = _plain_mapping(case)
+        response = _plain_mapping(case_dict.get("response"))
+        has_artifact_evidence = (
+            "artifact_evidence" in response or "artifacts" in response
+        )
+        evidence = _plain_list(
+            response.get("artifact_evidence") or response.get("artifacts")
+        )
+        if has_artifact_evidence:
+            values.extend(
+                _framework_probe_runtime_artifact_type(item) for item in evidence
+            )
+            continue
+        values.extend(
+            str(item)
+            for item in _plain_list(response.get("artifact_types"))
+            if str(item)
+        )
+    return _unique_strings(item for item in values if item)
+
+
+def _framework_probe_runtime_artifact_type(artifact: Any) -> str:
+    artifact_dict = _plain_mapping(artifact)
+    artifact_type = str(artifact_dict.get("type") or "")
+    metadata = _plain_mapping(artifact_dict.get("metadata"))
+    kind = str(metadata.get("kind") or "").lower()
+    source = str(metadata.get("source") or "").lower()
+    if kind == "framework_runtime" and source == "generic_agent_wrapper":
+        return ""
+    return artifact_type
 
 
 def score_framework_adapter_probe_result(

@@ -435,11 +435,13 @@ class GenericAgentWrapper(AgentWrapper):
         provider_tool_calls = _provider_tool_calls(raw)
         history_tool_calls = _message_history_tool_calls(raw)
         realtime_tool_calls = _realtime_tool_calls(raw)
+        browser_tool_calls = _browser_cua_tool_calls(raw)
         return [
             *(tool_calls or []),
             *provider_tool_calls,
             *history_tool_calls,
             *realtime_tool_calls,
+            *browser_tool_calls,
         ] or None
 
     def _extract_tool_responses(self, raw: Any) -> Optional[List[Dict[str, Any]]]:
@@ -522,6 +524,9 @@ class GenericAgentWrapper(AgentWrapper):
             agent_memory_lineage = _framework_memory_agent_lineage(raw)
             if agent_memory_lineage:
                 state.setdefault("agent_memory_lineage", agent_memory_lineage)
+        browser_state = _browser_cua_state(raw)
+        if browser_state:
+            state.setdefault("browser_cua", browser_state)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -558,6 +563,35 @@ class GenericAgentWrapper(AgentWrapper):
                     },
                 )
             )
+        browser_state = _browser_cua_state(raw)
+        if browser_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=_browser_cua_trace_payload(raw),
+                    metadata={
+                        "kind": "browser_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+            for screenshot in browser_state.get("screenshots", []):
+                uri = screenshot.get("uri") or screenshot.get("screenshot_uri")
+                if not uri:
+                    continue
+                artifacts.append(
+                    SimulationArtifact(
+                        type="screenshot",
+                        uri=str(uri),
+                        role="assistant",
+                        metadata={
+                            "kind": "browser_screenshot",
+                            "source": "generic_agent_wrapper",
+                            "id": str(screenshot.get("id") or ""),
+                        },
+                    )
+                )
         return artifacts
 
     def _extract_events(self, raw: Any) -> List[SimulationEvent]:
@@ -573,6 +607,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_message_history_coordination_events(raw))
         events.extend(_realtime_trace_events(raw))
         events.extend(_framework_memory_events(raw))
+        events.extend(_browser_cua_events(raw))
         return events
 
 
@@ -1154,6 +1189,611 @@ def _reconciliation_payload_from_message(
         "message_type": str(message.get("type") or message.get("kind") or ""),
         "content": _message_content(message),
     }
+
+
+def _browser_cua_state(raw: Any) -> Dict[str, Any]:
+    if not _has_browser_cua_shape(raw):
+        return {}
+    trace = _browser_cua_trace_payload(raw)
+    snapshots = _plain_list(trace.get("snapshots"))
+    actions = _plain_list(trace.get("action_replay"))
+    screenshots = _browser_cua_screenshots(raw, snapshots=snapshots)
+    regions = _plain_mapping(trace.get("regions"))
+    network_log = _plain_list(trace.get("network_log"))
+    runtime_events = _plain_list(trace.get("runtime_events"))
+    performance_entries = _plain_list(trace.get("performance_entries"))
+    prompt_injections = _plain_list(trace.get("prompt_injections"))
+    mutation_pack = _plain_mapping(trace.get("mutation_pack"))
+    mutations = _plain_list(
+        mutation_pack.get("mutations") or trace.get("browser_mutations")
+    )
+    storage_state = _plain_mapping(trace.get("storage_state"))
+    return {
+        "kind": "framework_browser_cua_trace",
+        "url": str(trace.get("url") or ""),
+        "snapshot_count": len(snapshots),
+        "action_count": len(actions),
+        "successful_action_count": sum(
+            1 for action in actions if _plain_mapping(action).get("success") is True
+        ),
+        "blocked_action_count": sum(
+            1 for action in actions if _plain_mapping(action).get("blocked") is True
+        ),
+        "matched_action_count": sum(
+            1 for action in actions if _plain_mapping(action).get("matched") is True
+        ),
+        "screenshot_count": len(screenshots),
+        "region_count": len(regions),
+        "network_request_count": len(network_log),
+        "runtime_event_count": len(runtime_events),
+        "performance_entry_count": len(performance_entries),
+        "prompt_injection_surface_count": len(prompt_injections),
+        "prompt_injection_touched_count": sum(
+            1
+            for action in actions
+            if _plain_mapping(action).get("prompt_injection_touched") is True
+        ),
+        "screenshot_diff_count": len(_plain_list(trace.get("screenshot_diffs"))),
+        "mutation_count": len(mutations),
+        "layout_shift_present": bool(trace.get("layout_shift_distribution")),
+        "storage_present": bool(
+            _plain_list(storage_state.get("cookies"))
+            or _plain_list(storage_state.get("origins"))
+        ),
+        "action_types": sorted(
+            {
+                str(
+                    _plain_mapping(action).get("action")
+                    or _plain_mapping(action).get("type")
+                    or ""
+                )
+                for action in actions
+                if _plain_mapping(action).get("action")
+                or _plain_mapping(action).get("type")
+            }
+        ),
+        "tool_names": sorted(
+            {
+                str(tool.get("name") or "")
+                for tool in _browser_cua_tool_calls(raw)
+                if tool.get("name")
+            }
+        ),
+        "screenshots": screenshots,
+        "snapshots": snapshots,
+        "action_replay": actions,
+        "regions": regions,
+        "network_log": network_log,
+        "runtime_events": runtime_events,
+        "performance_entries": performance_entries,
+        "prompt_injections": prompt_injections,
+        "mutation_pack": mutation_pack,
+        "summary": {
+            "snapshot_count": len(snapshots),
+            "action_count": len(actions),
+            "successful_action_count": sum(
+                1 for action in actions if _plain_mapping(action).get("success") is True
+            ),
+            "screenshot_count": len(screenshots),
+            "region_count": len(regions),
+            "network_request_count": len(network_log),
+            "prompt_injection_surface_count": len(prompt_injections),
+            "mutation_count": len(mutations),
+        },
+    }
+
+
+def _browser_cua_trace_payload(raw: Any) -> Dict[str, Any]:
+    explicit_trace = _plain_mapping(_browser_cua_field(raw, "browser_trace"))
+    if not explicit_trace:
+        explicit_trace = _plain_mapping(_browser_cua_field(raw, "trace_export"))
+    snapshots = _browser_cua_snapshots(raw, explicit_trace=explicit_trace)
+    actions = _browser_cua_actions(raw, explicit_trace=explicit_trace)
+    regions = (
+        _plain_mapping(_browser_cua_field(raw, "regions"))
+        or _plain_mapping(explicit_trace.get("regions"))
+    )
+    mutation_pack = (
+        _plain_mapping(_browser_cua_field(raw, "mutation_pack"))
+        or _plain_mapping(explicit_trace.get("mutation_pack"))
+    )
+    mutations = [
+        _plain_mapping(item)
+        for item in [
+            *_plain_list(_browser_cua_field(raw, "mutations")),
+            *_plain_list(explicit_trace.get("browser_mutations")),
+            *_plain_list(explicit_trace.get("mutations")),
+        ]
+        if _plain_mapping(item)
+    ]
+    if mutations and not mutation_pack:
+        mutation_pack = {"kind": "browser_mutation_pack", "mutations": mutations}
+    elif mutations and not mutation_pack.get("mutations"):
+        mutation_pack = {**mutation_pack, "mutations": mutations}
+    storage_state = (
+        _plain_mapping(_browser_cua_field(raw, "storage_state"))
+        or _plain_mapping(_browser_cua_field(raw, "storageState"))
+        or _plain_mapping(explicit_trace.get("storage_state"))
+        or _plain_mapping(explicit_trace.get("storageState"))
+    )
+    trace = {
+        "kind": "browser_trace",
+        "url": str(
+            _browser_cua_field(raw, "url")
+            or explicit_trace.get("url")
+            or _browser_cua_snapshot_url(snapshots)
+            or ""
+        ),
+        "snapshots": snapshots,
+        "action_replay": actions,
+        "dom_mutations": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "dom_mutations")
+                or explicit_trace.get("dom_mutations")
+            )
+            if _plain_mapping(item)
+        ],
+        "screenshot_diffs": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "screenshot_diffs")
+                or explicit_trace.get("screenshot_diffs")
+            )
+            if _plain_mapping(item)
+        ],
+        "regions": regions,
+        "console_logs": _plain_list(
+            _browser_cua_field(raw, "console_logs") or explicit_trace.get("console_logs")
+        ),
+        "network_log": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "network_log") or explicit_trace.get("network_log")
+            )
+            if _plain_mapping(item)
+        ],
+        "resource_bodies": _plain_list(
+            _browser_cua_field(raw, "resource_bodies")
+            or explicit_trace.get("resource_bodies")
+        ),
+        "actionability_timeline": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "actionability_timeline")
+                or explicit_trace.get("actionability_timeline")
+            )
+            if _plain_mapping(item)
+        ],
+        "storage_state": storage_state,
+        "runtime_events": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "runtime_events")
+                or explicit_trace.get("runtime_events")
+            )
+            if _plain_mapping(item)
+        ],
+        "performance_entries": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "performance_entries")
+                or explicit_trace.get("performance_entries")
+            )
+            if _plain_mapping(item)
+        ],
+        "prompt_injections": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "prompt_injections")
+                or _browser_cua_field(raw, "prompt_injection_surfaces")
+                or explicit_trace.get("prompt_injections")
+                or explicit_trace.get("prompt_injection_surfaces")
+            )
+            if _plain_mapping(item)
+        ],
+        "video_artifacts": _plain_list(
+            _browser_cua_field(raw, "video_artifacts")
+            or explicit_trace.get("video_artifacts")
+        ),
+        "perturbations": [
+            _plain_mapping(item)
+            for item in _plain_list(
+                _browser_cua_field(raw, "perturbations")
+                or explicit_trace.get("perturbations")
+            )
+            if _plain_mapping(item)
+        ],
+        "mutation_pack": mutation_pack,
+        "browser_mutations": _plain_list(mutation_pack.get("mutations")),
+        "layout_shift_distribution": _plain_value(
+            _browser_cua_field(raw, "layout_shift_distribution")
+            or explicit_trace.get("layout_shift_distribution")
+            or {}
+        ),
+        "trace_import": {
+            "source": "framework_adapter_output",
+            "provider": str(
+                _browser_cua_field(raw, "trace_provider")
+                or explicit_trace.get("trace_provider")
+                or "framework_browser_cua"
+            ),
+        },
+    }
+    trace["final_state"] = {
+        "browser": {
+            "url": trace["url"],
+            "snapshot": snapshots[-1] if snapshots else {},
+            "action_replay": actions,
+            "regions": regions,
+            "storage_state": storage_state,
+            "runtime_events": trace["runtime_events"],
+            "performance_entries": trace["performance_entries"],
+            "network_log": trace["network_log"],
+            "mutation_pack": mutation_pack,
+            "browser_mutations": trace["browser_mutations"],
+            "layout_shift_distribution": trace["layout_shift_distribution"],
+        }
+    }
+    return trace
+
+
+def _browser_cua_events(raw: Any) -> List[SimulationEvent]:
+    if not _has_browser_cua_shape(raw):
+        return []
+    trace = _browser_cua_trace_payload(raw)
+    events: List[SimulationEvent] = []
+    for index, snapshot in enumerate(_plain_list(trace.get("snapshots")), start=1):
+        snapshot_dict = _plain_mapping(snapshot)
+        events.append(
+            SimulationEvent(
+                type="browser_snapshot",
+                name=str(snapshot_dict.get("id") or f"snapshot_{index}"),
+                payload={**snapshot_dict, "sequence": index},
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    for index, action in enumerate(_plain_list(trace.get("action_replay")), start=1):
+        action_dict = _plain_mapping(action)
+        events.append(
+            SimulationEvent(
+                type="browser_action",
+                name=str(
+                    action_dict.get("tool")
+                    or action_dict.get("tool_name")
+                    or action_dict.get("action")
+                    or f"browser_action_{index}"
+                ),
+                payload={**action_dict, "sequence": index},
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    if trace.get("network_log"):
+        events.append(
+            SimulationEvent(
+                type="browser_network",
+                name="network_log_loaded",
+                payload={"requests": trace["network_log"]},
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    if trace.get("runtime_events") or trace.get("performance_entries"):
+        events.append(
+            SimulationEvent(
+                type="browser_runtime",
+                name="runtime_capture_loaded",
+                payload={
+                    "runtime_events": trace["runtime_events"],
+                    "performance_entries": trace["performance_entries"],
+                },
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    if trace.get("storage_state"):
+        events.append(
+            SimulationEvent(
+                type="browser_storage",
+                name="storage_state_loaded",
+                payload={"storage_state": trace["storage_state"]},
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    if trace.get("mutation_pack"):
+        events.append(
+            SimulationEvent(
+                type="browser_mutation_pack",
+                name="browser_mutation_pack_loaded",
+                payload=trace["mutation_pack"],
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    for index, injection in enumerate(_plain_list(trace.get("prompt_injections")), start=1):
+        injection_dict = _plain_mapping(injection)
+        events.append(
+            SimulationEvent(
+                type="environment_injection",
+                name=str(injection_dict.get("id") or f"prompt_injection_{index}"),
+                payload=injection_dict,
+                metadata={"kind": "browser_cua", "source": "framework_adapter_output"},
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="browser_trace",
+            name="framework_browser_cua_trace",
+            payload=trace,
+            metadata={"kind": "browser_trace", "source": "framework_adapter_output"},
+        )
+    )
+    return events
+
+
+def _browser_cua_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    if not _has_browser_cua_shape(raw):
+        return []
+    calls: List[Dict[str, Any]] = []
+    for index, action in enumerate(_browser_cua_actions(raw), start=1):
+        action_dict = _plain_mapping(action)
+        name = _browser_cua_tool_name(action_dict)
+        arguments = _browser_cua_action_arguments(action_dict)
+        calls.append(
+            {
+                "id": str(
+                    action_dict.get("id")
+                    or action_dict.get("call_id")
+                    or f"{name}_{index}"
+                ),
+                "name": name,
+                "arguments": arguments,
+                "function": {
+                    "name": name,
+                    "arguments": arguments,
+                },
+            }
+        )
+    return calls
+
+
+def _has_browser_cua_shape(raw: Any) -> bool:
+    raw_mapping = _object_mapping(raw)
+    names = (
+        "browser_trace",
+        "trace_export",
+        "browser_actions",
+        "computer_actions",
+        "cua_actions",
+        "action_replay",
+        "browser_snapshots",
+        "dom_snapshots",
+        "screenshots",
+        "screenshot_diffs",
+        "prompt_injections",
+        "prompt_injection_surfaces",
+        "mutation_pack",
+        "browser_mutations",
+    )
+    if raw_mapping is not None:
+        return any(raw_mapping.get(name) not in (None, "", [], {}) for name in names)
+    return any(
+        hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+        for name in names
+    )
+
+
+def _browser_cua_actions(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace)
+    values: List[Any] = []
+    for name in ("browser_actions", "computer_actions", "cua_actions", "action_replay"):
+        values.extend(_plain_list(_browser_cua_field(raw, name)))
+    values.extend(_plain_list(trace.get("actions")))
+    values.extend(_plain_list(trace.get("action_replay")))
+    actions = [
+        _normalize_browser_cua_action(action, index=index)
+        for index, action in enumerate(values, start=1)
+        if _plain_mapping(action)
+    ]
+    return actions
+
+
+def _browser_cua_snapshots(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    trace = _plain_mapping(explicit_trace)
+    values: List[Any] = []
+    for name in ("browser_snapshots", "dom_snapshots", "snapshots"):
+        values.extend(_plain_list(_browser_cua_field(raw, name)))
+    values.extend(_plain_list(trace.get("snapshots")))
+    screenshots = _plain_list(_browser_cua_field(raw, "screenshots"))
+    snapshots = [
+        _normalize_browser_cua_snapshot(snapshot, index=index)
+        for index, snapshot in enumerate(values, start=1)
+        if _plain_mapping(snapshot)
+    ]
+    if not snapshots and screenshots:
+        snapshots = [
+            _normalize_browser_cua_snapshot(screenshot, index=index)
+            for index, screenshot in enumerate(screenshots, start=1)
+            if _plain_mapping(screenshot)
+        ]
+    return snapshots
+
+
+def _browser_cua_screenshots(
+    raw: Any,
+    *,
+    snapshots: Sequence[Any],
+) -> List[Dict[str, Any]]:
+    screenshots = [
+        _plain_mapping(item)
+        for item in _plain_list(_browser_cua_field(raw, "screenshots"))
+        if _plain_mapping(item)
+    ]
+    for snapshot in snapshots:
+        snapshot_dict = _plain_mapping(snapshot)
+        uri = snapshot_dict.get("screenshot_uri") or snapshot_dict.get("uri")
+        if not uri:
+            continue
+        screenshots.append(
+            {
+                "id": str(
+                    snapshot_dict.get("id")
+                    or f"screenshot_{len(screenshots) + 1}"
+                ),
+                "uri": str(uri),
+                "screenshot_uri": str(uri),
+            }
+        )
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for screenshot in screenshots:
+        uri = str(screenshot.get("uri") or screenshot.get("screenshot_uri") or "")
+        key = uri or json.dumps(screenshot, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(screenshot)
+    return deduped
+
+
+def _normalize_browser_cua_snapshot(
+    item: Any,
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    snapshot = _plain_mapping(item)
+    metadata = _plain_mapping(snapshot.get("metadata"))
+    dom = str(snapshot.get("dom") or snapshot.get("html") or "")
+    screenshot_uri = str(snapshot.get("screenshot_uri") or snapshot.get("uri") or "")
+    return {
+        "id": str(
+            snapshot.get("id")
+            or snapshot.get("snapshot_id")
+            or f"snapshot_{index}"
+        ),
+        "url": str(snapshot.get("url") or ""),
+        "title": str(snapshot.get("title") or ""),
+        "dom": dom,
+        "screenshot_uri": screenshot_uri,
+        "has_dom": bool(snapshot.get("has_dom", bool(dom))),
+        "has_screenshot": bool(snapshot.get("has_screenshot", bool(screenshot_uri))),
+        "metadata": {
+            **metadata,
+            "stale": bool(metadata.get("stale", snapshot.get("stale", False))),
+            "stale_screenshot": bool(
+                metadata.get(
+                    "stale_screenshot",
+                    snapshot.get("stale_screenshot", False),
+                )
+            ),
+        },
+    }
+
+
+def _normalize_browser_cua_action(
+    item: Any,
+    *,
+    index: int,
+) -> Dict[str, Any]:
+    action = _plain_mapping(item)
+    arguments = _browser_cua_action_arguments(action)
+    selector = (
+        action.get("selector")
+        or action.get("locator")
+        or arguments.get("selector")
+        or arguments.get("locator")
+    )
+    coordinates = (
+        _plain_mapping(action.get("coordinates"))
+        or _plain_mapping(arguments.get("coordinates"))
+        or {
+            key: action.get(key, arguments.get(key))
+            for key in ("x", "y")
+            if action.get(key, arguments.get(key)) is not None
+        }
+    )
+    region = _plain_mapping(action.get("region") or action.get("observed_region"))
+    return {
+        "id": str(
+            action.get("id")
+            or action.get("call_id")
+            or f"browser_action_{index}"
+        ),
+        "tool": _browser_cua_tool_name(action),
+        "tool_name": _browser_cua_tool_name(action),
+        "action": str(
+            action.get("action")
+            or action.get("type")
+            or arguments.get("action")
+            or "action"
+        ),
+        "selector": str(selector or ""),
+        "url": str(action.get("url") or arguments.get("url") or ""),
+        "coordinates": coordinates,
+        "region": region,
+        "observed_region": _plain_mapping(action.get("observed_region")) or region,
+        "success": bool(action.get("success", True)),
+        "blocked": bool(action.get("blocked", False)),
+        "matched": bool(action.get("matched", True)),
+        "region_matched": bool(action.get("region_matched", bool(region))),
+        "prompt_injection_touched": bool(action.get("prompt_injection_touched", False)),
+        "prompt_injection_surfaces": _plain_list(action.get("prompt_injection_surfaces")),
+        "screenshot_diff": _plain_value(action.get("screenshot_diff") or {}),
+        "mutation_id": str(action.get("mutation_id") or ""),
+        "mutation_type": str(action.get("mutation_type") or ""),
+        "arguments": arguments,
+    }
+
+
+def _browser_cua_action_arguments(action: Mapping[str, Any]) -> Dict[str, Any]:
+    arguments = _plain_mapping(action.get("arguments") or action.get("args"))
+    for key in ("action", "selector", "locator", "url", "x", "y"):
+        value = action.get(key)
+        if value not in (None, "", [], {}) and key not in arguments:
+            arguments[key] = _plain_value(value)
+    coordinates = _plain_mapping(action.get("coordinates"))
+    if coordinates and "coordinates" not in arguments:
+        arguments["coordinates"] = coordinates
+    return arguments
+
+
+def _browser_cua_tool_name(action: Mapping[str, Any]) -> str:
+    for key in ("tool_name", "tool", "name"):
+        value = action.get(key)
+        if value not in (None, "", [], {}):
+            return str(value)
+    action_type = str(action.get("action") or action.get("type") or "").lower()
+    if action_type in {"click", "tap", "press"}:
+        return "browser_click"
+    if action_type in {"navigate", "goto", "open"}:
+        return "browser_navigate"
+    if action_type in {"type", "fill", "input"}:
+        return "browser_type"
+    if action_type in {"screenshot", "snapshot"}:
+        return "browser_snapshot"
+    if action_type in {"scroll"}:
+        return "browser_scroll"
+    return "browser_action"
+
+
+def _browser_cua_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
+
+
+def _browser_cua_snapshot_url(snapshots: Sequence[Mapping[str, Any]]) -> str:
+    for snapshot in reversed(list(snapshots)):
+        url = str(_plain_mapping(snapshot).get("url") or "")
+        if url:
+            return url
+    return ""
 
 
 def _framework_memory_state(raw: Any) -> Dict[str, Any]:

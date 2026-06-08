@@ -148,6 +148,13 @@ Keep framework support local-first:
   normalize into `framework_memory`, `retrieval_memory`, and
   `agent_memory_lineage` state plus `framework_memory_*` events so framework
   adapters and memory-layer evals share the same evidence path.
+- Preserve framework browser/CUA trace semantics. Local framework outputs
+  carrying browser/computer-use actions, DOM/screenshot snapshots, Playwright-
+  like trace fields, storage/runtime/network evidence, mutation packs,
+  screenshot diffs, or prompt-injection surfaces should normalize into
+  `browser_cua` state, browser trace/screenshot artifacts, `browser_*` events,
+  and browser tool calls so computer-use agents can be optimized through the
+  same framework adapter path.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe
