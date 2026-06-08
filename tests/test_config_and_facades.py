@@ -2279,6 +2279,115 @@ def test_workflow_framework_adapter_accepts_nested_trace_export():
     } <= {event.type for event in response.events}
 
 
+def test_lifecycle_framework_adapter_preserves_recovery_trace(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_lifecycle_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_lifecycle_trace_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "livekit",
+        module.LocalRealtimeLifecycleAgent(),
+        target=module.TARGET,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=6,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("execute_task", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["framework_lifecycle_trace"]
+    assert runtime_contract["required_tools"] == ["framework_lifecycle_status"]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_events"]) >= {
+        "framework_lifecycle_phase",
+        "framework_lifecycle_trace",
+    }
+    assert set(config["required_framework_lifecycle"]) >= {
+        "framework_lifecycle",
+        "lifecycle",
+        "session",
+        "tool_registration",
+        "invocation",
+        "streaming",
+        "checkpoint",
+        "retry",
+        "cancellation",
+        "resume",
+        "cleanup",
+        "state_persistence",
+        "recovery",
+    }
+    lifecycle_quality = config["framework_lifecycle_quality"]
+    assert lifecycle_quality["framework"] == "livekit"
+    assert lifecycle_quality["min_phase_count"] == 10
+    assert lifecycle_quality["require_retry"] is True
+    assert lifecycle_quality["require_cancellation"] is True
+    assert lifecycle_quality["require_resume"] is True
+    assert lifecycle_quality["require_cleanup"] is True
+    assert lifecycle_quality["require_state_persistence"] is True
+    assert lifecycle_quality["min_recovered_errors"] == 1
+    assert lifecycle_quality["max_error_count"] == 1
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-lifecycle-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["framework_lifecycle_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["framework_lifecycle_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    lifecycle = state["framework_lifecycle_trace"]
+    summary = lifecycle["summary"]
+    assert summary["phase_count"] == 10
+    assert summary["session_count"] == 1
+    assert summary["retry_count"] == 1
+    assert summary["error_count"] == 1
+    assert summary["recovered_error_count"] == 1
+    assert summary["cancellation_count"] == 1
+    assert summary["resume_count"] == 1
+    assert summary["cleanup_count"] == 1
+    assert summary["terminal_status"] == "completed"
+    assert summary["state_persistence"] is True
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert output["tool_names"] == ["framework_lifecycle_status"]
+    assert "framework_lifecycle_trace" in output["state_keys"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "framework_lifecycle_phase",
+        "framework_lifecycle_trace",
+    } <= set(output["event_types"])
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

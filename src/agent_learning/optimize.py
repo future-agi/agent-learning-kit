@@ -15791,6 +15791,19 @@ def build_framework_adapter_probe_evaluation_config(
     )
     if streaming_observed and not streaming_trace_signals:
         streaming_trace_signals = ["chunk"]
+    lifecycle_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "framework_lifecycle_summary",
+    )
+    lifecycle_observed = (
+        "framework_lifecycle_trace" in state_keys
+        or bool(lifecycle_summary)
+    )
+    lifecycle_requirements = (
+        _framework_probe_lifecycle_requirements(framework, lifecycle_summary)
+        if lifecycle_observed
+        else {}
+    )
     required_signals = _unique_strings(
         [
             "method",
@@ -15891,6 +15904,9 @@ def build_framework_adapter_probe_evaluation_config(
         metric_weights["tool_selection_accuracy"] = 4.0
     if streaming_observed:
         metric_weights["streaming_trace_coverage"] = 4.0
+    if lifecycle_observed:
+        metric_weights["framework_lifecycle_coverage"] = 4.0
+        metric_weights["framework_lifecycle_quality"] = 4.0
 
     config = {
         "task_description": task_description
@@ -15923,6 +15939,13 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if streaming_observed:
         config["required_streaming_trace"] = streaming_trace_signals
+    if lifecycle_observed:
+        config["required_framework_lifecycle"] = lifecycle_requirements[
+            "required_framework_lifecycle"
+        ]
+        config["framework_lifecycle_quality"] = lifecycle_requirements[
+            "framework_lifecycle_quality"
+        ]
     return config
 
 
@@ -15936,6 +15959,75 @@ def _framework_probe_response_values(
         response = _plain_mapping(case_dict.get("response"))
         values.extend(str(item) for item in _plain_list(response.get(key)) if str(item))
     return values
+
+
+def _framework_probe_first_response_mapping(
+    selected_report: Mapping[str, Any],
+    key: str,
+) -> dict[str, Any]:
+    for case in _plain_list(selected_report.get("cases")):
+        case_dict = _plain_mapping(case)
+        response = _plain_mapping(case_dict.get("response"))
+        value = _plain_mapping(response.get(key))
+        if value:
+            return value
+    return {}
+
+
+def _framework_probe_lifecycle_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required_lifecycle = ["framework_lifecycle", "lifecycle"]
+    quality: dict[str, Any] = {
+        "framework": framework,
+        "min_phase_count": max(_as_int(summary.get("phase_count")), 1),
+    }
+    signal_checks = (
+        ("session_count", "session", "required_sessions"),
+        ("tool_registration_count", "tool_registration", "min_tool_registrations"),
+        ("invocation_count", "invocation", "min_invocations"),
+        ("streaming_event_count", "streaming", "require_streaming"),
+        ("checkpoint_count", "checkpoint", "require_checkpoint"),
+        ("retry_count", "retry", "require_retry"),
+        ("cancellation_count", "cancellation", "require_cancellation"),
+        ("resume_count", "resume", "require_resume"),
+        ("cleanup_count", "cleanup", "require_cleanup"),
+    )
+    for summary_key, signal, quality_key in signal_checks:
+        count = _as_int(summary.get(summary_key))
+        if count <= 0:
+            continue
+        required_lifecycle.append(signal)
+        if quality_key in {
+            "require_streaming",
+            "require_checkpoint",
+            "require_retry",
+            "require_cancellation",
+            "require_resume",
+            "require_cleanup",
+        }:
+            quality[quality_key] = True
+        elif quality_key in {"min_tool_registrations", "min_invocations"}:
+            quality[quality_key] = count
+    if bool(summary.get("state_persistence")):
+        required_lifecycle.append("state_persistence")
+        quality["require_state_persistence"] = True
+    recovered_errors = _as_int(summary.get("recovered_error_count"))
+    if recovered_errors > 0:
+        required_lifecycle.append("recovery")
+        quality["min_recovered_errors"] = recovered_errors
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+    terminal_status = str(summary.get("terminal_status") or "")
+    if terminal_status:
+        quality["terminal_status"] = terminal_status
+    return {
+        "required_framework_lifecycle": _unique_strings(required_lifecycle),
+        "framework_lifecycle_quality": quality,
+    }
 
 
 def _framework_probe_output_artifact_types(

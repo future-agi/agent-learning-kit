@@ -4,6 +4,7 @@ import time
 from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Union
 
+from fi.simulate.environment import normalize_framework_lifecycle_trace
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -517,6 +518,9 @@ class GenericAgentWrapper(AgentWrapper):
         realtime_state = _realtime_trace_state(raw)
         if realtime_state:
             state.setdefault("realtime_trace", realtime_state)
+        lifecycle_state = _framework_lifecycle_state(raw)
+        if lifecycle_state:
+            state.setdefault("framework_lifecycle_trace", lifecycle_state)
         workflow_state = _workflow_trace_state(raw)
         if workflow_state:
             state.setdefault("workflow_trace", workflow_state)
@@ -551,6 +555,19 @@ class GenericAgentWrapper(AgentWrapper):
                     data=realtime_state,
                     metadata={
                         "kind": "realtime_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+        lifecycle_state = _framework_lifecycle_state(raw)
+        if lifecycle_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=lifecycle_state,
+                    metadata={
+                        "kind": "framework_lifecycle_trace",
                         "source": "generic_agent_wrapper",
                     },
                 )
@@ -624,6 +641,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_message_history_events(raw))
         events.extend(_message_history_coordination_events(raw))
         events.extend(_realtime_trace_events(raw))
+        events.extend(_framework_lifecycle_events(raw))
         events.extend(_workflow_trace_events(raw))
         events.extend(_framework_memory_events(raw))
         events.extend(_browser_cua_events(raw))
@@ -1208,6 +1226,174 @@ def _reconciliation_payload_from_message(
         "message_type": str(message.get("type") or message.get("kind") or ""),
         "content": _message_content(message),
     }
+
+
+def _framework_lifecycle_state(raw: Any) -> Dict[str, Any]:
+    if not _has_framework_lifecycle_shape(raw):
+        return {}
+    explicit = _framework_lifecycle_explicit_trace(raw)
+    phases = _framework_lifecycle_phases(raw, explicit_trace=explicit)
+    state = (
+        _plain_mapping(_framework_lifecycle_field(raw, "lifecycle_state"))
+        or _plain_mapping(_framework_lifecycle_field(raw, "framework_state"))
+        or _plain_mapping(explicit.get("state"))
+    )
+    metadata = {
+        **_plain_mapping(explicit.get("metadata")),
+        **_plain_mapping(_framework_lifecycle_field(raw, "lifecycle_metadata")),
+    }
+    framework = str(
+        _framework_lifecycle_field(raw, "framework")
+        or explicit.get("framework")
+        or ""
+    )
+    session_id = str(
+        _framework_lifecycle_field(raw, "session_id")
+        or _framework_lifecycle_field(raw, "thread_id")
+        or explicit.get("session_id")
+        or explicit.get("thread_id")
+        or ""
+    )
+    source = {**explicit}
+    if phases:
+        source["phases"] = phases
+    if state:
+        source["state"] = state
+    if metadata:
+        source["metadata"] = metadata
+    if framework:
+        source["framework"] = framework
+    if session_id:
+        source["session_id"] = session_id
+    return normalize_framework_lifecycle_trace(
+        source,
+        name=str(source.get("name") or "framework-adapter-lifecycle-trace"),
+        framework=framework or "custom",
+        session_id=session_id or None,
+        phases=phases or None,
+        state=state,
+        metadata=metadata,
+    )
+
+
+def _framework_lifecycle_events(raw: Any) -> List[SimulationEvent]:
+    if not _has_framework_lifecycle_shape(raw):
+        return []
+    trace = _framework_lifecycle_state(raw)
+    events: List[SimulationEvent] = []
+    for index, phase in enumerate(_plain_list(trace.get("phases")), start=1):
+        phase_dict = _plain_mapping(phase)
+        events.append(
+            SimulationEvent(
+                type="framework_lifecycle_phase",
+                name=str(
+                    phase_dict.get("name")
+                    or phase_dict.get("stage")
+                    or f"phase_{index}"
+                ),
+                payload={**phase_dict, "sequence": index},
+                metadata={
+                    "kind": "framework_lifecycle_trace",
+                    "source": "framework_adapter_output",
+                },
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="framework_lifecycle_trace",
+            name=str(trace.get("name") or "framework_lifecycle_trace"),
+            payload=trace,
+            metadata={
+                "kind": "framework_lifecycle_trace",
+                "source": "framework_adapter_output",
+            },
+        )
+    )
+    return events
+
+
+def _has_framework_lifecycle_shape(raw: Any) -> bool:
+    raw_mapping = _object_mapping(raw)
+    names = (
+        "framework_lifecycle_trace",
+        "lifecycle_trace",
+        "framework_lifecycle",
+        "lifecycle_phases",
+        "framework_lifecycle_phases",
+        "framework_phases",
+        "lifecycle_events",
+        "framework_lifecycle_events",
+        "lifecycle_sessions",
+        "lifecycle_state",
+        "lifecycle_metadata",
+        "setup_events",
+        "teardown_events",
+        "retry_events",
+        "recovery_events",
+        "cancellation_events",
+        "resume_events",
+    )
+    if raw_mapping is not None:
+        return any(raw_mapping.get(name) not in (None, "", [], {}) for name in names)
+    return any(
+        hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+        for name in names
+    )
+
+
+def _framework_lifecycle_explicit_trace(raw: Any) -> Dict[str, Any]:
+    for name in ("framework_lifecycle_trace", "lifecycle_trace", "framework_lifecycle"):
+        trace = _plain_mapping(_framework_lifecycle_field(raw, name))
+        if trace:
+            return trace
+    return {}
+
+
+def _framework_lifecycle_phases(
+    raw: Any,
+    *,
+    explicit_trace: Mapping[str, Any] | None = None,
+) -> List[Any]:
+    trace = _plain_mapping(explicit_trace) or _framework_lifecycle_explicit_trace(raw)
+    values: List[Any] = []
+    for name in (
+        "lifecycle_phases",
+        "framework_lifecycle_phases",
+        "framework_phases",
+        "lifecycle_events",
+        "framework_lifecycle_events",
+    ):
+        values.extend(_plain_list(_framework_lifecycle_field(raw, name)))
+    for name in ("phases", "events", "lifecycle"):
+        values.extend(_plain_list(trace.get(name)))
+    for stage, field_name in (
+        ("initialize", "setup_events"),
+        ("teardown", "teardown_events"),
+        ("retry", "retry_events"),
+        ("resume", "resume_events"),
+        ("cancel", "cancellation_events"),
+    ):
+        for item in _plain_list(_framework_lifecycle_field(raw, field_name)):
+            item_dict = _plain_mapping(item)
+            values.append({**item_dict, "stage": item_dict.get("stage") or stage})
+    for item in _plain_list(_framework_lifecycle_field(raw, "recovery_events")):
+        item_dict = _plain_mapping(item)
+        values.append(
+            {
+                **item_dict,
+                "stage": item_dict.get("stage") or "retry",
+                "status": item_dict.get("status") or "recovered",
+                "recovered": True,
+            }
+        )
+    return [_plain_value(item) for item in values if _plain_value(item) not in ({}, [])]
+
+
+def _framework_lifecycle_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
 
 
 def _workflow_trace_state(raw: Any) -> Dict[str, Any]:

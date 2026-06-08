@@ -161,6 +161,13 @@ Keep framework support local-first:
   into `workflow_trace` state, workflow trace artifacts, `workflow_*` events,
   and ordinary tool calls so LangGraph, CrewAI Flow, LlamaIndex Workflow, and
   similar orchestrators can be optimized through the same adapter path.
+- Preserve lifecycle reliability semantics. Local framework outputs carrying
+  setup, tool registration, sessions, invocation errors, retries, recovery,
+  streaming, checkpoints, cancellation, resume, or cleanup evidence should
+  normalize into `framework_lifecycle_trace` state, trace artifacts,
+  `framework_lifecycle_*` events, and selected-output-derived lifecycle
+  coverage/quality gates so reliability regressions are visible during adapter
+  optimization.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

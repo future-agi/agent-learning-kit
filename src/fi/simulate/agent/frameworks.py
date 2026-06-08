@@ -1562,6 +1562,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
             _probe_artifact_evidence(artifact) for artifact in artifacts
         ],
         "state_keys": sorted(str(key) for key in state),
+        "framework_lifecycle_summary": _probe_framework_lifecycle_summary(
+            state.get("framework_lifecycle_trace")
+        ),
         "metadata_keys": sorted(str(key) for key in metadata),
         "streaming": bool(streaming_trace or metadata.get("streaming")),
         "streaming_trace_signals": sorted(
@@ -1573,6 +1576,12 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
             dict(streaming_trace).get("summary") or {}
         ),
     }
+
+
+def _probe_framework_lifecycle_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    summary = trace.get("summary")
+    return dict(summary) if isinstance(summary, Mapping) else {}
 
 
 def _probe_artifact_evidence(artifact: Mapping[str, Any]) -> dict[str, Any]:

@@ -2028,6 +2028,65 @@ def test_sdk_framework_adapter_workflow_trace_example_runs(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_sdk_framework_adapter_lifecycle_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_lifecycle_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_lifecycle_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-lifecycle-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_lifecycle_trace_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["framework_lifecycle_trace"]
+    assert runtime_contract["required_tools"] == ["framework_lifecycle_status"]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_framework_lifecycle"]) >= {
+        "retry",
+        "cancellation",
+        "resume",
+        "cleanup",
+        "state_persistence",
+        "recovery",
+    }
+    assert result["summary"]["metric_averages"]["framework_lifecycle_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["framework_lifecycle_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    lifecycle = state["framework_lifecycle_trace"]
+    summary = lifecycle["summary"]
+    assert summary["phase_count"] == 10
+    assert summary["retry_count"] == 1
+    assert summary["error_count"] == 1
+    assert summary["recovered_error_count"] == 1
+    assert summary["cancellation_count"] == 1
+    assert summary["resume_count"] == 1
+    assert summary["cleanup_count"] == 1
+    assert summary["terminal_status"] == "completed"
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["framework_lifecycle_status"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "framework_lifecycle_phase",
+        "framework_lifecycle_trace",
+    } <= set(output["event_types"])
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

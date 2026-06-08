@@ -697,6 +697,13 @@ CrewAI Flow-style routes/state, and LlamaIndex workflow step/event traces become
 ordinary tool calls from step-level tool evidence. See
 `examples/sdk_framework_adapter_workflow_trace.py`.
 
+Framework lifecycle exports normalize reliability and recovery semantics.
+LiveKit/Pipecat/LangGraph-style setup, tool registration, sessions, invocation
+errors, retries, streaming, checkpoints, cancellation, resume, and cleanup become
+`framework_lifecycle_trace` state, trace artifacts, `framework_lifecycle_*`
+events, and lifecycle coverage/quality eval gates derived from the selected
+adapter output. See `examples/sdk_framework_adapter_lifecycle_trace.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1326,6 +1333,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_browser_cua_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_workflow_trace.py \
   artifacts/sdk-framework-adapter-workflow-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_lifecycle_trace.py \
+  artifacts/sdk-framework-adapter-lifecycle-trace.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \
