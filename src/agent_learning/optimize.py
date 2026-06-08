@@ -15120,35 +15120,65 @@ def optimize_framework_adapter_probe(
     *,
     name: str,
     framework: str,
-    adapter_candidates: Sequence[Mapping[str, Any]],
+    adapter_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
     agent: Any = None,
     agent_factory: Optional[Callable[[], Any]] = None,
     cases: Sequence[Mapping[str, Any]] = (),
     target: str | None = None,
+    method_candidates: Optional[Sequence[str | None]] = None,
+    input_mode_candidates: Optional[Sequence[str]] = None,
     threshold: float = 0.9,
     trace_runtime: bool = True,
     allow_external_target: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
+    discovery_max_candidates: Optional[int] = 8,
     max_candidates: Optional[int] = None,
     include_seed: bool = True,
 ) -> dict[str, Any]:
     """Optimize framework adapter method/input candidates with local probes.
 
     This is the direct SDK path before a user has a full simulation manifest:
-    pass a local framework object or factory, candidate adapter specs, and probe
-    cases. The helper runs ``simulate.run_framework_adapter_probe`` for each
-    candidate and returns a normal ``agent-learning.optimization.v1`` artifact
-    with candidate lineage, optimizer governance, and a probe-specific proof.
+    pass a local framework object or factory, optional candidate adapter specs,
+    and probe cases. When ``adapter_candidates`` is omitted, the helper first
+    runs local framework adapter discovery and then probes the discovered
+    candidates. It returns a normal ``agent-learning.optimization.v1`` artifact
+    with candidate lineage, optimizer governance, discovery evidence, and a
+    probe-specific proof.
     """
 
     if not name:
         raise ValueError("name is required")
     if not framework:
         raise ValueError("framework is required")
-    if not adapter_candidates:
-        raise ValueError("adapter_candidates must contain at least one candidate")
     if agent is None and agent_factory is None:
         raise ValueError("agent or agent_factory is required")
+    discovery_result: dict[str, Any] | None = None
+    candidate_source = "explicit"
+    if adapter_candidates:
+        active_adapter_candidates = [
+            copy.deepcopy(dict(candidate)) for candidate in adapter_candidates
+        ]
+    else:
+        discovery_result = _discover_framework_probe_candidates(
+            framework=framework,
+            agent=agent,
+            agent_factory=agent_factory,
+            target=target,
+            method_candidates=method_candidates,
+            input_mode_candidates=input_mode_candidates,
+            trace_runtime=trace_runtime,
+            allow_external_target=allow_external_target,
+            metadata=metadata,
+            max_candidates=discovery_max_candidates,
+        )
+        active_adapter_candidates = [
+            copy.deepcopy(dict(candidate))
+            for candidate in _plain_list(discovery_result.get("adapter_candidates"))
+            if isinstance(candidate, Mapping)
+        ]
+        candidate_source = "discovery"
+    if not active_adapter_candidates:
+        raise ValueError("adapter_candidates must contain at least one candidate")
 
     candidate_configs = [
         _framework_probe_candidate_config(
@@ -15157,7 +15187,7 @@ def optimize_framework_adapter_probe(
             trace_runtime=trace_runtime,
             allow_external_target=allow_external_target,
         )
-        for candidate in adapter_candidates
+        for candidate in active_adapter_candidates
     ]
     first_config = candidate_configs[0]
     opt = _opt()
@@ -15175,6 +15205,13 @@ def optimize_framework_adapter_probe(
             "source": "agent_learning.optimize.optimize_framework_adapter_probe",
             "task_kind": "framework_adapter_probe",
             "framework": framework,
+            "adapter_candidate_source": candidate_source,
+            "framework_adapter_discovery_used": discovery_result is not None,
+            "framework_adapter_discovery_summary": copy.deepcopy(
+                _plain_mapping(discovery_result.get("summary"))
+                if discovery_result is not None
+                else {}
+            ),
             **copy.deepcopy(dict(metadata or {})),
         },
     )
@@ -15227,6 +15264,8 @@ def optimize_framework_adapter_probe(
         threshold=threshold,
         optimization_result=optimization_result,
         metadata=metadata,
+        discovery_result=discovery_result,
+        candidate_source=candidate_source,
     )
     payload = with_optimization_candidate_lineage(payload)
     payload = with_optimization_governance(payload)
@@ -15471,6 +15510,41 @@ def _framework_probe_candidate_config(
     return config
 
 
+def _discover_framework_probe_candidates(
+    *,
+    framework: str,
+    agent: Any,
+    agent_factory: Optional[Callable[[], Any]],
+    target: str | None,
+    method_candidates: Optional[Sequence[str | None]],
+    input_mode_candidates: Optional[Sequence[str]],
+    trace_runtime: bool,
+    allow_external_target: bool,
+    metadata: Optional[Mapping[str, Any]],
+    max_candidates: Optional[int],
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    discovery_agent = agent if agent is not None else agent_factory()
+    result = _agent_simulate.discover_framework_adapter(
+        framework,
+        discovery_agent,
+        target=target,
+        method_candidates=method_candidates,
+        input_mode_candidates=input_mode_candidates,
+        trace_runtime=trace_runtime,
+        allow_external_target=allow_external_target,
+        metadata=dict(metadata or {}),
+        max_candidates=max_candidates,
+    )
+    discovery = _plain_mapping(result)
+    if discovery.get("status") != "passed":
+        raise ValueError("framework adapter discovery did not produce passing candidates")
+    if not _plain_list(discovery.get("adapter_candidates")):
+        raise ValueError("framework adapter discovery produced no adapter candidates")
+    return discovery
+
+
 def _run_framework_probe_candidate(
     *,
     framework: str,
@@ -15608,6 +15682,8 @@ def _framework_probe_optimization_payload(
     threshold: float,
     optimization_result: Any,
     metadata: Optional[Mapping[str, Any]],
+    discovery_result: Optional[Mapping[str, Any]] = None,
+    candidate_source: str = "explicit",
 ) -> dict[str, Any]:
     final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
     best_candidate = getattr(optimization_result, "best_candidate", None)
@@ -15635,6 +15711,8 @@ def _framework_probe_optimization_payload(
     )
     metric_averages = _metric_averages_from_history(history)
     passed = final_score >= float(threshold)
+    discovery = copy.deepcopy(dict(discovery_result or {}))
+    discovery_summary = _plain_mapping(discovery.get("summary"))
     evaluation = {
         "kind": "agent-learning.framework-adapter-probe-evaluation.v1",
         "score": final_score,
@@ -15645,7 +15723,7 @@ def _framework_probe_optimization_payload(
             "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
         },
     }
-    return {
+    payload = {
         "schema_version": "agent-learning.cli.v1",
         "name": name,
         "status": "passed" if passed else "failed",
@@ -15662,6 +15740,19 @@ def _framework_probe_optimization_payload(
             "best_candidate_id": best_candidate_id,
             "search_paths": search_paths,
             "framework": framework,
+            "adapter_candidate_source": candidate_source,
+            "framework_adapter_discovery_used": bool(discovery),
+            "framework_adapter_discovery_status": discovery.get("status"),
+            "framework_adapter_discovery_candidate_count": (
+                discovery_summary.get("adapter_candidate_count")
+                or discovery_summary.get("candidate_count")
+            ),
+            "framework_adapter_discovery_top_method": discovery_summary.get(
+                "top_method"
+            ),
+            "framework_adapter_discovery_top_input_mode": discovery_summary.get(
+                "top_input_mode"
+            ),
         },
         "optimization": {
             "final_score": final_score,
@@ -15674,10 +15765,16 @@ def _framework_probe_optimization_payload(
                     "task_kind": "framework_adapter_probe",
                     "framework": framework,
                     "target": target,
+                    "adapter_candidate_source": candidate_source,
+                    "framework_adapter_discovery_used": bool(discovery),
+                    "framework_adapter_discovery_summary": copy.deepcopy(
+                        discovery_summary
+                    ),
                     **copy.deepcopy(dict(metadata or {})),
                 },
             },
             "history": history,
+            "framework_adapter_discovery": copy.deepcopy(discovery) if discovery else {},
             "manifest_optimization": {
                 "kind": "framework_adapter_probe_optimization",
                 "name": name,
@@ -15693,6 +15790,9 @@ def _framework_probe_optimization_payload(
         },
         "evaluation": evaluation,
     }
+    if discovery:
+        payload["framework_adapter_discovery"] = copy.deepcopy(discovery)
+    return payload
 
 
 def _framework_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
@@ -15776,6 +15876,12 @@ def _framework_adapter_probe_proof(
     selected_patch = _plain_mapping(selected_history.get("patch"))
     governance = _plain_mapping(payload.get("optimization_governance"))
     contract = _plain_mapping(selected_report.get("contract"))
+    discovery = _plain_mapping(
+        payload.get("framework_adapter_discovery")
+        or optimization.get("framework_adapter_discovery")
+    )
+    discovery_summary = _plain_mapping(discovery.get("summary"))
+    discovery_used = bool(summary.get("framework_adapter_discovery_used"))
     threshold = _as_float(summary.get("threshold")) or 0.9
     selected_score = _as_float(selected_history.get("score"))
     runtime_trace_count = _as_int(selected_report_summary.get("runtime_trace_count"))
@@ -15834,10 +15940,35 @@ def _framework_adapter_probe_proof(
         ),
         _proof_check(
             "framework_adapter_probe_patch_surface_present",
-            passed=bool(selected_patch) and "adapter" in selected_patch,
+            passed=bool(adapter)
+            and (
+                (bool(selected_patch) and "adapter" in selected_patch)
+                or bool(best_config.get("adapter"))
+            ),
             required=True,
             reason="optimizer selected a concrete adapter candidate, not prompt-only text",
-            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+            evidence={
+                "selected_patch": copy.deepcopy(selected_patch),
+                "best_config_adapter": copy.deepcopy(adapter),
+            },
+        ),
+        _proof_check(
+            "framework_adapter_probe_discovery_closed",
+            passed=not discovery_used
+            or (
+                discovery.get("kind")
+                == "agent-learning.framework-adapter-discovery.v1"
+                and discovery.get("status") == "passed"
+                and bool(_plain_list(discovery.get("adapter_candidates")))
+            ),
+            required=discovery_used,
+            reason="auto-discovered probe candidates carry local adapter discovery evidence",
+            evidence={
+                "discovery_used": discovery_used,
+                "discovery_kind": discovery.get("kind"),
+                "discovery_status": discovery.get("status"),
+                "discovery_summary": copy.deepcopy(discovery_summary),
+            },
         ),
         _proof_check(
             "framework_adapter_probe_optimizer_governance_passed",
@@ -15882,6 +16013,7 @@ def _framework_adapter_probe_proof(
             "selected_report_summary": copy.deepcopy(selected_report_summary),
             "selected_metrics": copy.deepcopy(selected_metrics),
             "framework_adapter_contract": copy.deepcopy(contract),
+            "framework_adapter_discovery": copy.deepcopy(discovery),
         },
         "check_count": len(checks),
         "passed_check_count": sum(1 for check in checks if check["passed"]),

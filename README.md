@@ -552,7 +552,9 @@ assert result["status"] == "passed"
 ```
 
 When several adapter shapes are plausible, run the same probe through
-AgentOptimizer before building a full manifest:
+AgentOptimizer before building a full manifest. You can pass explicit
+`adapter_candidates`, or omit them and let the optimizer use local adapter
+discovery first:
 
 ```python
 from agent_learning import optimize
@@ -562,10 +564,8 @@ result = optimize.optimize_framework_adapter_probe(
     framework="custom_refund_orchestrator",
     target="framework_shims.py:build_custom_refund_orchestrator",
     agent_factory=LocalRefundOrchestrator,
-    adapter_candidates=[
-        {"method": "run", "input_mode": "text"},
-        {"method": "execute_task", "input_mode": "dict"},
-    ],
+    method_candidates=["run", "execute_task"],
+    input_mode_candidates=["text", "dict", "agent_input"],
     cases=[
         {
             "id": "refund-status",
@@ -578,6 +578,7 @@ result = optimize.optimize_framework_adapter_probe(
     ],
 )
 assert result["optimization"]["best_config"]["adapter"]["method"] == "execute_task"
+assert result["summary"]["adapter_candidate_source"] == "discovery"
 assert result["framework_adapter_probe_proof"]["status"] == "passed"
 ```
 

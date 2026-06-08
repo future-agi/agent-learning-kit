@@ -1184,6 +1184,76 @@ def test_optimize_framework_adapter_probe_selects_working_adapter():
     ] == pytest.approx(1.0)
 
 
+def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
+    from agent_learning import optimize
+
+    class LocalRefundOrchestrator:
+        def run(self, text):
+            return "Adapter probe did not emit tool evidence."
+
+        async def execute_task(self, payload):
+            assert payload["metadata"]["framework"] == "custom_refund_orchestrator"
+            return {
+                "content": "Adapter probe approved refund with trace evidence.",
+                "tool_calls": [
+                    {
+                        "id": "framework_status",
+                        "name": "framework_trace_status",
+                        "arguments": {"status": "passed"},
+                    }
+                ],
+                "events": [
+                    {
+                        "type": "framework_trace",
+                        "name": "execute_task",
+                        "payload": {"framework": "custom_refund_orchestrator"},
+                    }
+                ],
+            }
+
+    result = optimize.optimize_framework_adapter_probe(
+        name="sdk-framework-adapter-auto-discovery-optimization",
+        framework="custom_refund_orchestrator",
+        target="framework_shims.py:build_custom_refund_orchestrator",
+        agent_factory=LocalRefundOrchestrator,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        discovery_max_candidates=4,
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit framework evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["adapter_candidate_source"] == "discovery"
+    assert result["summary"]["framework_adapter_discovery_used"] is True
+    assert result["summary"]["framework_adapter_discovery_status"] == "passed"
+    assert result["summary"]["framework_adapter_probe_proof_passed"] is True
+    assert result["framework_adapter_discovery"]["kind"] == (
+        "agent-learning.framework-adapter-discovery.v1"
+    )
+    assert result["framework_adapter_discovery"]["adapter_candidates"][0][
+        "method"
+    ] == "execute_task"
+    assert result["optimization"]["best_config"]["adapter"]["method"] == (
+        "execute_task"
+    )
+    assert result["optimization"]["best_config"]["adapter"]["input_mode"] == "dict"
+    proof_checks = {
+        check["id"]: check for check in result["framework_adapter_probe_proof"]["checks"]
+    }
+    assert proof_checks["framework_adapter_probe_discovery_closed"]["passed"] is True
+    assert proof_checks["framework_adapter_probe_discovery_closed"]["required"] is True
+
+
 def test_probe_optimization_promotes_to_framework_run_manifest(
     monkeypatch,
     tmp_path,

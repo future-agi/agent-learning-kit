@@ -1318,6 +1318,33 @@ def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
     assert result["framework_adapter_probe_proof"]["failed_check_ids"] == []
 
 
+def test_sdk_framework_adapter_auto_discovery_optimization_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_auto_discovery_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_auto_discovery_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-auto-discovery-optimization.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["adapter_candidate_source"] == "discovery"
+    assert result["summary"]["framework_adapter_discovery_used"] is True
+    assert result["summary"]["framework_adapter_probe_proof_passed"] is True
+    assert result["optimization"]["best_config"]["adapter"]["method"] == (
+        "execute_task"
+    )
+    assert result["framework_adapter_probe_proof"]["failed_check_ids"] == []
+
+
 def test_sdk_framework_adapter_probe_promotion_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_probe_promotion.py"
     spec = importlib.util.spec_from_file_location(
