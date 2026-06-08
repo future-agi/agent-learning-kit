@@ -221,6 +221,112 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
         _assert_vendored_under_agent_learning_kit(exported)
 
     assert "langgraph" in simulate.supported_frameworks()
+    assert callable(simulate.probe_framework_adapter)
+    assert callable(simulate.run_framework_adapter_probe)
+
+
+def test_framework_adapter_probe_runs_custom_framework_runtime() -> None:
+    class CustomRefundOrchestrator:
+        async def execute_task(self, payload):
+            assert payload["metadata"]["framework"] == "custom_refund_orchestrator"
+            assert payload["scenario_name"] == "adapter-probe"
+            return {
+                "content": "Adapter probe approved refund with trace evidence.",
+                "tool_calls": [
+                    {
+                        "id": "framework_status",
+                        "name": "framework_trace_status",
+                        "arguments": {"status": "passed"},
+                    }
+                ],
+                "events": [
+                    {
+                        "type": "framework_trace",
+                        "name": "execute_task",
+                        "payload": {"framework": "custom_refund_orchestrator"},
+                    }
+                ],
+                "metadata": {"runtime_contract": {"passed": True}},
+            }
+
+    result = asyncio.run(
+        simulate.probe_framework_adapter(
+            "custom_refund_orchestrator",
+            CustomRefundOrchestrator(),
+            target="framework_shims.py:build_custom_refund_orchestrator",
+            method="execute_task",
+            input_mode="dict",
+            cases=[
+                {
+                    "id": "refund",
+                    "scenario_name": "adapter-probe",
+                    "input": "Approve the refund.",
+                    "expected_contains": ["approved refund"],
+                    "required_tools": ["framework_trace_status"],
+                    "required_events": ["framework_trace"],
+                    "required_state_keys": ["framework_runtime"],
+                }
+            ],
+            metadata={"suite": "adapter-probe"},
+        )
+    )
+
+    assert result["kind"] == "agent-learning.framework-adapter-probe.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["case_count"] == 1
+    assert result["summary"]["runtime_trace_count"] == 1
+    assert result["summary"]["tool_call_count"] == 1
+    assert result["contract"]["framework"] == "custom_refund_orchestrator"
+    assert result["contract"]["method"] == "execute_task"
+    assert result["contract"]["input_mode"] == "dict"
+    assert result["contract"]["local_executable_fixture"] is True
+    case = result["cases"][0]
+    assert case["status"] == "passed"
+    assert case["runtime_trace"]["summary"]["methods"] == ["execute_task"]
+    assert case["runtime_trace"]["summary"]["input_modes"] == ["dict"]
+    assert case["runtime_trace"]["metadata"]["framework_adapter_contract"] == (
+        result["contract"]
+    )
+
+
+def test_framework_adapter_probe_runs_sync_callable_and_rejects_external_target() -> None:
+    def callable_agent(agent_input):
+        return simulate.AgentResponse(
+            content="Callable adapter probe passed.",
+            tool_calls=[
+                {
+                    "id": "callable_status",
+                    "name": "framework_trace_status",
+                    "arguments": {"status": "passed"},
+                }
+            ],
+        )
+
+    result = simulate.run_framework_adapter_probe(
+        "callable",
+        callable_agent,
+        input_mode="agent_input",
+        cases=[
+            {
+                "id": "callable",
+                "input": "Run a callable probe.",
+                "expected_contains": ["probe passed"],
+                "required_tools": ["framework_trace_status"],
+            }
+        ],
+    )
+
+    assert result["status"] == "passed"
+    assert result["summary"]["runtime_trace_count"] == 1
+    assert result["cases"][0]["runtime_trace"]["framework"] == "callable"
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.run_framework_adapter_probe(
+            "langchain",
+            callable_agent,
+            target="https://example.com/agent",
+            input_mode="agent_input",
+        )
 
 
 def test_public_manifest_api_runs_vendored_local_world_and_framework_runtime(

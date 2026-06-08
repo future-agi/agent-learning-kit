@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from fi.simulate.agent.generic import GenericAgentWrapper, InputMode
-from fi.simulate.agent.wrapper import AgentWrapper
+from fi.simulate.agent.wrapper import AgentInput, AgentResponse, AgentWrapper
 
 
 @dataclass(frozen=True)
@@ -342,6 +343,115 @@ def wrap_framework(
     )
 
 
+async def probe_framework_adapter(
+    framework: str,
+    agent: Any,
+    *,
+    cases: Sequence[Mapping[str, Any]] | None = None,
+    target: str | None = None,
+    method: str | Callable[..., Any] | None = None,
+    input_mode: InputMode | None = None,
+    system_prompt: str | None = None,
+    output_key: str | None = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    trace_runtime: bool = True,
+    allow_external_target: bool = False,
+) -> dict[str, Any]:
+    """Run a local adapter conformance probe for any framework shim.
+
+    The probe is intentionally import-free: callers pass an already-created
+    LangChain/LangGraph/LiveKit/Pipecat/custom object or plain callable. The
+    function wraps it with the same generic adapter used by manifests, executes
+    representative cases, and returns runtime evidence that can feed evals,
+    reports, optimizer proofs, or Future AGI UI cards.
+    """
+
+    if target and _is_external_target(target) and not allow_external_target:
+        raise ValueError(
+            "external targets are disabled for framework adapter probes; "
+            "set allow_external_target=True only when the user explicitly "
+            "wants to test that live workload"
+        )
+
+    key = _framework_key(framework)
+    method_name = _probe_method_name(method)
+    selected_metadata = dict(metadata or {})
+    contract = framework_adapter_contract(
+        key,
+        target=target,
+        method=method_name,
+        input_mode=input_mode,
+        trace_runtime=trace_runtime,
+        metadata=selected_metadata,
+    )
+    selected_metadata["framework_adapter_contract"] = contract
+    wrapper = wrap_framework(
+        key,
+        agent,
+        target=target,
+        method=method,
+        input_mode=input_mode,
+        system_prompt=system_prompt,
+        output_key=output_key,
+        metadata=selected_metadata,
+        trace_runtime=trace_runtime,
+        runtime_metadata={"framework_adapter_contract": contract},
+    )
+
+    probe_cases = _probe_cases(cases)
+    case_results: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+
+    for index, case in enumerate(probe_cases, start=1):
+        case_result = await _run_probe_case(
+            wrapper,
+            key,
+            case,
+            index=index,
+            trace_runtime=trace_runtime,
+            contract=contract,
+        )
+        case_results.append(case_result)
+        findings.extend(case_result.get("findings", []))
+
+    summary = _probe_summary(case_results, contract)
+    status = "passed" if not findings else "failed"
+    return {
+        "kind": "agent-learning.framework-adapter-probe.v1",
+        "status": status,
+        "passed": status == "passed",
+        "framework": key,
+        "method": method_name or str(contract.get("method") or "auto"),
+        "input_mode": str(input_mode or contract.get("input_mode") or "auto"),
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "allow_external_target": bool(allow_external_target),
+        "contract": contract,
+        "summary": summary,
+        "cases": case_results,
+        "findings": findings,
+    }
+
+
+def run_framework_adapter_probe(
+    framework: str,
+    agent: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Synchronous wrapper for :func:`probe_framework_adapter`.
+
+    Use ``await probe_framework_adapter(...)`` when already inside an event loop.
+    """
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(probe_framework_adapter(framework, agent, **kwargs))
+    raise RuntimeError(
+        "run_framework_adapter_probe cannot run inside an active event loop; "
+        "await probe_framework_adapter(...) instead"
+    )
+
+
 def _framework_key(value: str) -> str:
     return str(value or "custom").strip().lower().replace("-", "_") or "custom"
 
@@ -519,4 +629,306 @@ def _output_schema() -> dict[str, Any]:
             {"type": "object", "class": "AgentResponse"},
         ],
         "required_trace_state": ["framework_runtime"],
+    }
+
+
+def _probe_method_name(method: str | Callable[..., Any] | None) -> str | None:
+    if method is None:
+        return None
+    if isinstance(method, str):
+        return method
+    return getattr(method, "__name__", None) or "callable"
+
+
+def _probe_cases(cases: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    if not cases:
+        return [
+            {
+                "id": "default",
+                "input": "Return a short adapter probe result.",
+            }
+        ]
+    return [dict(case) for case in cases]
+
+
+async def _run_probe_case(
+    wrapper: AgentWrapper,
+    framework: str,
+    case: Mapping[str, Any],
+    *,
+    index: int,
+    trace_runtime: bool,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    case_id = str(case.get("id") or f"case_{index}")
+    agent_input = _probe_agent_input(framework, case, index=index)
+    raw_response = await wrapper.call(agent_input)
+    response = (
+        raw_response
+        if isinstance(raw_response, AgentResponse)
+        else AgentResponse(content=str(raw_response))
+    )
+    response_payload = _probe_response_payload(response)
+    runtime_trace = dict((response.state or {}).get("framework_runtime") or {})
+    checks = _probe_case_checks(
+        case,
+        response_payload,
+        runtime_trace=runtime_trace,
+        trace_runtime=trace_runtime,
+        contract=contract,
+    )
+    findings = [
+        {
+            "case_id": case_id,
+            "check": check["id"],
+            "level": "error",
+            "message": check["message"],
+            "expected": check.get("expected"),
+            "observed": check.get("observed"),
+        }
+        for check in checks
+        if not check["passed"]
+    ]
+    return {
+        "id": case_id,
+        "status": "passed" if not findings else "failed",
+        "passed": not findings,
+        "input": {
+            "message_count": len(agent_input.messages),
+            "tool_count": len(agent_input.tools),
+            "artifact_count": len(agent_input.artifacts),
+            "event_count": len(agent_input.events),
+            "modality": agent_input.modality,
+        },
+        "response": response_payload,
+        "runtime_trace": runtime_trace,
+        "checks": checks,
+        "findings": findings,
+    }
+
+
+def _probe_agent_input(
+    framework: str,
+    case: Mapping[str, Any],
+    *,
+    index: int,
+) -> AgentInput:
+    messages = _probe_messages(case)
+    new_message = dict(case.get("new_message") or messages[-1])
+    metadata = {
+        "framework": framework,
+        "probe_case_id": str(case.get("id") or f"case_{index}"),
+        **dict(case.get("metadata") or {}),
+    }
+    return AgentInput(
+        thread_id=str(case.get("thread_id") or f"{framework}-probe-{index}"),
+        messages=messages,
+        new_message=new_message,
+        execution_id=str(case.get("execution_id") or f"{framework}-probe"),
+        turn_index=int(case.get("turn_index") or index - 1),
+        scenario_name=str(case.get("scenario_name") or "framework-adapter-probe"),
+        persona=dict(case.get("persona") or {}),
+        situation=str(case.get("situation") or ""),
+        expected_outcome=str(case.get("expected_outcome") or ""),
+        modality=str(case.get("modality") or ""),
+        artifacts=list(case.get("artifacts") or []),
+        events=list(case.get("events") or []),
+        memory=dict(case.get("memory") or {}),
+        tools=[dict(tool) for tool in case.get("tools", []) if isinstance(tool, Mapping)],
+        metadata=metadata,
+    )
+
+
+def _probe_messages(case: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw_messages = case.get("messages")
+    if isinstance(raw_messages, Sequence) and not isinstance(raw_messages, (str, bytes)):
+        messages = [
+            dict(message)
+            for message in raw_messages
+            if isinstance(message, Mapping)
+        ]
+        if messages:
+            return messages
+    message = case.get("input", case.get("message", "Run the adapter probe."))
+    return [{"role": "user", "content": str(message)}]
+
+
+def _probe_case_checks(
+    case: Mapping[str, Any],
+    response: Mapping[str, Any],
+    *,
+    runtime_trace: Mapping[str, Any],
+    trace_runtime: bool,
+    contract: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    content = str(response.get("content") or "")
+    tool_names = set(response.get("tool_names") or [])
+    event_types = set(response.get("event_types") or [])
+    state_keys = set(response.get("state_keys") or [])
+
+    for term in _probe_strings(case.get("expected_contains")):
+        checks.append(
+            _probe_check(
+                f"content_contains_{_framework_key(term)}",
+                term.lower() in content.lower(),
+                f"response content should contain {term!r}",
+                expected=term,
+                observed=content,
+            )
+        )
+    for tool in _probe_strings(case.get("required_tools")):
+        checks.append(
+            _probe_check(
+                f"required_tool_{_framework_key(tool)}",
+                tool in tool_names,
+                f"response should emit required tool {tool!r}",
+                expected=tool,
+                observed=sorted(tool_names),
+            )
+        )
+    for event_type in _probe_strings(case.get("required_events")):
+        checks.append(
+            _probe_check(
+                f"required_event_{_framework_key(event_type)}",
+                event_type in event_types,
+                f"response should emit required event {event_type!r}",
+                expected=event_type,
+                observed=sorted(event_types),
+            )
+        )
+    for state_key in _probe_strings(case.get("required_state_keys")):
+        checks.append(
+            _probe_check(
+                f"required_state_{_framework_key(state_key)}",
+                state_key in state_keys,
+                f"response should include required state key {state_key!r}",
+                expected=state_key,
+                observed=sorted(state_keys),
+            )
+        )
+    if trace_runtime:
+        runtime_summary = dict(runtime_trace.get("summary") or {})
+        runtime_contract = dict(
+            dict(runtime_trace.get("metadata") or {}).get("framework_adapter_contract")
+            or {}
+        )
+        checks.extend(
+            [
+                _probe_check(
+                    "framework_runtime_trace_present",
+                    bool(runtime_trace),
+                    "trace_runtime=True should attach framework_runtime state",
+                    expected=True,
+                    observed=bool(runtime_trace),
+                ),
+                _probe_check(
+                    "framework_runtime_contract_present",
+                    runtime_contract.get("kind")
+                    == "agent-learning.framework-adapter-contract.v1",
+                    "runtime trace should carry the adapter contract",
+                    expected="agent-learning.framework-adapter-contract.v1",
+                    observed=runtime_contract.get("kind"),
+                ),
+                _probe_check(
+                    "framework_runtime_invocation_present",
+                    int(runtime_summary.get("invocation_count") or 0) >= 1,
+                    "runtime trace should record at least one invocation",
+                    expected=">=1",
+                    observed=runtime_summary.get("invocation_count"),
+                ),
+            ]
+        )
+    checks.append(
+        _probe_check(
+            "adapter_contract_local_first",
+            contract.get("requires_external_service") is False,
+            "adapter contract should not require a hosted service",
+            expected=False,
+            observed=contract.get("requires_external_service"),
+        )
+    )
+    return checks
+
+
+def _probe_check(
+    check_id: str,
+    passed: bool,
+    message: str,
+    *,
+    expected: Any = None,
+    observed: Any = None,
+) -> dict[str, Any]:
+    return {
+        "id": check_id,
+        "passed": bool(passed),
+        "message": message,
+        "expected": expected,
+        "observed": observed,
+    }
+
+
+def _probe_strings(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Sequence):
+        return [str(item) for item in value if str(item)]
+    return [str(value)]
+
+
+def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
+    tool_calls = [dict(call) for call in response.tool_calls or []]
+    events = [event.model_dump() for event in response.events]
+    artifacts = [artifact.model_dump() for artifact in response.artifacts]
+    state = dict(response.state or {})
+    metadata = dict(response.metadata or {})
+    return {
+        "content": response.content,
+        "tool_call_count": len(tool_calls),
+        "tool_names": sorted(
+            {
+                str(
+                    call.get("name")
+                    or call.get("tool")
+                    or dict(call.get("function") or {}).get("name")
+                    or ""
+                )
+                for call in tool_calls
+                if isinstance(call, Mapping)
+            }
+        ),
+        "event_count": len(events),
+        "event_types": sorted({str(event.get("type") or "") for event in events}),
+        "artifact_count": len(artifacts),
+        "artifact_types": sorted({str(artifact.get("type") or "") for artifact in artifacts}),
+        "state_keys": sorted(str(key) for key in state),
+        "metadata_keys": sorted(str(key) for key in metadata),
+    }
+
+
+def _probe_summary(
+    cases: Sequence[Mapping[str, Any]],
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    passed = sum(1 for case in cases if case.get("passed"))
+    failed = len(cases) - passed
+    response_tool_count = sum(
+        int(dict(case.get("response") or {}).get("tool_call_count") or 0)
+        for case in cases
+    )
+    runtime_trace_count = sum(1 for case in cases if case.get("runtime_trace"))
+    return {
+        "case_count": len(cases),
+        "passed_case_count": passed,
+        "failed_case_count": failed,
+        "runtime_trace_count": runtime_trace_count,
+        "tool_call_count": response_tool_count,
+        "framework": contract.get("framework"),
+        "method": contract.get("method"),
+        "input_mode": contract.get("input_mode"),
+        "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "trace_runtime": bool(contract.get("trace_runtime")),
     }

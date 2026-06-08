@@ -32,6 +32,8 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "FrameworkAdapterSpec",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
+    "probe_framework_adapter",
+    "run_framework_adapter_probe",
     "supported_frameworks",
     "wrap_agent",
     "wrap_framework",
@@ -4795,6 +4797,14 @@ def wrap_agent(*args: Any, **kwargs: Any) -> Any:
 
 def wrap_framework(*args: Any, **kwargs: Any) -> Any:
     return _simulate().wrap_framework(*args, **kwargs)
+
+
+async def probe_framework_adapter(*args: Any, **kwargs: Any) -> Any:
+    return await _simulate().probe_framework_adapter(*args, **kwargs)
+
+
+def run_framework_adapter_probe(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().run_framework_adapter_probe(*args, **kwargs)
 
 
 def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:

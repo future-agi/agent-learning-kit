@@ -5,6 +5,8 @@ from .frameworks import (
     FrameworkAdapterSpec,
     framework_adapter_contract,
     framework_adapter_contract_matrix,
+    probe_framework_adapter,
+    run_framework_adapter_probe,
     supported_frameworks,
     wrap_framework,
 )
@@ -35,6 +37,8 @@ __all__ = [
     "FrameworkAdapterSpec",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
+    "probe_framework_adapter",
+    "run_framework_adapter_probe",
     "supported_frameworks",
     "probe_framework_imports",
     "wrap_agent",

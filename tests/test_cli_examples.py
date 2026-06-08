@@ -1242,6 +1242,32 @@ def test_sdk_built_eval_suite_runs_through_cli_and_suite(tmp_path, monkeypatch):
     assert suite_payload["children"][0]["kind"] == "agent-learning.eval.v1"
 
 
+def test_sdk_framework_adapter_probe_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_probe.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-probe.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.framework-adapter-probe.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["runtime_trace_count"] == 1
+    assert result["summary"]["tool_call_count"] == 1
+    assert result["contract"]["framework"] == "custom_refund_orchestrator"
+    assert result["cases"][0]["runtime_trace"]["metadata"][
+        "framework_adapter_contract"
+    ] == result["contract"]
+
+
 def test_world_framework_memory_optimization_example_runs_evidence_gates(
     tmp_path,
     monkeypatch,

@@ -11,4 +11,5 @@ build/
 coverage/
 *.tsbuildinfo
 .DS_Store
+artifacts/
 examples/artifacts/
