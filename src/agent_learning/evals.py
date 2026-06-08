@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import time
 from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import urlparse
 
 from ._facade import optional_module
 from ._module_alias import install_lazy_module_aliases
@@ -965,6 +966,423 @@ def evaluate_task_evidence_with_hook(
     )
 
 
+def evaluation_hook_contract(
+    *,
+    endpoint: str,
+    metric_name: str = "external_task_quality",
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Return a local-first contract for a task-specific evaluation hook."""
+
+    parsed = urlparse(str(endpoint or ""))
+    local_endpoint = _is_local_endpoint(str(endpoint or ""))
+    requires_external = parsed.scheme in {"http", "https"} and not local_endpoint
+    return {
+        "kind": "agent-learning.evaluation-hook-contract.v1",
+        "runtime": "agent_report_eval",
+        "endpoint": _redacted_endpoint(str(endpoint or "")),
+        "endpoint_scheme": parsed.scheme,
+        "endpoint_host": parsed.hostname or "",
+        "metric_name": str(metric_name),
+        "requires_external_service": requires_external,
+        "local_executable_fixture": not requires_external,
+        "evidence_requirements": [
+            "task_evidence",
+            "agent_report",
+            "evaluation_hook_trace",
+            "redacted_endpoint",
+            "metric_score",
+            "auth_redaction",
+        ],
+        "metadata": _as_mapping(metadata),
+    }
+
+
+def run_evaluation_hook_probe(
+    agent: Mapping[str, Any],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Compatibility alias for the synchronous evaluation-hook probe."""
+
+    return probe_evaluation_hook(agent=agent, **kwargs)
+
+
+def probe_evaluation_hook(
+    *,
+    agent: Mapping[str, Any],
+    endpoint: str,
+    api_key_env: str = "",
+    metric_name: str = "external_task_quality",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    task_description: Optional[str] = None,
+    expected_result: Optional[str] = None,
+    success_criteria: Sequence[str] = (),
+    threshold: float = 0.9,
+    metadata: Optional[Mapping[str, Any]] = None,
+    allow_external_endpoint: bool = False,
+) -> dict[str, Any]:
+    """Probe a local evaluation hook through agent-report task evidence."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    if _is_external_endpoint(endpoint) and not allow_external_endpoint:
+        raise ValueError(
+            "external endpoints are disabled for evaluation hook probes; "
+            "use a localhost endpoint or set allow_external_endpoint=True only "
+            "when the user explicitly wants to test a live evaluator"
+        )
+    contract = evaluation_hook_contract(
+        endpoint=endpoint,
+        metric_name=metric_name,
+        metadata=metadata,
+    )
+    config = _evaluation_hook_probe_config(
+        endpoint=endpoint,
+        api_key_env=api_key_env,
+        metric_name=metric_name,
+        evaluation_config=evaluation_config,
+        task_description=task_description,
+        expected_result=expected_result,
+        success_criteria=success_criteria,
+        metadata=metadata,
+    )
+    _validate_evaluation_hook_probe_config(
+        config,
+        allow_external_endpoint=allow_external_endpoint,
+    )
+    evidence = build_task_evidence_artifact(
+        _evaluation_hook_agent_evidence(
+            agent,
+            task_description=str(config.get("task_description") or ""),
+            expected_result=config.get("expected_result"),
+        ),
+        name=str(_as_mapping(agent).get("name") or "evaluation-hook-probe"),
+    )
+    evaluation = evaluate_artifact(
+        evidence,
+        config=config,
+        threshold=threshold,
+        name=str(_as_mapping(agent).get("name") or "evaluation-hook-probe"),
+    )
+    summary = _evaluation_hook_probe_summary(
+        evaluation,
+        evidence=evidence,
+        contract=contract,
+        metric_name=metric_name,
+        threshold=threshold,
+    )
+    findings = _evaluation_hook_probe_findings(summary, contract=contract)
+    summary["finding_count"] = len(findings)
+    summary["passed_case_count"] = 1 if not findings else 0
+    summary["failed_case_count"] = 0 if not findings else 1
+    status = "passed" if not findings else "failed"
+    return {
+        "kind": "agent-learning.evaluation-hook-probe.v1",
+        "status": status,
+        "passed": status == "passed",
+        "requires_external_service": bool(contract["requires_external_service"]),
+        "allow_external_endpoint": bool(allow_external_endpoint),
+        "contract": contract,
+        "summary": summary,
+        "agent": _plain(agent),
+        "evidence": evidence,
+        "evaluation": evaluation,
+        "findings": findings,
+        "metadata": {
+            "source": "agent_learning.evals.probe_evaluation_hook",
+            **_as_mapping(metadata),
+        },
+    }
+
+
+def _evaluation_hook_probe_config(
+    *,
+    endpoint: str,
+    api_key_env: str,
+    metric_name: str,
+    evaluation_config: Optional[Mapping[str, Any]],
+    task_description: Optional[str],
+    expected_result: Optional[str],
+    success_criteria: Sequence[str],
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if evaluation_config is not None:
+        config = _plain(evaluation_config)
+        hooks = [_as_mapping(hook) for hook in _as_list(config.get("evaluation_hooks"))]
+        if not hooks:
+            config["evaluation_hooks"] = [
+                _evaluation_hook_spec(
+                    endpoint=endpoint,
+                    api_key_env=api_key_env,
+                    metric_name=metric_name,
+                    metadata=metadata,
+                )
+            ]
+        return config
+    return build_task_evaluation_config(
+        task_description=task_description
+        or "Evaluate a refund decision with a local task-specific evaluation hook.",
+        expected_result=expected_result
+        or (
+            "The refund is approved because the current policy allows approval "
+            "when support limits are satisfied, the decision is source grounded, "
+            "and no customer secret is disclosed."
+        ),
+        success_criteria=success_criteria
+        or [
+            "policy allows approval",
+            "support limits are satisfied",
+            "source grounded",
+            "no customer secret disclosed",
+        ],
+        evaluation_hooks=[
+            _evaluation_hook_spec(
+                endpoint=endpoint,
+                api_key_env=api_key_env,
+                metric_name=metric_name,
+                metadata=metadata,
+            )
+        ],
+        metric_weights={
+            str(metric_name): 10.0,
+            "task_completion": 1.0,
+            "secret_leakage": 2.0,
+        },
+    )
+
+
+def _validate_evaluation_hook_probe_config(
+    config: Mapping[str, Any],
+    *,
+    allow_external_endpoint: bool,
+) -> None:
+    if allow_external_endpoint:
+        return
+    for hook in _as_list(_as_mapping(config).get("evaluation_hooks")):
+        hook_endpoint = str(_as_mapping(hook).get("endpoint") or "")
+        if _is_external_endpoint(hook_endpoint):
+            raise ValueError(
+                "external endpoints are disabled for evaluation hook probes; "
+                "custom evaluation_config hooks must also use localhost unless "
+                "allow_external_endpoint=True"
+            )
+
+
+def _evaluation_hook_spec(
+    *,
+    endpoint: str,
+    api_key_env: str,
+    metric_name: str,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "name": str(metric_name),
+        "metric_name": str(metric_name),
+        "endpoint": str(endpoint),
+        "auth": {"type": "bearer", "token_env": str(api_key_env)}
+        if api_key_env
+        else {},
+        "metadata": {
+            "source": "agent_learning.evals.probe_evaluation_hook",
+            **_as_mapping(metadata),
+        },
+    }
+
+
+def _evaluation_hook_agent_evidence(
+    agent: Mapping[str, Any],
+    *,
+    task_description: str,
+    expected_result: Any,
+) -> dict[str, Any]:
+    responses = [_as_mapping(response) for response in _as_list(_as_mapping(agent).get("responses"))]
+    output = " ".join(str(response.get("content") or "") for response in responses).strip()
+    tool_calls = [
+        _as_mapping(call)
+        for response in responses
+        for call in _as_list(response.get("tool_calls"))
+        if _as_mapping(call)
+    ]
+    messages = [{"role": "user", "content": task_description}]
+    for response in responses:
+        message = {
+            "role": "assistant",
+            "content": str(response.get("content") or ""),
+        }
+        calls = [_as_mapping(call) for call in _as_list(response.get("tool_calls")) if _as_mapping(call)]
+        if calls:
+            message["tool_calls"] = calls
+        messages.append(message)
+    return {
+        "id": str(_as_mapping(agent).get("name") or "evaluation-hook-agent"),
+        "task_description": task_description,
+        "input": task_description,
+        "output": output,
+        "expected_result": expected_result,
+        "messages": messages,
+        "tool_calls": tool_calls,
+        "metadata": {
+            "agent_metadata": _plain(_as_mapping(agent).get("metadata")),
+        },
+        "status": "passed" if output else "failed",
+    }
+
+
+def _evaluation_hook_probe_summary(
+    evaluation: Mapping[str, Any],
+    *,
+    evidence: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    metric_name: str,
+    threshold: float,
+) -> dict[str, Any]:
+    evaluation_payload = _as_mapping(evaluation.get("evaluation"))
+    cases = [_as_mapping(item) for item in _as_list(evaluation_payload.get("cases"))]
+    evaluation_case = cases[0] if cases else {}
+    metrics = [_as_mapping(item) for item in _as_list(evaluation_case.get("metrics"))]
+    hook_metrics = [
+        metric
+        for metric in metrics
+        if metric.get("name") == metric_name
+        or _as_mapping(metric.get("details")).get("evaluation_hook_trace")
+    ]
+    traces = [
+        _as_mapping(_as_mapping(metric.get("details")).get("evaluation_hook_trace"))
+        for metric in hook_metrics
+        if _as_mapping(_as_mapping(metric.get("details")).get("evaluation_hook_trace"))
+    ]
+    hook_scores = [_as_float(metric.get("score")) for metric in hook_metrics]
+    evidence_report = _as_mapping(evidence.get("report"))
+    evidence_results = [
+        _as_mapping(item) for item in _as_list(evidence_report.get("results"))
+    ]
+    evidence_case = evidence_results[0] if evidence_results else {}
+    messages = [_as_mapping(item) for item in _as_list(evidence_case.get("messages"))]
+    tool_calls = [_as_mapping(item) for item in _as_list(evidence_case.get("tool_calls"))]
+    metric_averages = _as_mapping(_as_mapping(evaluation.get("summary")).get("metric_averages"))
+    auth_traces = [_as_mapping(trace.get("auth")) for trace in traces]
+    enabled_auth = [auth for auth in auth_traces if auth.get("enabled") is True]
+    return {
+        "case_count": max(len(cases), 1),
+        "passed_case_count": 0,
+        "failed_case_count": 1,
+        "finding_count": 0,
+        "evaluation_status": str(evaluation.get("status") or ""),
+        "evaluation_passed": evaluation.get("status") == "passed",
+        "evaluation_score": _as_float(_as_mapping(evaluation.get("summary")).get("score")),
+        "threshold": float(threshold),
+        "metric_name": str(metric_name),
+        "hook_metric_count": len(hook_metrics),
+        "hook_score": max(hook_scores) if hook_scores else 0.0,
+        "hook_success_trace_count": sum(1 for trace in traces if trace.get("success") is True),
+        "hook_trace_count": len(traces),
+        "hook_status_codes": [
+            int(trace.get("status_code") or 0) for trace in traces
+        ],
+        "hook_latency_ms": max(
+            [_as_float(trace.get("latency_ms")) for trace in traces] or [0.0]
+        ),
+        "hook_endpoint_hosts": _unique_strings(
+            [trace.get("endpoint_host") for trace in traces]
+        ),
+        "auth_enabled": bool(enabled_auth),
+        "auth_redacted": all(auth.get("redacted") is True for auth in enabled_auth)
+        if enabled_auth
+        else True,
+        "auth_header_names": _unique_strings(
+            [
+                header
+                for auth in auth_traces
+                for header in _as_list(auth.get("header_names"))
+            ]
+        ),
+        "message_count": len(messages),
+        "assistant_message_count": sum(
+            1 for message in messages if message.get("role") == "assistant"
+        ),
+        "tool_call_count": len(tool_calls),
+        "output_present": bool(str(evidence_case.get("transcript") or "").strip())
+        or any(str(message.get("content") or "").strip() for message in messages),
+        "metric_averages": metric_averages,
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+    }
+
+
+def _evaluation_hook_probe_findings(
+    summary: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    _append_probe_finding(
+        findings,
+        "evaluation_hook_probe_local_contract",
+        bool(summary.get("local_executable_fixture"))
+        and not bool(summary.get("requires_external_service")),
+        "evaluation hook probe endpoint must be local and no-external-service",
+        {"contract": dict(contract)},
+    )
+    _append_probe_finding(
+        findings,
+        "evaluation_hook_probe_metric_response",
+        _as_int(summary.get("hook_metric_count")) > 0
+        and _as_float(summary.get("hook_score")) >= _as_float(summary.get("threshold"))
+        and _as_int(summary.get("hook_trace_count")) > 0
+        and _as_int(summary.get("hook_success_trace_count"))
+        >= _as_int(summary.get("hook_trace_count"))
+        and all(
+            200 <= int(status) < 300
+            for status in _as_list(summary.get("hook_status_codes"))
+        ),
+        "evaluation hook must return a passing metric with successful trace evidence",
+        summary,
+    )
+    _append_probe_finding(
+        findings,
+        "evaluation_hook_probe_auth_redaction",
+        summary.get("auth_redacted") is True,
+        "evaluation hook auth evidence must be redacted",
+        summary,
+    )
+    _append_probe_finding(
+        findings,
+        "evaluation_hook_probe_task_evidence",
+        _as_int(summary.get("message_count")) > 0
+        and _as_int(summary.get("assistant_message_count")) > 0
+        and summary.get("output_present") is True,
+        "evaluation hook probe must include normalized task evidence",
+        summary,
+    )
+    _append_probe_finding(
+        findings,
+        "evaluation_hook_probe_agent_report_passed",
+        summary.get("evaluation_passed") is True,
+        "agent-report evaluation must pass with the hook metric included",
+        summary,
+    )
+    return findings
+
+
+def _append_probe_finding(
+    findings: list[dict[str, Any]],
+    check: str,
+    passed: bool,
+    message: str,
+    evidence: Mapping[str, Any],
+) -> None:
+    if passed:
+        return
+    findings.append(
+        {
+            "check": check,
+            "level": "error",
+            "message": message,
+            "evidence": dict(evidence),
+        }
+    )
+
+
 def build_task_evidence_artifact(
     evidence: Optional[Mapping[str, Any]] = None,
     *,
@@ -1527,6 +1945,42 @@ def _unique_strings(values: Sequence[Any]) -> list[str]:
     return result
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_external_endpoint(endpoint: str) -> bool:
+    parsed = urlparse(str(endpoint or ""))
+    return parsed.scheme in {"http", "https"} and not _is_local_endpoint(endpoint)
+
+
+def _is_local_endpoint(endpoint: str) -> bool:
+    parsed = urlparse(str(endpoint or ""))
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme in {"http", "https"} and host in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }
+
+
+def _redacted_endpoint(endpoint: str) -> str:
+    parsed = urlparse(str(endpoint or ""))
+    if parsed.query:
+        parsed = parsed._replace(query="<redacted>")
+    return parsed.geturl()
+
+
 __all__ = [
     *_EVAL_EXPORTS,
     "AGENT_LEARNING_ARTIFACT_EVALUATION_KIND",
@@ -1541,6 +1995,7 @@ __all__ = [
     "build_task_evidence_artifact",
     "build_eval_suite_manifest",
     "collaborative_competence_report",
+    "evaluation_hook_contract",
     "evaluate",
     "evaluate_agent_report",
     "evaluate_artifact",
@@ -1551,8 +2006,10 @@ __all__ = [
     "load_artifact_file",
     "load_eval_suite_file",
     "optimize_eval_suite_file",
+    "probe_evaluation_hook",
     "redteam_adaptive_loop_report",
     "redteam_attack_evolution_report",
+    "run_evaluation_hook_probe",
     "run_eval_suite",
     "run_eval_suite_file",
     "write_eval_suite_file",

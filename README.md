@@ -825,6 +825,14 @@ candidates against the live external metric; SDK entry points are
 `simulate.build_evaluation_hook_run_manifest()`,
 `optimize.build_evaluation_hook_optimization_manifest()`, and
 `optimize.optimize_evaluation_hooks()`.
+Before using a live evaluator, use `evals.run_evaluation_hook_probe()` or
+`optimize.optimize_evaluation_hook_probe()` with a localhost hook to verify the
+task-specific metric, redacted `evaluation_hook_trace`, normalized task
+evidence, and agent-report pass locally. Non-local HTTP/HTTPS endpoints are
+rejected by default. The selected probe can be promoted with
+`optimize.build_evaluation_hook_run_manifest_from_probe_optimization(...)`.
+See `examples/sdk_evaluation_hook_probe_optimization.py` for a local probe,
+promotion, and evaluated run cookbook that does not require an API key.
 
 For saved task/run artifacts, pass artifact field-extraction candidates and
 fixed structured assertions. The SDK builds a promptfoo-style optimization
@@ -962,6 +970,9 @@ PYTHONPATH=src python examples/sdk_realtime_stack_probe_optimization.py \
 
 PYTHONPATH=src python examples/sdk_browser_cua_probe_optimization.py \
   artifacts/sdk-browser-cua-probe-optimization.json
+
+PYTHONPATH=src python examples/sdk_evaluation_hook_probe_optimization.py \
+  artifacts/sdk-evaluation-hook-probe-optimization.json
 
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \

@@ -29,6 +29,9 @@ AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND = (
 AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND = (
     "agent-learning.optimization.browser-cua-probe-proof.v1"
 )
+AGENT_LEARNING_EVALUATION_HOOK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.evaluation-hook-probe-proof.v1"
+)
 AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND = (
     "agent-learning.optimization.framework-adapter-probe-proof.v1"
 )
@@ -1346,6 +1349,582 @@ def optimize_evaluation_hooks(
         name=result_name,
         dry_run=dry_run,
     )
+
+
+def optimize_evaluation_hook_probe(
+    *,
+    name: str = "evaluation-hook-probe-optimization",
+    endpoint: str,
+    agent_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    api_key_env: str = "",
+    metric_name: str = "external_task_quality",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    task_description: Optional[str] = None,
+    expected_result: Optional[str] = None,
+    success_criteria: Sequence[str] = (),
+    threshold: float = 0.9,
+    allow_external_endpoint: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize local evaluation-hook agent candidates with direct probes."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    agents = (
+        [copy.deepcopy(dict(candidate)) for candidate in agent_candidates]
+        if agent_candidates is not None
+        else _evaluation_hook_agent_candidates()
+    )
+    if not agents:
+        raise ValueError("agent_candidates must contain at least one candidate")
+    candidates = [
+        {
+            "agent": copy.deepcopy(dict(agent)),
+            "endpoint": endpoint,
+            "api_key_env": api_key_env,
+            "allow_external_endpoint": allow_external_endpoint,
+        }
+        for agent in agents
+    ]
+    opt = _opt()
+    optimizer_module = optional_module("fi.opt.optimizers", _OPTIMIZE_EXTRA)
+    optimization_target = opt.OptimizationTarget(
+        name=name,
+        layers=["evaluator", "objective", "harness", "security", "planner"],
+        base_config=copy.deepcopy(candidates[0]),
+        search_space={"evaluation_hook_agent": copy.deepcopy(candidates)},
+        metadata={
+            "source": "agent_learning.optimize.optimize_evaluation_hook_probe",
+            "task_kind": "evaluation_hook_probe",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+    def evaluate_candidate(candidate: Any) -> Any:
+        config = _plain_mapping(candidate.config)
+        pair = _plain_mapping(config.get("evaluation_hook_agent")) or config
+        probe_result = _run_evaluation_hook_probe_candidate(
+            agent=_plain_mapping(pair.get("agent")),
+            endpoint=str(pair.get("endpoint") or endpoint),
+            api_key_env=str(pair.get("api_key_env") or api_key_env),
+            metric_name=metric_name,
+            evaluation_config=evaluation_config,
+            task_description=task_description,
+            expected_result=expected_result,
+            success_criteria=success_criteria,
+            threshold=threshold,
+            metadata=metadata,
+            default_allow_external_endpoint=allow_external_endpoint,
+            allow_external_endpoint=bool(
+                pair.get("allow_external_endpoint", allow_external_endpoint)
+            ),
+        )
+        scoring = score_evaluation_hook_probe_result(probe_result)
+        return opt.CandidateEvaluation(
+            candidate=candidate,
+            score=float(scoring["score"]),
+            reason=str(scoring["reason"]),
+            report=copy.deepcopy(probe_result),
+            metadata={
+                "candidate_patch": copy.deepcopy(candidate.patch),
+                "patch": copy.deepcopy(candidate.patch),
+                "search_paths": list(candidate.metadata.get("search_paths", [])),
+                "metrics": copy.deepcopy(scoring["metrics"]),
+                "findings": copy.deepcopy(probe_result.get("findings", [])),
+                "report_summary": copy.deepcopy(probe_result.get("summary", {})),
+                "evaluation_score": float(scoring["score"]),
+                "evaluation_passed": bool(scoring["passed"]),
+            },
+        )
+
+    optimizer = optimizer_module.AgentOptimizer(
+        target=optimization_target,
+        evaluate_candidate=evaluate_candidate,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        auto_diagnose=False,
+    )
+    optimization_result = optimizer.optimize()
+    payload = _evaluation_hook_probe_optimization_payload(
+        name=name,
+        threshold=threshold,
+        optimization_result=optimization_result,
+        metadata=metadata,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_evaluation_hook_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def build_evaluation_hook_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    endpoint: Optional[str] = None,
+    api_key_env: str = "",
+    metric_name: str = "external_task_quality",
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    simulation_engine: str = "local_text",
+    metadata: Optional[Mapping[str, Any]] = None,
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+) -> dict[str, Any]:
+    """Promote a verified evaluation-hook probe into a run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    pair = _plain_mapping(best_config.get("evaluation_hook_agent")) or best_config
+    agent = _plain_mapping(pair.get("agent"))
+    if not agent:
+        raise ValueError("selected evaluation-hook agent is required")
+    proof = _plain_mapping(
+        payload.get("evaluation_hook_probe_proof")
+        or optimization.get("evaluation_hook_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_EVALUATION_HOOK_PROBE_PROOF_KIND:
+        raise ValueError("evaluation_hook_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("evaluation_hook_probe_proof must be passed")
+
+    from . import simulate as _agent_simulate
+
+    selected_endpoint = str(endpoint or pair.get("endpoint") or "")
+    if not selected_endpoint:
+        raise ValueError("endpoint is required")
+    selected_api_key_env = str(pair.get("api_key_env") or api_key_env or "")
+    manifest_name = str(name or f"{payload.get('name') or 'evaluation-hook-probe'}-run")
+    merged_metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_evaluation_hook_run_manifest_from_probe_optimization"
+        ),
+        "promoted_from_evaluation_hook_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+            or proof.get("selected_candidate_id")
+        ),
+        "evaluation_hook_probe_proof": copy.deepcopy(proof),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    manifest = _agent_simulate.build_evaluation_hook_run_manifest(
+        name=manifest_name,
+        endpoint=selected_endpoint,
+        api_key_env=selected_api_key_env,
+        metric_name=metric_name,
+        agent=agent,
+        evaluation_config=evaluation_config,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=merged_metadata,
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_evaluation_hook_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": merged_metadata["probe_selected_candidate_id"],
+        "evaluation_hook_probe_proof_status": proof.get("status"),
+    }
+    return manifest
+
+
+def score_evaluation_hook_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Score an evaluation-hook probe artifact into optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    case_count = max(_as_int(summary.get("case_count")), 1)
+    case_pass_rate = _as_int(summary.get("passed_case_count")) / case_count
+    local_contract_quality = 1.0 if (
+        summary.get("local_executable_fixture") is True
+        and summary.get("requires_external_service") is False
+    ) else 0.0
+    metric_response_quality = 1.0 if (
+        _as_int(summary.get("hook_metric_count")) > 0
+        and _as_float(summary.get("hook_score")) >= _as_float(summary.get("threshold"))
+        and _as_int(summary.get("hook_trace_count")) > 0
+        and _as_int(summary.get("hook_success_trace_count"))
+        >= _as_int(summary.get("hook_trace_count"))
+        and all(
+            200 <= int(status) < 300
+            for status in _plain_list(summary.get("hook_status_codes"))
+        )
+    ) else 0.0
+    auth_redaction = 1.0 if summary.get("auth_redacted") is True else 0.0
+    task_evidence = 1.0 if (
+        _as_int(summary.get("message_count")) > 0
+        and _as_int(summary.get("assistant_message_count")) > 0
+        and summary.get("output_present") is True
+    ) else 0.0
+    agent_report_quality = 1.0 if summary.get("evaluation_passed") is True else 0.0
+    score = round(
+        (
+            case_pass_rate * 0.15
+            + local_contract_quality * 0.1
+            + metric_response_quality * 0.35
+            + auth_redaction * 0.1
+            + task_evidence * 0.1
+            + agent_report_quality * 0.2
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.evaluation-hook-probe-score.v1",
+        "score": score,
+        "passed": bool(result.get("passed")) and score >= 0.9,
+        "reason": (
+            "evaluation hook probe passed with local endpoint, metric, trace, and redaction evidence"
+            if bool(result.get("passed")) and score >= 0.9
+            else "evaluation hook probe did not close local metric/trace evidence"
+        ),
+        "metrics": {
+            "evaluation_hook_probe_pass_rate": round(case_pass_rate, 6),
+            "evaluation_hook_probe_local_contract_quality": local_contract_quality,
+            "evaluation_hook_probe_metric_response_quality": metric_response_quality,
+            "evaluation_hook_probe_auth_redaction": auth_redaction,
+            "evaluation_hook_probe_task_evidence": task_evidence,
+            "evaluation_hook_probe_agent_report_quality": agent_report_quality,
+            "evaluation_hook_probe_score": score,
+        },
+        "summary": copy.deepcopy(dict(summary)),
+    }
+
+
+def _run_evaluation_hook_probe_candidate(
+    *,
+    agent: Mapping[str, Any],
+    endpoint: str,
+    api_key_env: str,
+    metric_name: str,
+    evaluation_config: Optional[Mapping[str, Any]],
+    task_description: Optional[str],
+    expected_result: Optional[str],
+    success_criteria: Sequence[str],
+    threshold: float,
+    metadata: Optional[Mapping[str, Any]],
+    default_allow_external_endpoint: bool,
+    allow_external_endpoint: bool,
+) -> dict[str, Any]:
+    from . import evals as _agent_evals
+
+    try:
+        return _agent_evals.run_evaluation_hook_probe(
+            agent,
+            endpoint=endpoint,
+            api_key_env=api_key_env,
+            metric_name=metric_name,
+            evaluation_config=evaluation_config,
+            task_description=task_description,
+            expected_result=expected_result,
+            success_criteria=success_criteria,
+            threshold=threshold,
+            metadata=metadata,
+            allow_external_endpoint=bool(
+                allow_external_endpoint or default_allow_external_endpoint
+            ),
+        )
+    except Exception as exc:
+        return _failed_evaluation_hook_probe(
+            agent=agent,
+            endpoint=endpoint,
+            metric_name=metric_name,
+            error=exc,
+            metadata=metadata,
+        )
+
+
+def _failed_evaluation_hook_probe(
+    *,
+    agent: Mapping[str, Any],
+    endpoint: str,
+    metric_name: str,
+    error: Exception,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    from . import evals as _agent_evals
+
+    try:
+        contract = _agent_evals.evaluation_hook_contract(
+            endpoint=endpoint,
+            metric_name=metric_name,
+            metadata=metadata,
+        )
+    except Exception:
+        contract = {
+            "kind": "agent-learning.evaluation-hook-contract.v1",
+            "requires_external_service": False,
+            "local_executable_fixture": bool(endpoint),
+        }
+    return {
+        "kind": "agent-learning.evaluation-hook-probe.v1",
+        "status": "failed",
+        "passed": False,
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "contract": contract,
+        "summary": {
+            "case_count": 1,
+            "passed_case_count": 0,
+            "failed_case_count": 1,
+            "finding_count": 1,
+            "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+            "requires_external_service": bool(contract.get("requires_external_service")),
+        },
+        "agent": copy.deepcopy(dict(agent)),
+        "findings": [
+            {
+                "check": "evaluation_hook_probe_exception",
+                "level": "error",
+                "message": str(error),
+                "observed": type(error).__name__,
+            }
+        ],
+    }
+
+
+def _evaluation_hook_probe_optimization_payload(
+    *,
+    name: str,
+    threshold: float,
+    optimization_result: Any,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
+    best_candidate = getattr(optimization_result, "best_candidate", None)
+    best_candidate_id = getattr(best_candidate, "id", None)
+    best_config = _json_plain(getattr(best_candidate, "config", {}) or {})
+    history = _evaluation_hook_probe_history(optimization_result)
+    search_paths = _unique_strings(
+        [
+            str(path)
+            for row in history
+            for path in _plain_list(row.get("search_paths"))
+            if str(path)
+        ]
+    )
+    metric_averages = _metric_averages_from_history(history)
+    passed = final_score >= float(threshold)
+    return {
+        "schema_version": "agent-learning.cli.v1",
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": final_score,
+            "optimization_passed": passed,
+            "evaluation_score": final_score,
+            "evaluation_passed": passed,
+            "metric_averages": metric_averages,
+            "threshold": float(threshold),
+            "total_iterations": getattr(optimization_result, "total_iterations", None),
+            "total_evaluations": getattr(optimization_result, "total_evaluations", None),
+            "best_candidate_id": best_candidate_id,
+            "search_paths": search_paths,
+        },
+        "optimization": {
+            "final_score": final_score,
+            "best_candidate_id": best_candidate_id,
+            "best_config": best_config,
+            "source_manifest": {
+                "name": name,
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_evaluation_hook_probe",
+                    "task_kind": "evaluation_hook_probe",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "history": history,
+            "manifest_optimization": {
+                "kind": "evaluation_hook_probe_optimization",
+                "name": name,
+                "final_score": final_score,
+                "threshold": float(threshold),
+                "passed": passed,
+                "best_candidate_id": best_candidate_id,
+                "best_config": copy.deepcopy(best_config),
+                "search_paths": search_paths,
+                "metrics": metric_averages,
+                "history": copy.deepcopy(history),
+            },
+        },
+        "evaluation": {
+            "kind": "agent-learning.evaluation-hook-probe-evaluation.v1",
+            "score": final_score,
+            "passed": passed,
+            "summary": {
+                "metric_averages": metric_averages,
+                "history_count": len(history),
+                "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
+            },
+        },
+    }
+
+
+def _evaluation_hook_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(optimization_result, "history", []) or []):
+        metadata = _plain_mapping(getattr(item, "metadata", {}) or {})
+        report = _json_plain(metadata.get("report") or {})
+        report_summary = _plain_mapping(metadata.get("report_summary"))
+        if not report_summary and isinstance(report, Mapping):
+            report_summary = _plain_mapping(report.get("summary"))
+        patch = _plain_mapping(metadata.get("patch") or metadata.get("candidate_patch"))
+        score = getattr(item, "average_score", None)
+        rows.append(
+            {
+                "candidate_id": getattr(item, "candidate_id", None),
+                "score": score,
+                "patch": patch,
+                "candidate_patch": patch,
+                "candidate_config": _json_plain(getattr(item, "candidate_config", {}) or {}),
+                "search_paths": list(metadata.get("search_paths") or []),
+                "metrics": _plain_mapping(metadata.get("metrics")),
+                "findings": _plain_list(metadata.get("findings")),
+                "evaluation_score": metadata.get("evaluation_score", score),
+                "evaluation_passed": metadata.get("evaluation_passed"),
+                "report": report,
+                "report_summary": report_summary,
+            }
+        )
+    return rows
+
+
+def _with_evaluation_hook_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _evaluation_hook_probe_proof(result, optimization)
+    result["evaluation_hook_probe_proof"] = proof
+    optimization["evaluation_hook_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["evaluation_hook_probe_proof_status"] = proof["status"]
+    summary["evaluation_hook_probe_proof_passed"] = proof["passed"]
+    summary["evaluation_hook_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["evaluation_hook_probe_proof_check_count"] = proof["check_count"]
+    summary["evaluation_hook_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _evaluation_hook_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    selected_summary = _plain_mapping(selected_report.get("summary"))
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    contract = _plain_mapping(selected_report.get("contract"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold")) or 0.9
+    checks = [
+        _proof_check(
+            "evaluation_hook_probe_report_present",
+            passed=selected_report.get("kind") == "agent-learning.evaluation-hook-probe.v1"
+            and selected_report.get("status") == "passed",
+            required=True,
+            reason="selected candidate carries a passing evaluation hook probe",
+            evidence={"kind": selected_report.get("kind"), "status": selected_report.get("status")},
+        ),
+        _proof_check(
+            "evaluation_hook_probe_local_contract_closed",
+            passed=contract.get("kind") == "agent-learning.evaluation-hook-contract.v1"
+            and contract.get("requires_external_service") is False
+            and contract.get("local_executable_fixture") is True,
+            required=True,
+            reason="selected evaluation hook contract is local and no-external-service",
+            evidence={"evaluation_hook_contract": copy.deepcopy(contract)},
+        ),
+        _proof_check(
+            "evaluation_hook_probe_metric_response_closed",
+            passed=_as_float(selected_metrics.get("evaluation_hook_probe_metric_response_quality")) >= 1.0,
+            required=True,
+            reason="selected probe closes hook metric and successful trace evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "evaluation_hook_probe_auth_redaction_closed",
+            passed=_as_float(selected_metrics.get("evaluation_hook_probe_auth_redaction")) >= 1.0,
+            required=True,
+            reason="selected probe redacts evaluation hook auth evidence",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "evaluation_hook_probe_agent_report_closed",
+            passed=_as_float(selected_metrics.get("evaluation_hook_probe_agent_report_quality")) >= 1.0,
+            required=True,
+            reason="selected probe passes agent-report evaluation",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "evaluation_hook_probe_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("evaluation_hook_probe_score")) >= threshold,
+            required=True,
+            reason="selected evaluation hook probe metrics meet threshold",
+            evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
+        ),
+        _proof_check(
+            "evaluation_hook_probe_patch_surface_present",
+            passed=bool(selected_patch) and "evaluation_hook_agent" in selected_patch,
+            required=True,
+            reason="optimizer selected a concrete evaluation hook agent candidate",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "evaluation_hook_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for evaluation hook probe search",
+            evidence={"governance_status": governance.get("status")},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_EVALUATION_HOOK_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l2_native_evaluation_hook_probe_verified"
+            if passed
+            else "evaluation_hook_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "requires_external_service": False,
+        "evidence": {
+            "selected_report_summary": copy.deepcopy(selected_summary),
+            "selected_metrics": copy.deepcopy(selected_metrics),
+            "selected_patch": copy.deepcopy(selected_patch),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
 
 
 def build_component_optimization_manifest(
@@ -27402,6 +27981,7 @@ def __dir__() -> list[str]:
 __all__ = [
     *_OPTIMIZE_EXPORTS,
     "AGENT_LEARNING_BROWSER_CUA_PROBE_PROOF_KIND",
+    "AGENT_LEARNING_EVALUATION_HOOK_PROBE_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
@@ -27433,6 +28013,7 @@ __all__ = [
     "build_component_optimization_manifest",
     "build_eval_suite_optimization_manifest",
     "build_evaluation_hook_optimization_manifest",
+    "build_evaluation_hook_run_manifest_from_probe_optimization",
     "build_external_agent_adapter_optimization_manifest",
     "build_framework_adapter_matrix_optimization_manifest",
     "build_framework_run_manifest_from_probe_optimization",
@@ -27489,6 +28070,7 @@ __all__ = [
     "optimize_browser_cua_probe",
     "optimize_component",
     "optimize_evaluation_hooks",
+    "optimize_evaluation_hook_probe",
     "optimize_external_agent_adapter",
     "optimize_framework_adapter_matrix",
     "optimize_framework_adapter_probe",
@@ -27540,6 +28122,7 @@ __all__ = [
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
     "score_browser_cua_probe_result",
+    "score_evaluation_hook_probe_result",
     "score_framework_adapter_probe_result",
     "score_memory_layer_probe_result",
     "score_multi_agent_room_probe_result",

@@ -358,6 +358,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_retrieval_hooks is not None
     assert optimize.build_evaluation_hook_optimization_manifest is not None
     assert optimize.optimize_evaluation_hooks is not None
+    assert optimize.optimize_evaluation_hook_probe is not None
+    assert optimize.score_evaluation_hook_probe_result is not None
+    assert optimize.build_evaluation_hook_run_manifest_from_probe_optimization is not None
     assert optimize.build_component_optimization_manifest is not None
     assert optimize.optimize_component is not None
     assert optimize.build_memory_optimization_manifest is not None
@@ -421,6 +424,9 @@ def test_facades_expose_unified_agent_learning_modules():
     assert evals.build_eval_suite_manifest is not None
     assert evals.build_task_evaluation_config is not None
     assert evals.build_task_evidence_artifact is not None
+    assert evals.evaluation_hook_contract is not None
+    assert evals.run_evaluation_hook_probe is not None
+    assert evals.probe_evaluation_hook is not None
     assert evals.evaluate_task_evidence is not None
     assert evals.evaluate_task_evidence_file is not None
     assert evals.write_eval_suite_file is not None
@@ -14139,6 +14145,173 @@ def test_evaluation_hook_manifest_builds_research_backed_agent_candidates():
     )
     assert hook_config["evaluation_hooks"][0]["endpoint"] == endpoint
     assert hook_config["metric_weights"]["external_task_quality"] == 10.0
+
+
+def test_evaluation_hook_probe_scores_local_hook_and_rejects_external_endpoint():
+    from agent_learning import evals
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_evaluation_hook_probe_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_evaluation_hook_probe_optimization_for_probe_test",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    weak_agent = {
+        "type": "scripted",
+        "responses": [{"content": "The refund is probably fine."}],
+    }
+    strong_agent = {
+        "type": "scripted",
+        "responses": [
+            {
+                "content": (
+                    "The refund is approved because the current policy allows "
+                    "approval when support limits are satisfied, the decision "
+                    "is source grounded, and no customer secret is disclosed."
+                )
+            }
+        ],
+    }
+
+    with module._local_evaluation_hook() as endpoint:
+        result = evals.run_evaluation_hook_probe(strong_agent, endpoint=endpoint)
+        weak = evals.run_evaluation_hook_probe(weak_agent, endpoint=endpoint)
+
+    assert result["kind"] == "agent-learning.evaluation-hook-probe.v1"
+    assert result["status"] == "passed"
+    assert result["contract"]["kind"] == "agent-learning.evaluation-hook-contract.v1"
+    assert result["contract"]["local_executable_fixture"] is True
+    assert result["summary"]["hook_score"] == pytest.approx(1.0)
+    assert result["summary"]["hook_trace_count"] == 1
+    assert result["summary"]["hook_success_trace_count"] == 1
+    assert result["summary"]["auth_redacted"] is True
+    assert result["summary"]["evaluation_passed"] is True
+    assert weak["status"] == "failed"
+    assert "evaluation_hook_probe_metric_response" in {
+        finding["check"] for finding in weak["findings"]
+    }
+
+    with pytest.raises(ValueError, match="external endpoints are disabled"):
+        evals.run_evaluation_hook_probe(
+            strong_agent,
+            endpoint="https://example.com/eval/task",
+        )
+    with pytest.raises(ValueError, match="custom evaluation_config hooks"):
+        evals.run_evaluation_hook_probe(
+            strong_agent,
+            endpoint="http://127.0.0.1:8768/eval/task",
+            evaluation_config={
+                "task_description": "Evaluate a custom task.",
+                "evaluation_hooks": [
+                    {
+                        "metric_name": "external_task_quality",
+                        "endpoint": "https://example.com/eval/task",
+                    }
+                ],
+            },
+        )
+
+
+def test_optimize_evaluation_hook_probe_selects_and_promotes_strong_candidate(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_evaluation_hook_probe_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_evaluation_hook_probe_optimization_for_optimizer_test",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    weak_agent = {
+        "type": "scripted",
+        "metadata": {"candidate_profile": "generic_candidate_without_eval_alignment"},
+        "responses": [{"content": "The refund is probably fine."}],
+    }
+    strong_agent = {
+        "type": "scripted",
+        "metadata": {"candidate_profile": "policy_grounded_external_eval_candidate"},
+        "responses": [
+            {
+                "content": (
+                    "The refund is approved because the current policy allows "
+                    "approval when support limits are satisfied, the decision "
+                    "is source grounded, and no customer secret is disclosed."
+                )
+            }
+        ],
+    }
+
+    with module._local_evaluation_hook() as endpoint:
+        result = optimize.optimize_evaluation_hook_probe(
+            name="sdk-evaluation-hook-probe-optimization",
+            endpoint=endpoint,
+            agent_candidates=[weak_agent, strong_agent],
+            metadata={"cookbook": "sdk-evaluation-hook-probe-optimization"},
+        )
+
+        assert result["kind"] == "agent-learning.optimization.v1"
+        assert result["status"] == "passed"
+        assert result["summary"]["evaluation_hook_probe_proof_passed"] is True
+        assert result["evaluation_hook_probe_proof"]["kind"] == (
+            optimize.AGENT_LEARNING_EVALUATION_HOOK_PROBE_PROOF_KIND
+        )
+        assert result["evaluation_hook_probe_proof"]["failed_check_ids"] == []
+        best_pair = result["optimization"]["best_config"]["evaluation_hook_agent"]
+        assert best_pair["agent"]["metadata"]["candidate_profile"] == (
+            "policy_grounded_external_eval_candidate"
+        )
+        history_by_profile = {}
+        for item in result["optimization"]["history"]:
+            pair = item["candidate_config"].get("evaluation_hook_agent") or item[
+                "candidate_config"
+            ]
+            history_by_profile[pair["agent"]["metadata"]["candidate_profile"]] = item
+        assert history_by_profile["generic_candidate_without_eval_alignment"][
+            "score"
+        ] < history_by_profile["policy_grounded_external_eval_candidate"]["score"]
+        assert history_by_profile["policy_grounded_external_eval_candidate"][
+            "metrics"
+        ]["evaluation_hook_probe_metric_response_quality"] == pytest.approx(1.0)
+
+        manifest = optimize.build_evaluation_hook_run_manifest_from_probe_optimization(
+            result,
+            endpoint=endpoint,
+            name="promoted-evaluation-hook-probe-run",
+            metadata={"cookbook": "sdk-evaluation-hook-probe-optimization"},
+        )
+        assert manifest["version"] == "agent-learning.run.v1"
+        assert manifest["required_env"] == []
+        assert manifest["metadata"]["promoted_from_evaluation_hook_probe"] is True
+        assert manifest["metadata"]["evaluation_hook_probe_proof_status"] == "passed"
+        manifest_path = simulate.write_manifest_file(
+            manifest,
+            tmp_path / "promoted-evaluation-hook-probe-run.json",
+        )
+        run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    assert run_result["summary"]["metric_averages"][
+        "external_task_quality"
+    ] == pytest.approx(1.0)
+    case = run_result["report"]["results"][0]
+    metric = next(
+        item
+        for item in case["evaluation"]["agent_report"]["metrics"]
+        if item["name"] == "external_task_quality"
+    )
+    trace = metric["details"]["evaluation_hook_trace"]
+    assert trace["status_code"] == 200
+    assert trace["success"] is True
+    assert trace["auth"]["redacted"] is False
 
 
 def test_sdk_workflow_hook_optimization_example_runs(monkeypatch, tmp_path):
