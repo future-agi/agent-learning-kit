@@ -548,11 +548,13 @@ def test_facades_expose_unified_agent_learning_modules():
         "framework_portability",
     } <= set(simulate.supported_manifest_environment_types())
     assert {
+        "a2a",
         "langchain",
         "langgraph",
         "custom",
         "livekit",
         "pipecat",
+        "mcp",
     } <= set(simulate.supported_frameworks())
 
     pipeline = redteam.create_default_pipeline(
@@ -2478,6 +2480,93 @@ def test_mcp_framework_adapter_preserves_tool_session_trace(tmp_path):
         "mcp_tool_call",
         "mcp_tool_result",
         "mcp_tool_session",
+    } <= set(output["event_types"])
+
+
+def test_a2a_framework_adapter_preserves_protocol_trace(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_a2a_protocol_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_a2a_protocol_trace_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "a2a",
+        module.LocalA2AReviewAgent(),
+        target=module.TARGET,
+        method_candidates=["run", "send_message"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=6,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("send_message", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "send_message"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["a2a_protocol_trace"]
+    assert set(runtime_contract["required_artifact_types"]) == {"trace", "json"}
+    assert set(config["required_events"]) >= {
+        "a2a_agent_card",
+        "a2a_message_send",
+        "a2a_task_status",
+        "a2a_task_artifact",
+        "a2a_artifact",
+        "a2a_protocol_trace",
+    }
+    assert set(runtime_contract["required_signals"]) >= {
+        "artifact",
+        "event",
+        "state",
+    }
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-a2a-protocol-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    a2a = state["a2a_protocol_trace"]
+    summary = a2a["summary"]
+    assert summary["agent_card_count"] == 1
+    assert summary["skill_count"] == 1
+    assert summary["message_count"] == 3
+    assert summary["task_count"] == 1
+    assert summary["artifact_count"] == 1
+    assert summary["status_update_count"] == 3
+    assert summary["artifact_update_count"] == 1
+    assert summary["terminal_task_count"] == 1
+    assert summary["agent_names"] == ["refund-review-agent"]
+    assert summary["skill_names"] == ["refund_review"]
+    assert summary["task_ids"] == ["a2a-task-refund-review"]
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert "a2a_protocol_trace" in output["state_keys"]
+    assert {"trace", "json"} <= set(output["artifact_types"])
+    assert {
+        "a2a_agent_card",
+        "a2a_message_send",
+        "a2a_task_status",
+        "a2a_task_artifact",
+        "a2a_artifact",
+        "a2a_protocol_trace",
     } <= set(output["event_types"])
 
 

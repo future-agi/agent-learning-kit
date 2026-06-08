@@ -667,6 +667,13 @@ Framework handoff transcripts get a compact coordination view. Messages with
 plus `framework_handoffs` state with participants, handoffs, reviews, and
 reconciliations. See `examples/sdk_framework_adapter_handoff_transcript.py`.
 
+A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs
+carrying agent cards, JSON-RPC `SendMessage` records, messages, tasks, task
+status updates, task artifact updates, or protocol artifacts become
+`a2a_protocol_trace` state, trace/json artifacts, and `a2a_*` events, so remote
+agent collaboration can be optimized through the same local framework adapter
+path. See `examples/sdk_framework_adapter_a2a_protocol_trace.py`.
+
 MCP client/server sessions normalize protocol-native tool evidence. Outputs
 carrying MCP `tools/list`, `tools/call`, resource, JSON-RPC, or `{tools, calls}`
 exports become `mcp_tool_session` state, a trace artifact, `mcp_*` events,
@@ -1343,6 +1350,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_workflow_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_lifecycle_trace.py \
   artifacts/sdk-framework-adapter-lifecycle-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_a2a_protocol_trace.py \
+  artifacts/sdk-framework-adapter-a2a-protocol-trace.json
 
 PYTHONPATH=src python examples/sdk_framework_adapter_mcp_tool_session.py \
   artifacts/sdk-framework-adapter-mcp-tool-session.json

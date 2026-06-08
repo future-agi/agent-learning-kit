@@ -168,6 +168,11 @@ Keep framework support local-first:
   `framework_lifecycle_*` events, and selected-output-derived lifecycle
   coverage/quality gates so reliability regressions are visible during adapter
   optimization.
+- Preserve A2A/Agent2Agent protocol semantics. Local framework outputs carrying
+  agent cards, `SendMessage` JSON-RPC records, messages, tasks, status updates,
+  artifact updates, or protocol artifacts should normalize into
+  `a2a_protocol_trace` state, trace/json artifacts, and `a2a_*` events so
+  remote-agent collaboration can be optimized through the same adapter path.
 - Preserve MCP tool protocol semantics. Local framework outputs carrying MCP
   `tools/list`, `tools/call`, resources, JSON-RPC request/result records, or
   `{tools, calls}` fixtures should normalize into `mcp_tool_session` state,

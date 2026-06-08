@@ -2143,6 +2143,58 @@ def test_sdk_framework_adapter_mcp_tool_session_example_runs(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_sdk_framework_adapter_a2a_protocol_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_a2a_protocol_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_a2a_protocol_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-a2a-protocol-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_a2a_protocol_trace_manifest"]
+    assert manifest["agent"]["method"] == "send_message"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["a2a_protocol_trace"]
+    assert set(runtime_contract["required_artifact_types"]) == {"trace", "json"}
+    assert {
+        "a2a_agent_card",
+        "a2a_message_send",
+        "a2a_task_status",
+        "a2a_task_artifact",
+        "a2a_artifact",
+        "a2a_protocol_trace",
+    } <= set(config["required_events"])
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    summary = state["a2a_protocol_trace"]["summary"]
+    assert summary["agent_card_count"] == 1
+    assert summary["message_count"] == 3
+    assert summary["task_count"] == 1
+    assert summary["artifact_count"] == 1
+    assert summary["status_update_count"] == 3
+    assert summary["skill_names"] == ["refund_review"]
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert {"trace", "json"} <= set(output["artifact_types"])
+    assert {
+        "a2a_agent_card",
+        "a2a_message_send",
+        "a2a_task_status",
+        "a2a_task_artifact",
+        "a2a_artifact",
+        "a2a_protocol_trace",
+    } <= set(output["event_types"])
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

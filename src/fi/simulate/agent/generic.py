@@ -41,6 +41,8 @@ _METHOD_INPUT_KEY_PREFERENCES = {
     "run": ("task", "user_prompt", "prompt", "input"),
     "arun": ("task", "user_prompt", "prompt", "input"),
     "run_stream": ("task", "user_prompt", "prompt", "input"),
+    "send_message": ("message", "payload", "input"),
+    "message_send": ("message", "payload", "input"),
     "send": ("message", "messages", "input"),
     "achat": ("message", "messages", "input"),
     "chat": ("message", "messages", "input"),
@@ -75,6 +77,8 @@ _AUTO_METHOD_ORDER = (
     "run_stream",
     "arun",
     "run",
+    "send_message",
+    "message_send",
     "send",
     "respond",
     "achat",
@@ -113,6 +117,8 @@ _METHOD_INPUT_MODES: dict[str, InputMode] = {
     "run": "text",
     "run_stream": "text",
     "arun": "text",
+    "send_message": "dict",
+    "message_send": "dict",
     "send": "text",
 }
 
@@ -531,6 +537,9 @@ class GenericAgentWrapper(AgentWrapper):
         mcp_state = _mcp_tool_session_state(raw)
         if mcp_state:
             state.setdefault("mcp_tool_session", mcp_state)
+        a2a_state = _a2a_protocol_state(raw)
+        if a2a_state:
+            state.setdefault("a2a_protocol_trace", a2a_state)
         workflow_state = _workflow_trace_state(raw)
         if workflow_state:
             state.setdefault("workflow_trace", workflow_state)
@@ -595,6 +604,33 @@ class GenericAgentWrapper(AgentWrapper):
                     },
                 )
             )
+        a2a_state = _a2a_protocol_state(raw)
+        if a2a_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=a2a_state,
+                    metadata={
+                        "kind": "a2a_protocol_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+            for artifact in _plain_list(a2a_state.get("artifacts")):
+                artifact_dict = _plain_mapping(artifact)
+                artifacts.append(
+                    SimulationArtifact(
+                        type=_a2a_simulation_artifact_type(artifact_dict),
+                        role="assistant",
+                        data=artifact_dict,
+                        metadata={
+                            "kind": "a2a_artifact",
+                            "source": "generic_agent_wrapper",
+                            "id": str(artifact_dict.get("id") or ""),
+                        },
+                    )
+                )
         memory_state = _framework_memory_state(raw)
         if memory_state:
             artifacts.append(
@@ -666,6 +702,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_realtime_trace_events(raw))
         events.extend(_framework_lifecycle_events(raw))
         events.extend(_mcp_tool_session_events(raw))
+        events.extend(_a2a_protocol_events(raw))
         events.extend(_workflow_trace_events(raw))
         events.extend(_framework_memory_events(raw))
         events.extend(_browser_cua_events(raw))
@@ -1959,6 +1996,804 @@ def _mcp_span_error(span: Mapping[str, Any]) -> Any:
         or attributes.get("error")
         or attributes.get("exception")
     )
+
+
+def _a2a_protocol_state(raw: Any) -> Dict[str, Any]:
+    if not _has_a2a_protocol_shape(raw):
+        return {}
+    agent_cards = _a2a_agent_cards(raw)
+    messages = _a2a_messages(raw)
+    tasks = _a2a_tasks(raw)
+    artifacts = _a2a_artifacts(raw, tasks=tasks)
+    protocol_events = _a2a_protocol_events_payload(raw)
+    if not any((agent_cards, messages, tasks, artifacts, protocol_events)):
+        return {}
+
+    parts = [
+        *[
+            part
+            for message in messages
+            for part in _plain_list(message.get("parts"))
+        ],
+        *[
+            part
+            for artifact in artifacts
+            for part in _plain_list(artifact.get("parts"))
+        ],
+    ]
+    states = sorted(
+        {
+            str(task.get("state") or "")
+            for task in tasks
+            if task.get("state")
+        }
+    )
+    event_types = sorted(
+        {
+            str(event.get("type") or "")
+            for event in protocol_events
+            if event.get("type")
+        }
+    )
+    task_ids = sorted(
+        {
+            str(value)
+            for value in [
+                *[task.get("id") for task in tasks],
+                *[message.get("task_id") for message in messages],
+                *[event.get("task_id") for event in protocol_events],
+            ]
+            if value not in (None, "", [], {})
+        }
+    )
+    context_ids = sorted(
+        {
+            str(value)
+            for value in [
+                *[task.get("context_id") for task in tasks],
+                *[message.get("context_id") for message in messages],
+                *[event.get("context_id") for event in protocol_events],
+            ]
+            if value not in (None, "", [], {})
+        }
+    )
+    skill_names = sorted(
+        {
+            str(skill.get("name") or skill.get("id") or "")
+            for card in agent_cards
+            for skill in _plain_list(card.get("skills"))
+            if _plain_mapping(skill).get("name") or _plain_mapping(skill).get("id")
+        }
+    )
+    agent_names = sorted(
+        {
+            str(card.get("name") or "")
+            for card in agent_cards
+            if card.get("name")
+        }
+    )
+    roles = sorted(
+        {
+            str(message.get("role") or "")
+            for message in messages
+            if message.get("role")
+        }
+    )
+    terminal_states = {"completed", "failed", "canceled", "cancelled", "rejected"}
+    input_states = {"input_required", "input-required", "auth_required", "auth-required"}
+    summary = {
+        "agent_card_count": len(agent_cards),
+        "skill_count": len(skill_names),
+        "message_count": len(messages),
+        "task_count": len(tasks),
+        "artifact_count": len(artifacts),
+        "protocol_event_count": len(protocol_events),
+        "part_count": len(parts),
+        "text_part_count": sum(1 for part in parts if _plain_mapping(part).get("kind") == "text"),
+        "data_part_count": sum(1 for part in parts if _plain_mapping(part).get("kind") == "data"),
+        "file_part_count": sum(1 for part in parts if _plain_mapping(part).get("kind") == "file"),
+        "status_update_count": sum(1 for event in protocol_events if str(event.get("type") or "") == "a2a_task_status"),
+        "artifact_update_count": sum(1 for event in protocol_events if str(event.get("type") or "") == "a2a_task_artifact"),
+        "terminal_task_count": sum(1 for state in states if state in terminal_states),
+        "input_required_count": sum(1 for state in states if state in input_states),
+        "error_count": sum(1 for event in protocol_events if event.get("error")) + sum(1 for state in states if state == "failed"),
+        "task_ids": task_ids,
+        "context_ids": context_ids,
+        "agent_names": agent_names,
+        "skill_names": skill_names,
+        "roles": roles,
+        "states": states,
+        "event_types": event_types,
+    }
+    return {
+        "kind": "a2a_protocol_trace",
+        "framework": _a2a_protocol_framework(raw),
+        "protocol": "a2a",
+        **summary,
+        "agent_cards": agent_cards,
+        "messages": messages,
+        "tasks": tasks,
+        "artifacts": artifacts,
+        "events": protocol_events,
+        "summary": summary,
+    }
+
+
+def _a2a_protocol_events(raw: Any) -> List[SimulationEvent]:
+    state = _a2a_protocol_state(raw)
+    if not state:
+        return []
+    events: List[SimulationEvent] = []
+    for index, card in enumerate(_plain_list(state.get("agent_cards")), start=1):
+        card_dict = _plain_mapping(card)
+        events.append(
+            SimulationEvent(
+                type="a2a_agent_card",
+                name=str(card_dict.get("name") or f"agent_card_{index}"),
+                payload={**card_dict, "sequence": index},
+                metadata={"kind": "a2a_protocol_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, message in enumerate(_plain_list(state.get("messages")), start=1):
+        message_dict = _plain_mapping(message)
+        events.append(
+            SimulationEvent(
+                type="a2a_message",
+                name=str(message_dict.get("message_id") or f"message_{index}"),
+                payload={**message_dict, "sequence": index},
+                metadata={"kind": "a2a_protocol_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, task in enumerate(_plain_list(state.get("tasks")), start=1):
+        task_dict = _plain_mapping(task)
+        events.append(
+            SimulationEvent(
+                type="a2a_task",
+                name=str(task_dict.get("id") or f"task_{index}"),
+                payload={**task_dict, "sequence": index},
+                metadata={"kind": "a2a_protocol_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, artifact in enumerate(_plain_list(state.get("artifacts")), start=1):
+        artifact_dict = _plain_mapping(artifact)
+        events.append(
+            SimulationEvent(
+                type="a2a_artifact",
+                name=str(artifact_dict.get("name") or artifact_dict.get("id") or f"artifact_{index}"),
+                payload={**artifact_dict, "sequence": index},
+                metadata={"kind": "a2a_protocol_trace", "source": "framework_adapter_output"},
+            )
+        )
+    for index, protocol_event in enumerate(_plain_list(state.get("events")), start=1):
+        event_dict = _plain_mapping(protocol_event)
+        events.append(
+            SimulationEvent(
+                type=str(event_dict.get("type") or "a2a_protocol_event"),
+                name=str(event_dict.get("name") or event_dict.get("method") or f"a2a_event_{index}"),
+                payload={**event_dict, "sequence": index},
+                metadata={"kind": "a2a_protocol_trace", "source": "framework_adapter_output"},
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="a2a_protocol_trace",
+            name="a2a_protocol_trace",
+            payload=state,
+            metadata={"kind": "a2a_protocol_trace", "source": "framework_adapter_output"},
+        )
+    )
+    return events
+
+
+def _has_a2a_protocol_shape(raw: Any) -> bool:
+    if raw in (None, "", [], {}):
+        return False
+    if isinstance(raw, (list, tuple)):
+        return any(_looks_like_a2a_record(item) for item in raw)
+    raw_mapping = _object_mapping(raw)
+    explicit_names = (
+        "a2a_protocol_trace",
+        "a2a_session",
+        "a2a_trace",
+        "a2a_events",
+        "a2a_messages",
+        "a2a_tasks",
+        "a2a_artifacts",
+        "a2a_agent_card",
+        "a2a_agent_cards",
+        "agent_card",
+        "agentCard",
+        "agent_cards",
+        "remote_agents",
+    )
+    if raw_mapping is None:
+        return any(
+            hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+            for name in explicit_names
+        )
+    if any(raw_mapping.get(name) not in (None, "", [], {}) for name in explicit_names):
+        return True
+    if _looks_like_a2a_record(raw_mapping):
+        return True
+    if not _a2a_has_protocol_marker(raw_mapping):
+        return False
+    protocol_fields = (
+        "messages",
+        "tasks",
+        "task",
+        "events",
+        "records",
+        "requests",
+        "responses",
+        "stream_events",
+        "items",
+        "artifacts",
+    )
+    return any(raw_mapping.get(name) not in (None, "", [], {}) for name in protocol_fields)
+
+
+def _a2a_agent_cards(raw: Any) -> List[Dict[str, Any]]:
+    values: List[Any] = []
+    for name in (
+        "a2a_agent_card",
+        "a2a_agent_cards",
+        "agent_card",
+        "agentCard",
+        "agent_cards",
+        "remote_agents",
+    ):
+        values.extend(_a2a_values(_a2a_field(raw, name)))
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _looks_like_a2a_agent_card(raw_mapping):
+        values.append(raw_mapping)
+    return _dedupe_a2a_items(
+        _normalize_a2a_agent_card(value, index=index)
+        for index, value in enumerate(values, start=1)
+        if _looks_like_a2a_agent_card(value)
+    )
+
+
+def _a2a_messages(raw: Any) -> List[Dict[str, Any]]:
+    values: List[Any] = []
+    for name in ("a2a_messages", "messages", "history"):
+        field_value = _a2a_field(raw, name)
+        if name in {"messages", "history"} and not _a2a_has_protocol_marker(_object_mapping(raw) or {}):
+            continue
+        values.extend(_a2a_values(field_value))
+    for record in _a2a_protocol_records(raw):
+        record_dict = _plain_mapping(record)
+        params = _plain_mapping(record_dict.get("params"))
+        result = _plain_mapping(record_dict.get("result"))
+        task = _a2a_task_payload(record_dict) or _a2a_task_payload(result)
+        for candidate in (
+            params.get("message"),
+            result.get("message"),
+            _plain_mapping(record_dict.get("status")).get("message"),
+            _plain_mapping(result.get("status")).get("message"),
+        ):
+            if _looks_like_a2a_message(candidate):
+                values.append(candidate)
+        if task:
+            values.extend(_plain_list(task.get("history")))
+            status_message = _plain_mapping(_plain_mapping(task.get("status")).get("message"))
+            if status_message:
+                values.append(status_message)
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _looks_like_a2a_message(raw_mapping):
+        values.append(raw_mapping)
+    return _dedupe_a2a_items(
+        _normalize_a2a_message(value, index=index)
+        for index, value in enumerate(values, start=1)
+        if _looks_like_a2a_message(value)
+    )
+
+
+def _a2a_tasks(raw: Any) -> List[Dict[str, Any]]:
+    values: List[Any] = []
+    for name in ("a2a_tasks", "tasks", "task"):
+        value = _a2a_field(raw, name)
+        if name in {"tasks", "task"} and not _a2a_has_protocol_marker(_object_mapping(raw) or {}):
+            continue
+        values.extend(_a2a_values(value))
+    for record in _a2a_protocol_records(raw):
+        record_dict = _plain_mapping(record)
+        result = _plain_mapping(record_dict.get("result"))
+        candidates: List[Any] = [result, result.get("task")]
+        if not record_dict.get("method") and not record_dict.get("type") and not record_dict.get("event"):
+            candidates.append(record_dict)
+        for candidate in candidates:
+            task = _a2a_task_payload(candidate)
+            if task:
+                values.append(task)
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping:
+        task = _a2a_task_payload(raw_mapping)
+        if task:
+            values.append(task)
+    return _dedupe_a2a_tasks(
+        _normalize_a2a_task(value, index=index)
+        for index, value in enumerate(values, start=1)
+        if _a2a_task_payload(value)
+    )
+
+
+def _a2a_artifacts(raw: Any, *, tasks: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    values: List[Any] = []
+    for name in ("a2a_artifacts", "task_artifacts"):
+        values.extend(_a2a_values(_a2a_field(raw, name)))
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _a2a_has_protocol_marker(raw_mapping):
+        values.extend(_a2a_values(raw_mapping.get("artifacts")))
+    for task in tasks:
+        values.extend(_a2a_values(_plain_mapping(task).get("artifacts")))
+    for record in _a2a_protocol_records(raw):
+        record_dict = _plain_mapping(record)
+        result = _plain_mapping(record_dict.get("result"))
+        for candidate in (
+            record_dict.get("artifact"),
+            result.get("artifact"),
+            _plain_mapping(record_dict.get("params")).get("artifact"),
+        ):
+            if _looks_like_a2a_artifact(candidate):
+                values.append(candidate)
+    return _dedupe_a2a_items(
+        _normalize_a2a_artifact(value, index=index)
+        for index, value in enumerate(values, start=1)
+        if _looks_like_a2a_artifact(value)
+    )
+
+
+def _a2a_protocol_records(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, (list, tuple)):
+        return [
+            _plain_mapping(item)
+            for item in raw
+            if _plain_mapping(item)
+        ]
+    raw_mapping = _object_mapping(raw)
+    if not raw_mapping:
+        return []
+    records: List[Dict[str, Any]] = []
+    for name in ("a2a_events", "events", "records", "requests", "responses", "stream_events", "items"):
+        for value in _a2a_values(raw_mapping.get(name)):
+            record = _plain_mapping(value)
+            if record:
+                records.append(record)
+    if _looks_like_a2a_record(raw_mapping):
+        records.append(raw_mapping)
+    return _dedupe_a2a_items(records)
+
+
+def _a2a_protocol_events_payload(raw: Any) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    for index, record in enumerate(_a2a_protocol_records(raw), start=1):
+        event = _normalize_a2a_protocol_event(record, index=index)
+        if event:
+            events.append(event)
+    return _dedupe_a2a_items(events)
+
+
+def _normalize_a2a_agent_card(value: Any, *, index: int) -> Dict[str, Any]:
+    card = _plain_mapping(value)
+    skills = [
+        _normalize_a2a_skill(skill, index=skill_index)
+        for skill_index, skill in enumerate(_a2a_values(card.get("skills")), start=1)
+    ]
+    input_modes = _unique_nonempty_strings(
+        [
+            *_plain_list(card.get("defaultInputModes") or card.get("default_input_modes")),
+            *[
+                mode
+                for skill in skills
+                for mode in _plain_list(skill.get("input_modes"))
+            ],
+        ]
+    )
+    output_modes = _unique_nonempty_strings(
+        [
+            *_plain_list(card.get("defaultOutputModes") or card.get("default_output_modes")),
+            *[
+                mode
+                for skill in skills
+                for mode in _plain_list(skill.get("output_modes"))
+            ],
+        ]
+    )
+    return {
+        "id": str(card.get("id") or card.get("name") or f"a2a_agent_{index}"),
+        "name": str(card.get("name") or f"a2a_agent_{index}"),
+        "description": str(card.get("description") or ""),
+        "url": str(card.get("url") or ""),
+        "version": str(card.get("version") or ""),
+        "protocol_version": str(card.get("protocolVersion") or card.get("protocol_version") or ""),
+        "preferred_transport": str(card.get("preferredTransport") or card.get("preferred_transport") or ""),
+        "capabilities": _plain_mapping(card.get("capabilities")),
+        "input_modes": input_modes,
+        "output_modes": output_modes,
+        "skills": skills,
+        "security": _plain_value(card.get("security") or {}),
+        "metadata": _plain_mapping(card.get("metadata")),
+    }
+
+
+def _normalize_a2a_skill(value: Any, *, index: int) -> Dict[str, Any]:
+    skill = _plain_mapping(value)
+    skill_id = str(skill.get("id") or skill.get("name") or f"skill_{index}")
+    return {
+        "id": skill_id,
+        "name": str(skill.get("name") or skill_id),
+        "description": str(skill.get("description") or ""),
+        "tags": _unique_nonempty_strings(skill.get("tags")),
+        "examples": _unique_nonempty_strings(skill.get("examples")),
+        "input_modes": _unique_nonempty_strings(skill.get("inputModes") or skill.get("input_modes")),
+        "output_modes": _unique_nonempty_strings(skill.get("outputModes") or skill.get("output_modes")),
+        "metadata": _plain_mapping(skill.get("metadata")),
+    }
+
+
+def _normalize_a2a_message(value: Any, *, index: int) -> Dict[str, Any]:
+    message = _plain_mapping(value)
+    parts = _a2a_parts(message.get("parts") or message.get("content"))
+    return {
+        "id": str(message.get("id") or message.get("messageId") or message.get("message_id") or f"message_{index}"),
+        "message_id": str(message.get("messageId") or message.get("message_id") or message.get("id") or f"message_{index}"),
+        "task_id": str(message.get("taskId") or message.get("task_id") or ""),
+        "context_id": str(message.get("contextId") or message.get("context_id") or ""),
+        "role": str(message.get("role") or ""),
+        "parts": parts,
+        "text": _a2a_parts_text(parts),
+        "metadata": _plain_mapping(message.get("metadata")),
+    }
+
+
+def _normalize_a2a_task(value: Any, *, index: int) -> Dict[str, Any]:
+    task = _a2a_task_payload(value)
+    status = _plain_mapping(task.get("status"))
+    artifacts = [
+        _normalize_a2a_artifact(artifact, index=artifact_index)
+        for artifact_index, artifact in enumerate(_a2a_values(task.get("artifacts")), start=1)
+        if _looks_like_a2a_artifact(artifact)
+    ]
+    history = [
+        _normalize_a2a_message(message, index=message_index)
+        for message_index, message in enumerate(_a2a_values(task.get("history")), start=1)
+        if _looks_like_a2a_message(message)
+    ]
+    return {
+        "id": str(task.get("id") or task.get("taskId") or task.get("task_id") or f"task_{index}"),
+        "context_id": str(task.get("contextId") or task.get("context_id") or ""),
+        "state": _a2a_state_key(status.get("state") or task.get("state")),
+        "status": status,
+        "history": history,
+        "artifacts": artifacts,
+        "metadata": _plain_mapping(task.get("metadata")),
+    }
+
+
+def _normalize_a2a_artifact(value: Any, *, index: int) -> Dict[str, Any]:
+    artifact = _plain_mapping(value)
+    parts = _a2a_parts(artifact.get("parts") or artifact.get("content"))
+    return {
+        "id": str(artifact.get("artifactId") or artifact.get("artifact_id") or artifact.get("id") or f"artifact_{index}"),
+        "name": str(artifact.get("name") or artifact.get("title") or f"artifact_{index}"),
+        "description": str(artifact.get("description") or ""),
+        "parts": parts,
+        "text": _a2a_parts_text(parts),
+        "metadata": _plain_mapping(artifact.get("metadata")),
+    }
+
+
+def _normalize_a2a_protocol_event(record: Mapping[str, Any], *, index: int) -> Dict[str, Any]:
+    event = _plain_mapping(record)
+    params = _plain_mapping(event.get("params"))
+    result = _plain_mapping(event.get("result"))
+    status = _plain_mapping(event.get("status") or result.get("status"))
+    artifact = _plain_mapping(event.get("artifact") or result.get("artifact") or params.get("artifact"))
+    method = str(event.get("method") or event.get("event") or event.get("type") or "")
+    event_type = _a2a_event_type(event, method=method, status=status, artifact=artifact)
+    task = _a2a_task_payload(event) or _a2a_task_payload(result)
+    return {
+        "id": str(event.get("id") or event.get("event_id") or event.get("eventId") or f"a2a_event_{index}"),
+        "type": event_type,
+        "name": method or event_type,
+        "method": method,
+        "task_id": str(
+            event.get("taskId")
+            or event.get("task_id")
+            or params.get("taskId")
+            or params.get("task_id")
+            or result.get("taskId")
+            or result.get("task_id")
+            or task.get("id")
+            or task.get("taskId")
+            or ""
+        ),
+        "context_id": str(
+            event.get("contextId")
+            or event.get("context_id")
+            or params.get("contextId")
+            or params.get("context_id")
+            or result.get("contextId")
+            or result.get("context_id")
+            or task.get("contextId")
+            or task.get("context_id")
+            or ""
+        ),
+        "state": _a2a_state_key(status.get("state") or task.get("state") or _plain_mapping(task.get("status")).get("state")),
+        "final": bool(event.get("final", False) or result.get("final", False)),
+        "error": _plain_value(event.get("error") or result.get("error")),
+        "payload": _plain_value(event),
+    }
+
+
+def _a2a_event_type(
+    event: Mapping[str, Any],
+    *,
+    method: str,
+    status: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+) -> str:
+    key = _a2a_protocol_key(method or event.get("kind") or event.get("type"))
+    if key in {"sendmessage", "messagesend", "message_send", "message_sendstream", "messagesendstream", "message_stream", "sendstreamingmessage"}:
+        return "a2a_message_send"
+    if key in {"gettask", "tasksget", "task_get"}:
+        return "a2a_task_get"
+    if key in {"canceltask", "taskscancel", "task_cancel"}:
+        return "a2a_task_cancel"
+    if artifact or "artifact" in key:
+        return "a2a_task_artifact"
+    if status or "status" in key:
+        return "a2a_task_status"
+    if _looks_like_a2a_message(event):
+        return "a2a_message"
+    if _a2a_task_payload(event):
+        return "a2a_task"
+    if event.get("error"):
+        return "a2a_error"
+    return "a2a_protocol_event"
+
+
+def _a2a_parts(value: Any) -> List[Dict[str, Any]]:
+    values = _a2a_values(value)
+    if not values and value not in (None, "", [], {}):
+        values = [value]
+    parts: List[Dict[str, Any]] = []
+    for index, item in enumerate(values, start=1):
+        if isinstance(item, str):
+            parts.append({"kind": "text", "text": item})
+            continue
+        part = _plain_mapping(item)
+        if not part:
+            continue
+        file_payload = _plain_mapping(part.get("file"))
+        kind = _a2a_part_kind(part, file_payload=file_payload)
+        normalized = {
+            "id": str(part.get("id") or f"part_{index}"),
+            "kind": kind,
+            "text": str(part.get("text") or part.get("content") or "") if kind == "text" else "",
+            "data": _plain_value(part.get("data")) if kind == "data" else None,
+            "file": file_payload or _a2a_file_part_payload(part),
+            "metadata": _plain_mapping(part.get("metadata")),
+        }
+        parts.append({key: value for key, value in normalized.items() if value not in (None, "", [], {})})
+    return parts
+
+
+def _a2a_part_kind(part: Mapping[str, Any], *, file_payload: Mapping[str, Any]) -> str:
+    raw_kind = _a2a_protocol_key(part.get("kind") or part.get("type"))
+    if "file" in raw_kind or file_payload or part.get("uri") or part.get("path"):
+        return "file"
+    if "data" in raw_kind or part.get("data") not in (None, "", [], {}):
+        return "data"
+    if "text" in raw_kind or part.get("text") not in (None, "", [], {}) or part.get("content") not in (None, "", [], {}):
+        return "text"
+    return raw_kind or "part"
+
+
+def _a2a_file_part_payload(part: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = {}
+    for key in ("uri", "path", "name", "mimeType", "mime_type", "bytes"):
+        value = part.get(key)
+        if value not in (None, "", [], {}):
+            payload[key] = _plain_value(value)
+    return payload
+
+
+def _a2a_parts_text(parts: Sequence[Mapping[str, Any]]) -> str:
+    return " ".join(
+        str(_plain_mapping(part).get("text") or "")
+        for part in parts
+        if _plain_mapping(part).get("kind") == "text"
+        and _plain_mapping(part).get("text")
+    )
+
+
+def _a2a_simulation_artifact_type(artifact: Mapping[str, Any]) -> str:
+    parts = _plain_list(artifact.get("parts"))
+    if any(_plain_mapping(part).get("kind") == "file" for part in parts):
+        return "file"
+    if any(_plain_mapping(part).get("kind") == "data" for part in parts):
+        return "json"
+    return "text"
+
+
+def _a2a_task_payload(value: Any) -> Dict[str, Any]:
+    task = _plain_mapping(value)
+    if not task:
+        return {}
+    result_task = _plain_mapping(task.get("task"))
+    if result_task:
+        return result_task
+    if _looks_like_a2a_task(task):
+        return task
+    return {}
+
+
+def _looks_like_a2a_record(value: Any) -> bool:
+    record = _plain_mapping(value)
+    if not record:
+        return False
+    method = _a2a_protocol_key(record.get("method"))
+    if method in {
+        "sendmessage",
+        "sendstreamingmessage",
+        "gettask",
+        "canceltask",
+        "settaskpushnotificationconfig",
+        "gettaskpushnotificationconfig",
+        "message_send",
+        "message_stream",
+        "tasks_get",
+        "tasks_cancel",
+    }:
+        return True
+    if _looks_like_a2a_agent_card(record) or _looks_like_a2a_message(record) or _looks_like_a2a_task(record):
+        return True
+    result = _plain_mapping(record.get("result"))
+    return bool(_looks_like_a2a_task(result) or _looks_like_a2a_message(result))
+
+
+def _looks_like_a2a_agent_card(value: Any) -> bool:
+    card = _plain_mapping(value)
+    if not card:
+        return False
+    has_card_fields = bool(card.get("skills") or card.get("capabilities"))
+    has_identity = bool(card.get("name") or card.get("url") or card.get("version"))
+    return has_card_fields and has_identity
+
+
+def _looks_like_a2a_message(value: Any) -> bool:
+    message = _plain_mapping(value)
+    if not message:
+        return False
+    has_parts = message.get("parts") not in (None, "", [], {})
+    has_identity = bool(
+        message.get("messageId")
+        or message.get("message_id")
+        or message.get("taskId")
+        or message.get("task_id")
+        or message.get("contextId")
+        or message.get("context_id")
+    )
+    return has_parts and bool(message.get("role")) and has_identity
+
+
+def _looks_like_a2a_task(value: Any) -> bool:
+    task = _plain_mapping(value)
+    if not task:
+        return False
+    has_id = bool(task.get("id") or task.get("taskId") or task.get("task_id"))
+    return has_id and any(key in task for key in ("status", "artifacts", "history", "contextId", "context_id"))
+
+
+def _looks_like_a2a_artifact(value: Any) -> bool:
+    artifact = _plain_mapping(value)
+    if not artifact:
+        return False
+    return bool(artifact.get("parts")) and bool(
+        artifact.get("artifactId")
+        or artifact.get("artifact_id")
+        or artifact.get("id")
+        or artifact.get("name")
+    )
+
+
+def _a2a_has_protocol_marker(value: Mapping[str, Any]) -> bool:
+    for key in ("framework", "protocol", "type", "kind"):
+        if _a2a_protocol_key(value.get(key)) in {"a2a", "agent2agent", "agenttoagent"}:
+            return True
+    metadata = _plain_mapping(value.get("metadata"))
+    for key in ("framework", "protocol"):
+        if _a2a_protocol_key(metadata.get(key)) in {"a2a", "agent2agent", "agenttoagent"}:
+            return True
+    return False
+
+
+def _a2a_protocol_framework(raw: Any) -> str:
+    value = (
+        _a2a_field(raw, "framework")
+        or _a2a_field(raw, "protocol")
+        or _plain_mapping(_a2a_field(raw, "metadata")).get("framework")
+    )
+    return "a2a" if _a2a_protocol_key(value) in {"a2a", "agent2agent", "agenttoagent"} else str(value or "a2a")
+
+
+def _a2a_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
+
+
+def _a2a_values(value: Any) -> List[Any]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [_plain_value(item) for item in value]
+    return [_plain_value(value)]
+
+
+def _a2a_state_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_")
+
+
+def _a2a_protocol_key(value: Any) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace(".", "_")
+    )
+
+
+def _unique_nonempty_strings(value: Any) -> List[str]:
+    return sorted({str(item) for item in _plain_list(value) if str(item)})
+
+
+def _dedupe_a2a_items(values: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        item = _plain_mapping(value)
+        if not item:
+            continue
+        signature = json.dumps(item, sort_keys=True, default=str)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(item)
+    return deduped
+
+
+def _dedupe_a2a_tasks(values: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    indexes: Dict[str, int] = {}
+    for value in values:
+        task = _plain_mapping(value)
+        if not task:
+            continue
+        task_id = str(task.get("id") or "")
+        if not task_id or task_id not in indexes:
+            indexes[task_id] = len(deduped)
+            deduped.append(task)
+            continue
+        existing = deduped[indexes[task_id]]
+        if _a2a_task_prefer(task, existing):
+            deduped[indexes[task_id]] = task
+    return deduped
+
+
+def _a2a_task_prefer(candidate: Mapping[str, Any], existing: Mapping[str, Any]) -> bool:
+    terminal_states = {"completed", "failed", "canceled", "cancelled", "rejected"}
+    candidate_state = str(candidate.get("state") or "")
+    existing_state = str(existing.get("state") or "")
+    if candidate_state in terminal_states and existing_state not in terminal_states:
+        return True
+    candidate_evidence = len(_plain_list(candidate.get("artifacts"))) + len(_plain_list(candidate.get("history")))
+    existing_evidence = len(_plain_list(existing.get("artifacts"))) + len(_plain_list(existing.get("history")))
+    return candidate_evidence > existing_evidence
 
 
 def _workflow_trace_state(raw: Any) -> Dict[str, Any]:

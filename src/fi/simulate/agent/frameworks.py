@@ -28,6 +28,7 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
     # Text/chat orchestration
     "custom": FrameworkAdapterSpec("custom", None, "auto", notes="Bring-your-own framework adapter."),
     "callable": FrameworkAdapterSpec("callable", None, "agent_input", notes="Plain Python callable."),
+    "a2a": FrameworkAdapterSpec("a2a", "send_message", "dict", notes="Agent2Agent protocol client/server session."),
     "langchain": FrameworkAdapterSpec("langchain", "ainvoke", "dict", notes="LangChain Runnable/Chain."),
     "langgraph": FrameworkAdapterSpec("langgraph", "ainvoke", "dict", notes="LangGraph compiled graph."),
     "llamaindex": FrameworkAdapterSpec("llamaindex", "achat", "text", notes="LlamaIndex chat/query engines."),
@@ -91,6 +92,8 @@ _DISCOVERY_METHOD_ORDER = (
     "stream_events",
     "execute_task",
     "process_frame",
+    "send_message",
+    "message_send",
     "call",
     "achat",
     "chat",
@@ -121,6 +124,8 @@ _DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
     "stream_events": "dict",
     "execute_task": "dict",
     "process_frame": "dict",
+    "send_message": "dict",
+    "message_send": "dict",
     "responses.create": "text",
     "chat.completions.create": "messages",
     "messages.create": "messages",
@@ -167,6 +172,8 @@ _METHOD_INPUT_KEY_PREFERENCES = {
     "run": ("task", "user_prompt", "prompt", "input"),
     "arun": ("task", "user_prompt", "prompt", "input"),
     "run_stream": ("task", "user_prompt", "prompt", "input"),
+    "send_message": ("message", "payload", "input"),
+    "message_send": ("message", "payload", "input"),
     "send": ("message", "messages", "input"),
     "achat": ("message", "messages", "input"),
     "chat": ("message", "messages", "input"),
@@ -1568,6 +1575,9 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "mcp_tool_session_summary": _probe_mcp_tool_session_summary(
             state.get("mcp_tool_session")
         ),
+        "a2a_protocol_summary": _probe_a2a_protocol_summary(
+            state.get("a2a_protocol_trace")
+        ),
         "metadata_keys": sorted(str(key) for key in metadata),
         "streaming": bool(streaming_trace or metadata.get("streaming")),
         "streaming_trace_signals": sorted(
@@ -1588,6 +1598,12 @@ def _probe_framework_lifecycle_summary(value: Any) -> dict[str, Any]:
 
 
 def _probe_mcp_tool_session_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    summary = trace.get("summary")
+    return dict(summary) if isinstance(summary, Mapping) else {}
+
+
+def _probe_a2a_protocol_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
     summary = trace.get("summary")
     return dict(summary) if isinstance(summary, Mapping) else {}
