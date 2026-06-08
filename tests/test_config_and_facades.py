@@ -280,9 +280,15 @@ def test_facades_expose_unified_agent_learning_modules():
         fi_simulate.StatefulToolWorldEnvironment
     )
     assert simulate.normalize_stateful_tool_world_manifest is not None
+    assert simulate.OpenEnvEnvironment is fi_simulate.OpenEnvEnvironment
+    assert simulate.normalize_openenv_manifest is not None
+    assert simulate.build_openenv_run_manifest is not None
+    assert simulate.build_openenv_environments is not None
     assert simulate.build_stateful_tool_world_run_manifest is not None
     assert simulate.build_stateful_tool_world_environments is not None
     assert simulate.build_world_model_run_manifest is not None
+    assert optimize.build_openenv_optimization_manifest is not None
+    assert optimize.optimize_openenv is not None
     assert optimize.build_stateful_tool_world_optimization_manifest is not None
     assert optimize.optimize_stateful_tool_world is not None
     assert optimize.build_world_model_optimization_manifest is not None
@@ -546,6 +552,9 @@ def test_facades_expose_unified_agent_learning_modules():
         "framework_capability",
         "framework_probe",
         "framework_portability",
+        "openenv",
+        "open_env",
+        "gymnasium_env",
     } <= set(simulate.supported_manifest_environment_types())
     assert {
         "a2a",
@@ -15712,6 +15721,96 @@ def test_release_proof_status_rejects_unknown_sdk_check_id():
         "v1_release_proof_partial",
         "v1_release_proof_unknown_check",
     }
+
+
+def test_openenv_manifest_builds_executable_replay_candidates(monkeypatch, tmp_path):
+    from agent_learning import optimize, simulate
+
+    monkeypatch.setenv("AGENT_LEARNING_SDK_OPENENV_KEY", "local-openenv-key")
+    manifest = optimize.build_openenv_optimization_manifest(
+        name="sdk-openenv-environment-optimization",
+        required_env=["AGENT_LEARNING_SDK_OPENENV_KEY"],
+    )
+
+    assert manifest["required_env"] == ["AGENT_LEARNING_SDK_OPENENV_KEY"]
+    assert manifest["optimization"]["scoring"]["layers"] == ["openenv"]
+    assert manifest["optimization"]["scoring"]["openenv_quality"][
+        "min_step_count"
+    ] == 2
+    sources = manifest["optimization"]["target"]["metadata"]["research_sources"]
+    assert {
+        "https://huggingface.co/docs/openenv/index",
+        "https://gymnasium.farama.org/api/env/",
+    } <= {source["url"] for source in sources}
+
+    candidates = manifest["optimization"]["target"]["search_space"][
+        "simulation.environments"
+    ]
+    assert len(candidates) == 3
+    assert [candidate[0]["type"] for candidate in candidates] == [
+        "openenv",
+        "openenv",
+        "openenv",
+    ]
+    assert candidates[0][0]["data"]["metadata"]["candidate_profile"] == (
+        "weak_openenv_reset_step_only"
+    )
+    assert candidates[-1][0]["data"]["metadata"]["candidate_profile"] == (
+        "verified_openenv_replay"
+    )
+
+    run_manifest = simulate.build_openenv_run_manifest(
+        name="sdk-openenv-environment-run",
+        required_env=["AGENT_LEARNING_SDK_OPENENV_KEY"],
+    )
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert [env["type"] for env in run_manifest["simulation"]["environments"]] == [
+        "openenv"
+    ]
+    assert {
+        "openenv",
+        "open_env",
+        "gymnasium_env",
+        "environment_replay",
+    } <= set(simulate.supported_manifest_environment_types())
+
+    manifest_path = tmp_path / "openenv-run.json"
+    simulate.write_manifest_file(run_manifest, manifest_path)
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["openenv_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["openenv_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]["openenv"]
+    summary = state["summary"]
+    assert summary["reset_count"] == 1
+    assert summary["step_count"] == 2
+    assert summary["action_route_count"] == 2
+    assert summary["done"] is True
+    assert summary["failure_count"] == 1
+    assert summary["sandbox_enabled"] is True
+    assert summary["requires_external_service"] is False
+
+    candidate = optimize.AgentCandidate.from_config(
+        {"simulation": {"environments": run_manifest["simulation"]["environments"]}},
+        layers=manifest["optimization"]["target"]["layers"],
+    )
+    evidence = optimize.score_simulation_evidence(
+        result["report"],
+        manifest=manifest,
+        candidate=candidate,
+        config=manifest["optimization"]["scoring"],
+    )
+    assert evidence.score == pytest.approx(1.0)
+    assert {
+        component["name"]: component["score"]
+        for component in evidence.metadata["simulation_evidence_score"][
+            "components"
+        ]
+    } == {"tool_coverage": 1.0, "openenv": 1.0}
 
 
 def test_stateful_tool_world_manifest_builds_research_backed_candidates():

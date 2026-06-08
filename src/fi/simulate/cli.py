@@ -38,6 +38,7 @@ from fi.simulate import (
     ImageEnvironment,
     MultiAgentRoomEnvironment,
     ObservabilityReplayEnvironment,
+    OpenEnvEnvironment,
     OptimizerPortfolioEnvironment,
     OptimizerTraceEnvironment,
     Persona,
@@ -378,6 +379,10 @@ MANIFEST_ENVIRONMENT_TYPES = frozenset(
         "multimodal_image",
         "multi_agent_room",
         "observability_replay",
+        "open_env",
+        "openenv",
+        "gymnasium_env",
+        "environment_replay",
         "optimizer_backend_portfolio",
         "optimizer_portfolio",
         "optimizer_society_trace",
@@ -932,6 +937,8 @@ def _build_environments(specs: Iterable[Mapping[str, Any]], base_dir: Path) -> L
             environments.append(RedTeamAttackEvolutionEnvironment(payload))
         elif env_type in {"stateful_tool_world", "stateful_tool_world_benchmark"}:
             environments.append(StatefulToolWorldEnvironment(payload))
+        elif env_type in {"openenv", "open_env", "gymnasium_env", "environment_replay"}:
+            environments.append(OpenEnvEnvironment(payload))
         elif env_type == "agent_memory_lineage":
             environments.append(AgentMemoryLineageEnvironment(payload))
         elif env_type in {"tool_mock", "mock_tools"}:

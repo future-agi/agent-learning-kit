@@ -506,6 +506,7 @@ V1_REQUIRED_EVIDENCE_COMPONENTS = [
     "red_team_campaign",
     "red_team_readiness",
     "runtime_semantics",
+    "openenv",
     "stateful_tool_world",
     "world_hooks",
     "world_contract",

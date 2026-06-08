@@ -3734,6 +3734,159 @@ def optimize_stateful_tool_world(
     )
 
 
+def build_openenv_optimization_manifest(
+    *,
+    name: str = "openenv-optimization",
+    openenv: Optional[Mapping[str, Any]] = None,
+    environment_candidates: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build AgentOptimizer search over local-first OpenEnv replay bundles."""
+
+    if not name:
+        raise ValueError("name is required")
+    from . import simulate as _agent_simulate
+
+    verified_run = _agent_simulate.build_openenv_run_manifest(
+        name=name,
+        openenv=openenv,
+        agent=agent,
+        scenario=scenario,
+        evaluation_config=evaluation_config,
+        required_env=required_env,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        metadata=target_metadata,
+    )
+    candidates = (
+        [
+            [_agent_simulate._openenv_environment(item) for item in candidate]
+            for candidate in environment_candidates
+        ]
+        if environment_candidates is not None
+        else _default_openenv_environment_candidates(
+            name,
+            openenv=openenv,
+            metadata=target_metadata,
+        )
+    )
+    if not candidates:
+        raise ValueError("environment_candidates must contain at least one candidate")
+    for index, candidate in enumerate(candidates, start=1):
+        if not candidate:
+            raise ValueError(f"environment_candidates[{index}] must not be empty")
+
+    search_space = {"simulation.environments": candidates}
+    eval_config = copy.deepcopy(
+        verified_run["evaluation"]["agent_report"]["config"]
+    )
+    base_candidate = copy.deepcopy(candidates[0])
+    manifest = {
+        "version": AGENT_LEARNING_OPTIMIZATION_KIND,
+        "name": str(name),
+        "required_env": [str(key) for key in required_env],
+        "scenario": copy.deepcopy(verified_run["scenario"]),
+        "agent": copy.deepcopy(verified_run["agent"]),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": int(verified_run["simulation"]["max_turns"]),
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": base_candidate,
+        },
+        "evaluation": {
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            }
+        },
+        "optimization": {
+            "threshold": float(threshold),
+            "target": {
+                "name": str(name),
+                "layers": ["environment", "tools", "evaluator"],
+                "base_config": {
+                    "simulation": {
+                        "environments": copy.deepcopy(base_candidate)
+                    }
+                },
+                "search_space": search_space,
+                "metadata": {
+                    "source": (
+                        "agent_learning.optimize."
+                        "build_openenv_optimization_manifest"
+                    ),
+                    "cookbook": "openenv-environment-optimization",
+                    "task_kind": "openenv",
+                    "research_sources": _unique_research_sources(
+                        [
+                            *verified_run.get("metadata", {}).get(
+                                "research_sources",
+                                [],
+                            ),
+                            *[dict(item) for item in research_sources],
+                        ]
+                    ),
+                    "original_synthesis": (
+                        "This searches complete OpenEnv replay bundles, not "
+                        "just prompt text: reset, step, state, reward/done, "
+                        "metadata, sandbox/isolation, replay transport, and "
+                        "failure-injection evidence move together."
+                    ),
+                    **copy.deepcopy(dict(target_metadata or {})),
+                },
+            },
+            "optimizer": copy.deepcopy(
+                dict(optimizer or _default_task_optimizer(search_space))
+            ),
+        },
+    }
+    manifest["optimization"]["scoring"] = {
+        "method": "simulation_evidence",
+        "enabled": True,
+        "layers": ["openenv"],
+        "required_tools": eval_config.get("required_tools", []),
+        "openenv_quality": eval_config.get("openenv_quality", {}),
+        "weights": {
+            "openenv": 10.0,
+            "tool_coverage": 2.0,
+        },
+    }
+    return manifest
+
+
+def optimize_openenv(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute local OpenEnv replay optimization."""
+
+    manifest = build_openenv_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_world_model_optimization_manifest(
     *,
     name: str = "world-model-optimization",
@@ -22588,6 +22741,66 @@ def _default_redteam_corpus_candidate_rows(
     ]
 
 
+def _default_openenv_environment_candidates(
+    name: str,
+    *,
+    openenv: Optional[Mapping[str, Any]],
+    metadata: Optional[Mapping[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    from . import simulate as _agent_simulate
+
+    verified = _agent_simulate.build_openenv_environments(
+        name=name,
+        openenv=openenv,
+        metadata=metadata,
+    )
+    verified_payload = _agent_simulate._openenv_payload_from_environments(
+        verified,
+        name=name,
+    )
+    steps = [
+        copy.deepcopy(dict(item))
+        for item in verified_payload.get("steps", [])
+        if isinstance(item, Mapping)
+    ]
+
+    weak_payload = copy.deepcopy(verified_payload)
+    weak_payload["steps"] = steps[:1]
+    weak_payload["sandbox"] = {
+        **copy.deepcopy(dict(weak_payload.get("sandbox") or {})),
+        "enabled": False,
+        "isolation": "none",
+    }
+    weak_payload["failure_injections"] = []
+    weak_payload["requires_external_service"] = True
+    weak_payload["metadata"] = {
+        **copy.deepcopy(dict(weak_payload.get("metadata") or {})),
+        "candidate_profile": "weak_openenv_reset_step_only",
+    }
+
+    partial_payload = copy.deepcopy(verified_payload)
+    partial_payload["failure_injections"] = []
+    partial_steps = copy.deepcopy(steps)
+    for step in partial_steps:
+        step.pop("failure", None)
+        step["failure_injected"] = False
+    partial_payload["steps"] = partial_steps
+    partial_payload["metadata"] = {
+        **copy.deepcopy(dict(partial_payload.get("metadata") or {})),
+        "candidate_profile": "partial_openenv_no_failure_injection",
+    }
+
+    verified_payload["metadata"] = {
+        **copy.deepcopy(dict(verified_payload.get("metadata") or {})),
+        "candidate_profile": "verified_openenv_replay",
+    }
+    return [
+        [{"type": "openenv", "data": weak_payload}],
+        [{"type": "openenv", "data": partial_payload}],
+        [{"type": "openenv", "data": verified_payload}],
+    ]
+
+
 def _default_stateful_tool_world_environment_candidates(
     name: str,
     *,
@@ -30853,6 +31066,7 @@ __all__ = [
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_multimodal_image_optimization_manifest",
+    "build_openenv_optimization_manifest",
     "build_optimizer_backend_portfolio_optimization_manifest",
     "build_optimizer_governance_optimization_manifest",
     "build_optimizer_portfolio_optimization_manifest",
@@ -30914,6 +31128,7 @@ __all__ = [
     "optimize_multi_agent_coordination",
     "optimize_multi_agent_room_probe",
     "optimize_multimodal_image",
+    "optimize_openenv",
     "optimize_optimizer_backend_portfolio",
     "optimize_optimizer_governance",
     "optimize_optimizer_portfolio",

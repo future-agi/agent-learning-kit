@@ -13,6 +13,54 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = PROJECT_ROOT / "examples"
 
 
+def _load_example_module(name: str):
+    path = EXAMPLES / name
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sdk_openenv_environment_simulation_example_runs(tmp_path):
+    module = _load_example_module("sdk_openenv_environment_simulation.py")
+
+    manifest = module.build_manifest()
+    assert manifest["name"] == "sdk-openenv-environment-simulation"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "openenv"
+    ]
+    assert manifest["evaluation"]["agent_report"]["config"]["openenv_quality"][
+        "min_step_count"
+    ] == 2
+
+    output_path = tmp_path / "sdk-openenv-environment-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["openenv_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["openenv_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]["openenv"]
+    summary = state["summary"]
+    assert summary["reset_count"] == 1
+    assert summary["step_count"] == 2
+    assert summary["done"] is True
+    assert summary["failure_count"] == 1
+    assert summary["sandbox_enabled"] is True
+    assert summary["requires_external_service"] is False
+    assert result["openenv_environment_manifest"]["simulation"]["environments"][0][
+        "type"
+    ] == "openenv"
+
+
 @pytest.mark.parametrize(
     ("command", "example", "kind", "required_env"),
     [

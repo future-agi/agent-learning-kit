@@ -16,6 +16,7 @@ DEFAULT_SIMULATION_EVIDENCE_WEIGHTS: dict[str, float] = {
     "red_team_campaign": 3.0,
     "red_team_readiness": 3.0,
     "runtime_semantics": 1.0,
+    "openenv": 3.0,
     "stateful_tool_world": 3.0,
     "world_hooks": 3.0,
     "world_contract": 3.0,
@@ -131,6 +132,15 @@ def score_simulation_evidence(
     if _should_score("stateful_tool_world", layers, env_states, cfg):
         components.append(
             _score_stateful_tool_world(
+                env_states,
+                cfg=cfg,
+                manifest_config=manifest_config,
+            )
+        )
+
+    if _should_score("openenv", layers, env_states, cfg):
+        components.append(
+            _score_openenv(
                 env_states,
                 cfg=cfg,
                 manifest_config=manifest_config,
@@ -1162,6 +1172,139 @@ def _score_stateful_tool_world(
     }
 
 
+def _score_openenv(
+    env_states: Sequence[Mapping[str, Any]],
+    *,
+    cfg: Mapping[str, Any],
+    manifest_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _first_payload(env_states, "openenv")
+    if not payload:
+        return _missing_component("openenv", "No OpenEnv environment evidence.")
+
+    quality = _first_mapping(
+        cfg.get("openenv_quality"),
+        manifest_config.get("openenv_quality"),
+    )
+    summary = _as_mapping(payload.get("summary"))
+    checks: list[dict[str, Any]] = []
+    _append_numeric_floor_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("min_reset_count", "reset_count"),
+            ("min_step_count", "step_count"),
+            ("min_action_route_count", "action_route_count"),
+            ("min_failure_count", "failure_count"),
+            ("min_metadata_capture_count", "metadata_capture_count"),
+            ("min_reward_total", "reward_total"),
+        ),
+    )
+    _append_numeric_ceiling_checks(
+        checks,
+        summary,
+        quality,
+        (("max_error_count", "error_count"),),
+    )
+    _append_boolean_summary_checks(
+        checks,
+        summary,
+        quality,
+        (
+            ("require_done", "done"),
+            ("require_terminated", "terminated"),
+            ("require_truncated", "truncated"),
+            ("require_sandbox", "sandbox_enabled"),
+            ("require_deterministic_reset", "deterministic_reset"),
+        ),
+    )
+    if "require_metadata_capture" in quality:
+        required = bool(quality.get("require_metadata_capture"))
+        actual = int(summary.get("metadata_capture_count") or 0) > 0
+        checks.append(
+            {
+                "check": "require_metadata_capture",
+                "expected": required,
+                "actual": actual,
+                "match": actual is required,
+            }
+        )
+    if "require_no_external_service" in quality:
+        required = bool(quality.get("require_no_external_service"))
+        actual = not bool(summary.get("requires_external_service"))
+        checks.append(
+            {
+                "check": "require_no_external_service",
+                "expected": required,
+                "actual": actual,
+                "match": actual is required,
+            }
+        )
+    for requirement, summary_key in (
+        ("required_runtime", "runtime"),
+        ("required_transport", "transport"),
+        ("required_isolation", "isolation"),
+    ):
+        expected = quality.get(requirement)
+        if expected in (None, "", [], {}):
+            continue
+        actual = summary.get(summary_key)
+        checks.append(
+            {
+                "check": requirement,
+                "expected": _norm(expected),
+                "actual": _norm(actual),
+                "match": _norm(actual) == _norm(expected),
+            }
+        )
+    expected_state = _as_mapping(quality.get("expected_state"))
+    if expected_state:
+        checks.append(
+            {
+                "check": "expected_state",
+                "expected": copy.deepcopy(expected_state),
+                "actual": copy.deepcopy(_as_mapping(payload.get("state"))),
+                "match": _contains_subset(
+                    _as_mapping(payload.get("state")),
+                    expected_state,
+                ),
+            }
+        )
+    if not checks:
+        checks.extend(
+            [
+                {
+                    "check": "payload_present",
+                    "expected": True,
+                    "actual": True,
+                    "match": True,
+                },
+                {
+                    "check": "no_errors",
+                    "expected": 0,
+                    "actual": int(summary.get("error_count") or 0),
+                    "match": int(summary.get("error_count") or 0) == 0,
+                },
+            ]
+        )
+    score = round(_checks_score(checks), 4)
+    return {
+        "name": "openenv",
+        "score": score,
+        "reason": (
+            "OpenEnv replay evidence is complete"
+            if score >= 0.99
+            else "OpenEnv replay evidence incomplete"
+        ),
+        "details": {
+            "checks": checks,
+            "summary": copy.deepcopy(summary),
+            "state": copy.deepcopy(_as_mapping(payload.get("state"))),
+        },
+    }
+
+
 def _score_world_hooks_contract(
     env_states: Sequence[Mapping[str, Any]],
     *,
@@ -2021,6 +2164,14 @@ def _should_score(
             "utility_under_attack",
             "temporal_takeover",
         },
+        "openenv": {
+            "openenv",
+            "open_env",
+            "gymnasium",
+            "gymnasium_env",
+            "environment_replay",
+            "reset_step_state",
+        },
         "world_hooks": {
             "world_hooks",
             "world_hook",
@@ -2107,6 +2258,12 @@ def _should_score(
             "stateful_tool_world" in keys
             or bool(cfg.get("stateful_tool_world_quality"))
             or bool(cfg.get("required_stateful_tool_world"))
+        )
+    if layer == "openenv":
+        return (
+            "openenv" in keys
+            or bool(cfg.get("openenv_quality"))
+            or bool(cfg.get("required_openenv"))
         )
     if layer == "world_hooks":
         return (

@@ -251,6 +251,9 @@ Next implementation focus:
   OpenEnv by proving cross-framework simulation, eval, red-team, memory,
   browser/CUA, realtime, protocol, multi-agent, replay, optimizer, and
   regression-promotion gates in one artifact.
+- Back that target with the executable `OpenEnvEnvironment` adapter,
+  `openenv_quality`/`openenv_coverage` report gates, SDK cookbook manifests,
+  and agent-opt OpenEnv bundle search before using the claim in release notes.
 - Treat the OpenEnv comparison as an executable roadmap bar, not a marketing
   claim: V1 should exercise deterministic resets, failure-injection scenarios,
   adversarial environment states, tool/action contract drift, transcript/replay

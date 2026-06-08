@@ -191,6 +191,8 @@ class AgentReportEvalConfig(BaseModel):
     required_world_contract: List[str] = Field(default_factory=list)
     world_contract_quality: Dict[str, Any] = Field(default_factory=dict)
     world_hook_contract_quality: Dict[str, Any] = Field(default_factory=dict)
+    required_openenv: List[str] = Field(default_factory=list)
+    openenv_quality: Dict[str, Any] = Field(default_factory=dict)
     required_adversarial_attacks: List[str] = Field(default_factory=list)
     adversarial_resilience: Dict[str, Any] = Field(default_factory=dict)
     required_red_team_campaign: List[str] = Field(default_factory=list)
@@ -510,6 +512,8 @@ class AgentReportEvaluator:
                 _world_contract_coverage_metric(report_context, config),
                 _world_contract_quality_metric(report_context, config),
                 *_world_hook_contract_quality_metrics(report_context, config),
+                *_openenv_coverage_metrics(report_context, config),
+                *_openenv_quality_metrics(report_context, config),
                 _browser_action_safety_metric(report_context, config),
                 _browser_action_outcome_metric(report_context, config),
                 _browser_grounding_quality_metric(report_context, config),
@@ -9704,6 +9708,272 @@ def _realtime_trace_quality_metric(
             "summary": _protocol_summary_details(summary),
         },
     )
+
+
+def _openenv_coverage_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.required_openenv and "openenv_coverage" not in config.metric_weights:
+        return []
+    required = [_normalize_openenv_key(key) for key in config.required_openenv]
+    required = [key for key in required if key]
+    if not required:
+        return [
+            AgentReportMetricResult(
+                name="openenv_coverage",
+                score=1.0,
+                reason="No required OpenEnv keys provided.",
+            )
+        ]
+
+    observed = _openenv_observed(context)
+    missing = sorted(set(required) - observed)
+    matched = len(set(required) - set(missing))
+    score = matched / len(set(required)) if required else 1.0
+    findings = [{"type": "missing_openenv_key", "key": key} for key in missing]
+    return [
+        AgentReportMetricResult(
+            name="openenv_coverage",
+            score=round(score, 4),
+            reason=(
+                "All required OpenEnv evidence observed."
+                if not missing
+                else f"Missing OpenEnv evidence: {', '.join(missing)}."
+            ),
+            details={
+                "required": sorted(set(required)),
+                "observed": sorted(observed),
+                "missing": missing,
+                "findings": findings,
+            },
+        )
+    ]
+
+
+def _openenv_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.openenv_quality and "openenv_quality" not in config.metric_weights:
+        return []
+    return [_openenv_quality_metric(context, config.openenv_quality)]
+
+
+def _openenv_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    payloads = _openenv_payloads_from_context(context)
+    summary = _openenv_summary_from_payloads(payloads)
+    state = _openenv_state_from_payloads(payloads)
+    observation = _openenv_observation_from_payloads(payloads)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    if requirements or payloads:
+        _append_openenv_check(
+            checks,
+            findings,
+            check="payload_present",
+            expected={">=": 1},
+            actual=len(payloads),
+            match=bool(payloads),
+            finding_type="openenv_payload_missing",
+        )
+
+    for requirement_key, summary_key, finding_type in (
+        ("min_reset_count", "reset_count", "openenv_reset_count_low"),
+        ("min_step_count", "step_count", "openenv_step_count_low"),
+        ("min_action_route_count", "action_route_count", "openenv_action_route_count_low"),
+        ("min_failure_count", "failure_count", "openenv_failure_count_low"),
+        ("min_metadata_capture_count", "metadata_capture_count", "openenv_metadata_capture_low"),
+    ):
+        expected_min = _as_int(requirements.get(requirement_key))
+        if expected_min is None:
+            continue
+        actual = int(summary.get(summary_key) or 0)
+        _append_openenv_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=expected_min,
+            actual=actual,
+            match=actual >= expected_min,
+            finding_type=finding_type,
+        )
+
+    min_reward_total = _as_float(requirements.get("min_reward_total"))
+    if min_reward_total is not None:
+        actual = float(summary.get("reward_total") or 0.0)
+        _append_openenv_check(
+            checks,
+            findings,
+            check="min_reward_total",
+            expected=min_reward_total,
+            actual=actual,
+            match=actual >= min_reward_total,
+            finding_type="openenv_reward_total_low",
+        )
+
+    max_error_count = _as_int(requirements.get("max_error_count"))
+    if max_error_count is not None:
+        actual = int(summary.get("error_count") or 0)
+        _append_openenv_check(
+            checks,
+            findings,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=actual,
+            match=actual <= max_error_count,
+            finding_type="openenv_error_threshold_exceeded",
+        )
+
+    for requirement_key, summary_key, finding_type in (
+        ("require_done", "done", "openenv_done_missing"),
+        ("require_terminated", "terminated", "openenv_terminated_missing"),
+        ("require_truncated", "truncated", "openenv_truncated_missing"),
+        ("require_sandbox", "sandbox_enabled", "openenv_sandbox_missing"),
+        ("require_deterministic_reset", "deterministic_reset", "openenv_deterministic_reset_missing"),
+    ):
+        if requirements.get(requirement_key) is None:
+            continue
+        required = bool(requirements.get(requirement_key))
+        actual = bool(summary.get(summary_key))
+        _append_openenv_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type=finding_type,
+        )
+
+    if requirements.get("require_metadata_capture") is not None:
+        required = bool(requirements.get("require_metadata_capture"))
+        actual = int(summary.get("metadata_capture_count") or 0) > 0
+        _append_openenv_check(
+            checks,
+            findings,
+            check="require_metadata_capture",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="openenv_metadata_missing",
+        )
+
+    if requirements.get("require_no_external_service") is not None:
+        required = bool(requirements.get("require_no_external_service"))
+        actual = not bool(summary.get("requires_external_service"))
+        _append_openenv_check(
+            checks,
+            findings,
+            check="require_no_external_service",
+            expected=required,
+            actual=actual,
+            match=actual is required,
+            finding_type="openenv_external_service_required",
+        )
+
+    for requirement_key, summary_key, finding_type in (
+        ("required_runtime", "runtime", "openenv_runtime_mismatch"),
+        ("required_transport", "transport", "openenv_transport_mismatch"),
+        ("required_isolation", "isolation", "openenv_isolation_mismatch"),
+    ):
+        expected = requirements.get(requirement_key)
+        if expected in (None, "", [], {}):
+            continue
+        expected_normalized = _normalize_openenv_key(expected)
+        actual = _normalize_openenv_key(summary.get(summary_key))
+        _append_openenv_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=expected_normalized,
+            actual=actual,
+            match=actual == expected_normalized,
+            finding_type=finding_type,
+        )
+
+    expected_state = _as_dict(requirements.get("expected_state") or requirements.get("final_state"))
+    for path, expected in _flatten_state(expected_state).items():
+        actual = _get_path(state, path)
+        _append_openenv_check(
+            checks,
+            findings,
+            check=f"state.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="openenv_state_mismatch",
+        )
+
+    expected_observation = _as_dict(
+        requirements.get("expected_observation")
+        or requirements.get("final_observation")
+    )
+    for path, expected in _flatten_state(expected_observation).items():
+        actual = _get_path(observation, path)
+        _append_openenv_check(
+            checks,
+            findings,
+            check=f"observation.{path}",
+            expected=expected,
+            actual=actual,
+            match=actual == expected,
+            finding_type="openenv_observation_mismatch",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="openenv_quality",
+            score=1.0,
+            reason="No expected OpenEnv checks provided.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="openenv_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} OpenEnv check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "summary": summary,
+            "state": state,
+            "observation": observation,
+        },
+    )
+
+
+def _append_openenv_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    record = {
+        "check": check,
+        "expected": copy.deepcopy(expected),
+        "actual": copy.deepcopy(actual),
+        "match": bool(match),
+    }
+    checks.append(record)
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "check": check,
+                "expected": copy.deepcopy(expected),
+                "actual": copy.deepcopy(actual),
+            }
+        )
 
 
 def _world_contract_coverage_metric(
@@ -31094,6 +31364,252 @@ def _dedupe_streaming_dicts(records: Iterable[Mapping[str, Any]]) -> List[Dict[s
         if key not in deduped:
             deduped[key] = dict(record_dict)
     return list(deduped.values())
+
+
+def _openenv_observed(context: Mapping[str, Any]) -> set[str]:
+    observed: set[str] = set()
+    for payload in _openenv_payloads_from_context(context):
+        observed.add("openenv")
+        _merge_openenv_payload(observed, payload)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "openenv" in event_type or "openenv" in name:
+            observed.add("openenv")
+            _add_openenv_key(observed, event_type)
+            _add_openenv_key(observed, name)
+            _merge_openenv_payload(observed, payload)
+
+    for tool_call in _as_list(context.get("tool_calls", [])):
+        name = str(_get(tool_call, "name", _get(tool_call, "tool", "")) or "").lower()
+        if name in {"openenv_status", "openenv_reset", "openenv_step", "openenv_state"}:
+            observed.add("openenv")
+        _add_openenv_key(observed, name)
+    return observed
+
+
+def _openenv_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_payload(value: Any) -> None:
+        payload = _as_dict(value)
+        if not payload:
+            return
+        kind = str(payload.get("kind") or "").lower()
+        if kind not in {"openenv", "openenv_trace", "open_env"} and not (
+            "summary" in payload and ("runtime" in payload or "transport" in payload)
+        ):
+            return
+        signature = json.dumps(payload, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        payloads.append(payload)
+
+    final_state = _extract_final_state(context)
+    append_payload(final_state.get("openenv"))
+    metadata_state = _as_dict(_as_dict(context.get("metadata", {})).get("environment_state"))
+    append_payload(metadata_state.get("openenv"))
+
+    for artifact in _as_list(context.get("artifacts", [])):
+        data = _as_dict(_get(artifact, "data", {}))
+        metadata = _as_dict(_get(artifact, "metadata", {}))
+        if str(metadata.get("kind") or "").lower() in {"openenv", "openenv_trace"}:
+            append_payload(data)
+        append_payload(data)
+
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        name = str(_get(event, "name", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "openenv" in event_type or "openenv" in name:
+            append_payload(payload)
+            state_payload = _as_dict(payload.get("openenv"))
+            append_payload(state_payload)
+    return payloads
+
+
+def _openenv_summary_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not payloads:
+        return {}
+    summary = copy.deepcopy(_as_dict(payloads[-1].get("summary")))
+    numeric_max_keys = {
+        "configured_step_count",
+        "reset_count",
+        "step_count",
+        "action_route_count",
+        "failure_count",
+        "error_count",
+        "metadata_capture_count",
+        "state_key_count",
+        "observation_key_count",
+    }
+    for key in numeric_max_keys:
+        values = [
+            _as_int(_as_dict(payload.get("summary")).get(key))
+            for payload in payloads
+        ]
+        values = [value for value in values if value is not None]
+        if values:
+            summary[key] = max(values)
+    reward_values = [
+        _as_float(_as_dict(payload.get("summary")).get("reward_total"))
+        for payload in payloads
+    ]
+    reward_values = [value for value in reward_values if value is not None]
+    if reward_values:
+        summary["reward_total"] = max(reward_values)
+    for key in ("done", "terminated", "truncated", "sandbox_enabled"):
+        values = [
+            bool(_as_dict(payload.get("summary")).get(key))
+            for payload in payloads
+            if key in _as_dict(payload.get("summary"))
+        ]
+        if values:
+            summary[key] = any(values)
+    external_values = [
+        bool(_as_dict(payload.get("summary")).get("requires_external_service"))
+        for payload in payloads
+        if "requires_external_service" in _as_dict(payload.get("summary"))
+    ]
+    if external_values:
+        summary["requires_external_service"] = any(external_values)
+    deterministic_values = [
+        bool(_as_dict(payload.get("summary")).get("deterministic_reset"))
+        for payload in payloads
+        if "deterministic_reset" in _as_dict(payload.get("summary"))
+    ]
+    if deterministic_values:
+        summary["deterministic_reset"] = all(deterministic_values)
+
+    latest = _as_dict(payloads[-1])
+    for key in ("runtime", "transport", "requires_external_service", "deterministic_reset"):
+        if summary.get(key) in (None, "") and latest.get(key) not in (None, ""):
+            summary[key] = latest.get(key)
+    sandbox = _as_dict(latest.get("sandbox"))
+    if summary.get("isolation") in (None, "") and sandbox.get("isolation") not in (None, ""):
+        summary["isolation"] = sandbox.get("isolation")
+    if "sandbox_enabled" not in summary and sandbox:
+        summary["sandbox_enabled"] = bool(sandbox.get("enabled", True))
+    if "step_count" not in summary:
+        summary["step_count"] = len(_as_list(latest.get("trajectory")))
+    if "action_route_count" not in summary:
+        summary["action_route_count"] = len(_as_list(latest.get("action_log")))
+    if "failure_count" not in summary:
+        summary["failure_count"] = len(_as_list(latest.get("failure_injections")))
+    return summary
+
+
+def _openenv_state_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    for payload in reversed(payloads):
+        state = _as_dict(payload.get("state"))
+        if state:
+            return state
+    return {}
+
+
+def _openenv_observation_from_payloads(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    for payload in reversed(payloads):
+        observation = _as_dict(
+            payload.get("current_observation")
+            or payload.get("observation")
+            or payload.get("initial_observation")
+        )
+        if observation:
+            return observation
+    return {}
+
+
+def _merge_openenv_payload(observed: set[str], payload: Mapping[str, Any]) -> None:
+    for key in payload.keys():
+        _add_openenv_key(observed, key)
+    summary = _as_dict(payload.get("summary"))
+    for key, value in summary.items():
+        _add_openenv_key(observed, key)
+        if isinstance(value, bool) and value:
+            _add_openenv_key(observed, key)
+    if payload.get("state"):
+        observed.add("state")
+    if payload.get("current_observation") or payload.get("initial_observation") or payload.get("observation"):
+        observed.add("observation")
+    if payload.get("action_space") or payload.get("action_log"):
+        observed.add("action")
+    if _as_list(payload.get("trajectory")) or (_as_int(summary.get("step_count")) or 0) > 0:
+        observed.update({"step", "reward"})
+    if (_as_int(summary.get("reset_count")) or 0) > 0:
+        observed.add("reset")
+    if bool(summary.get("done")):
+        observed.add("done")
+    if bool(summary.get("terminated")):
+        observed.add("terminated")
+    if bool(summary.get("truncated")):
+        observed.add("truncated")
+    if (_as_int(summary.get("metadata_capture_count")) or 0) > 0:
+        observed.add("metadata")
+    if bool(summary.get("sandbox_enabled")) or payload.get("sandbox"):
+        observed.add("sandbox")
+    if (_as_int(summary.get("failure_count")) or 0) > 0 or payload.get("failure_injections"):
+        observed.add("failure_injection")
+    for key in ("runtime", "transport"):
+        if payload.get(key):
+            _add_openenv_key(observed, payload.get(key))
+
+
+def _add_openenv_key(observed: set[str], value: Any) -> None:
+    normalized = _normalize_openenv_key(value)
+    if normalized:
+        observed.add(normalized)
+    lowered = str(value or "").lower()
+    aliases = {
+        "reset": "reset",
+        "step": "step",
+        "state": "state",
+        "observation": "observation",
+        "action": "action",
+        "reward": "reward",
+        "done": "done",
+        "terminated": "terminated",
+        "truncated": "truncated",
+        "metadata": "metadata",
+        "sandbox": "sandbox",
+        "isolation": "sandbox",
+        "failure": "failure_injection",
+        "fault": "failure_injection",
+        "mcp": "mcp",
+        "http": "http",
+        "websocket": "websocket",
+        "container": "container",
+    }
+    for token, alias in aliases.items():
+        if token in lowered:
+            observed.add(alias)
+
+
+def _normalize_openenv_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "open_env": "openenv",
+        "gymnasium": "openenv",
+        "gymnasium_env": "openenv",
+        "environment_replay": "openenv",
+        "reset_count": "reset",
+        "step_count": "step",
+        "action_route": "action",
+        "action_route_count": "action",
+        "action_routing": "action",
+        "rewards": "reward",
+        "terminal": "done",
+        "terminal_status": "done",
+        "failure": "failure_injection",
+        "fault": "failure_injection",
+        "fault_injection": "failure_injection",
+        "sandboxed": "sandbox",
+        "isolation": "sandbox",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _world_contract_observed(context: Mapping[str, Any]) -> set[str]:

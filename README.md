@@ -1626,6 +1626,15 @@ SDK entry points are `simulate.build_stateful_tool_world_run_manifest()`,
 `optimize.build_stateful_tool_world_optimization_manifest()`, and
 `optimize.optimize_stateful_tool_world()`.
 
+The `sdk_openenv_environment_simulation.py` example adds a local-first OpenEnv
+cookbook. It runs an executable `openenv` replay with deterministic reset,
+Gymnasium-style step results, reward/done capture, state/observation snapshots,
+sandbox metadata, and contained failure-injection evidence. The same contract
+can be searched through `optimize.build_openenv_optimization_manifest()` and
+`optimize.optimize_openenv()`, which compare weak, partial, and verified
+environment bundles using `openenv_quality` and `openenv_coverage` report
+metrics.
+
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment
 synthesis work by searching L1 predictor, L2 simulator, and L3 evolver

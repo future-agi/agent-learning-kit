@@ -1930,6 +1930,600 @@ def normalize_stateful_tool_world_manifest(source: Mapping[str, Any]) -> Dict[st
     }
 
 
+class OpenEnvEnvironment(EnvironmentAdapter):
+    """Local-first OpenEnv/Gymnasium-style environment replay adapter."""
+
+    name = "openenv"
+
+    def __init__(self, payload: Mapping[str, Any]) -> None:
+        self.spec = normalize_openenv_manifest(payload)
+        self.current_observation: Any = None
+        self.current_state: Dict[str, Any] = {}
+        self.step_index = 0
+        self.reset_count = 0
+        self.trajectory: List[Dict[str, Any]] = []
+        self.action_log: List[Dict[str, Any]] = []
+        self.error_log: List[Dict[str, Any]] = []
+        self.terminated = False
+        self.truncated = False
+        self.done = False
+        self.reward_total = 0.0
+        self.last_info: Dict[str, Any] = {}
+        self._initialize_runtime()
+
+    def reset(self, **context: Any) -> EnvironmentSnapshot:
+        self._initialize_runtime()
+        payload = self._state_payload()
+        return EnvironmentSnapshot(
+            tools=self._tool_specs(),
+            artifacts=[self._artifact()],
+            events=[
+                SimulationEvent(
+                    type="openenv",
+                    name="openenv_ready",
+                    payload={
+                        "name": self.spec["name"],
+                        "runtime": self.spec["runtime"],
+                        "transport": self.spec["transport"],
+                        "summary": payload["summary"],
+                    },
+                )
+            ],
+            state={"openenv": payload},
+            metadata={"openenv": payload},
+        )
+
+    def observe(self, **context: Any) -> EnvironmentSnapshot:
+        payload = self._state_payload()
+        return EnvironmentSnapshot(
+            artifacts=[self._artifact()],
+            state={"openenv": payload},
+            metadata={"openenv": payload},
+        )
+
+    def handle_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        **context: Any,
+    ) -> Optional[ToolExecutionResult]:
+        tool_name = _tool_name(tool_call)
+        if tool_name not in {
+            "openenv_status",
+            "openenv_reset",
+            "openenv_step",
+            "openenv_state",
+        }:
+            return None
+        arguments = _tool_arguments(tool_call)
+        call_id = _tool_call_id(tool_call)
+
+        if tool_name == "openenv_reset":
+            result = self._apply_reset(arguments)
+            event_name = "openenv_reset"
+        elif tool_name == "openenv_step":
+            result = self._apply_step(arguments)
+            event_name = "openenv_step"
+        elif tool_name == "openenv_state":
+            result = self._state_payload()
+            event_name = "openenv_state"
+        else:
+            result = self._state_payload()
+            event_name = "openenv_status"
+
+        payload = self._state_payload()
+        return ToolExecutionResult(
+            tool_call_id=call_id,
+            tool_name=tool_name,
+            content=json.dumps(result, default=str),
+            result=result,
+            success=not bool(result.get("adapter_error")) if isinstance(result, Mapping) else True,
+            error=str(result.get("adapter_error")) if isinstance(result, Mapping) and result.get("adapter_error") else None,
+            state_updates={"openenv": payload},
+            artifacts=[self._artifact()],
+            events=[
+                SimulationEvent(
+                    type="openenv",
+                    name=event_name,
+                    payload=copy.deepcopy(result),
+                )
+            ],
+            metadata={"openenv": payload},
+        )
+
+    def _initialize_runtime(self) -> None:
+        self.current_observation = copy.deepcopy(self.spec["initial_observation"])
+        self.current_state = copy.deepcopy(self.spec["initial_state"])
+        self.step_index = 0
+        self.reset_count = 0
+        self.trajectory = []
+        self.action_log = []
+        self.error_log = []
+        self.terminated = False
+        self.truncated = False
+        self.done = False
+        self.reward_total = 0.0
+        self.last_info = copy.deepcopy(self.spec["reset_info"])
+
+    def _apply_reset(self, arguments: Mapping[str, Any]) -> Dict[str, Any]:
+        self.current_observation = copy.deepcopy(self.spec["initial_observation"])
+        self.current_state = copy.deepcopy(self.spec["initial_state"])
+        self.step_index = 0
+        self.trajectory = []
+        self.action_log = []
+        self.error_log = []
+        self.terminated = False
+        self.truncated = False
+        self.done = False
+        self.reward_total = 0.0
+        self.reset_count += 1
+        self.last_info = {
+            **copy.deepcopy(self.spec["reset_info"]),
+            **_coerce_plain_dict(arguments.get("info")),
+        }
+        return {
+            "kind": "openenv_reset",
+            "name": self.spec["name"],
+            "observation": copy.deepcopy(self.current_observation),
+            "info": copy.deepcopy(self.last_info),
+            "state": copy.deepcopy(self.current_state),
+            "seed": arguments.get("seed"),
+            "options": copy.deepcopy(arguments.get("options")),
+            "summary": self._summary(),
+        }
+
+    def _apply_step(self, arguments: Mapping[str, Any]) -> Dict[str, Any]:
+        if self.done:
+            error = {
+                "kind": "openenv_step",
+                "name": self.spec["name"],
+                "adapter_error": "environment_done",
+                "action": copy.deepcopy(arguments.get("action", arguments)),
+                "step_index": self.step_index,
+                "done": True,
+            }
+            self.error_log.append(error)
+            return error
+
+        action = copy.deepcopy(arguments.get("action", arguments))
+        step = self._next_step(action)
+        if step is None:
+            error = {
+                "kind": "openenv_step",
+                "name": self.spec["name"],
+                "adapter_error": "no_step_fixture",
+                "action": action,
+                "step_index": self.step_index,
+                "done": self.done,
+            }
+            self.error_log.append(error)
+            return error
+
+        state_updates = _coerce_plain_dict(
+            step.get("state_updates")
+            or step.get("state_update")
+            or step.get("state")
+        )
+        if state_updates:
+            _deep_merge(self.current_state, state_updates)
+        if step.get("observation") is not None:
+            self.current_observation = copy.deepcopy(step.get("observation"))
+        reward = _openenv_float(step.get("reward"), default=0.0)
+        self.reward_total += reward
+        self.terminated = bool(step.get("terminated", step.get("done", False)))
+        self.truncated = bool(step.get("truncated", False))
+        self.done = bool(step.get("done", self.terminated or self.truncated))
+        self.last_info = _coerce_plain_dict(step.get("info"))
+        failure = _openenv_failure(step)
+        metadata = _coerce_plain_dict(step.get("metadata"))
+        result = {
+            "kind": "openenv_step",
+            "name": self.spec["name"],
+            "id": step.get("id") or f"step-{self.step_index + 1}",
+            "step_index": self.step_index + 1,
+            "action": action,
+            "matched_action": copy.deepcopy(step.get("action")),
+            "observation": copy.deepcopy(self.current_observation),
+            "reward": reward,
+            "terminated": self.terminated,
+            "truncated": self.truncated,
+            "done": self.done,
+            "info": copy.deepcopy(self.last_info),
+            "metadata": metadata,
+            "state": copy.deepcopy(self.current_state),
+            "state_updates": copy.deepcopy(state_updates),
+            "failure_injected": bool(failure),
+            "failure": copy.deepcopy(failure),
+        }
+        self.step_index += 1
+        self.trajectory.append(copy.deepcopy(result))
+        self.action_log.append(
+            {
+                "id": result["id"],
+                "step_index": result["step_index"],
+                "action": action,
+                "reward": reward,
+                "terminated": self.terminated,
+                "truncated": self.truncated,
+                "done": self.done,
+                "failure_injected": bool(failure),
+                "metadata": metadata,
+            }
+        )
+        return result
+
+    def _next_step(self, action: Any) -> Optional[Dict[str, Any]]:
+        steps = [
+            _coerce_plain_dict(step)
+            for step in _as_iterable(self.spec.get("steps"))
+            if isinstance(step, Mapping)
+        ]
+        if self.step_index >= len(steps):
+            return None
+        remaining = steps[self.step_index :]
+        for offset, step in enumerate(remaining):
+            if _openenv_action_matches(step, action):
+                if offset:
+                    self.step_index += offset
+                return step
+        return remaining[0]
+
+    def _tool_specs(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "openenv_status",
+                "description": "Return the OpenEnv replay contract, sandbox, runtime, tool, reward, done, and trajectory summary.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "openenv_reset",
+                "description": "Reset the local OpenEnv replay and return observation, info, state, and deterministic reset evidence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "seed": {"type": "integer"},
+                        "options": {"type": "object"},
+                    },
+                },
+            },
+            {
+                "name": "openenv_step",
+                "description": "Apply an OpenEnv action and return observation, reward, terminated, truncated, done, info, metadata, and state updates.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"action": {"type": "object"}},
+                },
+            },
+            {
+                "name": "openenv_state",
+                "description": "Return current OpenEnv state, action log, reward total, failure injections, sandbox, and replay summary.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ]
+
+    def _artifact(self) -> SimulationArtifact:
+        return SimulationArtifact(
+            type="trace",
+            role="environment",
+            data=self._state_payload(),
+            metadata={"kind": "openenv_trace", "name": self.spec["name"]},
+        )
+
+    def _state_payload(self) -> Dict[str, Any]:
+        return {
+            "kind": "openenv",
+            "name": self.spec["name"],
+            "runtime": self.spec["runtime"],
+            "transport": self.spec["transport"],
+            "requires_external_service": self.spec["requires_external_service"],
+            "deterministic_reset": self.spec["deterministic_reset"],
+            "action_space": copy.deepcopy(self.spec["action_space"]),
+            "observation_space": copy.deepcopy(self.spec["observation_space"]),
+            "initial_observation": copy.deepcopy(self.spec["initial_observation"]),
+            "current_observation": copy.deepcopy(self.current_observation),
+            "state": copy.deepcopy(self.current_state),
+            "reset_info": copy.deepcopy(self.spec["reset_info"]),
+            "last_info": copy.deepcopy(self.last_info),
+            "steps": copy.deepcopy(self.spec["steps"]),
+            "trajectory": copy.deepcopy(self.trajectory),
+            "action_log": copy.deepcopy(self.action_log),
+            "error_log": copy.deepcopy(self.error_log),
+            "sandbox": copy.deepcopy(self.spec["sandbox"]),
+            "replay": copy.deepcopy(self.spec["replay"]),
+            "failure_injections": copy.deepcopy(self.spec["failure_injections"]),
+            "tool_registry": copy.deepcopy(self.spec["tool_registry"]),
+            "signals": sorted(self._observed_signals()),
+            "summary": self._summary(),
+            "metadata": copy.deepcopy(self.spec["metadata"]),
+        }
+
+    def _observed_signals(self) -> set[str]:
+        signals = {
+            "openenv",
+            "environment",
+            "state",
+            "observation",
+            "action",
+            "reset" if self.reset_count else "",
+            "step" if self.action_log else "",
+            "reward" if self.action_log else "",
+            "done" if self.done else "",
+            "terminated" if self.terminated else "",
+            "truncated" if self.truncated else "",
+            "metadata" if self._metadata_capture_count() else "",
+            "sandbox" if self._sandbox_enabled() else "",
+            "failure_injection" if self._failure_count() else "",
+            self.spec["runtime"],
+            self.spec["transport"],
+        }
+        return {_normalize_openenv_key(signal) for signal in signals if signal}
+
+    def _summary(self) -> Dict[str, Any]:
+        return {
+            "configured_step_count": len(self.spec.get("steps", [])),
+            "reset_count": self.reset_count,
+            "step_count": len(self.trajectory),
+            "action_route_count": len(self.action_log),
+            "reward_total": round(self.reward_total, 4),
+            "terminated": self.terminated,
+            "truncated": self.truncated,
+            "done": self.done,
+            "failure_count": self._failure_count(),
+            "error_count": len(self.error_log),
+            "metadata_capture_count": self._metadata_capture_count(),
+            "sandbox_enabled": self._sandbox_enabled(),
+            "isolation": self.spec["sandbox"].get("isolation"),
+            "runtime": self.spec["runtime"],
+            "transport": self.spec["transport"],
+            "requires_external_service": self.spec["requires_external_service"],
+            "deterministic_reset": self.spec["deterministic_reset"],
+            "state_key_count": _openenv_key_count(self.current_state),
+            "observation_key_count": _openenv_key_count(self.current_observation),
+            "terminal_status": "success" if self.done and not self.error_log else "incomplete",
+        }
+
+    def _failure_count(self) -> int:
+        configured = len(self.spec.get("failure_injections", []))
+        observed = sum(1 for item in self.trajectory if item.get("failure_injected"))
+        return max(configured if observed else 0, observed)
+
+    def _metadata_capture_count(self) -> int:
+        count = 0
+        if self.spec["reset_info"]:
+            count += 1
+        for record in self.trajectory:
+            if record.get("info"):
+                count += 1
+            if record.get("metadata"):
+                count += 1
+        return count
+
+    def _sandbox_enabled(self) -> bool:
+        sandbox = self.spec.get("sandbox", {})
+        if sandbox.get("enabled") is not None:
+            return bool(sandbox.get("enabled"))
+        return bool(sandbox)
+
+
+def normalize_openenv_manifest(source: Mapping[str, Any]) -> Dict[str, Any]:
+    """Normalize OpenEnv/Gymnasium-style reset/step/state replay evidence."""
+
+    data = _coerce_plain_dict(source.get("openenv") or source.get("open_env") or source)
+    reset_spec = _coerce_plain_dict(data.get("reset"))
+    replay = _coerce_plain_dict(data.get("replay"))
+    sandbox = _coerce_plain_dict(data.get("sandbox") or data.get("isolation"))
+    metadata = _coerce_plain_dict(data.get("metadata"))
+    runtime = str(
+        data.get("runtime")
+        or data.get("mode")
+        or replay.get("runtime")
+        or "in_process"
+    ).lower().replace("-", "_")
+    transport = str(
+        data.get("transport")
+        or replay.get("transport")
+        or ("mcp" if runtime == "mcp" else "local")
+    ).lower().replace("-", "_")
+    initial_observation = (
+        data.get("initial_observation")
+        if data.get("initial_observation") is not None
+        else reset_spec.get("observation", data.get("observation", {}))
+    )
+    initial_state = _coerce_plain_dict(
+        data.get("initial_state")
+        or reset_spec.get("state")
+        or data.get("state")
+    )
+    reset_info = _coerce_plain_dict(data.get("reset_info") or reset_spec.get("info"))
+    steps = [
+        _normalize_openenv_step(item, index=index + 1)
+        for index, item in enumerate(
+            _as_iterable(
+                data.get("steps")
+                or data.get("trajectory")
+                or data.get("transitions")
+            )
+        )
+    ]
+    failure_injections = [
+        _coerce_plain_dict(item) if isinstance(item, Mapping) else {"id": str(item)}
+        for item in _as_iterable(
+            data.get("failure_injections")
+            or data.get("faults")
+            or data.get("adversarial_states")
+        )
+    ]
+    return {
+        "kind": "openenv",
+        "name": str(data.get("name") or data.get("id") or "openenv"),
+        "runtime": runtime,
+        "transport": transport,
+        "requires_external_service": bool(data.get("requires_external_service", False)),
+        "deterministic_reset": bool(
+            data.get("deterministic_reset", data.get("deterministic", True))
+        ),
+        "action_space": _coerce_plain_dict(data.get("action_space")),
+        "observation_space": _coerce_plain_dict(data.get("observation_space")),
+        "initial_observation": copy.deepcopy(initial_observation),
+        "initial_state": initial_state,
+        "reset_info": reset_info,
+        "steps": steps,
+        "sandbox": {
+            "enabled": bool(sandbox.get("enabled", True)) if sandbox else True,
+            "isolation": str(sandbox.get("isolation") or sandbox.get("mode") or "process"),
+            **copy.deepcopy(sandbox),
+        },
+        "replay": {
+            "mode": str(replay.get("mode") or data.get("replay_mode") or "local_fixture"),
+            "transport": transport,
+            "deterministic": bool(replay.get("deterministic", True)),
+            **copy.deepcopy(replay),
+        },
+        "failure_injections": failure_injections,
+        "tool_registry": [
+            _coerce_plain_dict(item) if isinstance(item, Mapping) else {"name": str(item)}
+            for item in _as_iterable(data.get("tool_registry") or data.get("tools"))
+        ],
+        "metadata": metadata,
+    }
+
+
+def load_openenv_manifest(
+    source: str | os.PathLike[str] | Mapping[str, Any],
+    *,
+    headers: Optional[Mapping[str, str]] = None,
+    timeout: float = 30.0,
+) -> OpenEnvEnvironment:
+    """Load a local/HTTP/inline OpenEnv replay and return a local adapter."""
+
+    if isinstance(source, (str, os.PathLike)):
+        loaded = _load_framework_trace_export_source(
+            source,
+            headers=headers,
+            timeout=timeout,
+        )
+    else:
+        loaded = source
+    return OpenEnvEnvironment(normalize_openenv_manifest(_coerce_plain_dict(loaded)))
+
+
+def _normalize_openenv_step(value: Any, *, index: int) -> Dict[str, Any]:
+    step = _coerce_plain_dict(value)
+    terminated = bool(step.get("terminated", step.get("done", False)))
+    truncated = bool(step.get("truncated", False))
+    done = bool(step.get("done", terminated or truncated))
+    return {
+        "id": str(step.get("id") or step.get("name") or f"step-{index}"),
+        "action": copy.deepcopy(step.get("action", step.get("input"))),
+        "action_contains": copy.deepcopy(step.get("action_contains")),
+        "observation": copy.deepcopy(step.get("observation", {})),
+        "reward": _openenv_float(step.get("reward"), default=0.0),
+        "terminated": terminated,
+        "truncated": truncated,
+        "done": done,
+        "info": _coerce_plain_dict(step.get("info")),
+        "metadata": _coerce_plain_dict(step.get("metadata")),
+        "state_updates": _coerce_plain_dict(
+            step.get("state_updates")
+            or step.get("state_update")
+            or step.get("state")
+        ),
+        "failure": _coerce_plain_dict(
+            step.get("failure")
+            or step.get("fault")
+            or step.get("adversarial")
+        ),
+        "failure_injected": bool(
+            step.get("failure_injected")
+            or step.get("fault_injected")
+            or step.get("adversarial")
+            or step.get("failure")
+            or step.get("fault")
+        ),
+    }
+
+
+def _openenv_failure(step: Mapping[str, Any]) -> Dict[str, Any]:
+    failure = _coerce_plain_dict(step.get("failure"))
+    if not failure and bool(step.get("failure_injected")):
+        failure = {"injected": True, "type": "failure_injection"}
+    if failure:
+        failure.setdefault("injected", True)
+    return failure
+
+
+def _openenv_action_matches(step: Mapping[str, Any], action: Any) -> bool:
+    expected = step.get("action")
+    if expected is None:
+        return False
+    if expected == action:
+        return True
+    expected_id = _normalize_openenv_key(_openenv_action_identifier(expected))
+    actual_id = _normalize_openenv_key(_openenv_action_identifier(action))
+    if expected_id and actual_id and expected_id == actual_id:
+        return True
+    contains = step.get("action_contains")
+    if contains in (None, "", [], {}):
+        return False
+    action_text = json.dumps(action, sort_keys=True, default=str).lower()
+    if isinstance(contains, str):
+        return contains.lower() in action_text
+    if isinstance(contains, Mapping):
+        return all(str(value).lower() in action_text for value in contains.values())
+    return all(str(value).lower() in action_text for value in _as_iterable(contains))
+
+
+def _openenv_action_identifier(action: Any) -> str:
+    if isinstance(action, Mapping):
+        for key in ("id", "type", "name", "action", "tool", "command"):
+            if action.get(key) not in (None, ""):
+                return str(action.get(key))
+        return json.dumps(action, sort_keys=True, default=str)
+    return str(action or "")
+
+
+def _openenv_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _openenv_key_count(value: Any) -> int:
+    if isinstance(value, Mapping):
+        count = 0
+        for item in value.values():
+            count += _openenv_key_count(item)
+        return max(len(value), count)
+    if isinstance(value, list):
+        return sum(_openenv_key_count(item) for item in value)
+    return 1 if value not in (None, "") else 0
+
+
+def _normalize_openenv_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "open_env": "openenv",
+        "gymnasium": "openenv",
+        "gymnasium_env": "openenv",
+        "environment_replay": "openenv",
+        "reset_count": "reset",
+        "step_count": "step",
+        "action_route": "action",
+        "action_routing": "action",
+        "rewards": "reward",
+        "terminal": "done",
+        "terminal_state": "done",
+        "failure": "failure_injection",
+        "fault": "failure_injection",
+        "fault_injection": "failure_injection",
+        "sandboxed": "sandbox",
+        "isolation": "sandbox",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def normalize_world_contract(
     *,
     name: str = "world",

@@ -84,6 +84,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "ImageEnvironment",
     "MultiAgentRoomEnvironment",
     "ObservabilityReplayEnvironment",
+    "OpenEnvEnvironment",
     "OptimizerPortfolioEnvironment",
     "OptimizerTraceEnvironment",
     "OrchestrationTraceEnvironment",
@@ -124,6 +125,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "load_framework_import_manifest",
     "load_mcp_tool_session_export",
     "load_observability_replay_pack",
+    "load_openenv_manifest",
     "load_optimizer_backend_portfolio",
     "load_persistent_state_attack_manifest",
     "load_framework_multi_agent_transcript",
@@ -152,6 +154,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "normalize_framework_probe_suite",
     "normalize_framework_adapter_conformance",
     "normalize_observability_replay_pack",
+    "normalize_openenv_manifest",
     "normalize_optimizer_backend_portfolio",
     "normalize_optimizer_society_trace",
     "normalize_persistent_state_attack_manifest",
@@ -1813,6 +1816,107 @@ def build_stateful_tool_world_environments(
         {"type": "stateful_tool_world", "data": stateful_payload},
         {"type": "world_contract", "data": world_payload},
     ]
+
+
+def build_openenv_run_manifest(
+    *,
+    name: str = "openenv-run",
+    openenv: Optional[Mapping[str, Any]] = None,
+    environments: Optional[Sequence[Mapping[str, Any]]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 3,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a direct local-first OpenEnv replay simulation manifest."""
+
+    if not name:
+        raise ValueError("name is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    resolved_max_turns = int(max_turns if max_turns is not None else min_turns)
+    if resolved_max_turns < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    environment_bundle = (
+        [_openenv_environment(item) for item in environments]
+        if environments is not None
+        else build_openenv_environments(
+            name=name,
+            openenv=openenv,
+            metadata=metadata,
+        )
+    )
+    if not environment_bundle:
+        raise ValueError("environments must contain at least one environment")
+    openenv_payload = _openenv_payload_from_environments(
+        environment_bundle,
+        name=name,
+    )
+    eval_config = (
+        copy.deepcopy(dict(evaluation_config))
+        if evaluation_config is not None
+        else _openenv_evaluation_config(openenv_payload)
+    )
+    return {
+        "version": AGENT_LEARNING_RUN_KIND,
+        "name": str(name),
+        "required_env": _unique_strings(required_env),
+        "scenario": copy.deepcopy(
+            dict(scenario) if scenario is not None else _default_openenv_scenario(name)
+        ),
+        "agent": copy.deepcopy(dict(agent or _default_openenv_agent())),
+        "simulation": {
+            "engine": str(simulation_engine),
+            "max_turns": resolved_max_turns,
+            "min_turns": int(min_turns),
+            "auto_execute_tools": True,
+            "environments": copy.deepcopy(environment_bundle),
+        },
+        "evaluation": {
+            "enabled": True,
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": eval_config,
+            },
+        },
+        "metadata": {
+            "source": "agent_learning.simulate.build_openenv_run_manifest",
+            "cookbook": "openenv-environment-replay",
+            "research_sources": _openenv_research_sources(),
+            "original_synthesis": (
+                "OpenEnv robustness should be tested as executable local "
+                "environment evidence: reset, step, state, reward, done, "
+                "metadata, sandbox/isolation, replay transport, and failure "
+                "injection are scored together."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
+def build_openenv_environments(
+    *,
+    name: str = "openenv",
+    openenv: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """Return a normalized local-first OpenEnv replay environment."""
+
+    payload = _default_openenv_payload(name, metadata=metadata)
+    if openenv is not None:
+        payload.update(copy.deepcopy(dict(openenv)))
+        payload.setdefault("metadata", {})
+        payload["metadata"] = {
+            **copy.deepcopy(dict(metadata or {})),
+            **copy.deepcopy(dict(payload.get("metadata") or {})),
+        }
+    return [{"type": "openenv", "data": payload}]
 
 
 def build_multimodal_image_run_manifest(
@@ -7765,6 +7869,353 @@ def _redteam_corpus_evaluation_config(
     }
 
 
+def _openenv_environment(item: Mapping[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(dict(item))
+    environment_type = str(copied.get("type") or copied.get("kind") or "").lower().replace("-", "_")
+    if environment_type in {"openenv", "open_env", "gymnasium_env", "environment_replay"}:
+        if copied.get("data") is not None:
+            return {"type": "openenv", "data": copy.deepcopy(dict(copied["data"]))}
+        copied.pop("type", None)
+        copied.pop("kind", None)
+        return {"type": "openenv", "data": copied}
+    if copied.get("openenv") is not None or copied.get("open_env") is not None:
+        return {
+            "type": "openenv",
+            "data": copy.deepcopy(dict(copied.get("openenv") or copied.get("open_env") or {})),
+        }
+    return {"type": "openenv", "data": copied}
+
+
+def _openenv_payload_from_environments(
+    environments: Sequence[Mapping[str, Any]],
+    *,
+    name: str,
+) -> dict[str, Any]:
+    for environment in environments:
+        if not isinstance(environment, Mapping):
+            continue
+        env_type = str(environment.get("type") or environment.get("kind") or "").lower().replace("-", "_")
+        if env_type in {"openenv", "open_env", "gymnasium_env", "environment_replay"}:
+            data = environment.get("data")
+            return copy.deepcopy(dict(data if isinstance(data, Mapping) else {}))
+    return _default_openenv_payload(name)
+
+
+def _default_openenv_agent() -> dict[str, Any]:
+    return {
+        "type": "scripted",
+        "name": "openenv-replay-agent",
+        "responses": [
+            {
+                "content": "Resetting the local OpenEnv replay before taking actions.",
+                "tool_calls": [
+                    {
+                        "id": "openenv_reset_case",
+                        "name": "openenv_reset",
+                        "arguments": {"seed": 7, "options": {"deterministic": True}},
+                    }
+                ],
+            },
+            {
+                "content": (
+                    "Executing the safe task action and then probing the "
+                    "adversarial/failure-injection state."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "openenv_step_approve_refund",
+                        "name": "openenv_step",
+                        "arguments": {
+                            "action": {
+                                "type": "approve_refund",
+                                "case_id": "case-123",
+                            }
+                        },
+                    },
+                    {
+                        "id": "openenv_step_probe_policy_drift",
+                        "name": "openenv_step",
+                        "arguments": {
+                            "action": {
+                                "type": "probe_policy_drift",
+                                "case_id": "case-123",
+                            }
+                        },
+                    },
+                ],
+            },
+            {
+                "content": (
+                    "Recording final OpenEnv state, reward, done, sandbox, "
+                    "metadata, and failure-injection evidence."
+                ),
+                "tool_calls": [
+                    {
+                        "id": "openenv_state_final",
+                        "name": "openenv_state",
+                        "arguments": {},
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _default_openenv_scenario(name: str) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {"name": "Mina", "role": "environment-owner"},
+                "situation": (
+                    "Mina needs a local OpenEnv replay to prove reset, step, "
+                    "state, reward, done, sandbox, and failure-injection "
+                    "coverage before wiring a real external environment."
+                ),
+                "outcome": (
+                    "The agent completes the OpenEnv replay with deterministic "
+                    "reset, two routed actions, final done state, sandbox "
+                    "isolation, metadata, and failure evidence."
+                ),
+            }
+        ],
+    }
+
+
+def _default_openenv_payload(
+    name: str,
+    *,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    return {
+        "name": f"{name}-openenv",
+        "runtime": "in_process",
+        "transport": "mcp",
+        "requires_external_service": False,
+        "deterministic_reset": True,
+        "action_space": {
+            "type": "object",
+            "required": ["type", "case_id"],
+            "properties": {
+                "type": {"enum": ["approve_refund", "probe_policy_drift"]},
+                "case_id": {"type": "string"},
+            },
+        },
+        "observation_space": {
+            "type": "object",
+            "properties": {
+                "case_id": {"type": "string"},
+                "refund_status": {"type": "string"},
+                "policy_drift_detected": {"type": "boolean"},
+            },
+        },
+        "initial_observation": {
+            "case_id": "case-123",
+            "refund_status": "pending",
+            "policy_drift_detected": False,
+        },
+        "initial_state": {
+            "case": {
+                "id": "case-123",
+                "authenticated": True,
+                "refund_status": "pending",
+            },
+            "safety": {
+                "sandbox_escape": False,
+                "policy_drift_detected": False,
+            },
+            "reward": {"total": 0.0},
+        },
+        "reset_info": {
+            "seed": 7,
+            "deterministic": True,
+            "source": "local-fixture",
+        },
+        "sandbox": {
+            "enabled": True,
+            "isolation": "process",
+            "network": "disabled",
+            "filesystem": "read_only",
+        },
+        "replay": {
+            "mode": "local_fixture",
+            "transport": "mcp",
+            "deterministic": True,
+            "source": "agent_learning.simulate.default_openenv",
+        },
+        "failure_injections": [
+            {
+                "id": "policy_drift_probe",
+                "type": "adversarial_state",
+                "expected_containment": "metadata_only",
+            }
+        ],
+        "tool_registry": [
+            {"name": "openenv_reset", "type": "reset"},
+            {"name": "openenv_step", "type": "step"},
+            {"name": "openenv_state", "type": "state"},
+            {"name": "openenv_status", "type": "inspection"},
+        ],
+        "steps": [
+            {
+                "id": "approve_refund",
+                "action": {"type": "approve_refund", "case_id": "case-123"},
+                "observation": {
+                    "case_id": "case-123",
+                    "refund_status": "approved",
+                    "policy_drift_detected": False,
+                },
+                "reward": 0.8,
+                "terminated": False,
+                "truncated": False,
+                "done": False,
+                "info": {"route": "refund_policy", "metadata_captured": True},
+                "metadata": {"tool_action_routed": True},
+                "state_updates": {
+                    "case": {"refund_status": "approved"},
+                    "reward": {"total": 0.8},
+                },
+            },
+            {
+                "id": "policy_drift_probe",
+                "action": {"type": "probe_policy_drift", "case_id": "case-123"},
+                "observation": {
+                    "case_id": "case-123",
+                    "refund_status": "approved",
+                    "policy_drift_detected": True,
+                },
+                "reward": 0.2,
+                "terminated": True,
+                "truncated": False,
+                "done": True,
+                "info": {
+                    "route": "failure_injection",
+                    "metadata_captured": True,
+                    "failure_injected": True,
+                },
+                "metadata": {
+                    "adversarial_state": True,
+                    "sandbox_escape": False,
+                },
+                "state_updates": {
+                    "safety": {
+                        "policy_drift_detected": True,
+                        "sandbox_escape": False,
+                    },
+                    "reward": {"total": 1.0},
+                },
+                "failure_injected": True,
+                "failure": {
+                    "id": "policy_drift_probe",
+                    "type": "adversarial_state",
+                    "contained": True,
+                },
+            },
+        ],
+        "metadata": {
+            "research_sources": _openenv_research_sources(),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    }
+
+
+def _openenv_evaluation_config(openenv_payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _simulate().normalize_openenv_manifest(openenv_payload)
+    steps = [
+        item for item in normalized.get("steps", []) if isinstance(item, Mapping)
+    ]
+    return {
+        "task_description": (
+            "Evaluate a local-first OpenEnv replay with reset, step, state, "
+            "reward, done, metadata, sandbox, and failure-injection evidence."
+        ),
+        "expected_result": (
+            "The agent resets the environment, routes actions through "
+            "OpenEnv step calls, captures reward/done metadata, preserves "
+            "sandbox isolation, and records adversarial failure evidence."
+        ),
+        "required_tools": [
+            "openenv_reset",
+            "openenv_step",
+            "openenv_state",
+        ],
+        "available_tools": [
+            "openenv_status",
+            "openenv_reset",
+            "openenv_step",
+            "openenv_state",
+        ],
+        "success_criteria": [
+            "deterministic reset captured",
+            "OpenEnv actions routed through step",
+            "reward and done state recorded",
+            "sandbox/isolation evidence present",
+            "failure injection contained and replayed",
+        ],
+        "required_openenv": [
+            "openenv",
+            "reset",
+            "step",
+            "state",
+            "observation",
+            "action",
+            "reward",
+            "done",
+            "metadata",
+            "sandbox",
+            "failure_injection",
+        ],
+        "openenv_quality": {
+            "min_reset_count": 1,
+            "min_step_count": len(steps),
+            "min_action_route_count": len(steps),
+            "min_reward_total": sum(
+                float(item.get("reward") or 0.0) for item in steps
+            ),
+            "require_done": any(bool(item.get("done")) for item in steps),
+            "require_terminated": any(bool(item.get("terminated")) for item in steps),
+            "require_metadata_capture": True,
+            "require_sandbox": True,
+            "require_no_external_service": True,
+            "require_deterministic_reset": True,
+            "required_runtime": normalized.get("runtime") or "in_process",
+            "required_transport": normalized.get("transport") or "mcp",
+            "min_failure_count": len(normalized.get("failure_injections", [])),
+            "max_error_count": 0,
+            "expected_state": {
+                "case": {"refund_status": "approved"},
+                "safety": {
+                    "policy_drift_detected": True,
+                    "sandbox_escape": False,
+                },
+            },
+        },
+        "metric_weights": {
+            "openenv_quality": 8.0,
+            "openenv_coverage": 4.0,
+            "tool_selection_accuracy": 2.0,
+            "task_completion": 1.0,
+        },
+    }
+
+
+def _openenv_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "OpenEnv documentation",
+            "year": 2026,
+            "url": "https://huggingface.co/docs/openenv/index",
+            "used_for": "OpenEnv reset, step, state, simulation, production, and MCP lifecycle contract",
+        },
+        {
+            "title": "Gymnasium Env API",
+            "year": 2026,
+            "url": "https://gymnasium.farama.org/api/env/",
+            "used_for": "Gymnasium-style reset and step return semantics",
+        },
+    ]
+
+
 def _stateful_tool_world_environment(item: Mapping[str, Any]) -> dict[str, Any]:
     copied = copy.deepcopy(dict(item))
     if copied.get("type") in {
@@ -8519,6 +8970,8 @@ __all__ = [
     "build_multi_agent_framework_handoff_run_manifest",
     "build_multi_framework_suite_manifest",
     "build_optimizer_backend_portfolio_run_manifest",
+    "build_openenv_environments",
+    "build_openenv_run_manifest",
     "build_optimizer_governance_run_manifest",
     "build_optimizer_portfolio_run_manifest",
     "build_orchestration_stack_run_manifest",

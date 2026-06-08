@@ -4096,6 +4096,7 @@ _KNOWN_ENVIRONMENT_TYPES = {
     "multimodal_image",
     "multi_agent_room",
     "observability_replay",
+    "openenv",
     "optimizer_trace",
     "persistent_state_attack",
     "red_team_campaign",
