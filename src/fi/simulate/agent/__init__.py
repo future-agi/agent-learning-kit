@@ -18,6 +18,11 @@ from .multi_agent import (
     probe_multi_agent_room,
     run_multi_agent_room_probe,
 )
+from .orchestration import (
+    orchestration_stack_contract,
+    probe_orchestration_stack,
+    run_orchestration_stack_probe,
+)
 from .realtime import (
     probe_realtime_stack,
     realtime_stack_contract,
@@ -60,6 +65,9 @@ __all__ = [
     "multi_agent_room_contract",
     "probe_multi_agent_room",
     "run_multi_agent_room_probe",
+    "orchestration_stack_contract",
+    "probe_orchestration_stack",
+    "run_orchestration_stack_probe",
     "probe_realtime_stack",
     "realtime_stack_contract",
     "run_realtime_stack_probe",

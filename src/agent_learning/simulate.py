@@ -35,16 +35,19 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "framework_adapter_contract_matrix",
     "memory_layer_contract",
     "multi_agent_room_contract",
+    "orchestration_stack_contract",
     "probe_browser_cua",
     "probe_framework_adapter",
     "probe_memory_layer",
     "probe_multi_agent_room",
+    "probe_orchestration_stack",
     "probe_realtime_stack",
     "realtime_stack_contract",
     "run_browser_cua_probe",
     "run_framework_adapter_probe",
     "run_memory_layer_probe",
     "run_multi_agent_room_probe",
+    "run_orchestration_stack_probe",
     "run_realtime_stack_probe",
     "supported_frameworks",
     "wrap_agent",
@@ -255,6 +258,7 @@ _SIMULATE_SUBMODULE_ALIASES = {
     "agent.import_probe": "fi.simulate.agent.import_probe",
     "agent.memory": "fi.simulate.agent.memory",
     "agent.multi_agent": "fi.simulate.agent.multi_agent",
+    "agent.orchestration": "fi.simulate.agent.orchestration",
     "agent.mocks": "fi.simulate.agent.mocks",
     "agent.wrapper": "fi.simulate.agent.wrapper",
     "agent.wrappers": "fi.simulate.agent.wrappers",
@@ -4838,6 +4842,14 @@ def run_multi_agent_room_probe(*args: Any, **kwargs: Any) -> Any:
     return _simulate().run_multi_agent_room_probe(*args, **kwargs)
 
 
+def probe_orchestration_stack(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().probe_orchestration_stack(*args, **kwargs)
+
+
+def run_orchestration_stack_probe(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().run_orchestration_stack_probe(*args, **kwargs)
+
+
 def probe_realtime_stack(*args: Any, **kwargs: Any) -> Any:
     return _simulate().probe_realtime_stack(*args, **kwargs)
 
@@ -4868,6 +4880,10 @@ def memory_layer_contract(*args: Any, **kwargs: Any) -> Any:
 
 def multi_agent_room_contract(*args: Any, **kwargs: Any) -> Any:
     return _simulate().multi_agent_room_contract(*args, **kwargs)
+
+
+def orchestration_stack_contract(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().orchestration_stack_contract(*args, **kwargs)
 
 
 def browser_cua_contract(*args: Any, **kwargs: Any) -> Any:

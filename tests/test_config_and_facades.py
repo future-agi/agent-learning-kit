@@ -376,7 +376,11 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.probe_multi_agent_room is not None
     assert optimize.build_orchestration_optimization_manifest is not None
     assert optimize.optimize_orchestration_stack is not None
+    assert optimize.optimize_orchestration_stack_probe is not None
+    assert optimize.score_orchestration_stack_probe_result is not None
+    assert optimize.build_orchestration_run_manifest_from_probe_optimization is not None
     assert simulate.build_orchestration_stack_run_manifest is not None
+    assert simulate.run_orchestration_stack_probe is not None
     assert optimize.build_world_framework_memory_optimization_manifest is not None
     assert optimize.build_agent_architecture_optimization_manifest is (
         optimize.build_world_framework_memory_optimization_manifest
@@ -4390,6 +4394,104 @@ def test_optimize_realtime_stack_probe_selects_and_promotes_strong_candidate(
     state = run_result["report"]["results"][0]["metadata"]["environment_state"]
     assert state["voice"]["current_route"] == "support"
     assert state["streaming_trace"]["state"]["route"] == "support"
+
+
+def test_optimize_orchestration_stack_probe_selects_and_promotes_strong_candidate(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_orchestration_optimization_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = optimize.optimize_orchestration_stack_probe(
+        name="sdk-orchestration-stack-probe-optimization",
+        stack_candidates=[module.weak_stack(), module.strong_stack()],
+        agent_candidates=[module.weak_agent(), module.strong_agent()],
+        metadata={"cookbook": "sdk-orchestration-stack-probe-optimization"},
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["orchestration_stack_probe_proof_passed"] is True
+    assert result["orchestration_stack_probe_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_ORCHESTRATION_STACK_PROBE_PROOF_KIND
+    )
+    assert result["orchestration_stack_probe_proof"]["failed_check_ids"] == []
+    best_pair = result["optimization"]["best_config"]["orchestration_stack"]
+    assert best_pair["stack"]["name"] == "strong-orchestration-stack"
+    assert best_pair["agent"]["responses"][0]["tool_calls"][0]["name"] == (
+        "apply_world_transition"
+    )
+
+    best_id = result["optimization"]["best_candidate_id"]
+    best_history = next(
+        item for item in result["optimization"]["history"] if item["candidate_id"] == best_id
+    )
+    assert best_history["metrics"]["orchestration_stack_probe_world_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["orchestration_stack_probe_memory_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"][
+        "orchestration_stack_probe_multi_agent_quality"
+    ] == pytest.approx(1.0)
+    history_by_stack = {}
+    for item in result["optimization"]["history"]:
+        pair = item["candidate_config"].get("orchestration_stack") or item[
+            "candidate_config"
+        ]
+        history_by_stack.setdefault(pair["stack"]["name"], []).append(item["score"])
+    assert max(history_by_stack["weak-orchestration-stack"]) < max(
+        history_by_stack["strong-orchestration-stack"]
+    )
+
+    manifest = optimize.build_orchestration_run_manifest_from_probe_optimization(
+        result,
+        name="promoted-orchestration-stack-probe-run",
+        evaluation_config=module.evaluation_config(),
+        metadata={"cookbook": "sdk-orchestration-stack-probe-optimization"},
+    )
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["metadata"]["promoted_from_orchestration_stack_probe"] is True
+    assert manifest["metadata"]["orchestration_stack_probe_proof_status"] == "passed"
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    assert manifest["evaluation"]["agent_report"]["config"] == module.evaluation_config()
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-orchestration-stack-probe-run.json",
+    )
+    run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    assert run_result["summary"]["metric_averages"][
+        "world_contract_quality"
+    ] == pytest.approx(1.0)
+    assert run_result["summary"]["metric_averages"][
+        "agent_memory_lineage_quality"
+    ] == pytest.approx(1.0)
+    assert run_result["summary"]["metric_averages"][
+        "multi_agent_coordination_quality"
+    ] == pytest.approx(1.0)
+    state = run_result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["world_contract"]["state"]["refund"]["status"] == "approved"
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == ["doc_refund_2026"]
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
 
 
 def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):

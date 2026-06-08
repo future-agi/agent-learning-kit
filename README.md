@@ -728,6 +728,19 @@ manifest = optimize.build_orchestration_optimization_manifest(
 result = optimize.optimize_manifest(manifest, manifest_path="examples/sdk.json")
 ```
 
+Before committing to a full orchestration manifest, use
+`simulate.run_orchestration_stack_probe()` or
+`optimize.optimize_orchestration_stack_probe()` to test local stack candidates
+for world transitions, framework trace signals, current retrieval citations,
+source-attributed governed memory lineage, multi-agent review/reconciliation,
+and successful tool handling. The probe uses the same stack shorthand blocks as
+full orchestration optimization, rejects HTTP/HTTPS targets by default, and
+`optimize.build_orchestration_run_manifest_from_probe_optimization(...)`
+promotes the selected stack into the normal `agent-learning.run.v1`
+orchestration simulation path. See
+`examples/sdk_orchestration_stack_probe_optimization.py` for an end-to-end
+probe, promotion, and evaluated run cookbook.
+
 For direct, non-optimizer orchestration simulation,
 `simulate.build_orchestration_stack_run_manifest()` and
 `examples/sdk_orchestration_simulation.py` run a selected world/framework/
@@ -934,6 +947,9 @@ AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_simulation.py \
   artifacts/sdk-memory-simulation.json
+
+PYTHONPATH=src python examples/sdk_orchestration_stack_probe_optimization.py \
+  artifacts/sdk-orchestration-stack-probe-optimization.json
 
 PYTHONPATH=src python examples/sdk_memory_layer_probe_optimization.py \
   artifacts/sdk-memory-layer-probe-optimization.json

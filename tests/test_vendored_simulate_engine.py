@@ -229,6 +229,9 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
     assert callable(simulate.multi_agent_room_contract)
     assert callable(simulate.probe_multi_agent_room)
     assert callable(simulate.run_multi_agent_room_probe)
+    assert callable(simulate.orchestration_stack_contract)
+    assert callable(simulate.probe_orchestration_stack)
+    assert callable(simulate.run_orchestration_stack_probe)
     assert callable(simulate.realtime_stack_contract)
     assert callable(simulate.probe_realtime_stack)
     assert callable(simulate.run_realtime_stack_probe)
@@ -346,6 +349,64 @@ def test_realtime_stack_probe_scores_local_voice_streaming_and_rejects_external_
             framework="livekit",
             expected_route="support",
             target="https://example.com/realtime-agent",
+        )
+
+
+def test_orchestration_stack_probe_scores_local_stack_and_rejects_external_target() -> None:
+    example_path = PROJECT_ROOT / "examples" / "sdk_orchestration_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_orchestration_optimization_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = simulate.run_orchestration_stack_probe(
+        module.strong_stack(),
+        agent=module.strong_agent(),
+        metadata={"suite": "orchestration-stack-probe"},
+    )
+
+    assert result["kind"] == "agent-learning.orchestration-stack-probe.v1"
+    assert result["status"] == "passed"
+    assert result["contract"]["kind"] == (
+        "agent-learning.orchestration-stack-contract.v1"
+    )
+    assert result["contract"]["local_executable_fixture"] is True
+    assert result["summary"]["expected_transition_completed"] is True
+    assert result["summary"]["world_state_match"] is True
+    assert result["summary"]["framework_required_signal_match_count"] == 3
+    assert result["summary"]["retrieval_expected_document_cited"] is True
+    assert result["summary"]["has_source_attribution"] is True
+    assert result["summary"]["role_match"] is True
+    assert result["summary"]["expected_review_present"] is True
+    assert result["summary"]["expected_reconciliation_present"] is True
+    assert result["summary"]["required_tools_handled"] is True
+    assert [env["type"] for env in result["environments"]] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+
+    weak = simulate.run_orchestration_stack_probe(
+        module.weak_stack(),
+        agent=module.weak_agent(),
+    )
+    assert weak["status"] == "failed"
+    assert {
+        "orchestration_probe_world_transition",
+        "orchestration_probe_tool_evidence",
+    } <= {finding["check"] for finding in weak["findings"]}
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.run_orchestration_stack_probe(
+            module.strong_stack(),
+            agent=module.strong_agent(),
+            target="https://example.com/orchestration-agent",
         )
 
 
