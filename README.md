@@ -639,6 +639,14 @@ such as Pipecat-style `process_frame(frame=..., direction=...)`; runtime traces
 record `input_kwargs_keys`, and generated `framework_runtime_contract` gates can
 require those keys. See `examples/sdk_framework_adapter_side_kwargs.py`.
 
+Nested SDK entrypoints are first-class method paths. Discovery and runtime
+resolution can promote paths such as OpenAI-compatible
+`chat.completions.create(messages=...)` or Anthropic-style
+`messages.create(messages=...)`; the promoted manifest records the dotted
+`agent.method`, `agent.input_mode`, and `agent.input_key`, and the runtime trace
+keeps the full method path for eval gates. See
+`examples/sdk_framework_adapter_nested_method.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1244,6 +1252,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_keyword_inputs.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_side_kwargs.py \
   artifacts/sdk-framework-adapter-side-kwargs.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_nested_method.py \
+  artifacts/sdk-framework-adapter-nested-method.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

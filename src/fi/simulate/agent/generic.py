@@ -19,6 +19,9 @@ _KEYWORD_INPUT_NAMES = (
     "input",
     "payload",
     "frame",
+    "request",
+    "contents",
+    "arguments",
     "task",
     "user_prompt",
     "prompt",
@@ -41,6 +44,9 @@ _METHOD_INPUT_KEY_PREFERENCES = {
     "respond": ("message", "input", "payload"),
     "process": ("frame", "payload", "input", "data"),
     "process_frame": ("frame", "payload", "input", "data"),
+    "responses.create": ("input", "messages", "payload"),
+    "chat.completions.create": ("messages", "input", "payload"),
+    "messages.create": ("messages", "input", "payload"),
     "completion": ("request", "payload", "input"),
     "call_tool": ("payload", "input", "arguments"),
     "invoke_model": ("payload", "input", "request"),
@@ -59,6 +65,9 @@ _AUTO_METHOD_ORDER = (
     "kickoff",
     "process_frame",
     "process",
+    "responses.create",
+    "chat.completions.create",
+    "messages.create",
     "run_stream",
     "arun",
     "run",
@@ -84,6 +93,9 @@ _METHOD_INPUT_MODES: dict[str, InputMode] = {
     "kickoff": "dict",
     "process": "dict",
     "process_frame": "dict",
+    "responses.create": "text",
+    "chat.completions.create": "messages",
+    "messages.create": "messages",
     "completion": "dict",
     "call_tool": "dict",
     "invoke_model": "dict",
@@ -139,8 +151,10 @@ class GenericAgentWrapper(AgentWrapper):
 
     async def call(self, input: AgentInput) -> Union[str, AgentResponse]:
         method = self._resolve_method()
-        method_name = getattr(method, "__name__", None) or (
-            self.method if isinstance(self.method, str) else None
+        method_name = (
+            self.method
+            if isinstance(self.method, str)
+            else getattr(method, "__name__", None)
         )
         runtime_input_mode = (
             self._infer_input_mode(method_name)
@@ -196,13 +210,13 @@ class GenericAgentWrapper(AgentWrapper):
             return self.method
 
         if isinstance(self.method, str):
-            candidate = getattr(self.agent, self.method, None)
+            candidate = _resolve_callable_attr_path(self.agent, self.method)
             if callable(candidate):
                 return candidate
             raise AttributeError(f"Agent does not expose method '{self.method}'.")
 
         for name in _AUTO_METHOD_ORDER:
-            candidate = getattr(self.agent, name, None)
+            candidate = _resolve_callable_attr_path(self.agent, name)
             if callable(candidate):
                 return candidate
 
@@ -251,7 +265,11 @@ class GenericAgentWrapper(AgentWrapper):
         return input
 
     def _infer_input_mode(self, method_name: str | None) -> InputMode:
-        return _METHOD_INPUT_MODES.get(str(method_name or ""), "agent_input")
+        return (
+            _METHOD_INPUT_MODES.get(str(method_name or ""))
+            or _METHOD_INPUT_MODES.get(_method_leaf(method_name))
+            or "agent_input"
+        )
 
     def _messages_with_system(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         normalized = [dict(message) for message in messages]
@@ -531,6 +549,25 @@ def _extract_list_field(raw: Any, names: Iterable[str]) -> Optional[List[Dict[st
     return items or None
 
 
+def _resolve_callable_attr_path(root: Any, path: str | None) -> Callable[..., Any] | None:
+    if not path:
+        return root if callable(root) else None
+    value = root
+    for raw_part in str(path).split("."):
+        part = raw_part.strip()
+        if not part:
+            return None
+        try:
+            value = getattr(value, part)
+        except Exception:
+            return None
+    return value if callable(value) else None
+
+
+def _method_leaf(method_name: str | None) -> str:
+    return str(method_name or "").rsplit(".", 1)[-1]
+
+
 def _invoke_method_with_payload(
     method: Callable[..., Any],
     payload: Any,
@@ -577,10 +614,11 @@ def _signature_input_key(
         return None
     params = list(signature.parameters.values())
     names = {param.name: param for param in params}
-    preferred_names = (
-        _METHOD_INPUT_KEY_PREFERENCES.get(str(method_name or ""), ())
-        + _KEYWORD_INPUT_NAMES
+    method_preferences = (
+        _METHOD_INPUT_KEY_PREFERENCES.get(str(method_name or ""))
+        or _METHOD_INPUT_KEY_PREFERENCES.get(_method_leaf(method_name), ())
     )
+    preferred_names = method_preferences + _KEYWORD_INPUT_NAMES
     accepts_positional = _params_accept_positional(params)
 
     for name in preferred_names:

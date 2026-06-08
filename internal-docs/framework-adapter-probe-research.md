@@ -45,6 +45,13 @@ the local-first adapter contract.
   implication: adapter responses should retain structured output metadata and
   state, not flatten everything into only text. Source:
   https://docs.pydantic.dev/dev/examples/pydantic_ai/
+- OpenAI-compatible and Anthropic-style provider clients commonly expose nested
+  SDK entrypoints such as chat completions or messages create calls. Probe
+  implication: adapter discovery and runtime resolution should preserve dotted
+  method paths like `chat.completions.create` and `messages.create`, not require
+  users to write wrapper functions. Sources:
+  https://platform.openai.com/docs/api-reference/chat/create and
+  https://docs.anthropic.com/en/api/messages
 - Instructor and OpenAI Agents-style structured output paths use Pydantic or
   dataclass-like response models. Probe implication: `model_dump()`/dataclass
   payloads should normalize into content, tools, events, metadata, and state so
@@ -106,6 +113,10 @@ Keep framework support local-first:
   payload-plus-kwargs shape, the adapter candidate, contract, probe summary,
   promoted manifest, runtime trace, and generated eval config should carry the
   selected `input_kwargs_keys`.
+- Preserve nested SDK method paths. If discovery selects
+  `chat.completions.create` or `messages.create`, the adapter candidate, probe
+  proof, promoted manifest, runtime trace, and generated eval config should
+  carry the full dotted method path instead of only the leaf method name.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

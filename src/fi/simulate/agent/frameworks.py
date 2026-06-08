@@ -58,7 +58,7 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
     "agora": FrameworkAdapterSpec("agora", "respond", "dict", modality="voice", notes="Agora conversational AI shim."),
     "twilio": FrameworkAdapterSpec("twilio", "respond", "dict", modality="voice", notes="Twilio voice/media stream webhook shim."),
     # Model/provider clients commonly instrumented by TraceAI
-    "anthropic": FrameworkAdapterSpec("anthropic", "chat", "dict", notes="Anthropic messages client shim."),
+    "anthropic": FrameworkAdapterSpec("anthropic", "messages.create", "messages", notes="Anthropic messages client shim."),
     "bedrock": FrameworkAdapterSpec("bedrock", "invoke_model", "dict", notes="AWS Bedrock client shim."),
     "cerebras": FrameworkAdapterSpec("cerebras", "chat", "dict", notes="Cerebras client shim."),
     "cohere": FrameworkAdapterSpec("cohere", "chat", "dict", notes="Cohere client shim."),
@@ -70,7 +70,7 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
     "instructor": FrameworkAdapterSpec("instructor", "chat", "dict", notes="Instructor structured output client shim."),
     "mistralai": FrameworkAdapterSpec("mistralai", "chat", "dict", notes="Mistral AI client shim."),
     "ollama": FrameworkAdapterSpec("ollama", "chat", "dict", notes="Ollama client shim."),
-    "openai": FrameworkAdapterSpec("openai", "chat", "dict", notes="OpenAI chat client shim."),
+    "openai": FrameworkAdapterSpec("openai", "chat.completions.create", "messages", notes="OpenAI chat client shim."),
     "together": FrameworkAdapterSpec("together", "chat", "dict", notes="Together AI client shim."),
     "vertexai": FrameworkAdapterSpec("vertexai", "generate_content", "dict", notes="Vertex AI client shim."),
     "vllm": FrameworkAdapterSpec("vllm", "generate", "dict", notes="vLLM server/client shim."),
@@ -94,6 +94,9 @@ _DISCOVERY_METHOD_ORDER = (
     "call",
     "achat",
     "chat",
+    "responses.create",
+    "chat.completions.create",
+    "messages.create",
     "kickoff",
     "query",
     "process",
@@ -118,6 +121,9 @@ _DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
     "stream_events": "dict",
     "execute_task": "dict",
     "process_frame": "dict",
+    "responses.create": "text",
+    "chat.completions.create": "messages",
+    "messages.create": "messages",
     "kickoff": "dict",
     "process": "dict",
     "completion": "dict",
@@ -143,6 +149,9 @@ _KEYWORD_INPUT_NAMES = (
     "input",
     "payload",
     "frame",
+    "request",
+    "contents",
+    "arguments",
     "task",
     "user_prompt",
     "prompt",
@@ -165,6 +174,9 @@ _METHOD_INPUT_KEY_PREFERENCES = {
     "respond": ("message", "input", "payload"),
     "process": ("frame", "payload", "input", "data"),
     "process_frame": ("frame", "payload", "input", "data"),
+    "responses.create": ("input", "messages", "payload"),
+    "chat.completions.create": ("messages", "input", "payload"),
+    "messages.create": ("messages", "input", "payload"),
     "completion": ("request", "payload", "input"),
     "call_tool": ("payload", "input", "arguments"),
     "invoke_model": ("payload", "input", "request"),
@@ -848,14 +860,29 @@ def _adapter_public_callable_names(agent: Any) -> list[str]:
     return names
 
 
+def _adapter_resolve_callable_attr_path(agent: Any, method_name: str | None) -> Callable[..., Any] | None:
+    if not method_name:
+        return agent if callable(agent) else None
+    value = agent
+    for raw_part in str(method_name).split("."):
+        part = raw_part.strip()
+        if not part:
+            return None
+        try:
+            value = getattr(value, part)
+        except Exception:
+            return None
+    return value if callable(value) else None
+
+
+def _adapter_method_leaf(method_name: str | None) -> str:
+    return str(method_name or "").rsplit(".", 1)[-1]
+
+
 def _adapter_has_callable_method(agent: Any, method_name: str) -> bool:
     if not method_name:
         return callable(agent)
-    try:
-        candidate = getattr(agent, method_name)
-    except Exception:
-        return False
-    return callable(candidate)
+    return _adapter_resolve_callable_attr_path(agent, method_name) is not None
 
 
 def _adapter_discovery_methods(
@@ -943,7 +970,10 @@ def _adapter_discovery_modes_for_method(
 def _adapter_inferred_input_mode(method_name: str | None) -> InputMode | None:
     if method_name is None:
         return "agent_input"
-    return _DISCOVERY_METHOD_INPUT_MODES.get(method_name)
+    return (
+        _DISCOVERY_METHOD_INPUT_MODES.get(method_name)
+        or _DISCOVERY_METHOD_INPUT_MODES.get(_adapter_method_leaf(method_name))
+    )
 
 
 def _adapter_candidate_input_key(
@@ -953,11 +983,8 @@ def _adapter_candidate_input_key(
 ) -> str | None:
     if agent is None or not method_name:
         return None
-    try:
-        method = getattr(agent, method_name)
-    except Exception:
-        return None
-    if not callable(method):
+    method = _adapter_resolve_callable_attr_path(agent, method_name)
+    if method is None:
         return None
     try:
         signature = inspect.signature(method)
@@ -966,7 +993,10 @@ def _adapter_candidate_input_key(
     params = list(signature.parameters.values())
     names = {param.name: param for param in params}
     preferred_names = (
-        _METHOD_INPUT_KEY_PREFERENCES.get(str(method_name or ""), ())
+        (
+            _METHOD_INPUT_KEY_PREFERENCES.get(str(method_name or ""))
+            or _METHOD_INPUT_KEY_PREFERENCES.get(_adapter_method_leaf(method_name), ())
+        )
         + _KEYWORD_INPUT_NAMES
     )
     accepts_positional = any(

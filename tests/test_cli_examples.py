@@ -1665,6 +1665,39 @@ def test_sdk_framework_adapter_side_kwargs_example_runs(tmp_path):
     assert state["pipecat_frame"]["direction"] == "downstream"
 
 
+def test_sdk_framework_adapter_nested_method_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_nested_method.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_nested_method",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-nested-method.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_nested_method_manifest"]
+    assert manifest["agent"]["method"] == "chat.completions.create"
+    assert manifest["agent"]["input_mode"] == "messages"
+    assert manifest["agent"]["input_key"] == "messages"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["method"] == "chat.completions.create"
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["framework_runtime"]["summary"]["methods"] == [
+        "chat.completions.create"
+    ]
+    assert state["nested_client"]["method_path"] == "chat.completions.create"
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

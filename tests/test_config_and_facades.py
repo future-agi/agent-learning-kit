@@ -1484,6 +1484,67 @@ def test_side_kwarg_framework_adapter_promotes_call_contract(tmp_path):
     assert state["pipecat_frame"]["direction"] == "downstream"
 
 
+def test_nested_method_framework_adapter_promotes_method_path(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_nested_method.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_nested_method_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "openai",
+        module.LocalOpenAICompatibleClient(),
+        target=module.TARGET,
+        method_candidates=["run", "chat.completions.create"],
+        input_mode_candidates=["text", "messages", "dict"],
+        max_candidates=4,
+    )
+
+    assert discovery["status"] == "passed"
+    assert discovery["adapter_candidates"][0]["method"] == "chat.completions.create"
+    assert discovery["adapter_candidates"][0]["input_mode"] == "messages"
+    assert discovery["adapter_candidates"][0]["input_key"] == "messages"
+    assert discovery["candidates"][0]["contract"]["method"] == (
+        "chat.completions.create"
+    )
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "chat.completions.create"
+    assert manifest["agent"]["input_mode"] == "messages"
+    assert manifest["agent"]["input_key"] == "messages"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["method"] == "chat.completions.create"
+    assert runtime_contract["input_mode"] == "messages"
+    assert runtime_contract["input_key"] == "messages"
+    assert runtime_contract["call_style"] == "keyword"
+    assert runtime_contract["required_state_keys"] == ["nested_client"]
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-nested-method-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["methods"] == ["chat.completions.create"]
+    assert runtime["summary"]["input_modes"] == ["messages"]
+    assert runtime["summary"]["input_keys"] == ["messages"]
+    assert runtime["invocations"][0]["method"] == "chat.completions.create"
+    assert state["nested_client"]["method_path"] == "chat.completions.create"
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 
