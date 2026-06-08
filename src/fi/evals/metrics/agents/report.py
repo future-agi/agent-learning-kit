@@ -20863,6 +20863,8 @@ def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("browser")
             if _framework_runtime_output_has_workflow_evidence(output):
                 observed.add("workflow")
+            if _framework_runtime_output_has_openenv_evidence(output):
+                observed.add("openenv")
     return observed
 
 
@@ -21157,6 +21159,25 @@ def _framework_runtime_output_has_workflow_evidence(output: Mapping[str, Any]) -
             value == "workflow_trace"
             or value.startswith("workflow_")
             or value in {"graph_trace", "workflow"}
+        )
+        for value in normalized
+    )
+
+
+def _framework_runtime_output_has_openenv_evidence(output: Mapping[str, Any]) -> bool:
+    values = [
+        *_as_list(output.get("state_keys", [])),
+        *_as_list(output.get("event_types", [])),
+        *_as_list(output.get("artifact_types", [])),
+        *_as_list(output.get("metadata_keys", [])),
+    ]
+    normalized = {_normalize_framework_runtime_key(value) for value in values}
+    return bool(_as_dict(output.get("openenv_summary"))) or any(
+        value
+        and (
+            value == "openenv"
+            or value == "openenv_trace"
+            or value.startswith("openenv_")
         )
         for value in normalized
     )

@@ -16069,6 +16069,20 @@ def build_framework_adapter_probe_evaluation_config(
         if a2a_protocol_observed
         else {}
     )
+    openenv_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "openenv_summary",
+    )
+    openenv_observed = (
+        "openenv" in state_keys
+        or any("openenv" in str(event) for event in event_types)
+        or bool(openenv_summary)
+    )
+    openenv_requirements = (
+        _framework_probe_openenv_requirements(framework, openenv_summary)
+        if openenv_observed
+        else {}
+    )
     framework_memory_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_memory_summary",
@@ -16143,6 +16157,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["workflow"] if workflow_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
+            *(["openenv"] if openenv_observed else []),
             *(["memory"] if memory_trace_observed else []),
             *(["browser"] if browser_cua_observed else []),
             *(["tool"] if tool_names else []),
@@ -16165,6 +16180,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["workflow graph evidence"] if workflow_trace_observed else []),
             *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
             *(["A2A protocol evidence"] if a2a_protocol_observed else []),
+            *(["OpenEnv environment replay evidence"] if openenv_observed else []),
             *(["memory lineage evidence"] if memory_trace_observed else []),
             *(["browser/CUA evidence"] if browser_cua_observed else []),
             *(["tool evidence"] if tool_names else []),
@@ -16267,6 +16283,9 @@ def build_framework_adapter_probe_evaluation_config(
     if a2a_protocol_observed:
         metric_weights["a2a_protocol_coverage"] = 4.0
         metric_weights["a2a_protocol_quality"] = 4.0
+    if openenv_observed:
+        metric_weights["openenv_coverage"] = 4.0
+        metric_weights["openenv_quality"] = 4.0
     if memory_trace_observed:
         metric_weights["agent_memory_lineage_coverage"] = 4.0
         metric_weights["agent_memory_lineage_quality"] = 4.0
@@ -16306,6 +16325,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["orchestration"] if orchestration_trace_observed else []),
             *(["workflow"] if workflow_trace_observed else []),
             *(["protocol"] if mcp_tool_session_observed or a2a_protocol_observed else []),
+            *(["openenv"] if openenv_observed else []),
             *(["memory"] if memory_trace_observed else []),
             *(["browser"] if browser_cua_observed else []),
             *(["tool"] if tool_names else []),
@@ -16358,6 +16378,9 @@ def build_framework_adapter_probe_evaluation_config(
         config["a2a_protocol_quality"] = a2a_protocol_requirements[
             "a2a_protocol_quality"
         ]
+    if openenv_observed:
+        config["required_openenv"] = openenv_requirements["required_openenv"]
+        config["openenv_quality"] = openenv_requirements["openenv_quality"]
     if memory_trace_observed:
         config["required_agent_memory_lineage"] = memory_trace_requirements[
             "required_agent_memory_lineage"
@@ -17223,6 +17246,88 @@ def _framework_probe_workflow_requirements(
             str(item) for item in required_trace if str(item)
         ),
         "workflow_trace_quality": {
+            key: value
+            for key, value in quality.items()
+            if value not in (None, "", [], {})
+        },
+    }
+
+
+def _framework_probe_openenv_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    required = ["openenv", "state", "observation"]
+    signal_checks = (
+        ("reset_count", "reset"),
+        ("step_count", "step"),
+        ("action_route_count", "action"),
+        ("step_count", "reward"),
+        ("metadata_capture_count", "metadata"),
+        ("failure_count", "failure_injection"),
+    )
+    for summary_key, signal in signal_checks:
+        if _as_int(summary.get(summary_key)) > 0:
+            required.append(signal)
+    if bool(summary.get("done")):
+        required.append("done")
+    if bool(summary.get("terminated")):
+        required.append("terminated")
+    if bool(summary.get("truncated")):
+        required.append("truncated")
+    if bool(summary.get("sandbox_enabled")):
+        required.append("sandbox")
+    for key in ("runtime", "transport"):
+        if summary.get(key) not in (None, "", [], {}):
+            required.append(str(summary[key]))
+    required.extend(_plain_list(summary.get("signals")))
+
+    quality: dict[str, Any] = {"framework": framework}
+    for summary_key, quality_key in (
+        ("reset_count", "min_reset_count"),
+        ("step_count", "min_step_count"),
+        ("action_route_count", "min_action_route_count"),
+        ("failure_count", "min_failure_count"),
+        ("metadata_capture_count", "min_metadata_capture_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    reward_total = _as_float(summary.get("reward_total"))
+    if reward_total > 0:
+        quality["min_reward_total"] = reward_total
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+    if bool(summary.get("done")):
+        quality["require_done"] = True
+    if bool(summary.get("terminated")):
+        quality["require_terminated"] = True
+    if bool(summary.get("truncated")):
+        quality["require_truncated"] = True
+    if bool(summary.get("sandbox_enabled")):
+        quality["require_sandbox"] = True
+    if _as_int(summary.get("metadata_capture_count")) > 0:
+        quality["require_metadata_capture"] = True
+    if summary.get("requires_external_service") is not None:
+        quality["require_no_external_service"] = not bool(
+            summary.get("requires_external_service")
+        )
+    if summary.get("deterministic_reset") is not None:
+        quality["require_deterministic_reset"] = bool(
+            summary.get("deterministic_reset")
+        )
+    for summary_key, quality_key in (
+        ("runtime", "required_runtime"),
+        ("transport", "required_transport"),
+        ("isolation", "required_isolation"),
+    ):
+        if summary.get(summary_key) not in (None, "", [], {}):
+            quality[quality_key] = str(summary[summary_key])
+    return {
+        "required_openenv": _unique_strings(str(item) for item in required if str(item)),
+        "openenv_quality": {
             key: value
             for key, value in quality.items()
             if value not in (None, "", [], {})

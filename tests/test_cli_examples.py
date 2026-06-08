@@ -61,6 +61,84 @@ def test_sdk_openenv_environment_simulation_example_runs(tmp_path):
     ] == "openenv"
 
 
+def test_sdk_framework_adapter_openenv_trace_example_runs(tmp_path):
+    module = _load_example_module("sdk_framework_adapter_openenv_trace.py")
+
+    output_path = tmp_path / "sdk-framework-adapter-openenv-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_openenv_trace_manifest"]
+    assert manifest["agent"]["framework"] == "openenv"
+    assert manifest["agent"]["method"] == "run"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["openenv"]
+    assert set(runtime_contract["required_signals"]) >= {
+        "artifact",
+        "event",
+        "openenv",
+        "state",
+    }
+    assert set(config["required_openenv"]) >= {
+        "openenv",
+        "state",
+        "observation",
+        "reset",
+        "step",
+        "action",
+        "reward",
+        "done",
+        "terminated",
+        "metadata",
+        "sandbox",
+        "failure_injection",
+        "in_process",
+        "local",
+    }
+    openenv_quality = config["openenv_quality"]
+    assert openenv_quality["min_reset_count"] == 1
+    assert openenv_quality["min_step_count"] == 2
+    assert openenv_quality["min_action_route_count"] == 2
+    assert openenv_quality["min_failure_count"] == 1
+    assert openenv_quality["min_reward_total"] == pytest.approx(1.0)
+    assert openenv_quality["max_error_count"] == 0
+    assert openenv_quality["require_done"] is True
+    assert openenv_quality["require_terminated"] is True
+    assert openenv_quality["require_sandbox"] is True
+    assert openenv_quality["require_metadata_capture"] is True
+    assert openenv_quality["require_no_external_service"] is True
+    assert openenv_quality["require_deterministic_reset"] is True
+    assert openenv_quality["required_runtime"] == "in_process"
+    assert openenv_quality["required_transport"] == "local"
+    assert openenv_quality["required_isolation"] == "process"
+    assert config["metric_weights"]["openenv_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["openenv_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["openenv_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["openenv_quality"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    openenv = state["openenv"]
+    summary = openenv["summary"]
+    assert summary["reset_count"] == 1
+    assert summary["step_count"] == 2
+    assert summary["done"] is True
+    assert summary["failure_count"] == 1
+    assert summary["sandbox_enabled"] is True
+    assert summary["requires_external_service"] is False
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert "openenv" in output["state_keys"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {"openenv"} <= set(output["event_types"])
+    assert output["openenv_summary"]["step_count"] == 2
+
+
 @pytest.mark.parametrize(
     ("command", "example", "kind", "required_env"),
     [

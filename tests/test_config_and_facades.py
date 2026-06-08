@@ -564,6 +564,8 @@ def test_facades_expose_unified_agent_learning_modules():
         "livekit",
         "pipecat",
         "mcp",
+        "openenv",
+        "gymnasium",
     } <= set(simulate.supported_frameworks())
 
     pipeline = redteam.create_default_pipeline(

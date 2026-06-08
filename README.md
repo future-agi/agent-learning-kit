@@ -696,6 +696,13 @@ require MCP coverage and quality gates for servers, sessions, schemas,
 resources, tool calls, tool results, and tool names. See
 `examples/sdk_framework_adapter_mcp_tool_session.py`.
 
+OpenEnv/Gymnasium-style framework outputs normalize into environment replay
+evidence. Local adapters can return `openenv`, `open_env`, reset/step
+trajectories, reward/done fields, sandbox metadata, or failure-injection
+records; the generic wrapper promotes them to `openenv` state, trace artifacts,
+`openenv` events, and generated `required_openenv` / `openenv_quality` gates.
+See `examples/sdk_framework_adapter_openenv_trace.py`.
+
 Realtime framework exports are normalized from local session traces. Pipecat-like
 `frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
 artifact, `realtime_frame` / `realtime_tool_call` /
@@ -1634,6 +1641,11 @@ can be searched through `optimize.build_openenv_optimization_manifest()` and
 `optimize.optimize_openenv()`, which compare weak, partial, and verified
 environment bundles using `openenv_quality` and `openenv_coverage` report
 metrics.
+
+The `sdk_framework_adapter_openenv_trace.py` example covers the adapter side of
+the same contract: a local framework returns a plain OpenEnv/Gymnasium-style
+trace dict, and adapter promotion derives `openenv` state, `openenv` events,
+trace artifacts, plus generated OpenEnv coverage and quality gates.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

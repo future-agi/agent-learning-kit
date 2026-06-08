@@ -31,6 +31,8 @@ The executable OpenEnv bar should prove more than action success:
 - no unexpected external-service dependency in local replay
 - failure-injection/adversarial-state replay
 - optimizer feedback for weak, partial, and verified environment bundles
+- framework-adapter promotion when arbitrary local frameworks return
+  OpenEnv/Gymnasium-style reset/step/state traces
 
 ## Current Local Surface
 
@@ -41,3 +43,10 @@ The executable OpenEnv bar should prove more than action success:
 - Agent report configs can require `required_openenv` and `openenv_quality`.
 - AgentOptimizer configs can use `build_openenv_optimization_manifest()` and
   `optimize_openenv()` with simulation-evidence scoring for `openenv`.
+- Framework adapter presets include `openenv` and `gymnasium`, and generic local
+  adapter outputs with `openenv`, `open_env`, reset/step trajectories, sandbox
+  metadata, reward/done fields, or failure-injection records are normalized into
+  evaluator-visible `openenv` state, trace artifacts, and `openenv` events.
+- Auto-generated adapter eval configs now derive `required_openenv` and
+  `openenv_quality` from selected framework-probe output; see
+  `examples/sdk_framework_adapter_openenv_trace.py`.

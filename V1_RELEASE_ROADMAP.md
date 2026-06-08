@@ -254,6 +254,10 @@ Next implementation focus:
 - Back that target with the executable `OpenEnvEnvironment` adapter,
   `openenv_quality`/`openenv_coverage` report gates, SDK cookbook manifests,
   and agent-opt OpenEnv bundle search before using the claim in release notes.
+- Extend that target through framework adapters: local framework/provider
+  outputs that return OpenEnv/Gymnasium-style reset, step, state, reward/done,
+  sandbox, or failure-injection traces must normalize into evaluator-visible
+  `openenv` state, artifacts, events, and generated OpenEnv quality gates.
 - Treat the OpenEnv comparison as an executable roadmap bar, not a marketing
   claim: V1 should exercise deterministic resets, failure-injection scenarios,
   adversarial environment states, tool/action contract drift, transcript/replay

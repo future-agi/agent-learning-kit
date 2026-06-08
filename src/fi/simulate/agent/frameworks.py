@@ -29,6 +29,32 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
     "custom": FrameworkAdapterSpec("custom", None, "auto", notes="Bring-your-own framework adapter."),
     "callable": FrameworkAdapterSpec("callable", None, "agent_input", notes="Plain Python callable."),
     "a2a": FrameworkAdapterSpec("a2a", "send_message", "dict", notes="Agent2Agent protocol client/server session."),
+    "openenv": FrameworkAdapterSpec(
+        "openenv",
+        "run",
+        "dict",
+        capabilities=(
+            "environment_replay",
+            "reset_step_trace",
+            "runtime_trace",
+            "state",
+            "artifacts",
+        ),
+        notes="OpenEnv/Gymnasium-style environment replay adapter.",
+    ),
+    "gymnasium": FrameworkAdapterSpec(
+        "gymnasium",
+        "run",
+        "dict",
+        capabilities=(
+            "environment_replay",
+            "reset_step_trace",
+            "runtime_trace",
+            "state",
+            "artifacts",
+        ),
+        notes="Gymnasium Env reset/step replay adapter.",
+    ),
     "langchain": FrameworkAdapterSpec("langchain", "ainvoke", "dict", notes="LangChain Runnable/Chain."),
     "langgraph": FrameworkAdapterSpec("langgraph", "ainvoke", "dict", notes="LangGraph compiled graph."),
     "llamaindex": FrameworkAdapterSpec("llamaindex", "achat", "text", notes="LlamaIndex chat/query engines."),
@@ -287,6 +313,11 @@ def framework_adapter_contract(
         contract["target_scheme"] = target_scheme
     if spec and spec.notes:
         contract["notes"] = spec.notes
+    if key in {"openenv", "gymnasium", "gymnasium_env", "environment_replay"}:
+        contract["evidence_requirements"] = [
+            *contract["evidence_requirements"],
+            "openenv",
+        ]
     return contract
 
 
@@ -1608,6 +1639,7 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "a2a_protocol_summary": _probe_a2a_protocol_summary(
             state.get("a2a_protocol_trace")
         ),
+        "openenv_summary": _probe_openenv_summary(state.get("openenv")),
         "metadata_keys": sorted(str(key) for key in metadata),
         "streaming": bool(streaming_trace or metadata.get("streaming")),
         "streaming_trace_signals": sorted(
@@ -2378,6 +2410,83 @@ def _probe_a2a_protocol_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
     summary = trace.get("summary")
     return dict(summary) if isinstance(summary, Mapping) else {}
+
+
+def _probe_openenv_summary(value: Any) -> dict[str, Any]:
+    trace = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    trajectory = _probe_mappings(trace.get("trajectory") or trace.get("steps"))
+    action_log = _probe_mappings(trace.get("action_log") or trace.get("actions"))
+    error_log = _probe_mappings(trace.get("error_log") or trace.get("errors"))
+    sandbox = (
+        dict(trace.get("sandbox"))
+        if isinstance(trace.get("sandbox"), Mapping)
+        else {}
+    )
+    for count_key, fallback in (
+        ("reset_count", 1 if trace.get("initial_observation") is not None else 0),
+        ("step_count", len(trajectory)),
+        ("action_route_count", len(action_log) or len(trajectory)),
+        (
+            "failure_count",
+            max(
+                len(_probe_mappings(trace.get("failure_injections") or trace.get("faults"))),
+                sum(
+                    1
+                    for step in trajectory
+                    if step.get("failure_injected") or step.get("failure")
+                ),
+            ),
+        ),
+        (
+            "metadata_capture_count",
+            sum(
+                1
+                for step in trajectory
+                if step.get("metadata") not in (None, "", [], {})
+                or step.get("info") not in (None, "", [], {})
+            )
+            + (1 if trace.get("reset_info") else 0),
+        ),
+        ("error_count", len(error_log)),
+    ):
+        if summary.get(count_key) in (None, "", [], {}):
+            summary[count_key] = fallback
+    if summary.get("reward_total") in (None, "", [], {}):
+        summary["reward_total"] = round(
+            sum(_probe_float(step.get("reward")) or 0.0 for step in trajectory),
+            4,
+        )
+    for key in ("done", "terminated", "truncated"):
+        if summary.get(key) in (None, "", [], {}):
+            summary[key] = any(bool(step.get(key)) for step in trajectory)
+    if summary.get("sandbox_enabled") in (None, "", [], {}):
+        summary["sandbox_enabled"] = bool(sandbox.get("enabled", bool(sandbox)))
+    if summary.get("isolation") in (None, "", [], {}):
+        summary["isolation"] = str(sandbox.get("isolation") or "process")
+    for key in (
+        "runtime",
+        "transport",
+        "requires_external_service",
+        "deterministic_reset",
+    ):
+        if summary.get(key) in (None, "", [], {}) and trace.get(key) not in (
+            None,
+            "",
+            [],
+            {},
+        ):
+            summary[key] = trace.get(key)
+    signals = trace.get("signals")
+    if signals and summary.get("signals") in (None, "", [], {}):
+        summary["signals"] = sorted(str(signal) for signal in signals if str(signal))
+    return summary
 
 
 def _probe_artifact_evidence(artifact: Mapping[str, Any]) -> dict[str, Any]:

@@ -535,6 +535,11 @@ class GenericAgentWrapper(AgentWrapper):
             provider_state = _provider_response_state(raw_mapping)
             if provider_state:
                 state.setdefault("provider_response", provider_state)
+        openenv_state = _openenv_trace_state(state) or _openenv_trace_state(raw)
+        if openenv_state:
+            state["openenv"] = openenv_state
+            state.pop("open_env", None)
+            state.pop("gymnasium_env", None)
         history_state = _message_history_state(raw)
         if history_state:
             state.setdefault("message_history", history_state)
@@ -733,6 +738,19 @@ class GenericAgentWrapper(AgentWrapper):
                         },
                     )
                 )
+        openenv_state = _openenv_trace_state(raw)
+        if openenv_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=openenv_state,
+                    metadata={
+                        "kind": "openenv_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
         return artifacts
 
     def _extract_events(self, raw: Any) -> List[SimulationEvent]:
@@ -755,6 +773,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_workflow_trace_events(raw))
         events.extend(_framework_memory_events(raw))
         events.extend(_browser_cua_events(raw))
+        events.extend(_openenv_trace_events(raw))
         return events
 
 
@@ -4770,6 +4789,462 @@ def _workflow_trace_field(raw: Any, name: str) -> Any:
     return getattr(raw, name, None)
 
 
+def _openenv_trace_state(raw: Any) -> Dict[str, Any]:
+    payload = _openenv_trace_payload(raw)
+    if not payload:
+        return {}
+    return payload
+
+
+def _openenv_trace_payload(raw: Any) -> Dict[str, Any]:
+    mapping = _plain_mapping(raw)
+    if not mapping:
+        return {}
+
+    for key in ("openenv", "open_env", "gymnasium_env", "environment_replay"):
+        candidate = _plain_mapping(mapping.get(key))
+        if candidate:
+            return _normalize_openenv_trace_payload(candidate)
+
+    for container_key in ("state", "output_state", "outputState", "metadata"):
+        container = _plain_mapping(mapping.get(container_key))
+        for key in ("openenv", "open_env", "gymnasium_env", "environment_replay"):
+            candidate = _plain_mapping(container.get(key))
+            if candidate:
+                return _normalize_openenv_trace_payload(candidate)
+
+    for key in ("output", "result", "data", "payload", "trace_export"):
+        candidate = _plain_mapping(mapping.get(key))
+        if _has_openenv_trace_shape(candidate):
+            return _normalize_openenv_trace_payload(candidate)
+
+    if _has_openenv_trace_shape(mapping):
+        return _normalize_openenv_trace_payload(mapping)
+    return {}
+
+
+def _has_openenv_trace_shape(payload: Mapping[str, Any]) -> bool:
+    if not payload:
+        return False
+    kind = _openenv_key(
+        payload.get("kind")
+        or payload.get("type")
+        or payload.get("framework")
+        or payload.get("adapter")
+    )
+    if kind in {
+        "openenv",
+        "openenv_trace",
+        "open_env",
+        "gymnasium",
+        "gymnasium_env",
+        "environment_replay",
+    }:
+        return True
+    if any(key in payload for key in ("openenv", "open_env", "gymnasium_env")):
+        return True
+    if _plain_mapping(payload.get("summary")) and (
+        payload.get("runtime")
+        or payload.get("transport")
+        or payload.get("trajectory")
+        or payload.get("action_log")
+    ):
+        return True
+    has_reset_shape = any(
+        key in payload
+        for key in (
+            "reset",
+            "reset_info",
+            "initial_observation",
+            "current_observation",
+            "observation_space",
+            "action_space",
+        )
+    )
+    has_step_shape = any(
+        key in payload
+        for key in (
+            "steps",
+            "trajectory",
+            "action_log",
+            "reward",
+            "terminated",
+            "truncated",
+            "done",
+        )
+    )
+    if has_reset_shape and has_step_shape:
+        return True
+    if _plain_list(payload.get("trajectory") or payload.get("steps")) and (
+        payload.get("runtime")
+        or payload.get("transport")
+        or payload.get("sandbox")
+        or payload.get("replay")
+    ):
+        return True
+    if "observation" in payload and any(
+        key in payload for key in ("reward", "terminated", "truncated", "done", "info")
+    ):
+        return bool(kind or payload.get("env") or payload.get("gymnasium"))
+    return False
+
+
+def _normalize_openenv_trace_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    data = _plain_mapping(payload)
+    summary = _plain_mapping(data.get("summary"))
+    reset = _plain_mapping(data.get("reset"))
+    sandbox = _plain_mapping(data.get("sandbox") or data.get("isolation"))
+    replay = _plain_mapping(data.get("replay"))
+    metadata = _plain_mapping(data.get("metadata"))
+    steps = [
+        _plain_mapping(item)
+        for item in _plain_list(data.get("steps"))
+        if _plain_mapping(item)
+    ]
+    trajectory = [
+        _plain_mapping(item)
+        for item in _plain_list(data.get("trajectory"))
+        if _plain_mapping(item)
+    ]
+    if not trajectory:
+        trajectory = steps
+    action_log = [
+        _plain_mapping(item)
+        for item in _plain_list(data.get("action_log") or data.get("actions"))
+        if _plain_mapping(item)
+    ]
+    if not action_log:
+        action_log = [
+            {
+                "id": str(step.get("id") or f"step-{index}"),
+                "step_index": _openenv_int(step.get("step_index"), default=index),
+                "action": _plain_value(step.get("action")),
+                "reward": _openenv_float(step.get("reward"), default=0.0),
+                "terminated": _openenv_bool(step.get("terminated"), default=False),
+                "truncated": _openenv_bool(step.get("truncated"), default=False),
+                "done": _openenv_bool(step.get("done"), default=False),
+                "failure_injected": _openenv_bool(
+                    step.get("failure_injected"), default=False
+                ),
+                "metadata": _plain_mapping(step.get("metadata")),
+            }
+            for index, step in enumerate(trajectory, start=1)
+        ]
+    error_log = [
+        _plain_mapping(item)
+        for item in _plain_list(data.get("error_log") or data.get("errors"))
+        if _plain_mapping(item)
+    ]
+    failure_injections = [
+        _plain_mapping(item)
+        for item in _plain_list(data.get("failure_injections") or data.get("faults"))
+        if _plain_mapping(item)
+    ]
+    runtime = _openenv_key(
+        data.get("runtime")
+        or data.get("mode")
+        or replay.get("runtime")
+        or "in_process"
+    )
+    transport = _openenv_key(
+        data.get("transport")
+        or replay.get("transport")
+        or ("mcp" if runtime == "mcp" else "local")
+    )
+    state = _plain_mapping(
+        data.get("state") or data.get("current_state") or data.get("final_state")
+    )
+    current_observation = _plain_value(
+        data.get("current_observation")
+        or data.get("observation")
+        or (trajectory[-1].get("observation") if trajectory else None)
+    )
+    initial_observation = _plain_value(
+        data.get("initial_observation")
+        or reset.get("observation")
+        or current_observation
+        or {}
+    )
+    reset_count = _openenv_int(summary.get("reset_count"), default=-1)
+    if reset_count < 0:
+        reset_count = 1 if initial_observation not in (None, "", [], {}) else 0
+    step_count = _openenv_int(summary.get("step_count"), default=-1)
+    if step_count < 0:
+        step_count = len(trajectory)
+    action_route_count = _openenv_int(summary.get("action_route_count"), default=-1)
+    if action_route_count < 0:
+        action_route_count = len(action_log)
+    reward_total = _openenv_float(summary.get("reward_total"), default=None)
+    if reward_total is None:
+        reward_total = round(
+            sum(
+                _openenv_float(step.get("reward"), default=0.0) or 0.0
+                for step in trajectory
+            ),
+            4,
+        )
+    terminated = _openenv_bool(summary.get("terminated"), default=None)
+    if terminated is None:
+        terminated = any(
+            _openenv_bool(step.get("terminated"), default=False)
+            for step in trajectory
+        )
+    truncated = _openenv_bool(summary.get("truncated"), default=None)
+    if truncated is None:
+        truncated = any(
+            _openenv_bool(step.get("truncated"), default=False)
+            for step in trajectory
+        )
+    done = _openenv_bool(summary.get("done"), default=None)
+    if done is None:
+        done = terminated or truncated or any(
+            _openenv_bool(step.get("done"), default=False) for step in trajectory
+        )
+    failure_count = _openenv_int(summary.get("failure_count"), default=-1)
+    if failure_count < 0:
+        failure_count = max(
+            len(failure_injections),
+            sum(
+                1
+                for step in trajectory
+                if _openenv_bool(step.get("failure_injected"), default=False)
+                or bool(_plain_mapping(step.get("failure")))
+            ),
+        )
+    error_count = _openenv_int(summary.get("error_count"), default=-1)
+    if error_count < 0:
+        error_count = len(error_log) + sum(
+            1 for step in trajectory if step.get("adapter_error") or step.get("error")
+        )
+    metadata_capture_count = _openenv_int(
+        summary.get("metadata_capture_count"), default=-1
+    )
+    if metadata_capture_count < 0:
+        metadata_capture_count = (
+            (1 if reset.get("info") or data.get("reset_info") else 0)
+            + sum(
+                1
+                for step in trajectory
+                if step.get("info") not in (None, "", [], {})
+                or step.get("metadata") not in (None, "", [], {})
+            )
+        )
+    sandbox_enabled = _openenv_bool(summary.get("sandbox_enabled"), default=None)
+    if sandbox_enabled is None:
+        sandbox_enabled = _openenv_bool(
+            sandbox.get("enabled"), default=bool(sandbox) or True
+        )
+    requires_external_service = _openenv_bool(
+        summary.get("requires_external_service"),
+        default=_openenv_bool(data.get("requires_external_service"), default=False),
+    )
+    deterministic_reset = _openenv_bool(
+        summary.get("deterministic_reset"),
+        default=_openenv_bool(data.get("deterministic_reset"), default=True),
+    )
+    merged_summary = {
+        **summary,
+        "reset_count": reset_count,
+        "step_count": step_count,
+        "action_route_count": action_route_count,
+        "reward_total": reward_total,
+        "terminated": terminated,
+        "truncated": truncated,
+        "done": done,
+        "failure_count": failure_count,
+        "error_count": error_count,
+        "metadata_capture_count": metadata_capture_count,
+        "sandbox_enabled": sandbox_enabled,
+        "isolation": str(
+            summary.get("isolation") or sandbox.get("isolation") or "process"
+        ),
+        "runtime": runtime,
+        "transport": transport,
+        "requires_external_service": requires_external_service,
+        "deterministic_reset": deterministic_reset,
+        "state_key_count": _openenv_key_count(state),
+        "observation_key_count": _openenv_key_count(current_observation),
+    }
+    merged_summary.setdefault(
+        "terminal_status",
+        "success" if done and error_count == 0 else "incomplete",
+    )
+    normalized = {
+        "kind": "openenv",
+        "name": str(data.get("name") or data.get("id") or "framework-openenv"),
+        "runtime": runtime,
+        "transport": transport,
+        "requires_external_service": requires_external_service,
+        "deterministic_reset": deterministic_reset,
+        "action_space": _plain_mapping(data.get("action_space")),
+        "observation_space": _plain_mapping(data.get("observation_space")),
+        "initial_observation": initial_observation,
+        "current_observation": current_observation,
+        "state": state,
+        "reset_info": _plain_mapping(data.get("reset_info") or reset.get("info")),
+        "last_info": _plain_mapping(data.get("last_info") or data.get("info")),
+        "steps": steps,
+        "trajectory": trajectory,
+        "action_log": action_log,
+        "error_log": error_log,
+        "sandbox": {
+            "enabled": sandbox_enabled,
+            "isolation": merged_summary["isolation"],
+            **sandbox,
+        },
+        "replay": {"transport": transport, "deterministic": deterministic_reset, **replay},
+        "failure_injections": failure_injections,
+        "tool_registry": _plain_list(data.get("tool_registry") or data.get("tools")),
+        "signals": _openenv_payload_signals(merged_summary, data),
+        "summary": merged_summary,
+        "metadata": metadata,
+    }
+    return {
+        key: value
+        for key, value in normalized.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _openenv_trace_events(raw: Any) -> List[SimulationEvent]:
+    state = _openenv_trace_state(raw)
+    if not state:
+        return []
+    summary = _plain_mapping(state.get("summary"))
+    events: List[SimulationEvent] = []
+    if _openenv_int(summary.get("reset_count"), default=0) > 0:
+        events.append(
+            SimulationEvent(
+                type="openenv",
+                name="openenv_reset",
+                payload={
+                    "name": state.get("name"),
+                    "observation": state.get("initial_observation"),
+                    "info": state.get("reset_info"),
+                    "state": state.get("state"),
+                    "summary": summary,
+                },
+                metadata={
+                    "kind": "openenv_trace",
+                    "source": "framework_adapter_output",
+                },
+            )
+        )
+    for index, step in enumerate(_plain_list(state.get("trajectory")), start=1):
+        step_dict = _plain_mapping(step)
+        if not step_dict:
+            continue
+        events.append(
+            SimulationEvent(
+                type="openenv",
+                name="openenv_step",
+                payload={**step_dict, "sequence": index},
+                metadata={
+                    "kind": "openenv_trace",
+                    "source": "framework_adapter_output",
+                },
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="openenv",
+            name="openenv_state",
+            payload=state,
+            metadata={"kind": "openenv_trace", "source": "framework_adapter_output"},
+        )
+    )
+    return events
+
+
+def _openenv_payload_signals(
+    summary: Mapping[str, Any],
+    data: Mapping[str, Any],
+) -> List[str]:
+    signals = {
+        "openenv",
+        "state" if data.get("state") or summary.get("state_key_count") else "",
+        "observation" if summary.get("observation_key_count") else "",
+        "action" if data.get("action_space") or summary.get("action_route_count") else "",
+        "reset" if summary.get("reset_count") else "",
+        "step" if summary.get("step_count") else "",
+        "reward" if summary.get("step_count") else "",
+        "done" if summary.get("done") else "",
+        "terminated" if summary.get("terminated") else "",
+        "truncated" if summary.get("truncated") else "",
+        "metadata" if summary.get("metadata_capture_count") else "",
+        "sandbox" if summary.get("sandbox_enabled") else "",
+        "failure_injection" if summary.get("failure_count") else "",
+        summary.get("runtime"),
+        summary.get("transport"),
+    }
+    signals.update(_plain_list(data.get("signals")))
+    return sorted({_openenv_key(signal) for signal in signals if _openenv_key(signal)})
+
+
+def _openenv_int(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value.strip()))
+        except ValueError:
+            return default
+    return default
+
+
+def _openenv_float(value: Any, *, default: float | None = 0.0) -> float | None:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
+def _openenv_bool(value: Any, *, default: bool | None = False) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _openenv_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    aliases = {
+        "open_env": "openenv",
+        "gymnasium": "openenv",
+        "gymnasium_env": "openenv",
+        "environment_replay": "openenv",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _openenv_key_count(value: Any) -> int:
+    if isinstance(value, Mapping):
+        total = len(value)
+        for item in value.values():
+            total += _openenv_key_count(item)
+        return total
+    if isinstance(value, (list, tuple, set)):
+        return sum(_openenv_key_count(item) for item in value)
+    return 0
+
+
 def _browser_cua_state(raw: Any) -> Dict[str, Any]:
     if not _has_browser_cua_shape(raw):
         return {}
@@ -7141,6 +7616,8 @@ def _framework_runtime_trace(
         signals.add("event")
     if response_dict.get("state_keys"):
         signals.add("state")
+    if "openenv" in response_dict.get("state_keys", []) or response_dict.get("openenv_summary"):
+        signals.add("openenv")
     if response_dict.get("metadata_keys"):
         signals.add("metadata")
 
@@ -7257,6 +7734,9 @@ def _response_summary(response: str | AgentResponse) -> Dict[str, Any]:
         }
     metadata = dict(response.metadata or {})
     state = dict(response.state or {})
+    openenv_summary = _plain_mapping(
+        _plain_mapping(state.get("openenv")).get("summary")
+    )
     return {
         "type": "AgentResponse",
         "content_length": len(response.content or ""),
@@ -7274,6 +7754,7 @@ def _response_summary(response: str | AgentResponse) -> Dict[str, Any]:
         "event_count": len(response.events),
         "event_types": sorted({event.type for event in response.events}),
         "state_keys": sorted(str(key) for key in state.keys()),
+        "openenv_summary": openenv_summary,
         "metadata_keys": sorted(str(key) for key in metadata.keys()),
         "streaming": bool(metadata.get("streaming") or state.get("streaming_trace")),
     }
