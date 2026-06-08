@@ -15178,6 +15178,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_protocol_adapter_contracts"] == (
         trinity.V1_PROTOCOL_ADAPTER_CONTRACTS
     )
+    assert payload["required_browser_realtime_adapter_files"] == (
+        trinity.V1_BROWSER_REALTIME_ADAPTER_FILES
+    )
+    assert payload["required_browser_realtime_adapter_contracts"] == (
+        trinity.V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
+    )
     assert payload["required_trinity_stack_probe_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES
     )
@@ -15212,6 +15218,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_contract_readiness",
         "openenv_optimizer_readiness",
         "protocol_adapter_readiness",
+        "browser_realtime_adapter_readiness",
         "trinity_stack_probe_readiness",
         "package_metadata",
     }
@@ -15503,10 +15510,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert framework_provider["observed_frameworks"] == (
         trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
     )
-    assert {"openenv", "gymnasium", "mcp", "a2a"} <= set(
+    assert {"openenv", "gymnasium", "mcp", "a2a", "browser_use"} <= set(
         framework_provider["observed_frameworks"]
     )
-    assert set(framework_provider["observed_modalities"]) == {"text", "voice"}
+    assert set(framework_provider["observed_modalities"]) == {"text", "voice", "cua"}
     assert framework_provider["observed_transports"] == ["in_process"]
     assert framework_provider["observed_target_schemes"] == (
         ["agent-learning-fixture"]
@@ -15707,6 +15714,107 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert a2a_adapter["summary"]["terminal_task_count"] == 1
     assert a2a_adapter["summary"]["error_count"] == 0
     assert a2a_adapter["summary"]["states"] == ["completed"]
+    browser_realtime_adapter = checks["browser_realtime_adapter_readiness"]["evidence"]
+    assert browser_realtime_adapter["required_files"] == (
+        trinity.V1_BROWSER_REALTIME_ADAPTER_FILES
+    )
+    assert browser_realtime_adapter["required_contracts"] == (
+        trinity.V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
+    )
+    assert browser_realtime_adapter["missing_files"] == []
+    assert browser_realtime_adapter["adapter_errors"] == []
+    assert browser_realtime_adapter["event_errors"] == []
+    assert browser_realtime_adapter["artifact_errors"] == []
+    assert browser_realtime_adapter["metric_errors"] == []
+    assert browser_realtime_adapter["state_errors"] == []
+    assert browser_realtime_adapter["errors"] == []
+    browser_realtime_adapters = {
+        adapter["surface"]: adapter
+        for adapter in browser_realtime_adapter["adapters"]
+    }
+
+    realtime_adapter = browser_realtime_adapters["realtime_trace"]
+    assert realtime_adapter["result_kind"] == "agent-learning.run.v1"
+    assert realtime_adapter["result_status"] == "passed"
+    assert realtime_adapter["agent_framework"] == "livekit"
+    assert realtime_adapter["agent_method"] == "run_session"
+    assert realtime_adapter["agent_input_mode"] == "dict"
+    assert realtime_adapter["trace_runtime"] is True
+    assert realtime_adapter["runtime_required_state_keys"] == ["realtime_trace"]
+    assert realtime_adapter["runtime_required_tools"] == ["lookup_refund_policy"]
+    assert "realtime_trace" in realtime_adapter["state_keys"]
+    assert {
+        "realtime_frame",
+        "realtime_audio_frame",
+        "realtime_tool_call",
+        "realtime_tool_response",
+        "realtime_transcript",
+        "realtime_lifecycle",
+        "realtime_completion",
+    } <= set(realtime_adapter["event_types"])
+    assert {"realtime_trace", "framework_runtime", "framework_trace"} <= set(
+        realtime_adapter["artifact_kinds"]
+    )
+    assert realtime_adapter["metrics"] == {
+        "realtime_trace_coverage": pytest.approx(1.0),
+        "realtime_trace_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert realtime_adapter["state_summary"]["frame_count"] == 5
+    assert realtime_adapter["state_summary"]["event_count"] == 5
+    assert realtime_adapter["state_summary"]["tool_call_count"] == 2
+    assert realtime_adapter["state_summary"]["tool_response_count"] == 2
+    assert realtime_adapter["state_summary"]["audio_frame_count"] == 1
+    assert realtime_adapter["state_summary"]["error_count"] == 0
+    assert realtime_adapter["state_summary"]["tool_names"] == ["lookup_refund_policy"]
+    assert set(realtime_adapter["state_summary"]["directions"]) == {
+        "inbound",
+        "outbound",
+    }
+    assert "AudioRawFrame" in realtime_adapter["state_summary"]["frame_types"]
+    assert "session_closed" in realtime_adapter["state_summary"]["event_types"]
+
+    browser_adapter = browser_realtime_adapters["browser_cua"]
+    assert browser_adapter["result_kind"] == "agent-learning.run.v1"
+    assert browser_adapter["result_status"] == "passed"
+    assert browser_adapter["agent_framework"] == "browser_use"
+    assert browser_adapter["agent_method"] == "execute_task"
+    assert browser_adapter["agent_input_mode"] == "dict"
+    assert browser_adapter["trace_runtime"] is True
+    assert browser_adapter["runtime_required_state_keys"] == ["browser_cua"]
+    assert browser_adapter["runtime_required_tools"] == ["browser_click"]
+    assert "browser_cua" in browser_adapter["state_keys"]
+    assert {
+        "browser_snapshot",
+        "browser_action",
+        "browser_trace",
+        "browser_network",
+        "browser_runtime",
+        "browser_storage",
+        "browser_mutation_pack",
+        "environment_injection",
+    } <= set(browser_adapter["event_types"])
+    assert {"browser_trace", "browser_screenshot", "framework_runtime"} <= set(
+        browser_adapter["artifact_kinds"]
+    )
+    assert browser_adapter["metrics"] == {
+        "browser_trace_coverage": pytest.approx(1.0),
+        "browser_action_safety": pytest.approx(1.0),
+        "browser_action_outcome": pytest.approx(1.0),
+        "browser_grounding_quality": pytest.approx(1.0),
+        "browser_mutation_resilience": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert browser_adapter["state_summary"]["snapshot_count"] == 2
+    assert browser_adapter["state_summary"]["action_count"] == 1
+    assert browser_adapter["state_summary"]["successful_action_count"] == 1
+    assert browser_adapter["state_summary"]["matched_action_count"] == 1
+    assert browser_adapter["state_summary"]["blocked_action_count"] == 0
+    assert browser_adapter["state_summary"]["prompt_injection_touched_count"] == 0
+    assert browser_adapter["state_summary"]["mutation_count"] == 1
+    assert browser_adapter["state_summary"]["layout_shift_present"] is True
+    assert browser_adapter["state_summary"]["storage_present"] is True
+    assert browser_adapter["state_summary"]["tool_names"] == ["browser_click"]
     trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
     assert trinity_stack_probe["required_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES

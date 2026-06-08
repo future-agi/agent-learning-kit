@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `harness_diagnosis_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -217,9 +217,9 @@ Current checkpoint:
 - `agent-learn release-check` now builds
   `agent-learning.framework-adapter-contract-matrix.v1` for LangChain,
   LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI, LiveKit,
-  Pipecat, OpenEnv, Gymnasium, MCP, and A2A.
-- The gate requires local executable fixture targets, `trace_runtime`, text and
-  voice modality coverage, `in_process` transport, no external service
+  Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, and A2A.
+- The gate requires local executable fixture targets, `trace_runtime`, text,
+  voice, and CUA modality coverage, `in_process` transport, no external service
   dependency, no external targets, and no HTTP/WebSocket values in
   representative provider manifests.
 - Representative manifests are validated for text framework simulation,
@@ -236,6 +236,11 @@ Current checkpoint:
   `examples/sdk_framework_adapter_a2a_protocol_trace.py` must run locally,
   select the protocol-native adapter methods, emit MCP/A2A state, events, and
   artifacts, and pass protocol coverage/quality metrics.
+- Browser/realtime adapter readiness is now an executable release-check gate:
+  `examples/sdk_framework_adapter_realtime_trace.py` and
+  `examples/sdk_framework_adapter_browser_cua_trace.py` must run locally, select
+  the local trace-capable adapter methods, emit realtime/browser state, events,
+  and artifacts, and pass coverage, grounding, mutation, and quality metrics.
 
 Acceptance gates:
 
@@ -280,6 +285,11 @@ Next implementation focus:
   should prove protocol state, tool/task records, artifacts, generated eval
   gates, and no external service dependency before expanding to additional
   protocol transports.
+- Keep browser/CUA and realtime adapters on that same bar: local release gates
+  should prove screenshots/DOM/action replay, browser mutation resilience,
+  prompt-injection-surface avoidance, voice frames, session events, lifecycle
+  events, and realtime tool calls before expanding to live browser or voice
+  transports.
 
 ### M7: Release Packaging And Proof
 

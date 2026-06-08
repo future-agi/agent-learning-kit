@@ -373,6 +373,8 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/agent_integration_optimization.json",
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
+    "examples/sdk_framework_adapter_realtime_trace.py",
+    "examples/sdk_framework_adapter_browser_cua_trace.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -391,13 +393,14 @@ V1_FRAMEWORK_PROVIDER_FRAMEWORKS = [
     "pydantic_ai",
     "livekit",
     "pipecat",
+    "browser_use",
     "openenv",
     "gymnasium",
     "mcp",
     "a2a",
 ]
 
-V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES = ["text", "voice"]
+V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES = ["text", "voice", "cua"]
 
 V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS = ["in_process"]
 
@@ -620,6 +623,131 @@ V1_PROTOCOL_ADAPTER_CONTRACTS = [
             "skill_names": ["refund_review"],
             "roles": ["agent", "user"],
             "states": ["completed"],
+        },
+    },
+]
+
+V1_BROWSER_REALTIME_ADAPTER_FILES = [
+    "examples/sdk_framework_adapter_realtime_trace.py",
+    "examples/sdk_framework_adapter_browser_cua_trace.py",
+    "internal-docs/realtime-stack-probe-research.md",
+    "internal-docs/browser-cua-probe-research.md",
+]
+
+V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
+    {
+        "surface": "realtime_trace",
+        "path": "examples/sdk_framework_adapter_realtime_trace.py",
+        "manifest_key": "framework_adapter_realtime_trace_manifest",
+        "framework": "livekit",
+        "method": "run_session",
+        "input_mode": "dict",
+        "state_key": "realtime_trace",
+        "coverage_metric": "realtime_trace_coverage",
+        "quality_metrics": ["realtime_trace_quality"],
+        "required_tools": ["lookup_refund_policy"],
+        "required_events": [
+            "realtime_frame",
+            "realtime_audio_frame",
+            "realtime_tool_call",
+            "realtime_tool_response",
+            "realtime_transcript",
+            "realtime_lifecycle",
+            "realtime_completion",
+        ],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+            "realtime_trace",
+        ],
+        "state_minimums": {
+            "frame_count": 5,
+            "event_count": 5,
+            "tool_call_count": 2,
+            "tool_response_count": 2,
+            "transcript_count": 2,
+            "audio_frame_count": 1,
+            "lifecycle_event_count": 1,
+            "completion_count": 2,
+        },
+        "state_maximums": {"error_count": 0},
+        "state_contains": {
+            "tool_names": ["lookup_refund_policy"],
+            "directions": ["inbound", "outbound"],
+            "frame_types": [
+                "AudioRawFrame",
+                "FunctionCallFrame",
+                "FunctionCallResultFrame",
+                "TranscriptionFrame",
+            ],
+            "event_types": [
+                "agent_state_changed",
+                "session_closed",
+                "tool_execution_completed",
+                "tool_execution_started",
+                "transcript_final",
+            ],
+            "categories": ["control", "data", "event"],
+            "modalities": ["voice"],
+        },
+    },
+    {
+        "surface": "browser_cua",
+        "path": "examples/sdk_framework_adapter_browser_cua_trace.py",
+        "manifest_key": "framework_adapter_browser_cua_trace_manifest",
+        "framework": "browser_use",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "state_key": "browser_cua",
+        "coverage_metric": "browser_trace_coverage",
+        "quality_metrics": [
+            "browser_action_safety",
+            "browser_action_outcome",
+            "browser_grounding_quality",
+            "browser_mutation_resilience",
+        ],
+        "required_tools": ["browser_click"],
+        "required_events": [
+            "browser_snapshot",
+            "browser_action",
+            "browser_trace",
+            "browser_network",
+            "browser_runtime",
+            "browser_storage",
+            "browser_mutation_pack",
+            "environment_injection",
+        ],
+        "required_artifact_kinds": [
+            "browser_screenshot",
+            "browser_trace",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "state_minimums": {
+            "snapshot_count": 2,
+            "action_count": 1,
+            "successful_action_count": 1,
+            "matched_action_count": 1,
+            "screenshot_count": 2,
+            "region_count": 1,
+            "network_request_count": 1,
+            "runtime_event_count": 1,
+            "performance_entry_count": 1,
+            "prompt_injection_surface_count": 1,
+            "screenshot_diff_count": 1,
+            "mutation_count": 1,
+        },
+        "state_maximums": {
+            "blocked_action_count": 0,
+            "prompt_injection_touched_count": 0,
+        },
+        "state_contains": {
+            "action_types": ["click"],
+            "tool_names": ["browser_click"],
+        },
+        "state_equals": {
+            "layout_shift_present": True,
+            "storage_present": True,
         },
     },
 ]
@@ -994,6 +1122,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=protocol_adapter,
     )
+    browser_realtime_adapter = _release_browser_realtime_adapter_status(root)
+    _append_release_check(
+        checks,
+        check_id="browser_realtime_adapter_readiness",
+        passed=(
+            not browser_realtime_adapter["missing_files"]
+            and not browser_realtime_adapter["adapter_errors"]
+            and not browser_realtime_adapter["event_errors"]
+            and not browser_realtime_adapter["artifact_errors"]
+            and not browser_realtime_adapter["metric_errors"]
+            and not browser_realtime_adapter["state_errors"]
+            and not browser_realtime_adapter["errors"]
+        ),
+        milestone="M6",
+        evidence=browser_realtime_adapter,
+    )
     trinity_stack_probe = _release_trinity_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -1113,6 +1257,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
         "required_protocol_adapter_contracts": copy.deepcopy(
             V1_PROTOCOL_ADAPTER_CONTRACTS
+        ),
+        "required_browser_realtime_adapter_files": list(
+            V1_BROWSER_REALTIME_ADAPTER_FILES
+        ),
+        "required_browser_realtime_adapter_contracts": copy.deepcopy(
+            V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
         ),
         "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_trinity_stack_probe_environment_types": list(
@@ -3433,6 +3583,301 @@ def _release_protocol_adapter_status(root: Path) -> dict[str, Any]:
         "artifact_errors": artifact_errors,
         "metric_errors": metric_errors,
         "summary_errors": summary_errors,
+        "errors": errors,
+        "adapters": adapters,
+    }
+
+
+def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_BROWSER_REALTIME_ADAPTER_FILES)
+    adapter_errors: list[dict[str, Any]] = []
+    event_errors: list[dict[str, Any]] = []
+    artifact_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    state_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    adapters: list[dict[str, Any]] = []
+
+    if not missing_files:
+        for contract in V1_BROWSER_REALTIME_ADAPTER_CONTRACTS:
+            surface = str(contract["surface"])
+            relative_path = str(contract["path"])
+            example_path = root / relative_path
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"agent_learning_release_{surface}_adapter",
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                with tempfile.TemporaryDirectory(
+                    prefix=f"agent-learning-{surface}-"
+                ) as tmpdir:
+                    result = module.run(Path(tmpdir) / f"{surface}.json")
+            except Exception as exc:
+                errors.append({"path": relative_path, "surface": surface, "error": str(exc)})
+                continue
+
+            manifest = _as_mapping(result.get(str(contract["manifest_key"])))
+            agent = _as_mapping(manifest.get("agent"))
+            evaluation = _as_mapping(manifest.get("evaluation"))
+            agent_report = _as_mapping(evaluation.get("agent_report"))
+            eval_config = _as_mapping(agent_report.get("config"))
+            metric_weights = _as_mapping(eval_config.get("metric_weights"))
+            runtime_contract = _as_mapping(
+                eval_config.get("framework_runtime_contract")
+            )
+            summary = _as_mapping(result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report = _as_mapping(result.get("report"))
+            cases = [
+                item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+            ]
+            case = _as_mapping(cases[0]) if cases else {}
+            metadata = _as_mapping(case.get("metadata"))
+            environment_state = _as_mapping(metadata.get("environment_state"))
+            state_key = str(contract["state_key"])
+            adapter_state = _as_mapping(environment_state.get(state_key))
+            events = [item for item in _as_list(case.get("events")) if isinstance(item, Mapping)]
+            event_types = sorted(
+                {str(event.get("type") or "") for event in events if event.get("type")}
+            )
+            artifacts = [
+                item for item in _as_list(case.get("artifacts")) if isinstance(item, Mapping)
+            ]
+            artifact_kinds = sorted(
+                {
+                    str(_as_mapping(artifact.get("metadata")).get("kind") or "")
+                    for artifact in artifacts
+                    if _as_mapping(artifact.get("metadata")).get("kind")
+                }
+            )
+            coverage_metric = str(contract["coverage_metric"])
+            quality_metrics = [str(metric) for metric in contract["quality_metrics"]]
+            required_metrics = [coverage_metric, *quality_metrics]
+            state_fields = sorted(
+                {
+                    *[str(key) for key in _as_mapping(contract.get("state_minimums"))],
+                    *[str(key) for key in _as_mapping(contract.get("state_maximums"))],
+                    *[str(key) for key in _as_mapping(contract.get("state_contains"))],
+                    *[str(key) for key in _as_mapping(contract.get("state_equals"))],
+                }
+            )
+            record = {
+                "surface": surface,
+                "path": relative_path,
+                "result_kind": result.get("kind"),
+                "result_status": result.get("status"),
+                "manifest_version": manifest.get("version"),
+                "agent_framework": agent.get("framework"),
+                "agent_method": agent.get("method"),
+                "agent_input_mode": agent.get("input_mode"),
+                "trace_runtime": agent.get("trace_runtime"),
+                "required_env": list(manifest.get("required_env") or []),
+                "runtime_required_state_keys": list(
+                    runtime_contract.get("required_state_keys") or []
+                ),
+                "runtime_required_tools": list(
+                    runtime_contract.get("required_tools") or []
+                ),
+                "metric_weights": sorted(str(key) for key in metric_weights),
+                "state_keys": sorted(str(key) for key in environment_state),
+                "event_types": event_types,
+                "artifact_kinds": artifact_kinds,
+                "metrics": {
+                    **{
+                        metric: metric_averages.get(metric)
+                        for metric in required_metrics
+                    },
+                    "framework_runtime_contract": metric_averages.get(
+                        "framework_runtime_contract"
+                    ),
+                },
+                "state_summary": {
+                    field: adapter_state.get(field) for field in state_fields
+                },
+            }
+            adapters.append(record)
+
+            expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.run.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "manifest.version": (manifest.get("version"), "agent-learning.run.v1"),
+                "agent.framework": (agent.get("framework"), contract["framework"]),
+                "agent.method": (agent.get("method"), contract["method"]),
+                "agent.input_mode": (agent.get("input_mode"), contract["input_mode"]),
+                "agent.trace_runtime": (agent.get("trace_runtime"), True),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    adapter_errors.append(
+                        {
+                            "surface": surface,
+                            "path": relative_path,
+                            "field": field,
+                            "expected": expected,
+                            "observed": observed,
+                        }
+                    )
+            if manifest.get("required_env") not in (None, []):
+                adapter_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "field": "required_env",
+                        "expected": [],
+                        "observed": manifest.get("required_env"),
+                    }
+                )
+            if state_key not in environment_state:
+                adapter_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "field": "environment_state",
+                        "expected": state_key,
+                        "observed": sorted(str(key) for key in environment_state),
+                    }
+                )
+            if state_key not in set(runtime_contract.get("required_state_keys") or []):
+                adapter_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "field": (
+                            "evaluation.agent_report.config."
+                            "framework_runtime_contract.required_state_keys"
+                        ),
+                        "expected": state_key,
+                        "observed": runtime_contract.get("required_state_keys"),
+                    }
+                )
+            missing_tools = sorted(
+                set(str(tool) for tool in _as_list(contract.get("required_tools")))
+                - set(str(tool) for tool in runtime_contract.get("required_tools") or [])
+            )
+            if missing_tools:
+                adapter_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "field": (
+                            "evaluation.agent_report.config."
+                            "framework_runtime_contract.required_tools"
+                        ),
+                        "missing": missing_tools,
+                    }
+                )
+            missing_metric_weights = sorted(
+                set(required_metrics) - set(str(key) for key in metric_weights)
+            )
+            if missing_metric_weights:
+                adapter_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "field": "evaluation.agent_report.config.metric_weights",
+                        "missing": missing_metric_weights,
+                    }
+                )
+
+            missing_events = sorted(set(contract["required_events"]) - set(event_types))
+            if missing_events:
+                event_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "required": list(contract["required_events"]),
+                        "observed": event_types,
+                        "missing": missing_events,
+                    }
+                )
+            missing_artifacts = sorted(
+                set(contract["required_artifact_kinds"]) - set(artifact_kinds)
+            )
+            if missing_artifacts:
+                artifact_errors.append(
+                    {
+                        "surface": surface,
+                        "path": relative_path,
+                        "required": list(contract["required_artifact_kinds"]),
+                        "observed": artifact_kinds,
+                        "missing": missing_artifacts,
+                    }
+                )
+            for metric in (*required_metrics, "framework_runtime_contract"):
+                if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                    metric_errors.append(
+                        {
+                            "surface": surface,
+                            "path": relative_path,
+                            "metric": metric,
+                            "expected": 1.0,
+                            "observed": metric_averages.get(metric),
+                        }
+                    )
+            for field, minimum in _as_mapping(contract.get("state_minimums")).items():
+                if _float_or_zero(adapter_state.get(field)) < float(minimum):
+                    state_errors.append(
+                        {
+                            "surface": surface,
+                            "path": relative_path,
+                            "field": f"{state_key}.{field}",
+                            "expected": f">={minimum}",
+                            "observed": adapter_state.get(field),
+                        }
+                    )
+            for field, maximum in _as_mapping(contract.get("state_maximums")).items():
+                if _float_or_zero(adapter_state.get(field)) > float(maximum):
+                    state_errors.append(
+                        {
+                            "surface": surface,
+                            "path": relative_path,
+                            "field": f"{state_key}.{field}",
+                            "expected": f"<={maximum}",
+                            "observed": adapter_state.get(field),
+                        }
+                    )
+            for field, required_values in _as_mapping(contract.get("state_contains")).items():
+                observed_values = {str(item) for item in _as_list(adapter_state.get(field))}
+                missing_values = sorted(
+                    {str(item) for item in _as_list(required_values)} - observed_values
+                )
+                if missing_values:
+                    state_errors.append(
+                        {
+                            "surface": surface,
+                            "path": relative_path,
+                            "field": f"{state_key}.{field}",
+                            "required": list(required_values),
+                            "observed": sorted(observed_values),
+                            "missing": missing_values,
+                        }
+                    )
+            for field, expected in _as_mapping(contract.get("state_equals")).items():
+                observed = adapter_state.get(field)
+                if observed != expected:
+                    state_errors.append(
+                        {
+                            "surface": surface,
+                            "path": relative_path,
+                            "field": f"{state_key}.{field}",
+                            "expected": expected,
+                            "observed": observed,
+                        }
+                    )
+
+    return {
+        "required_files": list(V1_BROWSER_REALTIME_ADAPTER_FILES),
+        "required_contracts": copy.deepcopy(V1_BROWSER_REALTIME_ADAPTER_CONTRACTS),
+        "missing_files": missing_files,
+        "adapter_errors": adapter_errors,
+        "event_errors": event_errors,
+        "artifact_errors": artifact_errors,
+        "metric_errors": metric_errors,
+        "state_errors": state_errors,
         "errors": errors,
         "adapters": adapters,
     }

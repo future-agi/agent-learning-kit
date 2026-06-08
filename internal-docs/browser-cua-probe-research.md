@@ -55,6 +55,12 @@ Keep browser/CUA support local-first:
   selected output and weight `browser_trace_coverage`,
   `browser_action_outcome`, `browser_grounding_quality`, and
   `browser_mutation_resilience`.
+- `agent-learn release-check` now runs
+  `examples/sdk_framework_adapter_browser_cua_trace.py` as
+  `browser_realtime_adapter_readiness`; the gate requires local
+  `execute_task(dict)` Browser Use selection, `browser_cua` state, browser
+  events, browser trace/screenshot artifacts, prompt-injection-surface
+  avoidance, and passing safety/outcome/grounding/mutation/trace metrics.
 - Require refreshed snapshot evidence, safe selector fallback, coordinate-region
   grounding, action replay, mutation-pack and screenshot-diff evidence,
   storage/runtime/performance/network verification, layout-shift evidence, and

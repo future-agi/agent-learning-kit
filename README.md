@@ -73,13 +73,13 @@ rendered `harness_diagnosis` card, diagnosis actions, rollout plan, proof, and
 2026 research lineage without calling hosted optimizer/eval services.
 Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
-CrewAI, PydanticAI, LiveKit, Pipecat, OpenEnv, Gymnasium, MCP, and A2A, requires
-local fixture targets with no external service dependency, and validates
-representative text, voice, realtime, protocol, and OpenEnv framework manifests. It also
-runs the composed trinity-stack probe readiness gate, proving that the selected
-orchestration stack agent can pass a localhost task evaluator and promote into
-one run manifest with world, framework, retrieval, memory, multi-agent, and
-evaluation-hook evidence.
+CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, and
+A2A, requires local fixture targets with no external service dependency, and
+validates representative text, voice, CUA, realtime, browser/CUA, protocol, and
+OpenEnv framework manifests. It also runs the composed trinity-stack probe
+readiness gate, proving that the selected orchestration stack agent can pass a
+localhost task evaluator and promote into one run manifest with world, framework,
+retrieval, memory, multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -718,7 +718,10 @@ and ordinary tool-call evidence. Generated adapter eval configs can also require
 realtime coverage and quality gates for frames, session events, frame categories,
 directions, transcripts, audio frames, lifecycle events, completions, concrete
 frame/event types, and realtime tool calls/results. See
-`examples/sdk_framework_adapter_realtime_trace.py`.
+`examples/sdk_framework_adapter_realtime_trace.py`. `agent-learn release-check`
+now runs this cookbook locally and requires the selected `run_session(dict)`
+adapter to emit realtime state, events, artifacts, and passing coverage/quality
+metrics.
 
 Framework memory exports normalize into the same evaluator-visible memory
 evidence as memory-layer probes. LangGraph-style checkpoints, Mem0/Zep-style
@@ -738,7 +741,10 @@ mutation packs, screenshot diffs, and prompt-injection surfaces become
 ordinary `browser_click` tool calls. Generated adapter eval configs derive
 browser trace, action outcome, grounding, and mutation-resilience gates from the
 selected output. See
-`examples/sdk_framework_adapter_browser_cua_trace.py`.
+`examples/sdk_framework_adapter_browser_cua_trace.py`. `agent-learn
+release-check` now runs this cookbook locally and requires the selected
+`execute_task(dict)` Browser Use adapter to emit browser/CUA state, events,
+artifacts, and passing safety, outcome, grounding, mutation, and trace metrics.
 
 Workflow graph framework exports normalize durable execution semantics.
 LangGraph-style nodes, edges, checkpoints, state history, interrupts, and replay,
@@ -790,8 +796,8 @@ local `agent-learning.framework-adapter-contract.v1` per framework, rejects
 HTTP/HTTPS targets by default, and carries a `contract_quality_gate` that
 `framework_adapter_contract_quality` can score with plural requirements such as
 `required_frameworks`. The default matrix covers LangChain, LangGraph,
-LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, Pipecat, OpenEnv,
-Gymnasium, MCP, and A2A without importing or calling those packages.
+LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, Pipecat, Browser Use,
+OpenEnv, Gymnasium, MCP, and A2A without importing or calling those packages.
 `simulate.build_framework_adapter_matrix_run_manifest()` turns the same matrix
 into a normal local run artifact. `optimize.optimize_framework_adapter_matrix()`
 then searches weak versus verified matrix candidates through AgentOptimizer,

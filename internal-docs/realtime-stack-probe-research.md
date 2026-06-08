@@ -53,6 +53,11 @@ Keep realtime support local-first:
   `realtime_trace_quality`, `realtime_trace_coverage`, and
   `realtime_trace_quality` metric weights when the selected candidate emits
   realtime trace evidence.
+- `agent-learn release-check` now runs
+  `examples/sdk_framework_adapter_realtime_trace.py` as
+  `browser_realtime_adapter_readiness`; the gate requires local
+  `run_session(dict)` selection, `realtime_trace` state, realtime events, trace
+  artifacts, tool-call evidence, and passing coverage/quality metrics.
 - Require transcript, route call, TTS, audio frames, sample-rate closure, timing
   stages, audio quality, stream chunks, stream tool deltas, completion, and no
   dropped/error stream events before a probe is considered closed.
