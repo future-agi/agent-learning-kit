@@ -9833,6 +9833,32 @@ def _framework_runtime_contract_metric(
             finding_type="framework_runtime_input_mode_mismatch",
         )
 
+    expected_input_key = requirements.get("input_key") or requirements.get("required_input_key")
+    if expected_input_key not in (None, "", [], {}):
+        normalized = _normalize_framework_runtime_key(expected_input_key)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="input_key",
+            expected=normalized,
+            actual=observed["input_keys"],
+            match=normalized in observed["input_keys"],
+            finding_type="framework_runtime_input_key_missing",
+        )
+
+    expected_call_style = requirements.get("call_style") or requirements.get("required_call_style")
+    if expected_call_style not in (None, "", [], {}):
+        normalized = _normalize_framework_runtime_key(expected_call_style)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="call_style",
+            expected=normalized,
+            actual=observed["call_styles"],
+            match=normalized in observed["call_styles"],
+            finding_type="framework_runtime_call_style_missing",
+        )
+
     for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
         normalized = _normalize_framework_runtime_key(signal)
         _append_framework_runtime_check(
@@ -19534,6 +19560,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
     frameworks: set[str] = set()
     methods: set[str] = set()
     input_modes: set[str] = set()
+    input_keys: set[str] = set()
+    call_styles: set[str] = set()
     output_types: set[str] = set()
     signals: set[str] = set()
     tool_names: set[str] = set()
@@ -19570,6 +19598,16 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
             for mode in _as_list(summary.get("input_modes", []))
             if _normalize_framework_runtime_key(mode)
         )
+        input_keys.update(
+            _normalize_framework_runtime_key(key)
+            for key in _as_list(summary.get("input_keys", []))
+            if _normalize_framework_runtime_key(key)
+        )
+        call_styles.update(
+            _normalize_framework_runtime_key(style)
+            for style in _as_list(summary.get("call_styles", []))
+            if _normalize_framework_runtime_key(style)
+        )
         output_types.update(
             _normalize_framework_runtime_key(value)
             for value in _as_list(summary.get("output_types", []))
@@ -19591,12 +19629,18 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
             framework = _normalize_framework_runtime_key(invocation_dict.get("framework") or payload_framework)
             method = _normalize_framework_runtime_key(invocation_dict.get("method"))
             input_mode = _normalize_framework_runtime_key(invocation_dict.get("input_mode"))
+            input_key = _normalize_framework_runtime_key(invocation_dict.get("input_key"))
+            call_style = _normalize_framework_runtime_key(invocation_dict.get("call_style"))
             if framework:
                 frameworks.add(framework)
             if method:
                 methods.add(method)
             if input_mode:
                 input_modes.add(input_mode)
+            if input_key:
+                input_keys.add(input_key)
+            if call_style:
+                call_styles.add(call_style)
             signals.update(
                 _normalize_framework_runtime_key(signal)
                 for signal in _as_list(invocation_dict.get("signals", []))
@@ -19639,6 +19683,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
         "frameworks": sorted(frameworks),
         "methods": sorted(methods),
         "input_modes": sorted(input_modes),
+        "input_keys": sorted(input_keys),
+        "call_styles": sorted(call_styles),
         "output_types": sorted(output_types),
         "signals": sorted(signals),
         "tool_names": sorted(tool_names),

@@ -3031,6 +3031,7 @@ def build_framework_run_manifest(
     max_turns: int = 1,
     min_turns: int = 1,
     evaluation_enabled: bool = False,
+    input_key: Optional[str] = None,
     output_key: Optional[str] = None,
     system_prompt: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -3060,6 +3061,7 @@ def build_framework_run_manifest(
         target=str(target),
         method=method,
         input_mode=input_mode,
+        input_key=input_key,
         modality=resolved_modality,
         trace_runtime=trace_runtime,
         metadata=copy.deepcopy(dict(metadata or {})),
@@ -3081,6 +3083,8 @@ def build_framework_run_manifest(
         agent["method"] = str(method)
     if input_mode:
         agent["input_mode"] = str(input_mode)
+    if input_key:
+        agent["input_key"] = str(input_key)
     if output_key:
         agent["output_key"] = str(output_key)
     if system_prompt:

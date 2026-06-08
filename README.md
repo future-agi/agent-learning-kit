@@ -626,6 +626,13 @@ the run artifact instead of flattening them into text. Auto-generated eval gates
 then require the observed structured state keys, as shown in
 `examples/sdk_framework_adapter_typed_output.py`.
 
+Keyword-only framework entrypoints are also supported. Discovery inspects local
+method signatures and can promote adapters such as CrewAI-style
+`kickoff(inputs=...)`, AutoGen-style `run(task=...)`, or PydanticAI-style
+`run(user_prompt=...)`; the promoted manifest records `agent.input_key`, and
+the generated `framework_runtime_contract` requires the same keyword call. See
+`examples/sdk_framework_adapter_keyword_inputs.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1225,6 +1232,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_streaming.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_typed_output.py \
   artifacts/sdk-framework-adapter-typed-output.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_keyword_inputs.py \
+  artifacts/sdk-framework-adapter-keyword-inputs.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

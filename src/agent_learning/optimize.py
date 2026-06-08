@@ -15570,6 +15570,12 @@ def build_framework_run_manifest_from_probe_optimization(
         or proof.get("input_mode")
         or selected_report.get("input_mode")
     )
+    input_key = (
+        adapter.get("input_key")
+        or proof.get("input_key")
+        or selected_report.get("input_key")
+        or selected_contract.get("input_key")
+    )
     trace_runtime = bool(
         adapter.get(
             "trace_runtime",
@@ -15629,6 +15635,7 @@ def build_framework_run_manifest_from_probe_optimization(
         required_env=required_env,
         method=str(method) if method else None,
         input_mode=str(input_mode) if input_mode else None,
+        input_key=str(input_key) if input_key else None,
         factory=selected_factory,
         trace_runtime=trace_runtime,
         metadata=merged_metadata,
@@ -15722,6 +15729,14 @@ def build_framework_adapter_probe_evaluation_config(
         or contract.get("input_mode")
         or "auto"
     )
+    input_key = str(
+        adapter.get("input_key")
+        or proof.get("input_key")
+        or selected_report.get("input_key")
+        or contract.get("input_key")
+        or next(iter(_plain_list(selected_report_summary.get("input_keys"))), "")
+        or ""
+    )
     tool_names = _unique_strings(
         [
             *list(required_tools or []),
@@ -15795,6 +15810,9 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if tool_names:
         runtime_contract["required_tools"] = tool_names
+    if input_key:
+        runtime_contract["input_key"] = input_key
+        runtime_contract["call_style"] = "keyword"
     if runtime_state_keys:
         runtime_contract["required_state_keys"] = runtime_state_keys
     if streaming_observed:
@@ -16089,6 +16107,7 @@ def _run_framework_probe_candidate(
             target=str(adapter.get("target") or target or ""),
             method=adapter.get("method"),
             input_mode=adapter.get("input_mode"),
+            input_key=adapter.get("input_key"),
             system_prompt=adapter.get("system_prompt"),
             output_key=adapter.get("output_key"),
             metadata=adapter_metadata,
@@ -16121,6 +16140,7 @@ def _failed_framework_adapter_probe(
 
     method = adapter.get("method")
     input_mode = adapter.get("input_mode")
+    input_key = adapter.get("input_key")
     selected_target = str(adapter.get("target") or target or "")
     try:
         contract = _agent_simulate.framework_adapter_contract(
@@ -16128,6 +16148,7 @@ def _failed_framework_adapter_probe(
             target=selected_target or None,
             method=method,
             input_mode=input_mode,
+            input_key=adapter.get("input_key"),
             trace_runtime=bool(adapter.get("trace_runtime", True)),
             metadata=dict(metadata),
         )
@@ -16160,6 +16181,7 @@ def _failed_framework_adapter_probe(
             "framework": framework,
             "method": str(method or contract.get("method") or "auto"),
             "input_mode": str(input_mode or contract.get("input_mode") or "auto"),
+            "input_key": str(input_key or contract.get("input_key") or ""),
             "local_executable_fixture": bool(contract.get("local_executable_fixture")),
             "requires_external_service": bool(contract.get("requires_external_service")),
             "trace_runtime": bool(contract.get("trace_runtime")),
@@ -16523,6 +16545,7 @@ def _framework_adapter_probe_proof(
         "framework": summary.get("framework") or best_config.get("framework"),
         "method": adapter.get("method"),
         "input_mode": adapter.get("input_mode"),
+        "input_key": adapter.get("input_key") or contract.get("input_key"),
         "requires_external_service": False,
         "evidence": {
             "adapter": copy.deepcopy(adapter),

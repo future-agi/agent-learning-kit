@@ -27,6 +27,10 @@ the local-first adapter contract.
   multi-message outputs should be normalized into response content, events, and
   tool evidence. Source:
   https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/agents.html
+- CrewAI crews call the crew entrypoint with an `inputs` payload. Probe
+  implication: adapter discovery must preserve keyword-only input keys such as
+  `inputs`, not only positional method names. Source:
+  https://docs.crewai.com/en/concepts/crews
 - LiveKit Agents is a realtime framework with agent sessions, multimodality,
   tools, handoffs, traces, and media pipelines. Probe implication: voice adapters
   need modality, lifecycle, tool, handoff, and trace evidence without requiring
@@ -92,6 +96,10 @@ Keep framework support local-first:
   objects. Promotion should include observed typed state keys in the generated
   `framework_runtime_contract` so typed output cannot silently degrade into
   plain text.
+- Preserve keyword-input call contracts from method signatures. If discovery
+  selects `kickoff(inputs=...)`, `run(task=...)`, or `run(user_prompt=...)`, the
+  adapter candidate, probe proof, promoted manifest, runtime trace, and
+  generated eval config should all carry the selected `input_key`.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

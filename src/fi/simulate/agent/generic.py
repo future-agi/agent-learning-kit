@@ -14,6 +14,31 @@ from fi.simulate.agent.wrapper import (
 
 InputMode = Literal["auto", "agent_input", "dict", "messages", "text"]
 
+_KEYWORD_INPUT_NAMES = (
+    "inputs",
+    "input",
+    "payload",
+    "task",
+    "user_prompt",
+    "prompt",
+    "message",
+    "messages",
+    "query",
+    "data",
+)
+
+_METHOD_INPUT_KEY_PREFERENCES = {
+    "kickoff": ("inputs", "input", "payload"),
+    "run": ("task", "user_prompt", "prompt", "input"),
+    "arun": ("task", "user_prompt", "prompt", "input"),
+    "run_stream": ("task", "user_prompt", "prompt", "input"),
+    "achat": ("message", "messages", "input"),
+    "chat": ("message", "messages", "input"),
+    "query": ("query", "input", "message"),
+    "respond": ("message", "input", "payload"),
+    "process": ("frame", "payload", "input", "data"),
+}
+
 
 class GenericAgentWrapper(AgentWrapper):
     """
@@ -32,6 +57,7 @@ class GenericAgentWrapper(AgentWrapper):
         *,
         method: str | Callable[..., Any] | None = None,
         input_mode: InputMode = "auto",
+        input_key: str | None = None,
         output_key: str | None = None,
         system_prompt: str | None = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -41,6 +67,7 @@ class GenericAgentWrapper(AgentWrapper):
         self.agent = agent
         self.method = method
         self.input_mode = input_mode
+        self.input_key = input_key
         self.output_key = output_key
         self.system_prompt = system_prompt
         self.metadata = metadata or {}
@@ -61,10 +88,12 @@ class GenericAgentWrapper(AgentWrapper):
         started_at = time.time()
         streamed = False
 
-        if payload is _NO_PAYLOAD:
-            raw = method()
-        else:
-            raw = method(payload)
+        raw, call_style, selected_input_key = _invoke_method_with_payload(
+            method,
+            payload,
+            method_name=method_name,
+            input_key=self.input_key,
+        )
 
         if inspect.isawaitable(raw):
             raw = await raw
@@ -87,6 +116,8 @@ class GenericAgentWrapper(AgentWrapper):
             response=response,
             duration_ms=int((time.time() - started_at) * 1000),
             streamed=streamed,
+            call_style=call_style,
+            input_key=selected_input_key,
             wrapper_metadata=self.metadata,
             runtime_metadata=self.runtime_metadata,
         )
@@ -403,6 +434,7 @@ def wrap_agent(
     *,
     method: str | Callable[..., Any] | None = None,
     input_mode: InputMode = "auto",
+    input_key: str | None = None,
     output_key: str | None = None,
     system_prompt: str | None = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -417,6 +449,7 @@ def wrap_agent(
         agent,
         method=method,
         input_mode=input_mode,
+        input_key=input_key,
         output_key=output_key,
         system_prompt=system_prompt,
         metadata=metadata,
@@ -446,6 +479,103 @@ def _extract_list_field(raw: Any, names: Iterable[str]) -> Optional[List[Dict[st
         if item_mapping is not None:
             items.append(dict(item_mapping))
     return items or None
+
+
+def _invoke_method_with_payload(
+    method: Callable[..., Any],
+    payload: Any,
+    *,
+    method_name: str | None,
+    input_key: str | None,
+) -> tuple[Any, str, str | None]:
+    if payload is _NO_PAYLOAD:
+        return method(), "none", None
+
+    if input_key:
+        selected_key = str(input_key)
+        return method(**{selected_key: payload}), "keyword", selected_key
+
+    selected_key = _signature_input_key(method, method_name=method_name)
+    if selected_key:
+        return method(**{selected_key: payload}), "keyword", selected_key
+
+    if _signature_accepts_positional(method):
+        return method(payload), "positional", None
+
+    if _signature_accepts_var_keyword(method) and isinstance(payload, Mapping):
+        return method(**payload), "expanded_kwargs", None
+
+    return method(payload), "positional", None
+
+
+def _signature_input_key(
+    method: Callable[..., Any],
+    *,
+    method_name: str | None,
+) -> str | None:
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return None
+    params = list(signature.parameters.values())
+    names = {param.name: param for param in params}
+    preferred_names = (
+        _METHOD_INPUT_KEY_PREFERENCES.get(str(method_name or ""), ())
+        + _KEYWORD_INPUT_NAMES
+    )
+    accepts_positional = _params_accept_positional(params)
+
+    for name in preferred_names:
+        param = names.get(name)
+        if param is None:
+            continue
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            continue
+        if name == "inputs" or not accepts_positional or _keyword_only(param):
+            return name
+    if not accepts_positional:
+        for param in params:
+            if param.kind == inspect.Parameter.KEYWORD_ONLY:
+                return param.name
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params):
+            first_preference = next(iter(preferred_names), None)
+            return first_preference
+    return None
+
+
+def _signature_accepts_positional(method: Callable[..., Any]) -> bool:
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return True
+    return _params_accept_positional(list(signature.parameters.values()))
+
+
+def _params_accept_positional(params: List[inspect.Parameter]) -> bool:
+    return any(
+        param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        }
+        for param in params
+    )
+
+
+def _signature_accepts_var_keyword(method: Callable[..., Any]) -> bool:
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return False
+    return any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
+
+
+def _keyword_only(param: inspect.Parameter) -> bool:
+    return param.kind == inspect.Parameter.KEYWORD_ONLY
 
 
 def _is_async_stream(value: Any) -> bool:
@@ -597,6 +727,8 @@ def _framework_runtime_trace(
     response: str | AgentResponse,
     duration_ms: int,
     streamed: bool,
+    call_style: str,
+    input_key: str | None,
     wrapper_metadata: Dict[str, Any],
     runtime_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -623,13 +755,18 @@ def _framework_runtime_trace(
         "input": _shape_summary(payload),
         "output": response_dict,
         "duration_ms": max(0, int(duration_ms)),
+        "call_style": call_style,
         "signals": sorted(signals),
     }
+    if input_key:
+        invocation["input_key"] = input_key
     summary = {
         "invocation_count": 1,
         "framework": framework or "generic",
         "methods": [invocation["method"]],
         "input_modes": [invocation["input_mode"]],
+        "call_styles": [call_style],
+        "input_keys": [input_key] if input_key else [],
         "output_types": [response_dict["type"]],
         "tool_call_count": response_dict.get("tool_call_count", 0),
         "artifact_count": response_dict.get("artifact_count", 0),

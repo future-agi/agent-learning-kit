@@ -1370,6 +1370,63 @@ def test_typed_framework_adapter_output_preserves_structured_state(tmp_path):
     assert "typed_output" in invocation["output"]["state_keys"]
 
 
+def test_keyword_input_framework_adapter_promotes_input_key(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_keyword_inputs.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_keyword_inputs_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "crewai",
+        module.LocalCrewOrchestrator(),
+        target=module.TARGET,
+        method_candidates=["run", "kickoff"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=4,
+    )
+
+    assert discovery["status"] == "passed"
+    assert discovery["adapter_candidates"][0]["method"] == "kickoff"
+    assert discovery["adapter_candidates"][0]["input_mode"] == "dict"
+    assert discovery["adapter_candidates"][0]["input_key"] == "inputs"
+    assert discovery["candidates"][0]["contract"]["input_key"] == "inputs"
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "kickoff"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["input_key"] == "inputs"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["input_key"] == "inputs"
+    assert runtime_contract["call_style"] == "keyword"
+    assert runtime_contract["required_state_keys"] == ["crew_inputs"]
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-keyword-input-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["input_keys"] == ["inputs"]
+    assert runtime["summary"]["call_styles"] == ["keyword"]
+    assert runtime["invocations"][0]["input_key"] == "inputs"
+    assert runtime["invocations"][0]["call_style"] == "keyword"
+    assert state["crew_inputs"]["message_count"] >= 1
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

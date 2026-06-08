@@ -136,6 +136,31 @@ _DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
 
 _STREAMING_METHODS = {"astream", "stream", "stream_events", "run_stream"}
 
+_KEYWORD_INPUT_NAMES = (
+    "inputs",
+    "input",
+    "payload",
+    "task",
+    "user_prompt",
+    "prompt",
+    "message",
+    "messages",
+    "query",
+    "data",
+)
+
+_METHOD_INPUT_KEY_PREFERENCES = {
+    "kickoff": ("inputs", "input", "payload"),
+    "run": ("task", "user_prompt", "prompt", "input"),
+    "arun": ("task", "user_prompt", "prompt", "input"),
+    "run_stream": ("task", "user_prompt", "prompt", "input"),
+    "achat": ("message", "messages", "input"),
+    "chat": ("message", "messages", "input"),
+    "query": ("query", "input", "message"),
+    "respond": ("message", "input", "payload"),
+    "process": ("frame", "payload", "input", "data"),
+}
+
 _DISCOVERY_INPUT_MODE_ORDER: tuple[InputMode, ...] = (
     "dict",
     "text",
@@ -162,6 +187,7 @@ def framework_adapter_contract(
     target: str | None = None,
     method: str | None = None,
     input_mode: InputMode | None = None,
+    input_key: str | None = None,
     modality: str | None = None,
     trace_runtime: bool = True,
     metadata: Optional[Dict[str, Any]] = None,
@@ -220,6 +246,8 @@ def framework_adapter_contract(
             "metric_evidence",
         ],
     }
+    if input_key:
+        contract["input_key"] = str(input_key)
     if target:
         contract["target"] = str(target)
         contract["target_scheme"] = target_scheme
@@ -342,6 +370,7 @@ def wrap_framework(
     target: str | None = None,
     method: str | None = None,
     input_mode: InputMode | None = None,
+    input_key: str | None = None,
     system_prompt: str | None = None,
     output_key: str | None = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -366,6 +395,7 @@ def wrap_framework(
             target=target,
             method=method,
             input_mode=input_mode,
+            input_key=input_key,
             trace_runtime=trace_runtime,
             metadata=raw_metadata,
         )
@@ -376,6 +406,7 @@ def wrap_framework(
             agent,
             method=method,
             input_mode=input_mode or "auto",
+            input_key=input_key,
             output_key=output_key,
             system_prompt=system_prompt,
             metadata={
@@ -393,6 +424,7 @@ def wrap_framework(
         agent,
         method=method or spec.method,
         input_mode=input_mode or spec.input_mode,
+        input_key=input_key,
         output_key=output_key,
         system_prompt=system_prompt,
         metadata={
@@ -414,6 +446,7 @@ async def probe_framework_adapter(
     target: str | None = None,
     method: str | Callable[..., Any] | None = None,
     input_mode: InputMode | None = None,
+    input_key: str | None = None,
     system_prompt: str | None = None,
     output_key: str | None = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -444,6 +477,7 @@ async def probe_framework_adapter(
         target=target,
         method=method_name,
         input_mode=input_mode,
+        input_key=input_key,
         trace_runtime=trace_runtime,
         metadata=selected_metadata,
     )
@@ -454,6 +488,7 @@ async def probe_framework_adapter(
         target=target,
         method=method,
         input_mode=input_mode,
+        input_key=input_key,
         system_prompt=system_prompt,
         output_key=output_key,
         metadata=selected_metadata,
@@ -486,6 +521,8 @@ async def probe_framework_adapter(
         "framework": key,
         "method": method_name or str(contract.get("method") or "auto"),
         "input_mode": str(input_mode or contract.get("input_mode") or "auto"),
+        "input_key": str(input_key or contract.get("input_key") or "")
+        or None,
         "requires_external_service": bool(contract.get("requires_external_service")),
         "allow_external_target": bool(allow_external_target),
         "contract": contract,
@@ -577,11 +614,17 @@ def discover_framework_adapter(
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
+            input_key = _adapter_candidate_input_key(
+                agent,
+                method_name,
+                input_mode,
+            )
             contract = framework_adapter_contract(
                 key,
                 target=target,
                 method=method_name,
                 input_mode=input_mode,
+                input_key=input_key,
                 modality=modality,
                 trace_runtime=trace_runtime,
                 metadata=selected_metadata,
@@ -599,6 +642,8 @@ def discover_framework_adapter(
             }
             if method_name:
                 adapter_candidate["method"] = method_name
+            if input_key:
+                adapter_candidate["input_key"] = input_key
             if target:
                 adapter_candidate["target"] = str(target)
             candidates.append(
@@ -876,6 +921,55 @@ def _adapter_inferred_input_mode(method_name: str | None) -> InputMode | None:
     if method_name is None:
         return "agent_input"
     return _DISCOVERY_METHOD_INPUT_MODES.get(method_name)
+
+
+def _adapter_candidate_input_key(
+    agent: Any,
+    method_name: str | None,
+    input_mode: InputMode,
+) -> str | None:
+    if agent is None or not method_name:
+        return None
+    try:
+        method = getattr(agent, method_name)
+    except Exception:
+        return None
+    if not callable(method):
+        return None
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return None
+    params = list(signature.parameters.values())
+    names = {param.name: param for param in params}
+    preferred_names = (
+        _METHOD_INPUT_KEY_PREFERENCES.get(str(method_name or ""), ())
+        + _KEYWORD_INPUT_NAMES
+    )
+    accepts_positional = any(
+        param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        }
+        for param in params
+    )
+    for name in preferred_names:
+        param = names.get(name)
+        if param is None or param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            continue
+        if name == "inputs" or not accepts_positional or param.kind == inspect.Parameter.KEYWORD_ONLY:
+            return name
+    if not accepts_positional:
+        for param in params:
+            if param.kind == inspect.Parameter.KEYWORD_ONLY:
+                return param.name
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params):
+            if input_mode == "dict":
+                return "inputs" if method_name == "kickoff" else "payload"
+            return "task" if method_name in {"run", "arun", "run_stream"} else "input"
+    return None
 
 
 def _adapter_discovery_score(
@@ -1432,6 +1526,24 @@ def _probe_summary(
     streaming_trace_count = sum(
         1 for case in cases if dict(case.get("response") or {}).get("streaming")
     )
+    input_keys = sorted(
+        {
+            str(invocation.get("input_key"))
+            for case in cases
+            for invocation in dict(case.get("runtime_trace") or {}).get("invocations", [])
+            if isinstance(invocation, Mapping)
+            and invocation.get("input_key") not in (None, "", [], {})
+        }
+    )
+    call_styles = sorted(
+        {
+            str(invocation.get("call_style"))
+            for case in cases
+            for invocation in dict(case.get("runtime_trace") or {}).get("invocations", [])
+            if isinstance(invocation, Mapping)
+            and invocation.get("call_style") not in (None, "", [], {})
+        }
+    )
     return {
         "case_count": len(cases),
         "passed_case_count": passed,
@@ -1442,6 +1554,8 @@ def _probe_summary(
         "framework": contract.get("framework"),
         "method": contract.get("method"),
         "input_mode": contract.get("input_mode"),
+        "input_keys": input_keys,
+        "call_styles": call_styles,
         "local_executable_fixture": bool(contract.get("local_executable_fixture")),
         "requires_external_service": bool(contract.get("requires_external_service")),
         "trace_runtime": bool(contract.get("trace_runtime")),
