@@ -130,12 +130,17 @@ Keep framework support local-first:
 - Preserve framework transcript histories. `TaskResult(messages=[...])`,
   message-history objects, tool-call request events, and tool-call execution
   events should normalize into ordinary tool calls, tool responses, transcript
-  events, and `message_history` state.
+  events, and `message_history` state. Promotion should derive
+  `framework_transcript_quality` checks for observed speakers, turn count, tool
+  sequence, termination, output text, and message-history state from the selected
+  proof.
 - Preserve framework coordination semantics from transcripts. Messages carrying
   `handoff_to`, `recipient`, review, or reconciliation fields should normalize
   into `framework_handoff`, `framework_review`, and
   `framework_reconciliation` events plus `framework_handoffs` state so
   multi-agent framework handoffs can be scored without a separate parser.
+  Generated transcript gates should also check handoff source/target/task specs,
+  participant coverage, review counts, reconciliation counts, and termination.
 - Preserve framework trace export semantics. Local outputs carrying OTLP-style
   `resourceSpans` / `scopeSpans`, TraceAI/Future AGI wrappers, or explicit
   `framework_trace` span/event records should normalize into `framework_trace`

@@ -15828,6 +15828,29 @@ def build_framework_adapter_probe_evaluation_config(
         if framework_trace_observed
         else {}
     )
+    message_history_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "message_history_summary",
+    )
+    framework_handoff_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "framework_handoff_summary",
+    )
+    framework_transcript_observed = (
+        "message_history" in state_keys
+        or "framework_handoffs" in state_keys
+        or bool(message_history_summary)
+        or bool(framework_handoff_summary)
+    )
+    framework_transcript_quality = (
+        _framework_probe_transcript_quality_requirements(
+            framework,
+            message_history_summary,
+            framework_handoff_summary,
+        )
+        if framework_transcript_observed
+        else {}
+    )
     orchestration_trace_summary = _framework_probe_first_response_mapping(
         selected_report,
         "orchestration_trace_summary",
@@ -15983,6 +16006,8 @@ def build_framework_adapter_probe_evaluation_config(
             *(["streaming trace evidence"] if streaming_observed else []),
             *(["realtime trace evidence"] if realtime_trace_observed else []),
             *(["framework trace evidence"] if framework_trace_observed else []),
+            *(["framework transcript evidence"] if framework_transcript_observed else []),
+            *(["handoff transcript evidence"] if framework_handoff_summary else []),
             *(["orchestration trace evidence"] if orchestration_trace_observed else []),
             *(["workflow graph evidence"] if workflow_trace_observed else []),
             *(["MCP tool session evidence"] if mcp_tool_session_observed else []),
@@ -16075,6 +16100,8 @@ def build_framework_adapter_probe_evaluation_config(
     if framework_trace_observed:
         metric_weights["framework_trace_coverage"] = 4.0
         metric_weights["framework_trace_quality"] = 4.0
+    if framework_transcript_observed:
+        metric_weights["framework_transcript_quality"] = 4.0
     if orchestration_trace_observed:
         metric_weights["orchestration_trace_coverage"] = 4.0
         metric_weights["orchestration_flow_quality"] = 4.0
@@ -16148,6 +16175,8 @@ def build_framework_adapter_probe_evaluation_config(
     if framework_trace_observed:
         config["required_framework_trace"] = required_framework_trace
         config["framework_trace_quality"] = framework_trace_quality
+    if framework_transcript_observed:
+        config["framework_transcript_quality"] = framework_transcript_quality
     if orchestration_trace_observed:
         config["required_orchestration_trace"] = orchestration_requirements[
             "required_orchestration_trace"
@@ -16757,6 +16786,136 @@ def _framework_probe_trace_quality_requirements(
         for key, value in quality.items()
         if value not in (None, "", [], {})
     }
+
+
+def _framework_probe_transcript_quality_requirements(
+    framework: str,
+    message_summary: Mapping[str, Any],
+    handoff_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    del framework
+    message_summary = _plain_mapping(message_summary)
+    handoff_summary = _plain_mapping(handoff_summary)
+    quality: dict[str, Any] = {}
+
+    message_count = _as_int(message_summary.get("message_count"))
+    if message_count > 0:
+        quality["min_turns"] = message_count
+
+    message_types = _unique_strings(message_summary.get("message_types") or message_summary.get("types"))
+    event_methods = [
+        *message_types,
+        *(["handoff"] if _as_int(handoff_summary.get("handoff_count")) > 0 else []),
+        *(["review"] if _as_int(handoff_summary.get("review_count")) > 0 else []),
+        *(["reconciliation"] if _as_int(handoff_summary.get("reconciliation_count")) > 0 else []),
+    ]
+    if message_summary.get("stop_reason"):
+        event_methods.append("termination")
+    if event_methods:
+        quality["required_event_methods"] = _unique_strings(event_methods)
+
+    speaker_sequence = [
+        str(item).strip()
+        for item in _plain_list(message_summary.get("speaker_sequence"))
+        if str(item or "").strip()
+    ]
+    required_speakers = _unique_strings(
+        [
+            *speaker_sequence,
+            *_plain_list(message_summary.get("sources")),
+            *_plain_list(handoff_summary.get("participants")),
+        ]
+    )
+    if required_speakers:
+        quality["required_speakers"] = required_speakers
+    if len(speaker_sequence) > 1:
+        quality["expected_speaker_sequence"] = speaker_sequence[:20]
+
+    tool_names = _unique_strings(message_summary.get("tool_names"))
+    if tool_names:
+        quality["expected_tool_sequence"] = tool_names
+
+    handoff_sources = _plain_list(handoff_summary.get("handoffs")) or _plain_list(
+        message_summary.get("handoffs")
+    )
+    expected_handoffs = _framework_probe_expected_handoffs(handoff_sources)
+    if expected_handoffs:
+        quality["expected_handoffs"] = expected_handoffs
+
+    stop_reason = str(message_summary.get("stop_reason") or "").strip()
+    if stop_reason:
+        quality["require_termination"] = True
+        quality["termination_contains"] = [stop_reason]
+
+    last_content = str(message_summary.get("last_content") or "").strip()
+    output_fragment = _framework_probe_output_fragment(last_content)
+    if output_fragment:
+        quality["output_contains"] = [output_fragment]
+
+    expected_state: dict[str, Any] = {}
+    if message_count > 0:
+        expected_state["message_history"] = {"message_count": message_count}
+    for summary_key, state_key in (
+        ("handoff_count", "handoff_count"),
+        ("review_count", "review_count"),
+        ("reconciliation_count", "reconciliation_count"),
+    ):
+        count = _as_int(handoff_summary.get(summary_key))
+        if count > 0:
+            expected_state.setdefault("framework_handoffs", {})[state_key] = count
+    if expected_state:
+        quality["expected_state"] = expected_state
+
+    return {
+        key: value
+        for key, value in quality.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _framework_probe_expected_handoffs(value: Sequence[Any]) -> list[dict[str, Any]]:
+    handoffs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw_handoff in value:
+        handoff = _plain_mapping(raw_handoff)
+        if not handoff:
+            continue
+        source = str(
+            handoff.get("from")
+            or handoff.get("source")
+            or handoff.get("handoff_from")
+            or ""
+        ).strip()
+        target = str(
+            handoff.get("to")
+            or handoff.get("target")
+            or handoff.get("handoff_to")
+            or ""
+        ).strip()
+        task = str(handoff.get("task") or handoff.get("description") or "").strip()
+        key = (source, target, task)
+        if key in seen:
+            continue
+        seen.add(key)
+        spec: dict[str, Any] = {}
+        if source:
+            spec["from"] = source
+        if target:
+            spec["to"] = target
+        if task:
+            spec["task_contains"] = [_framework_probe_output_fragment(task) or task]
+        if spec:
+            handoffs.append(spec)
+    return handoffs
+
+
+def _framework_probe_output_fragment(value: str) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    if len(text) <= 160:
+        return text
+    return text[:160].rstrip()
 
 
 def _framework_probe_orchestration_requirements(

@@ -12958,8 +12958,8 @@ def _framework_transcript_quality_metric(
     context: Mapping[str, Any],
     requirements: Mapping[str, Any],
 ) -> AgentReportMetricResult:
-    records = _framework_trace_records_from_context(context)
-    payloads = _framework_trace_payloads_from_context(context)
+    records = _framework_transcript_records_from_context(context)
+    payloads = _framework_transcript_payloads_from_context(context)
     observed_methods = _framework_transcript_methods(records)
     observed_nodes = _framework_transcript_nodes(records)
     observed_subgraphs = _framework_transcript_subgraphs(records)
@@ -23898,6 +23898,225 @@ def _framework_trace_records_from_context(context: Mapping[str, Any]) -> List[Di
             record_dict = _as_dict(record)
             if record_dict:
                 records.append(record_dict)
+    return records
+
+
+def _framework_transcript_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    payloads = list(_framework_trace_payloads_from_context(context))
+    final_state = _extract_final_state(context)
+    message_history = _as_dict(final_state.get("message_history"))
+    if message_history:
+        payloads.append(
+            {
+                "kind": "framework_transcript_state",
+                "state": {"message_history": copy.deepcopy(message_history)},
+                "output": message_history.get("last_content"),
+                "termination": message_history.get("stop_reason"),
+            }
+        )
+    framework_handoffs = _as_dict(final_state.get("framework_handoffs"))
+    if framework_handoffs:
+        payloads.append(
+            {
+                "kind": "framework_handoff_state",
+                "state": {"framework_handoffs": copy.deepcopy(framework_handoffs)},
+                "output": _stringify(framework_handoffs),
+            }
+        )
+    return payloads
+
+
+def _framework_transcript_records_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    records = list(_framework_trace_records_from_context(context))
+    final_state = _extract_final_state(context)
+    records.extend(_framework_message_history_records(_as_dict(final_state.get("message_history"))))
+    records.extend(_framework_handoff_state_records(_as_dict(final_state.get("framework_handoffs"))))
+    return records
+
+
+def _framework_message_history_records(history: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    history = _as_dict(history)
+    if not history:
+        return []
+    records: List[Dict[str, Any]] = []
+    messages = [_as_dict(item) for item in _as_list(history.get("messages"))]
+    messages = [message for message in messages if message]
+    last_index = len(messages)
+    for index, message in enumerate(messages, start=1):
+        speaker = str(
+            message.get("source")
+            or message.get("speaker")
+            or message.get("role")
+            or ""
+        )
+        message_type = str(
+            message.get("type")
+            or message.get("message_type")
+            or message.get("role")
+            or "message"
+        )
+        text = _stringify(message.get("content") or message.get("text"))
+        if not text and index == last_index:
+            text = _stringify(history.get("last_content"))
+        record: Dict[str, Any] = {
+            "id": f"message_history_{index}",
+            "type": message_type,
+            "method": message_type,
+            "message_type": message_type,
+            "speaker": speaker,
+            "source": speaker,
+            "signals": ["message", "transcript"],
+            "attributes": {
+                "message_index": index,
+                "content_length": message.get("content_length"),
+            },
+        }
+        if text:
+            record["message_text"] = text
+        records.append(record)
+
+    tool_names = _string_list(history.get("tool_names"))
+    tool_owner = _framework_message_history_tool_owner(messages)
+    for index, tool_name in enumerate(tool_names, start=1):
+        records.append(
+            {
+                "id": f"message_history_tool_{index}",
+                "name": f"tool call {tool_name}",
+                "type": "tool_call",
+                "method": "tool_call",
+                "speaker": tool_owner,
+                "source": tool_owner,
+                "tool_name": tool_name,
+                "signals": ["tool", "transcript"],
+            }
+        )
+
+    stop_reason = str(history.get("stop_reason") or "")
+    if stop_reason:
+        terminal_speaker = ""
+        if messages:
+            terminal_speaker = str(
+                messages[-1].get("source")
+                or messages[-1].get("speaker")
+                or messages[-1].get("role")
+                or ""
+            )
+        records.append(
+            {
+                "id": "message_history_termination",
+                "type": "termination",
+                "method": "termination",
+                "speaker": terminal_speaker,
+                "source": terminal_speaker,
+                "termination": stop_reason,
+                "message_text": f"completed: {stop_reason}",
+                "signals": ["termination", "transcript"],
+            }
+        )
+    return records
+
+
+def _framework_message_history_tool_owner(messages: Sequence[Mapping[str, Any]]) -> str:
+    for message in messages:
+        if (_as_int(message.get("tool_call_count")) or 0) <= 0:
+            continue
+        owner = str(
+            message.get("source")
+            or message.get("speaker")
+            or message.get("role")
+            or ""
+        )
+        if owner:
+            return owner
+    for message in messages:
+        owner = str(
+            message.get("source")
+            or message.get("speaker")
+            or message.get("role")
+            or ""
+        )
+        if owner:
+            return owner
+    return ""
+
+
+def _framework_handoff_state_records(coordination: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    coordination = _as_dict(coordination)
+    if not coordination:
+        return []
+    records: List[Dict[str, Any]] = []
+    for index, handoff in enumerate(_as_list(coordination.get("handoffs")), start=1):
+        handoff_dict = _as_dict(handoff)
+        if not handoff_dict:
+            continue
+        source = str(handoff_dict.get("from") or handoff_dict.get("source") or "")
+        target = str(handoff_dict.get("to") or handoff_dict.get("target") or "")
+        task = _stringify(handoff_dict.get("task"))
+        records.append(
+            {
+                "id": f"framework_handoff_{index}",
+                "name": handoff_dict.get("name") or f"{source}->{target}",
+                "type": "handoff",
+                "method": "handoff",
+                "speaker": source,
+                "source": source,
+                "handoff_from": source,
+                "handoff_to": target,
+                "recipient": target,
+                "task": task,
+                "message_text": f"{source} -> {target}: {task}",
+                "signals": ["handoff", "transcript"],
+                "attributes": {"from_agent": source, "to_agent": target},
+            }
+        )
+    for index, review in enumerate(_as_list(coordination.get("reviews")), start=1):
+        review_dict = _as_dict(review)
+        if not review_dict:
+            continue
+        reviewer = str(review_dict.get("reviewer") or review_dict.get("source") or "")
+        status = str(review_dict.get("status") or "")
+        target = str(review_dict.get("target") or "")
+        content = _stringify(review_dict.get("content") or review_dict.get("notes"))
+        records.append(
+            {
+                "id": f"framework_review_{index}",
+                "name": review_dict.get("name") or "framework_review",
+                "type": "review",
+                "method": "review",
+                "speaker": reviewer,
+                "source": reviewer,
+                "recipient": target,
+                "message_text": " ".join(part for part in (status, content) if part),
+                "signals": ["review", "transcript"],
+            }
+        )
+    for index, reconciliation in enumerate(_as_list(coordination.get("reconciliations")), start=1):
+        reconciliation_dict = _as_dict(reconciliation)
+        if not reconciliation_dict:
+            continue
+        source = str(
+            reconciliation_dict.get("source")
+            or reconciliation_dict.get("accepted_source")
+            or ""
+        )
+        status = str(
+            reconciliation_dict.get("status")
+            or reconciliation_dict.get("reconciliation_status")
+            or ""
+        )
+        content = _stringify(reconciliation_dict.get("content") or reconciliation_dict.get("summary"))
+        records.append(
+            {
+                "id": f"framework_reconciliation_{index}",
+                "name": reconciliation_dict.get("name") or "framework_reconciliation",
+                "type": "reconciliation",
+                "method": "reconciliation",
+                "speaker": source,
+                "source": source,
+                "message_text": " ".join(part for part in (status, content) if part),
+                "signals": ["reconciliation", "transcript"],
+            }
+        )
     return records
 
 

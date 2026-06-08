@@ -1753,10 +1753,40 @@ def test_sdk_framework_adapter_message_history_example_runs(tmp_path):
     manifest = result["framework_adapter_message_history_manifest"]
     assert manifest["agent"]["method"] == "run"
     assert manifest["agent"]["input_key"] == "task"
-    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
-        "framework_runtime_contract"
-    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == ["message_history"]
+    transcript_quality = config["framework_transcript_quality"]
+    assert transcript_quality["min_turns"] == 4
+    assert set(transcript_quality["required_event_methods"]) >= {
+        "TextMessage",
+        "ToolCallRequestEvent",
+        "ToolCallExecutionEvent",
+        "termination",
+    }
+    assert transcript_quality["required_speakers"] == [
+        "planner",
+        "tool",
+        "reviewer",
+    ]
+    assert transcript_quality["expected_speaker_sequence"] == [
+        "planner",
+        "planner",
+        "tool",
+        "reviewer",
+    ]
+    assert transcript_quality["expected_tool_sequence"] == [
+        "framework_trace_status"
+    ]
+    assert transcript_quality["require_termination"] is True
+    assert transcript_quality["termination_contains"] == ["completed"]
+    assert transcript_quality["expected_state"] == {
+        "message_history": {"message_count": 4}
+    }
+    assert config["metric_weights"]["framework_transcript_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["framework_transcript_quality"] == (
+        pytest.approx(1.0)
+    )
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     history = state["message_history"]
     assert history["tool_names"] == ["framework_trace_status"]
@@ -1786,14 +1816,60 @@ def test_sdk_framework_adapter_handoff_transcript_example_runs(tmp_path):
     assert result["status"] == "passed"
     manifest = result["framework_adapter_handoff_transcript_manifest"]
     assert manifest["agent"]["method"] == "execute_task"
-    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
-        "framework_runtime_contract"
-    ]
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == [
         "framework_handoffs",
         "message_history",
     ]
-    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+    transcript_quality = config["framework_transcript_quality"]
+    assert transcript_quality["min_turns"] == 5
+    assert set(transcript_quality["required_event_methods"]) >= {
+        "handoff",
+        "review",
+        "reconciliation",
+        "final_answer",
+        "termination",
+    }
+    assert set(transcript_quality["required_speakers"]) >= {
+        "triage_agent",
+        "retrieval_agent",
+        "critic_agent",
+    }
+    assert transcript_quality["expected_speaker_sequence"] == [
+        "triage_agent",
+        "retrieval_agent",
+        "critic_agent",
+        "critic_agent",
+        "critic_agent",
+    ]
+    assert transcript_quality["expected_handoffs"] == [
+        {
+            "from": "triage_agent",
+            "to": "retrieval_agent",
+            "task_contains": ["Gather current refund policy evidence."],
+        },
+        {
+            "from": "retrieval_agent",
+            "to": "critic_agent",
+            "task_contains": ["Review grounded refund recommendation."],
+        },
+    ]
+    assert transcript_quality["expected_state"] == {
+        "message_history": {"message_count": 5},
+        "framework_handoffs": {
+            "handoff_count": 2,
+            "review_count": 1,
+            "reconciliation_count": 1,
+        },
+    }
+    assert transcript_quality["require_termination"] is True
+    assert transcript_quality["termination_contains"] == ["completed"]
+    assert config["metric_weights"]["framework_transcript_quality"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["framework_transcript_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert set(config["required_events"]) >= {
         "framework_handoff",
         "framework_review",
         "framework_reconciliation",

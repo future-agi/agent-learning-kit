@@ -1575,6 +1575,12 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "framework_trace_summary": _probe_framework_trace_summary(
             state.get("framework_trace")
         ),
+        "message_history_summary": _probe_message_history_summary(
+            state.get("message_history")
+        ),
+        "framework_handoff_summary": _probe_framework_handoff_summary(
+            state.get("framework_handoffs")
+        ),
         "orchestration_trace_summary": _probe_orchestration_trace_summary(
             state.get("orchestration_trace")
         ),
@@ -1677,6 +1683,114 @@ def _probe_framework_trace_summary(value: Any) -> dict[str, Any]:
                 if event.get("name") or event.get("id") or event.get("type")
             }
         )
+    return summary
+
+
+def _probe_message_history_summary(value: Any) -> dict[str, Any]:
+    history = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not history:
+        return {}
+    messages = _probe_mappings(history.get("messages"))
+    summary: dict[str, Any] = {}
+    for key in (
+        "message_count",
+        "tool_call_count",
+        "tool_response_count",
+        "handoff_count",
+    ):
+        if history.get(key) not in (None, "", [], {}):
+            summary[key] = history.get(key)
+    for key in ("roles", "sources", "types", "tool_names"):
+        values = _probe_list(history.get(key))
+        if values:
+            summary[key] = sorted(str(item) for item in values if str(item))
+    speaker_sequence = [
+        str(
+            message.get("source")
+            or message.get("speaker")
+            or message.get("role")
+            or ""
+        )
+        for message in messages
+        if message.get("source") or message.get("speaker") or message.get("role")
+    ]
+    if speaker_sequence:
+        summary["speaker_sequence"] = speaker_sequence
+    message_types = [
+        str(message.get("type") or message.get("message_type") or "")
+        for message in messages
+        if message.get("type") or message.get("message_type")
+    ]
+    if message_types:
+        summary["message_types"] = sorted(set(message_types))
+    stop_reason = str(history.get("stop_reason") or "")
+    if stop_reason:
+        summary["stop_reason"] = stop_reason
+    last_content = str(history.get("last_content") or "")
+    if last_content:
+        summary["last_content"] = last_content
+    handoffs = _probe_mappings(history.get("handoffs"))
+    if handoffs:
+        summary["handoffs"] = [
+            {
+                key: str(handoff.get(key) or "")
+                for key in ("from", "to", "task")
+                if handoff.get(key) not in (None, "", [], {})
+            }
+            for handoff in handoffs
+        ]
+    return summary
+
+
+def _probe_framework_handoff_summary(value: Any) -> dict[str, Any]:
+    coordination = dict(value or {}) if isinstance(value, Mapping) else {}
+    if not coordination:
+        return {}
+    summary: dict[str, Any] = {}
+    for key in ("handoff_count", "review_count", "reconciliation_count"):
+        if coordination.get(key) not in (None, "", [], {}):
+            summary[key] = coordination.get(key)
+    participants = _probe_list(coordination.get("participants"))
+    if participants:
+        summary["participants"] = sorted(str(item) for item in participants if str(item))
+    handoffs = _probe_mappings(coordination.get("handoffs"))
+    if handoffs:
+        summary["handoffs"] = [
+            {
+                key: str(handoff.get(key) or "")
+                for key in ("from", "to", "task", "reason", "message_type")
+                if handoff.get(key) not in (None, "", [], {})
+            }
+            for handoff in handoffs
+        ]
+    reviews = _probe_mappings(coordination.get("reviews"))
+    if reviews:
+        summary["reviews"] = [
+            {
+                key: str(review.get(key) or "")
+                for key in ("reviewer", "target", "status", "message_type")
+                if review.get(key) not in (None, "", [], {})
+            }
+            for review in reviews
+        ]
+    reconciliations = _probe_mappings(coordination.get("reconciliations"))
+    if reconciliations:
+        summary["reconciliations"] = [
+            {
+                key: str(reconciliation.get(key) or "")
+                for key in (
+                    "source",
+                    "accepted_source",
+                    "status",
+                    "message_type",
+                )
+                if reconciliation.get(key) not in (None, "", [], {})
+            }
+            for reconciliation in reconciliations
+        ]
+    summary["has_handoffs"] = bool(handoffs)
+    summary["has_reviews"] = bool(reviews)
+    summary["has_reconciliation"] = bool(reconciliations)
     return summary
 
 

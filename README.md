@@ -659,13 +659,18 @@ Message-history framework results are normalized as well. AutoGen-style
 embedded tool-call request/execution events become normal `tool_calls`,
 `tool_responses`, transcript events, and `message_history` state, so multi-agent
 framework transcripts can be optimized and scored without hand-written
-post-processing. See `examples/sdk_framework_adapter_message_history.py`.
+post-processing. Promoted adapters now generate `framework_transcript_quality`
+gates for observed speakers, turn count, tool sequence, termination, output, and
+message-history state. See `examples/sdk_framework_adapter_message_history.py`.
 
 Framework handoff transcripts get a compact coordination view. Messages with
 `handoff_to`/`recipient`, review fields, or reconciliation fields also emit
 `framework_handoff`, `framework_review`, and `framework_reconciliation` events
 plus `framework_handoffs` state with participants, handoffs, reviews, and
-reconciliations. See `examples/sdk_framework_adapter_handoff_transcript.py`.
+reconciliations. The generated transcript gate checks handoff source/target/task
+contracts, review and reconciliation counts, participant coverage, and
+termination in the same report artifact. See
+`examples/sdk_framework_adapter_handoff_transcript.py`.
 
 Framework trace exports normalize OpenTelemetry/TraceAI evidence directly from
 adapter outputs. OTLP-style `resourceSpans` / `scopeSpans`, TraceAI/Future AGI
