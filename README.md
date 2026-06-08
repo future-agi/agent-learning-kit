@@ -75,7 +75,10 @@ Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
 CrewAI, PydanticAI, LiveKit, and Pipecat, requires local fixture targets with
 no external service dependency, and validates representative text, voice, and
-realtime manifests.
+realtime manifests. It also runs the composed trinity-stack probe readiness
+gate, proving that the selected orchestration stack agent can pass a localhost
+task evaluator and promote into one run manifest with world, framework,
+retrieval, memory, multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full

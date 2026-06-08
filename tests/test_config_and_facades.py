@@ -13224,6 +13224,15 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
+    assert payload["required_trinity_stack_probe_files"] == (
+        trinity.V1_TRINITY_STACK_PROBE_FILES
+    )
+    assert payload["required_trinity_stack_probe_environment_types"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_trinity_stack_probe_proof_kind"] == (
+        trinity.V1_TRINITY_STACK_PROBE_PROOF_KIND
+    )
     assert payload["required_release_proof_checks"] == (
         trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
     )
@@ -13247,6 +13256,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "harness_diagnosis_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
+        "trinity_stack_probe_readiness",
         "package_metadata",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -13595,6 +13605,46 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_manifest["agent_type"] == "scripted"
     assert realtime_manifest["frameworks"] == ["livekit"]
     assert realtime_manifest["missing_environment_types"] == []
+    trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
+    assert trinity_stack_probe["required_files"] == (
+        trinity.V1_TRINITY_STACK_PROBE_FILES
+    )
+    assert trinity_stack_probe["required_environment_types"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert trinity_stack_probe["required_proof_kind"] == (
+        trinity.V1_TRINITY_STACK_PROBE_PROOF_KIND
+    )
+    assert trinity_stack_probe["missing_files"] == []
+    assert trinity_stack_probe["optimization_errors"] == []
+    assert trinity_stack_probe["proof_errors"] == []
+    assert trinity_stack_probe["manifest_errors"] == []
+    assert trinity_stack_probe["errors"] == []
+    trinity_evidence = trinity_stack_probe["evidence"]
+    assert trinity_evidence["optimization_kind"] == "agent-learning.optimization.v1"
+    assert trinity_evidence["optimization_status"] == "passed"
+    assert trinity_evidence["promotion_ready"] is True
+    assert trinity_evidence["same_agent_selected"] is True
+    assert trinity_evidence["requires_external_service"] is False
+    assert trinity_evidence["proof_kind"] == trinity.V1_TRINITY_STACK_PROBE_PROOF_KIND
+    assert trinity_evidence["proof_status"] == "passed"
+    assert trinity_evidence["proof_failed_check_ids"] == []
+    assert trinity_evidence["orchestration_stack_probe_proof_status"] == "passed"
+    assert trinity_evidence["evaluation_hook_probe_status"] == "passed"
+    assert trinity_evidence["evaluation_hook_trace_count"] >= 1
+    assert trinity_evidence["evaluation_hook_success_trace_count"] >= 1
+    assert trinity_evidence["evaluation_hook_metric_count"] >= 1
+    assert trinity_evidence["evaluation_hook_score"] == pytest.approx(1.0)
+    assert trinity_evidence["evaluation_hook_auth_redacted"] is True
+    assert trinity_evidence["evaluation_hook_local_executable_fixture"] is True
+    assert trinity_evidence["manifest_version"] == "agent-learning.run.v1"
+    assert trinity_evidence["manifest_required_env"] == []
+    assert trinity_evidence["manifest_environment_types"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert trinity_evidence["manifest_promoted_from_trinity_stack_probe"] is True
+    assert trinity_evidence["manifest_trinity_stack_probe_proof_status"] == "passed"
+    assert trinity_evidence["manifest_evaluation_hook_count"] >= 1
     evidence = checks["native_optimizer_evidence_components"]["evidence"]
     assert evidence["missing"] == []
     assert "framework_lifecycle" in evidence["observed"]

@@ -266,6 +266,7 @@ V1_REQUIRED_EXAMPLES = [
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_redteam_society_optimization.py",
     "examples/sdk_redteam_causal_attribution_optimization.py",
+    "examples/sdk_trinity_stack_probe_optimization.py",
 ]
 
 V1_LOCAL_SIM_EVAL_EXAMPLES = [
@@ -474,6 +475,27 @@ V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
         "required_environment_types": ["voice", "streaming_trace"],
     },
 ]
+
+V1_TRINITY_STACK_PROBE_FILES = [
+    "examples/sdk_trinity_stack_probe_optimization.py",
+    "examples/sdk_orchestration_stack_probe_optimization.py",
+    "examples/sdk_evaluation_hook_probe_optimization.py",
+    "internal-docs/trinity-stack-probe-research.md",
+    "internal-docs/orchestration-stack-probe-research.md",
+    "internal-docs/evaluation-hook-probe-research.md",
+]
+
+V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent_room",
+]
+
+V1_TRINITY_STACK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.trinity-stack-probe-proof.v1"
+)
 
 V1_REQUIRED_EVIDENCE_COMPONENTS = [
     "tool_coverage",
@@ -814,6 +836,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_provider_contract,
     )
+    trinity_stack_probe = _release_trinity_stack_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="trinity_stack_probe_readiness",
+        passed=(
+            not trinity_stack_probe["missing_files"]
+            and not trinity_stack_probe["optimization_errors"]
+            and not trinity_stack_probe["proof_errors"]
+            and not trinity_stack_probe["manifest_errors"]
+            and not trinity_stack_probe["errors"]
+        ),
+        milestone="M6",
+        evidence=trinity_stack_probe,
+    )
     pyproject = _read_pyproject(root)
     _append_release_check(
         checks,
@@ -915,6 +951,11 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_provider_manifest_contracts": copy.deepcopy(
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
         ),
+        "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
+        "required_trinity_stack_probe_environment_types": list(
+            V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_trinity_stack_probe_proof_kind": V1_TRINITY_STACK_PROBE_PROOF_KIND,
         "required_docs": list(V1_REQUIRED_DOCS),
         "required_evidence_components": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "trinity": trinity,
@@ -2616,6 +2657,323 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_TRINITY_STACK_PROBE_FILES)
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    if not missing_files:
+        example_path = root / "examples/sdk_trinity_stack_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_trinity_stack_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            from agent_learning import optimize
+
+            with module._local_trinity_evaluation_hook() as endpoint:
+                result = module.build_probe_optimization(endpoint)
+                manifest = optimize.build_trinity_run_manifest_from_probe_optimization(
+                    result,
+                    name="release-trinity-stack-probe-readiness",
+                    metadata={"release_check": "trinity_stack_probe_readiness"},
+                )
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+            result = {}
+            manifest = {}
+
+        if result:
+            summary = _as_mapping(result.get("summary"))
+            proof = _as_mapping(result.get("trinity_stack_probe_proof"))
+            hook_probe = _as_mapping(result.get("evaluation_hook_probe"))
+            hook_summary = _as_mapping(hook_probe.get("summary"))
+            orchestration_result = _as_mapping(
+                result.get("orchestration_stack_probe_optimization")
+            )
+            orchestration_proof = _as_mapping(
+                orchestration_result.get("orchestration_stack_probe_proof")
+            )
+            evidence.update(
+                {
+                    "optimization_kind": result.get("kind"),
+                    "optimization_status": result.get("status"),
+                    "optimization_score": summary.get("optimization_score"),
+                    "trinity_stack_probe_score": summary.get(
+                        "trinity_stack_probe_score"
+                    ),
+                    "promotion_ready": summary.get("promotion_ready"),
+                    "same_agent_selected": summary.get("same_agent_selected"),
+                    "requires_external_service": summary.get(
+                        "requires_external_service"
+                    ),
+                    "proof_kind": proof.get("kind"),
+                    "proof_status": proof.get("status"),
+                    "proof_failed_check_ids": proof.get("failed_check_ids") or [],
+                    "orchestration_stack_probe_proof_status": orchestration_proof.get(
+                        "status"
+                    ),
+                    "evaluation_hook_probe_status": hook_probe.get("status"),
+                    "evaluation_hook_trace_count": hook_summary.get(
+                        "hook_trace_count"
+                    ),
+                    "evaluation_hook_success_trace_count": hook_summary.get(
+                        "hook_success_trace_count"
+                    ),
+                    "evaluation_hook_metric_count": hook_summary.get(
+                        "hook_metric_count"
+                    ),
+                    "evaluation_hook_score": hook_summary.get("hook_score"),
+                    "evaluation_hook_auth_redacted": hook_summary.get(
+                        "auth_redacted"
+                    ),
+                    "evaluation_hook_local_executable_fixture": hook_summary.get(
+                        "local_executable_fixture"
+                    ),
+                }
+            )
+            if result.get("kind") != "agent-learning.optimization.v1":
+                optimization_errors.append(
+                    {
+                        "field": "kind",
+                        "expected": "agent-learning.optimization.v1",
+                        "observed": result.get("kind"),
+                    }
+                )
+            if result.get("status") != "passed":
+                optimization_errors.append(
+                    {
+                        "field": "status",
+                        "expected": "passed",
+                        "observed": result.get("status"),
+                    }
+                )
+            if summary.get("promotion_ready") is not True:
+                optimization_errors.append(
+                    {
+                        "field": "summary.promotion_ready",
+                        "expected": True,
+                        "observed": summary.get("promotion_ready"),
+                    }
+                )
+            if summary.get("same_agent_selected") is not True:
+                optimization_errors.append(
+                    {
+                        "field": "summary.same_agent_selected",
+                        "expected": True,
+                        "observed": summary.get("same_agent_selected"),
+                    }
+                )
+            if summary.get("requires_external_service") is not False:
+                optimization_errors.append(
+                    {
+                        "field": "summary.requires_external_service",
+                        "expected": False,
+                        "observed": summary.get("requires_external_service"),
+                    }
+                )
+            if proof.get("kind") != V1_TRINITY_STACK_PROBE_PROOF_KIND:
+                proof_errors.append(
+                    {
+                        "field": "kind",
+                        "expected": V1_TRINITY_STACK_PROBE_PROOF_KIND,
+                        "observed": proof.get("kind"),
+                    }
+                )
+            if proof.get("status") != "passed" or proof.get("passed") is not True:
+                proof_errors.append(
+                    {
+                        "field": "status",
+                        "expected": "passed",
+                        "observed": proof.get("status"),
+                    }
+                )
+            if proof.get("failed_check_ids"):
+                proof_errors.append(
+                    {
+                        "field": "failed_check_ids",
+                        "expected": [],
+                        "observed": proof.get("failed_check_ids"),
+                    }
+                )
+            if orchestration_proof.get("status") != "passed":
+                proof_errors.append(
+                    {
+                        "field": "orchestration_stack_probe_proof.status",
+                        "expected": "passed",
+                        "observed": orchestration_proof.get("status"),
+                    }
+                )
+            if hook_probe.get("status") != "passed":
+                proof_errors.append(
+                    {
+                        "field": "evaluation_hook_probe.status",
+                        "expected": "passed",
+                        "observed": hook_probe.get("status"),
+                    }
+                )
+            if _int_or_zero(hook_summary.get("hook_trace_count")) < 1:
+                proof_errors.append(
+                    {
+                        "field": "evaluation_hook_probe.summary.hook_trace_count",
+                        "expected": ">=1",
+                        "observed": hook_summary.get("hook_trace_count"),
+                    }
+                )
+            if _int_or_zero(hook_summary.get("hook_metric_count")) < 1:
+                proof_errors.append(
+                    {
+                        "field": "evaluation_hook_probe.summary.hook_metric_count",
+                        "expected": ">=1",
+                        "observed": hook_summary.get("hook_metric_count"),
+                    }
+                )
+            if hook_summary.get("auth_redacted") is not True:
+                proof_errors.append(
+                    {
+                        "field": "evaluation_hook_probe.summary.auth_redacted",
+                        "expected": True,
+                        "observed": hook_summary.get("auth_redacted"),
+                    }
+                )
+
+        if manifest:
+            env_types = [
+                str(item.get("type") or "")
+                for item in _as_list(
+                    _as_mapping(manifest.get("simulation")).get("environments")
+                )
+                if isinstance(item, Mapping)
+            ]
+            metadata = _as_mapping(manifest.get("metadata"))
+            eval_config = _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            )
+            hooks = _as_list(_as_mapping(eval_config.get("config")).get("evaluation_hooks"))
+            evidence.update(
+                {
+                    "manifest_version": manifest.get("version"),
+                    "manifest_status": manifest.get("status"),
+                    "manifest_required_env": manifest.get("required_env") or [],
+                    "manifest_environment_types": env_types,
+                    "manifest_promoted_from_trinity_stack_probe": metadata.get(
+                        "promoted_from_trinity_stack_probe"
+                    ),
+                    "manifest_trinity_stack_probe_proof_status": metadata.get(
+                        "trinity_stack_probe_proof_status"
+                    ),
+                    "manifest_evaluation_hook_count": len(hooks),
+                }
+            )
+            if manifest.get("version") != "agent-learning.run.v1":
+                manifest_errors.append(
+                    {
+                        "field": "version",
+                        "expected": "agent-learning.run.v1",
+                        "observed": manifest.get("version"),
+                    }
+                )
+            missing_env_types = sorted(
+                set(V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES)
+                - set(env_types)
+            )
+            if missing_env_types:
+                manifest_errors.append(
+                    {
+                        "field": "simulation.environments",
+                        "expected": list(
+                            V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+                        ),
+                        "missing": missing_env_types,
+                    }
+                )
+            if metadata.get("promoted_from_trinity_stack_probe") is not True:
+                manifest_errors.append(
+                    {
+                        "field": "metadata.promoted_from_trinity_stack_probe",
+                        "expected": True,
+                        "observed": metadata.get("promoted_from_trinity_stack_probe"),
+                    }
+                )
+            if metadata.get("trinity_stack_probe_proof_status") != "passed":
+                manifest_errors.append(
+                    {
+                        "field": "metadata.trinity_stack_probe_proof_status",
+                        "expected": "passed",
+                        "observed": metadata.get(
+                            "trinity_stack_probe_proof_status"
+                        ),
+                    }
+                )
+            if manifest.get("required_env") not in (None, []):
+                manifest_errors.append(
+                    {
+                        "field": "required_env",
+                        "expected": [],
+                        "observed": manifest.get("required_env"),
+                    }
+                )
+            if not hooks:
+                manifest_errors.append(
+                    {
+                        "field": "evaluation.agent_report.config.evaluation_hooks",
+                        "expected": "non-empty",
+                        "observed": len(hooks),
+                    }
+                )
+
+    return {
+        "required_files": list(V1_TRINITY_STACK_PROBE_FILES),
+        "required_environment_types": list(
+            V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_proof_kind": V1_TRINITY_STACK_PROBE_PROOF_KIND,
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "manifest_errors": manifest_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple | set):
+        return list(value)
+    return [value]
+
+
+def _int_or_zero(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value.strip()))
+        except ValueError:
+            return 0
+    return 0
+
+
 def _release_external_value_findings(
     relative_path: str,
     value: Any,
@@ -2789,6 +3147,9 @@ __all__ = [
     "V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES",
     "V1_HARNESS_DIAGNOSIS_SOURCE",
+    "V1_TRINITY_STACK_PROBE_FILES",
+    "V1_TRINITY_STACK_PROBE_PROOF_KIND",
+    "V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES",
     "V1_FRAMEWORK_PROVIDER_EXAMPLES",
     "V1_FRAMEWORK_PROVIDER_FRAMEWORKS",
     "V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS",
