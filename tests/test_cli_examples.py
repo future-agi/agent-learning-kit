@@ -1634,6 +1634,37 @@ def test_sdk_framework_adapter_keyword_inputs_example_runs(tmp_path):
     assert "crewai" in state["crew_inputs"]["input"].lower()
 
 
+def test_sdk_framework_adapter_side_kwargs_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_side_kwargs.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_side_kwargs",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-side-kwargs.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_side_kwargs_manifest"]
+    assert manifest["agent"]["method"] == "process_frame"
+    assert manifest["agent"]["input_key"] == "frame"
+    assert manifest["agent"]["input_kwargs"] == {"direction": "downstream"}
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_input_kwargs"] == ["direction"]
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["framework_runtime"]["summary"]["input_kwargs_keys"] == ["direction"]
+    assert state["pipecat_frame"]["direction"] == "downstream"
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

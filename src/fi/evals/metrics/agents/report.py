@@ -9859,6 +9859,22 @@ def _framework_runtime_contract_metric(
             finding_type="framework_runtime_call_style_missing",
         )
 
+    for key in _string_list(
+        requirements.get("input_kwargs_keys")
+        or requirements.get("required_input_kwargs")
+        or requirements.get("required_input_kwargs_keys")
+    ):
+        normalized = _normalize_framework_runtime_key(key)
+        _append_framework_runtime_check(
+            checks,
+            findings,
+            check="input_kwargs_key",
+            expected=normalized,
+            actual=observed["input_kwargs_keys"],
+            match=normalized in observed["input_kwargs_keys"],
+            finding_type="framework_runtime_input_kwarg_missing",
+        )
+
     for signal in _string_list(requirements.get("required_signals") or requirements.get("signals")):
         normalized = _normalize_framework_runtime_key(signal)
         _append_framework_runtime_check(
@@ -19561,6 +19577,7 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
     methods: set[str] = set()
     input_modes: set[str] = set()
     input_keys: set[str] = set()
+    input_kwargs_keys: set[str] = set()
     call_styles: set[str] = set()
     output_types: set[str] = set()
     signals: set[str] = set()
@@ -19603,6 +19620,11 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
             for key in _as_list(summary.get("input_keys", []))
             if _normalize_framework_runtime_key(key)
         )
+        input_kwargs_keys.update(
+            _normalize_framework_runtime_key(key)
+            for key in _as_list(summary.get("input_kwargs_keys", []))
+            if _normalize_framework_runtime_key(key)
+        )
         call_styles.update(
             _normalize_framework_runtime_key(style)
             for style in _as_list(summary.get("call_styles", []))
@@ -19630,6 +19652,11 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
             method = _normalize_framework_runtime_key(invocation_dict.get("method"))
             input_mode = _normalize_framework_runtime_key(invocation_dict.get("input_mode"))
             input_key = _normalize_framework_runtime_key(invocation_dict.get("input_key"))
+            invocation_input_kwargs_keys = [
+                _normalize_framework_runtime_key(key)
+                for key in _as_list(invocation_dict.get("input_kwargs_keys", []))
+                if _normalize_framework_runtime_key(key)
+            ]
             call_style = _normalize_framework_runtime_key(invocation_dict.get("call_style"))
             if framework:
                 frameworks.add(framework)
@@ -19639,6 +19666,7 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
                 input_modes.add(input_mode)
             if input_key:
                 input_keys.add(input_key)
+            input_kwargs_keys.update(invocation_input_kwargs_keys)
             if call_style:
                 call_styles.add(call_style)
             signals.update(
@@ -19684,6 +19712,7 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
         "methods": sorted(methods),
         "input_modes": sorted(input_modes),
         "input_keys": sorted(input_keys),
+        "input_kwargs_keys": sorted(input_kwargs_keys),
         "call_styles": sorted(call_styles),
         "output_types": sorted(output_types),
         "signals": sorted(signals),

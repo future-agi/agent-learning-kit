@@ -633,6 +633,12 @@ method signatures and can promote adapters such as CrewAI-style
 the generated `framework_runtime_contract` requires the same keyword call. See
 `examples/sdk_framework_adapter_keyword_inputs.py`.
 
+Framework calls that need static side keywords can set `agent.input_kwargs` (or
+candidate `input_kwargs`) alongside `agent.input_key`. That covers local shims
+such as Pipecat-style `process_frame(frame=..., direction=...)`; runtime traces
+record `input_kwargs_keys`, and generated `framework_runtime_contract` gates can
+require those keys. See `examples/sdk_framework_adapter_side_kwargs.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1235,6 +1241,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_typed_output.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_keyword_inputs.py \
   artifacts/sdk-framework-adapter-keyword-inputs.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_side_kwargs.py \
+  artifacts/sdk-framework-adapter-side-kwargs.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

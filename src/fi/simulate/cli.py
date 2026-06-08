@@ -837,6 +837,7 @@ def _build_framework_agent_callback(
         method=_optional_string(agent.get("method")),
         input_mode=_manifest_input_mode(agent.get("input_mode")),
         input_key=_optional_string(agent.get("input_key")),
+        input_kwargs=_optional_mapping(agent.get("input_kwargs"), "agent.input_kwargs"),
         system_prompt=_optional_string(agent.get("system_prompt")),
         output_key=_optional_string(agent.get("output_key")),
         metadata=_optional_mapping(agent.get("metadata"), "agent.metadata"),

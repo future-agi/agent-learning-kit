@@ -37,7 +37,8 @@ the local-first adapter contract.
   LiveKit Cloud during local release checks. Source: https://docs.livekit.io/agents/
 - Pipecat centers orchestration around pipelines, frame processors, and data,
   control, and system frames. Probe implication: voice/realtime adapters should
-  preserve event/frame categories and ordered runtime evidence. Sources:
+  preserve event/frame categories, ordered runtime evidence, and side-channel
+  call settings such as frame direction. Sources:
   https://docs.pipecat.ai/guides/learn/pipeline and
   https://docs.pipecat.ai/server/frames/overview
 - Pydantic AI emphasizes typed output validation around agent runs. Probe
@@ -100,6 +101,11 @@ Keep framework support local-first:
   selects `kickoff(inputs=...)`, `run(task=...)`, or `run(user_prompt=...)`, the
   adapter candidate, probe proof, promoted manifest, runtime trace, and
   generated eval config should all carry the selected `input_key`.
+- Preserve static side-keyword contracts for native framework entrypoints. If a
+  runnable method needs `process_frame(frame=..., direction=...)` or a similar
+  payload-plus-kwargs shape, the adapter candidate, contract, probe summary,
+  promoted manifest, runtime trace, and generated eval config should carry the
+  selected `input_kwargs_keys`.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

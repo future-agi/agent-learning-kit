@@ -90,6 +90,7 @@ _DISCOVERY_METHOD_ORDER = (
     "stream",
     "stream_events",
     "execute_task",
+    "process_frame",
     "call",
     "achat",
     "chat",
@@ -116,6 +117,7 @@ _DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
     "stream": "dict",
     "stream_events": "dict",
     "execute_task": "dict",
+    "process_frame": "dict",
     "kickoff": "dict",
     "process": "dict",
     "completion": "dict",
@@ -140,6 +142,7 @@ _KEYWORD_INPUT_NAMES = (
     "inputs",
     "input",
     "payload",
+    "frame",
     "task",
     "user_prompt",
     "prompt",
@@ -150,15 +153,23 @@ _KEYWORD_INPUT_NAMES = (
 )
 
 _METHOD_INPUT_KEY_PREFERENCES = {
+    "execute_task": ("task", "input", "payload"),
     "kickoff": ("inputs", "input", "payload"),
     "run": ("task", "user_prompt", "prompt", "input"),
     "arun": ("task", "user_prompt", "prompt", "input"),
     "run_stream": ("task", "user_prompt", "prompt", "input"),
+    "send": ("message", "messages", "input"),
     "achat": ("message", "messages", "input"),
     "chat": ("message", "messages", "input"),
     "query": ("query", "input", "message"),
     "respond": ("message", "input", "payload"),
     "process": ("frame", "payload", "input", "data"),
+    "process_frame": ("frame", "payload", "input", "data"),
+    "completion": ("request", "payload", "input"),
+    "call_tool": ("payload", "input", "arguments"),
+    "invoke_model": ("payload", "input", "request"),
+    "generate_content": ("contents", "input", "payload"),
+    "generate": ("prompt", "input", "payload"),
 }
 
 _DISCOVERY_INPUT_MODE_ORDER: tuple[InputMode, ...] = (
@@ -188,6 +199,7 @@ def framework_adapter_contract(
     method: str | None = None,
     input_mode: InputMode | None = None,
     input_key: str | None = None,
+    input_kwargs: Mapping[str, Any] | None = None,
     modality: str | None = None,
     trace_runtime: bool = True,
     metadata: Optional[Dict[str, Any]] = None,
@@ -248,6 +260,9 @@ def framework_adapter_contract(
     }
     if input_key:
         contract["input_key"] = str(input_key)
+    input_kwargs_keys = sorted(str(key) for key in dict(input_kwargs or {}))
+    if input_kwargs_keys:
+        contract["input_kwargs_keys"] = input_kwargs_keys
     if target:
         contract["target"] = str(target)
         contract["target_scheme"] = target_scheme
@@ -371,6 +386,7 @@ def wrap_framework(
     method: str | None = None,
     input_mode: InputMode | None = None,
     input_key: str | None = None,
+    input_kwargs: Mapping[str, Any] | None = None,
     system_prompt: str | None = None,
     output_key: str | None = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -396,6 +412,7 @@ def wrap_framework(
             method=method,
             input_mode=input_mode,
             input_key=input_key,
+            input_kwargs=input_kwargs,
             trace_runtime=trace_runtime,
             metadata=raw_metadata,
         )
@@ -407,6 +424,7 @@ def wrap_framework(
             method=method,
             input_mode=input_mode or "auto",
             input_key=input_key,
+            input_kwargs=input_kwargs,
             output_key=output_key,
             system_prompt=system_prompt,
             metadata={
@@ -425,6 +443,7 @@ def wrap_framework(
         method=method or spec.method,
         input_mode=input_mode or spec.input_mode,
         input_key=input_key,
+        input_kwargs=input_kwargs,
         output_key=output_key,
         system_prompt=system_prompt,
         metadata={
@@ -447,6 +466,7 @@ async def probe_framework_adapter(
     method: str | Callable[..., Any] | None = None,
     input_mode: InputMode | None = None,
     input_key: str | None = None,
+    input_kwargs: Mapping[str, Any] | None = None,
     system_prompt: str | None = None,
     output_key: str | None = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -478,6 +498,7 @@ async def probe_framework_adapter(
         method=method_name,
         input_mode=input_mode,
         input_key=input_key,
+        input_kwargs=input_kwargs,
         trace_runtime=trace_runtime,
         metadata=selected_metadata,
     )
@@ -489,6 +510,7 @@ async def probe_framework_adapter(
         method=method,
         input_mode=input_mode,
         input_key=input_key,
+        input_kwargs=input_kwargs,
         system_prompt=system_prompt,
         output_key=output_key,
         metadata=selected_metadata,
@@ -523,6 +545,7 @@ async def probe_framework_adapter(
         "input_mode": str(input_mode or contract.get("input_mode") or "auto"),
         "input_key": str(input_key or contract.get("input_key") or "")
         or None,
+        "input_kwargs_keys": sorted(str(key) for key in dict(input_kwargs or {})),
         "requires_external_service": bool(contract.get("requires_external_service")),
         "allow_external_target": bool(allow_external_target),
         "contract": contract,
@@ -967,7 +990,11 @@ def _adapter_candidate_input_key(
                 return param.name
         if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params):
             if input_mode == "dict":
-                return "inputs" if method_name == "kickoff" else "payload"
+                if method_name == "kickoff":
+                    return "inputs"
+                if method_name in {"process", "process_frame"}:
+                    return "frame"
+                return "payload"
             return "task" if method_name in {"run", "arun", "run_stream"} else "input"
     return None
 
@@ -1010,6 +1037,9 @@ def _adapter_discovery_score(
     if method_name == "execute_task" and input_mode == "dict":
         score += 0.1
         reasons.append("task_payload_adapter")
+    if method_name == "process_frame" and input_mode == "dict":
+        score += 0.1
+        reasons.append("frame_payload_adapter")
     if method_name in _STREAMING_METHODS:
         score += 0.1
         reasons.append("streaming_adapter_surface")
@@ -1544,6 +1574,16 @@ def _probe_summary(
             and invocation.get("call_style") not in (None, "", [], {})
         }
     )
+    input_kwargs_keys = sorted(
+        {
+            str(key)
+            for case in cases
+            for invocation in dict(case.get("runtime_trace") or {}).get("invocations", [])
+            if isinstance(invocation, Mapping)
+            for key in invocation.get("input_kwargs_keys", [])
+            if key not in (None, "", [], {})
+        }
+    )
     return {
         "case_count": len(cases),
         "passed_case_count": passed,
@@ -1556,6 +1596,7 @@ def _probe_summary(
         "input_mode": contract.get("input_mode"),
         "input_keys": input_keys,
         "call_styles": call_styles,
+        "input_kwargs_keys": input_kwargs_keys,
         "local_executable_fixture": bool(contract.get("local_executable_fixture")),
         "requires_external_service": bool(contract.get("requires_external_service")),
         "trace_runtime": bool(contract.get("trace_runtime")),

@@ -18,6 +18,7 @@ _KEYWORD_INPUT_NAMES = (
     "inputs",
     "input",
     "payload",
+    "frame",
     "task",
     "user_prompt",
     "prompt",
@@ -28,15 +29,75 @@ _KEYWORD_INPUT_NAMES = (
 )
 
 _METHOD_INPUT_KEY_PREFERENCES = {
+    "execute_task": ("task", "input", "payload"),
     "kickoff": ("inputs", "input", "payload"),
     "run": ("task", "user_prompt", "prompt", "input"),
     "arun": ("task", "user_prompt", "prompt", "input"),
     "run_stream": ("task", "user_prompt", "prompt", "input"),
+    "send": ("message", "messages", "input"),
     "achat": ("message", "messages", "input"),
     "chat": ("message", "messages", "input"),
     "query": ("query", "input", "message"),
     "respond": ("message", "input", "payload"),
     "process": ("frame", "payload", "input", "data"),
+    "process_frame": ("frame", "payload", "input", "data"),
+    "completion": ("request", "payload", "input"),
+    "call_tool": ("payload", "input", "arguments"),
+    "invoke_model": ("payload", "input", "request"),
+    "generate_content": ("contents", "input", "payload"),
+    "generate": ("prompt", "input", "payload"),
+}
+
+_AUTO_METHOD_ORDER = (
+    "call",
+    "ainvoke",
+    "invoke",
+    "astream",
+    "stream",
+    "stream_events",
+    "execute_task",
+    "kickoff",
+    "process_frame",
+    "process",
+    "run_stream",
+    "arun",
+    "run",
+    "send",
+    "respond",
+    "achat",
+    "chat",
+    "query",
+    "completion",
+    "call_tool",
+    "invoke_model",
+    "generate_content",
+    "generate",
+)
+
+_METHOD_INPUT_MODES: dict[str, InputMode] = {
+    "ainvoke": "dict",
+    "invoke": "dict",
+    "astream": "dict",
+    "stream": "dict",
+    "stream_events": "dict",
+    "execute_task": "dict",
+    "kickoff": "dict",
+    "process": "dict",
+    "process_frame": "dict",
+    "completion": "dict",
+    "call_tool": "dict",
+    "invoke_model": "dict",
+    "generate_content": "dict",
+    "generate": "dict",
+    "call": "agent_input",
+    "achat": "text",
+    "chat": "text",
+    "query": "text",
+    "respond": "text",
+    "run": "text",
+    "run_stream": "text",
+    "arun": "text",
+    "send": "text",
 }
 
 
@@ -58,6 +119,7 @@ class GenericAgentWrapper(AgentWrapper):
         method: str | Callable[..., Any] | None = None,
         input_mode: InputMode = "auto",
         input_key: str | None = None,
+        input_kwargs: Optional[Mapping[str, Any]] = None,
         output_key: str | None = None,
         system_prompt: str | None = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -68,6 +130,7 @@ class GenericAgentWrapper(AgentWrapper):
         self.method = method
         self.input_mode = input_mode
         self.input_key = input_key
+        self.input_kwargs = dict(input_kwargs or {})
         self.output_key = output_key
         self.system_prompt = system_prompt
         self.metadata = metadata or {}
@@ -93,6 +156,7 @@ class GenericAgentWrapper(AgentWrapper):
             payload,
             method_name=method_name,
             input_key=self.input_key,
+            input_kwargs=self.input_kwargs,
         )
 
         if inspect.isawaitable(raw):
@@ -118,6 +182,7 @@ class GenericAgentWrapper(AgentWrapper):
             streamed=streamed,
             call_style=call_style,
             input_key=selected_input_key,
+            input_kwargs_keys=sorted(str(key) for key in self.input_kwargs),
             wrapper_metadata=self.metadata,
             runtime_metadata=self.runtime_metadata,
         )
@@ -136,20 +201,7 @@ class GenericAgentWrapper(AgentWrapper):
                 return candidate
             raise AttributeError(f"Agent does not expose method '{self.method}'.")
 
-        for name in (
-            "call",
-            "ainvoke",
-            "invoke",
-            "astream",
-            "stream",
-            "stream_events",
-            "run_stream",
-            "arun",
-            "run",
-            "send",
-            "respond",
-            "chat",
-        ):
+        for name in _AUTO_METHOD_ORDER:
             candidate = getattr(self.agent, name, None)
             if callable(candidate):
                 return candidate
@@ -159,7 +211,7 @@ class GenericAgentWrapper(AgentWrapper):
 
         raise TypeError(
             "GenericAgentWrapper needs a callable agent or an object exposing one "
-            "of call/ainvoke/invoke/arun/run/send/respond/chat."
+            "of the supported framework adapter method names."
         )
 
     def _build_payload(self, input: AgentInput, *, method_name: str | None) -> Any:
@@ -199,11 +251,7 @@ class GenericAgentWrapper(AgentWrapper):
         return input
 
     def _infer_input_mode(self, method_name: str | None) -> InputMode:
-        if method_name in {"ainvoke", "invoke", "astream", "stream", "stream_events"}:
-            return "dict"
-        if method_name in {"arun", "run", "run_stream", "send", "respond", "chat"}:
-            return "text"
-        return "agent_input"
+        return _METHOD_INPUT_MODES.get(str(method_name or ""), "agent_input")
 
     def _messages_with_system(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         normalized = [dict(message) for message in messages]
@@ -435,6 +483,7 @@ def wrap_agent(
     method: str | Callable[..., Any] | None = None,
     input_mode: InputMode = "auto",
     input_key: str | None = None,
+    input_kwargs: Optional[Mapping[str, Any]] = None,
     output_key: str | None = None,
     system_prompt: str | None = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -450,6 +499,7 @@ def wrap_agent(
         method=method,
         input_mode=input_mode,
         input_key=input_key,
+        input_kwargs=input_kwargs,
         output_key=output_key,
         system_prompt=system_prompt,
         metadata=metadata,
@@ -487,24 +537,32 @@ def _invoke_method_with_payload(
     *,
     method_name: str | None,
     input_key: str | None,
+    input_kwargs: Mapping[str, Any] | None,
 ) -> tuple[Any, str, str | None]:
+    static_kwargs = {str(key): value for key, value in dict(input_kwargs or {}).items()}
     if payload is _NO_PAYLOAD:
+        if static_kwargs:
+            return method(**static_kwargs), "keyword", None
         return method(), "none", None
 
     if input_key:
         selected_key = str(input_key)
-        return method(**{selected_key: payload}), "keyword", selected_key
+        return method(**{**static_kwargs, selected_key: payload}), "keyword", selected_key
 
     selected_key = _signature_input_key(method, method_name=method_name)
     if selected_key:
-        return method(**{selected_key: payload}), "keyword", selected_key
+        return method(**{**static_kwargs, selected_key: payload}), "keyword", selected_key
 
     if _signature_accepts_positional(method):
+        if static_kwargs:
+            return method(payload, **static_kwargs), "positional_with_kwargs", None
         return method(payload), "positional", None
 
     if _signature_accepts_var_keyword(method) and isinstance(payload, Mapping):
-        return method(**payload), "expanded_kwargs", None
+        return method(**{**dict(payload), **static_kwargs}), "expanded_kwargs", None
 
+    if static_kwargs:
+        return method(payload, **static_kwargs), "positional_with_kwargs", None
     return method(payload), "positional", None
 
 
@@ -729,6 +787,7 @@ def _framework_runtime_trace(
     streamed: bool,
     call_style: str,
     input_key: str | None,
+    input_kwargs_keys: List[str],
     wrapper_metadata: Dict[str, Any],
     runtime_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -760,6 +819,8 @@ def _framework_runtime_trace(
     }
     if input_key:
         invocation["input_key"] = input_key
+    if input_kwargs_keys:
+        invocation["input_kwargs_keys"] = input_kwargs_keys
     summary = {
         "invocation_count": 1,
         "framework": framework or "generic",
@@ -767,6 +828,7 @@ def _framework_runtime_trace(
         "input_modes": [invocation["input_mode"]],
         "call_styles": [call_style],
         "input_keys": [input_key] if input_key else [],
+        "input_kwargs_keys": input_kwargs_keys,
         "output_types": [response_dict["type"]],
         "tool_call_count": response_dict.get("tool_call_count", 0),
         "artifact_count": response_dict.get("artifact_count", 0),

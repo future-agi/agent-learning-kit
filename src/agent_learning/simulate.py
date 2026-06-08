@@ -3032,6 +3032,7 @@ def build_framework_run_manifest(
     min_turns: int = 1,
     evaluation_enabled: bool = False,
     input_key: Optional[str] = None,
+    input_kwargs: Optional[Mapping[str, Any]] = None,
     output_key: Optional[str] = None,
     system_prompt: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -3062,6 +3063,7 @@ def build_framework_run_manifest(
         method=method,
         input_mode=input_mode,
         input_key=input_key,
+        input_kwargs=input_kwargs,
         modality=resolved_modality,
         trace_runtime=trace_runtime,
         metadata=copy.deepcopy(dict(metadata or {})),
@@ -3085,6 +3087,8 @@ def build_framework_run_manifest(
         agent["input_mode"] = str(input_mode)
     if input_key:
         agent["input_key"] = str(input_key)
+    if input_kwargs:
+        agent["input_kwargs"] = copy.deepcopy(dict(input_kwargs))
     if output_key:
         agent["output_key"] = str(output_key)
     if system_prompt:

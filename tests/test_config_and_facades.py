@@ -1427,6 +1427,63 @@ def test_keyword_input_framework_adapter_promotes_input_key(tmp_path):
     assert state["crew_inputs"]["message_count"] >= 1
 
 
+def test_side_kwarg_framework_adapter_promotes_call_contract(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_side_kwargs.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_side_kwargs_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "pipecat",
+        module.LocalPipecatProcessor(),
+        target=module.TARGET,
+        method_candidates=["process_frame"],
+        input_mode_candidates=["dict"],
+        max_candidates=2,
+    )
+
+    assert discovery["status"] == "passed"
+    assert discovery["adapter_candidates"][0]["method"] == "process_frame"
+    assert discovery["adapter_candidates"][0]["input_key"] == "frame"
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "process_frame"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["input_key"] == "frame"
+    assert manifest["agent"]["input_kwargs"] == {"direction": "downstream"}
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["input_key"] == "frame"
+    assert runtime_contract["call_style"] == "keyword"
+    assert runtime_contract["required_input_kwargs"] == ["direction"]
+    assert runtime_contract["required_state_keys"] == ["pipecat_frame"]
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-side-kwarg-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["input_keys"] == ["frame"]
+    assert runtime["summary"]["input_kwargs_keys"] == ["direction"]
+    assert runtime["invocations"][0]["input_key"] == "frame"
+    assert runtime["invocations"][0]["input_kwargs_keys"] == ["direction"]
+    assert state["pipecat_frame"]["direction"] == "downstream"
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 
