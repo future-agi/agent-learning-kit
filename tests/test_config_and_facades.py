@@ -447,9 +447,17 @@ def test_facades_expose_unified_agent_learning_modules():
     assert suite.build_suite_manifest is not None
     assert suite.build_optimization_lifecycle_plan is not None
     assert suite.build_regression_artifact_suite_manifest is not None
+    assert (
+        suite.build_framework_adapter_trinity_suite_optimization_manifest
+        is not None
+    )
     assert suite.build_framework_adapter_trinity_suite_manifest is not None
     assert suite.build_trinity_suite_manifest is not None
     assert suite.run_optimization_lifecycle_file is not None
+    assert (
+        suite.write_framework_adapter_trinity_suite_optimization_workspace
+        is not None
+    )
     assert suite.write_framework_adapter_trinity_suite_workspace is not None
     assert suite.write_suite_file is not None
     assert suite.AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND == (
@@ -1580,6 +1588,59 @@ def test_framework_adapter_trinity_suite_workspace_runs(tmp_path):
     assert children["framework-red-team"]["summary"]["metric_averages"][
         "red_team_campaign_quality"
     ] == pytest.approx(1.0)
+
+
+def test_framework_adapter_trinity_suite_optimization_workspace_selects_trinity(
+    tmp_path,
+):
+    from agent_learning import suite
+
+    target = (
+        f"{PROJECT_ROOT / 'examples' / 'sdk_framework_adapter_one_call_promotion.py'}"
+        ":LocalRefundOrchestrator"
+    )
+    workspace = suite.write_framework_adapter_trinity_suite_optimization_workspace(
+        name="framework-adapter-trinity-suite",
+        framework="custom_refund_orchestrator",
+        target=target,
+        directory=tmp_path / "framework-adapter-trinity-opt",
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        discovery_max_candidates=4,
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit framework evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+        redteam_attacks=["prompt_injection", "credential_exfiltration"],
+        redteam_surfaces=["instruction", "tool"],
+        metadata={"suite": "framework-adapter-trinity-suite-optimization"},
+    )
+
+    optimization_manifest = workspace["suite_optimization"]
+    candidates = optimization_manifest["optimization"]["target"]["search_space"][
+        "jobs.0"
+    ]
+    assert candidates[0]["command"] == "run"
+    assert candidates[1]["command"] == "suite"
+    assert Path(workspace["paths"]["suite_optimization"]).exists()
+
+    result = suite.optimize_suite_file(workspace["paths"]["suite_optimization"])
+
+    assert result["kind"] == "agent-learning.suite-optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] == pytest.approx(1.0)
+    assert "jobs.0" in result["summary"]["search_paths"]
+    assert result["optimization"]["best_config"]["jobs"][0]["command"] == "suite"
+    assert result["optimization"]["best_config"]["jobs"][0]["path"] == "suite.json"
+    assert result["optimization"]["suite_optimization"]["source"] == (
+        "agent_learning_suite"
+    )
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(

@@ -620,6 +620,13 @@ same adapter contract/proof, and an `agent-learning.suite.v1` wrapper with
 `examples/sdk_framework_adapter_trinity_suite.py` for the full
 target-to-suite workflow.
 
+To make that workflow itself optimizer-selected, use
+`suite.write_framework_adapter_trinity_suite_optimization_workspace(...)`: it
+writes a suite optimization whose search space compares a run-only seed against
+the full nested run+redteam trinity suite and selects the candidate satisfying
+framework, eval, and red-team capability gates. See
+`examples/sdk_framework_adapter_trinity_suite_optimization.py`.
+
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
 native gate alongside runtime and trace metrics, so an HTTP target or

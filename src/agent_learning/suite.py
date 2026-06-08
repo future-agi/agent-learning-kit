@@ -738,6 +738,166 @@ def write_framework_adapter_trinity_suite_workspace(
     }
 
 
+def build_framework_adapter_trinity_suite_optimization_manifest(
+    *,
+    name: str,
+    run_path: str | Path,
+    trinity_suite_path: str | Path,
+    framework: str,
+    required_env: Sequence[str] = (),
+    required_frameworks: Sequence[str] = (),
+    metadata: Optional[Mapping[str, Any]] = None,
+    threshold: float = 1.0,
+    optimizer: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a suite optimization that selects full framework trinity coverage."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not framework:
+        raise ValueError("framework is required")
+    suite_name = str(name)
+    frameworks = _unique_strings(required_frameworks) or [str(framework)]
+    seed_job = {
+        "id": "optimized-framework-run",
+        "command": "run",
+        "path": _suite_path_text(run_path),
+        "name": f"{suite_name}-run-only-seed",
+    }
+    trinity_job = {
+        "id": "framework-adapter-trinity",
+        "command": "suite",
+        "path": _suite_path_text(trinity_suite_path),
+        "name": f"{suite_name}-full-trinity",
+    }
+    manifest = build_suite_manifest(
+        name=suite_name,
+        required_env=required_env,
+        jobs=[seed_job],
+        required_capabilities={
+            "commands": ["run", "redteam", "suite"],
+            "result_kinds": [
+                "agent-learning.run.v1",
+                "agent-learning.redteam.v1",
+                "agent-learning.suite.v1",
+            ],
+            "frameworks": frameworks,
+            "metrics": [
+                "framework_runtime_contract",
+                "framework_adapter_contract_quality",
+                "adversarial_resilience",
+                "red_team_campaign_quality",
+            ],
+        },
+        metadata={
+            "source": (
+                "agent_learning.suite."
+                "build_framework_adapter_trinity_suite_optimization_manifest"
+            ),
+            "task_kind": "framework_adapter_trinity_suite_optimization",
+            "framework": framework,
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+    manifest["optimization"] = {
+        "threshold": float(threshold),
+        "target": {
+            "name": suite_name,
+            "layers": ["harness", "framework", "security", "evaluator"],
+            "base_config": {"jobs": [copy.deepcopy(seed_job)]},
+            "search_space": {
+                "jobs.0": [
+                    copy.deepcopy(seed_job),
+                    copy.deepcopy(trinity_job),
+                ]
+            },
+            "metadata": {
+                "source": (
+                    "agent_learning.suite."
+                    "build_framework_adapter_trinity_suite_optimization_manifest"
+                ),
+                "task_kind": "framework_adapter_trinity_suite_optimization",
+                "framework": framework,
+                **copy.deepcopy(dict(metadata or {})),
+            },
+        },
+        "optimizer": copy.deepcopy(
+            dict(
+                optimizer
+                or {
+                    "algorithm": "agent",
+                    "max_candidates": 3,
+                    "include_seed": True,
+                    "auto_diagnose": False,
+                }
+            )
+        ),
+    }
+    return manifest
+
+
+def write_framework_adapter_trinity_suite_optimization_workspace(
+    *,
+    name: str,
+    framework: str,
+    target: str,
+    directory: str | Path,
+    suite_optimization_threshold: float = 1.0,
+    suite_optimizer: Optional[Mapping[str, Any]] = None,
+    **workspace_kwargs: Any,
+) -> dict[str, Any]:
+    """Write a framework trinity workspace plus an optimizable outer suite."""
+
+    workspace = write_framework_adapter_trinity_suite_workspace(
+        name=name,
+        framework=framework,
+        target=target,
+        directory=directory,
+        **workspace_kwargs,
+    )
+    workspace_root = Path(workspace["paths"]["workspace"]).expanduser().resolve()
+    metadata = copy.deepcopy(dict(workspace_kwargs.get("metadata") or {}))
+    optimization_manifest = build_framework_adapter_trinity_suite_optimization_manifest(
+        name=f"{name}-optimization",
+        run_path=Path("manifests") / Path(workspace["paths"]["run"]).name,
+        trinity_suite_path=Path("suite.json"),
+        framework=framework,
+        required_env=workspace_kwargs.get("required_env", ()),
+        required_frameworks=[framework],
+        metadata={
+            "source": (
+                "agent_learning.suite."
+                "write_framework_adapter_trinity_suite_optimization_workspace"
+            ),
+            "framework": framework,
+            "target": workspace["summary"]["target"],
+            **metadata,
+        },
+        threshold=suite_optimization_threshold,
+        optimizer=suite_optimizer,
+    )
+    optimization_path = write_suite_file(
+        optimization_manifest,
+        workspace_root / "suite-optimization.json",
+    )
+    return {
+        "kind": "agent-learning.framework-adapter-trinity-optimization-workspace.v1",
+        "status": "passed",
+        "name": str(name),
+        "summary": {
+            **copy.deepcopy(dict(workspace.get("summary") or {})),
+            "suite_optimization_manifest": str(optimization_path),
+            "suite_optimization_search_paths": ["jobs.0"],
+        },
+        "paths": {
+            **copy.deepcopy(dict(workspace.get("paths") or {})),
+            "suite_optimization": str(optimization_path),
+        },
+        "suite_optimization": optimization_manifest,
+        "trinity_workspace": workspace,
+    }
+
+
 def build_regression_artifact_suite_manifest(
     *,
     name: str,
@@ -3964,6 +4124,7 @@ __all__ = [
     "SuiteError",
     "SuiteOptimizationOptions",
     "SuiteRunOptions",
+    "build_framework_adapter_trinity_suite_optimization_manifest",
     "build_framework_adapter_trinity_suite_manifest",
     "build_optimization_lifecycle_plan",
     "build_regression_artifact_suite_manifest",
@@ -3985,6 +4146,7 @@ __all__ = [
     "verify_trust_certificate",
     "verify_trust_certificate_file",
     "validate_suite_env",
+    "write_framework_adapter_trinity_suite_optimization_workspace",
     "write_framework_adapter_trinity_suite_workspace",
     "write_suite_file",
 ]
