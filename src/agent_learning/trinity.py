@@ -366,12 +366,14 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/framework_pydantic_ai_manifest.json",
     "examples/framework_livekit_manifest.json",
     "examples/framework_pipecat_manifest.json",
+    "examples/framework_openenv_manifest.json",
     "examples/voice_streaming_realtime_manifest.json",
     "examples/voice_streaming_realtime_optimization.json",
     "examples/agent_integration_optimization.json",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
+    "examples/sdk_framework_adapter_openenv_trace.py",
     "examples/sdk_realtime_voice_optimization.py",
 ]
 
@@ -385,6 +387,8 @@ V1_FRAMEWORK_PROVIDER_FRAMEWORKS = [
     "pydantic_ai",
     "livekit",
     "pipecat",
+    "openenv",
+    "gymnasium",
 ]
 
 V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES = ["text", "voice"]
@@ -465,6 +469,22 @@ V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
         "modality": "voice",
         "agent_type": "framework",
         "required_environment_types": ["framework_trace"],
+    },
+    {
+        "path": "examples/framework_openenv_manifest.json",
+        "kind": "agent-learning.run.v1",
+        "framework": "openenv",
+        "modality": "text",
+        "agent_type": "framework",
+        "required_environment_types": [],
+        "required_evaluation_config_keys": [
+            "framework_runtime_contract",
+            "required_openenv",
+            "openenv_quality",
+        ],
+        "required_metric_weights": ["openenv_coverage", "openenv_quality"],
+        "required_framework_runtime_signals": ["openenv"],
+        "required_state_keys": ["openenv"],
     },
     {
         "path": "examples/voice_streaming_realtime_manifest.json",
@@ -2233,6 +2253,13 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
     required_transports = set(V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS)
     required_target_schemes = set(V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES)
     required_capabilities = {"messages", "tool_calls", "runtime_trace"}
+    required_openenv_capabilities = {
+        "environment_replay",
+        "reset_step_trace",
+        "runtime_trace",
+        "state",
+        "artifacts",
+    }
     required_evidence = {
         "framework_runtime",
         "framework_trace",
@@ -2443,7 +2470,12 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
                         "observed": target_scheme,
                     }
                 )
-            missing_capabilities = sorted(required_capabilities - capabilities)
+            expected_capabilities = (
+                required_openenv_capabilities
+                if framework in {"openenv", "gymnasium", "gymnasium_env"}
+                else required_capabilities
+            )
+            missing_capabilities = sorted(expected_capabilities - capabilities)
             if missing_capabilities:
                 contract_errors.append(
                     {
@@ -2452,7 +2484,10 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
                         "missing": missing_capabilities,
                     }
                 )
-            missing_evidence = sorted(required_evidence - evidence)
+            expected_evidence = set(required_evidence)
+            if framework in {"openenv", "gymnasium", "gymnasium_env"}:
+                expected_evidence.add("openenv")
+            missing_evidence = sorted(expected_evidence - evidence)
             if missing_evidence:
                 contract_errors.append(
                     {
@@ -2519,6 +2554,31 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
             if isinstance(payload.get("simulation"), Mapping)
             else {}
         )
+        evaluation = (
+            payload.get("evaluation")
+            if isinstance(payload.get("evaluation"), Mapping)
+            else {}
+        )
+        agent_report = (
+            evaluation.get("agent_report")
+            if isinstance(evaluation.get("agent_report"), Mapping)
+            else {}
+        )
+        eval_config = (
+            agent_report.get("config")
+            if isinstance(agent_report.get("config"), Mapping)
+            else {}
+        )
+        metric_weights = (
+            eval_config.get("metric_weights")
+            if isinstance(eval_config.get("metric_weights"), Mapping)
+            else {}
+        )
+        framework_runtime_contract = (
+            eval_config.get("framework_runtime_contract")
+            if isinstance(eval_config.get("framework_runtime_contract"), Mapping)
+            else {}
+        )
         environments = [
             env
             for env in simulation.get("environments") or []
@@ -2545,6 +2605,36 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
         missing_environment_types = sorted(
             set(required_environment_types) - set(environment_types)
         )
+        required_eval_config_keys = [
+            str(item) for item in spec.get("required_evaluation_config_keys", [])
+        ]
+        missing_eval_config_keys = sorted(
+            set(required_eval_config_keys) - set(eval_config)
+        )
+        required_metric_weights = [
+            str(item) for item in spec.get("required_metric_weights", [])
+        ]
+        missing_metric_weights = sorted(
+            set(required_metric_weights) - set(metric_weights)
+        )
+        required_runtime_signals = [
+            str(item) for item in spec.get("required_framework_runtime_signals", [])
+        ]
+        observed_runtime_signals = [
+            str(item)
+            for item in framework_runtime_contract.get("required_signals", [])
+        ]
+        missing_runtime_signals = sorted(
+            set(required_runtime_signals) - set(observed_runtime_signals)
+        )
+        required_state_keys = [
+            str(item) for item in spec.get("required_state_keys", [])
+        ]
+        observed_state_keys = [
+            str(item)
+            for item in framework_runtime_contract.get("required_state_keys", [])
+        ]
+        missing_state_keys = sorted(set(required_state_keys) - set(observed_state_keys))
         observed_kind = (
             payload.get("version")
             or payload.get("kind")
@@ -2564,6 +2654,21 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
                 "environment_types": environment_types,
                 "required_environment_types": required_environment_types,
                 "missing_environment_types": missing_environment_types,
+                "evaluation_config_keys": sorted(str(key) for key in eval_config),
+                "required_evaluation_config_keys": required_eval_config_keys,
+                "missing_evaluation_config_keys": missing_eval_config_keys,
+                "metric_weights": sorted(str(key) for key in metric_weights),
+                "required_metric_weights": required_metric_weights,
+                "missing_metric_weights": missing_metric_weights,
+                "framework_runtime_required_signals": observed_runtime_signals,
+                "required_framework_runtime_signals": required_runtime_signals,
+                "missing_framework_runtime_signals": missing_runtime_signals,
+                "framework_runtime_required_state_keys": observed_state_keys,
+                "required_state_keys": required_state_keys,
+                "missing_state_keys": missing_state_keys,
+                "required_openenv": [
+                    str(item) for item in eval_config.get("required_openenv", [])
+                ],
                 "required_env": list(payload.get("required_env") or []),
                 "agent_target": agent_target,
             }
@@ -2600,6 +2705,52 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
                     "required": required_environment_types,
                     "observed": environment_types,
                     "missing": missing_environment_types,
+                }
+            )
+        if missing_eval_config_keys:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "evaluation.agent_report.config",
+                    "required": required_eval_config_keys,
+                    "observed": sorted(str(key) for key in eval_config),
+                    "missing": missing_eval_config_keys,
+                }
+            )
+        if missing_metric_weights:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": "evaluation.agent_report.config.metric_weights",
+                    "required": required_metric_weights,
+                    "observed": sorted(str(key) for key in metric_weights),
+                    "missing": missing_metric_weights,
+                }
+            )
+        if missing_runtime_signals:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": (
+                        "evaluation.agent_report.config."
+                        "framework_runtime_contract.required_signals"
+                    ),
+                    "required": required_runtime_signals,
+                    "observed": observed_runtime_signals,
+                    "missing": missing_runtime_signals,
+                }
+            )
+        if missing_state_keys:
+            manifest_errors.append(
+                {
+                    "path": relative_path,
+                    "field": (
+                        "evaluation.agent_report.config."
+                        "framework_runtime_contract.required_state_keys"
+                    ),
+                    "required": required_state_keys,
+                    "observed": observed_state_keys,
+                    "missing": missing_state_keys,
                 }
             )
         if not payload.get("required_env"):

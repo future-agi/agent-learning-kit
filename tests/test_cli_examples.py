@@ -139,6 +139,35 @@ def test_sdk_framework_adapter_openenv_trace_example_runs(tmp_path):
     assert output["openenv_summary"]["step_count"] == 2
 
 
+def test_framework_openenv_manifest_runs_through_cli(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_OPENENV_EXAMPLE_KEY",
+        "real-local-openenv-framework-key",
+    )
+    output_path = tmp_path / "framework-openenv.json"
+
+    exit_code = main([
+        "run",
+        str(EXAMPLES / "framework_openenv_manifest.json"),
+        "--output",
+        str(output_path),
+    ])
+
+    assert exit_code == 0
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    metrics = result["summary"]["metric_averages"]
+    assert metrics["framework_runtime_contract"] == pytest.approx(1.0)
+    assert metrics["openenv_coverage"] == pytest.approx(1.0)
+    assert metrics["openenv_quality"] == pytest.approx(1.0)
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["openenv"]["summary"]["step_count"] == 2
+    assert state["framework_runtime"]["invocations"][0]["output"][
+        "openenv_summary"
+    ]["done"] is True
+
+
 @pytest.mark.parametrize(
     ("command", "example", "kind", "required_env"),
     [

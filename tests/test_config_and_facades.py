@@ -15492,6 +15492,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert framework_provider["observed_frameworks"] == (
         trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
     )
+    assert {"openenv", "gymnasium"} <= set(framework_provider["observed_frameworks"])
     assert set(framework_provider["observed_modalities"]) == {"text", "voice"}
     assert framework_provider["observed_transports"] == ["in_process"]
     assert framework_provider["observed_target_schemes"] == (
@@ -15529,6 +15530,27 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         assert manifest["modality"] == "text"
         assert manifest["missing_environment_types"] == []
         assert manifest["agent_target"].startswith("framework_shims.py:")
+    openenv_manifest = manifest_contracts["examples/framework_openenv_manifest.json"]
+    assert openenv_manifest["kind"] == "agent-learning.run.v1"
+    assert openenv_manifest["agent_type"] == "framework"
+    assert openenv_manifest["frameworks"] == ["openenv"]
+    assert openenv_manifest["modality"] == "text"
+    assert openenv_manifest["missing_environment_types"] == []
+    assert openenv_manifest["missing_evaluation_config_keys"] == []
+    assert openenv_manifest["missing_metric_weights"] == []
+    assert openenv_manifest["missing_framework_runtime_signals"] == []
+    assert openenv_manifest["missing_state_keys"] == []
+    assert {"required_openenv", "openenv_quality"} <= set(
+        openenv_manifest["evaluation_config_keys"]
+    )
+    assert {"openenv_coverage", "openenv_quality"} <= set(
+        openenv_manifest["metric_weights"]
+    )
+    assert "openenv" in openenv_manifest["framework_runtime_required_signals"]
+    assert openenv_manifest["framework_runtime_required_state_keys"] == ["openenv"]
+    assert {"openenv", "reset", "step", "reward", "done", "sandbox"} <= set(
+        openenv_manifest["required_openenv"]
+    )
     livekit_manifest = manifest_contracts["examples/framework_livekit_manifest.json"]
     assert livekit_manifest["kind"] == "agent-learning.run.v1"
     assert livekit_manifest["agent_type"] == "framework"

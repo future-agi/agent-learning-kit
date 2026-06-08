@@ -73,12 +73,13 @@ rendered `harness_diagnosis` card, diagnosis actions, rollout plan, proof, and
 2026 research lineage without calling hosted optimizer/eval services.
 Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
-CrewAI, PydanticAI, LiveKit, and Pipecat, requires local fixture targets with
-no external service dependency, and validates representative text, voice, and
-realtime manifests. It also runs the composed trinity-stack probe readiness
-gate, proving that the selected orchestration stack agent can pass a localhost
-task evaluator and promote into one run manifest with world, framework,
-retrieval, memory, multi-agent, and evaluation-hook evidence.
+CrewAI, PydanticAI, LiveKit, Pipecat, OpenEnv, and Gymnasium, requires local
+fixture targets with no external service dependency, and validates
+representative text, voice, realtime, and OpenEnv framework manifests. It also
+runs the composed trinity-stack probe readiness gate, proving that the selected
+orchestration stack agent can pass a localhost task evaluator and promote into
+one run manifest with world, framework, retrieval, memory, multi-agent, and
+evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -783,8 +784,8 @@ local `agent-learning.framework-adapter-contract.v1` per framework, rejects
 HTTP/HTTPS targets by default, and carries a `contract_quality_gate` that
 `framework_adapter_contract_quality` can score with plural requirements such as
 `required_frameworks`. The default matrix covers LangChain, LangGraph,
-LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, and Pipecat without
-importing or calling those packages.
+LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, Pipecat, OpenEnv, and
+Gymnasium without importing or calling those packages.
 `simulate.build_framework_adapter_matrix_run_manifest()` turns the same matrix
 into a normal local run artifact. `optimize.optimize_framework_adapter_matrix()`
 then searches weak versus verified matrix candidates through AgentOptimizer,
@@ -1646,6 +1647,8 @@ The `sdk_framework_adapter_openenv_trace.py` example covers the adapter side of
 the same contract: a local framework returns a plain OpenEnv/Gymnasium-style
 trace dict, and adapter promotion derives `openenv` state, `openenv` events,
 trace artifacts, plus generated OpenEnv coverage and quality gates.
+The static `framework_openenv_manifest.json` carries the same OpenEnv framework
+adapter gate into `agent-learn release-check`.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

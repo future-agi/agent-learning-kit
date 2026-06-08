@@ -50,3 +50,6 @@ The executable OpenEnv bar should prove more than action success:
 - Auto-generated adapter eval configs now derive `required_openenv` and
   `openenv_quality` from selected framework-probe output; see
   `examples/sdk_framework_adapter_openenv_trace.py`.
+- V1 release-check now includes OpenEnv and Gymnasium in the native framework
+  adapter contract matrix and validates `examples/framework_openenv_manifest.json`
+  for OpenEnv runtime state, events, artifacts, coverage, and quality gates.
