@@ -223,6 +223,9 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
     assert "langgraph" in simulate.supported_frameworks()
     assert callable(simulate.probe_framework_adapter)
     assert callable(simulate.run_framework_adapter_probe)
+    assert callable(simulate.memory_layer_contract)
+    assert callable(simulate.probe_memory_layer)
+    assert callable(simulate.run_memory_layer_probe)
 
 
 def test_framework_adapter_probe_runs_custom_framework_runtime() -> None:
@@ -326,6 +329,116 @@ def test_framework_adapter_probe_runs_sync_callable_and_rejects_external_target(
             callable_agent,
             target="https://example.com/agent",
             input_mode="agent_input",
+        )
+
+
+def test_memory_layer_probe_scores_local_retrieval_and_lineage() -> None:
+    memory_candidate = {
+        "retrieval_memory": {
+            "documents": [
+                {
+                    "id": "doc_refund_2026",
+                    "content": "Current refund memory policy.",
+                    "current": True,
+                }
+            ],
+            "citations": [
+                {
+                    "claim": "Refund policy is current.",
+                    "doc_ids": ["doc_refund_2026"],
+                    "freshness_checked": True,
+                }
+            ],
+        },
+        "agent_memory_lineage": {
+            "target": {"agent": "refund-agent", "tenant": "tenant_a"},
+            "stores": [{"id": "episodic", "tenant": "tenant_a"}],
+            "memories": [
+                {
+                    "id": "refund_decision",
+                    "source_ids": ["doc_refund_2026"],
+                    "tenant": "tenant_a",
+                }
+            ],
+            "operations": [
+                {
+                    "id": "read_policy",
+                    "operation": "read",
+                    "trace_id": "trace_read",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                },
+                {
+                    "id": "write_policy",
+                    "operation": "write",
+                    "trace_id": "trace_write",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                },
+                {
+                    "id": "recall_policy",
+                    "operation": "recall",
+                    "trace_id": "trace_recall",
+                    "status": "allowed",
+                    "policy_decision": "allowed",
+                },
+            ],
+            "lineage": [
+                {
+                    "from": "doc_refund_2026",
+                    "to": "refund_decision",
+                    "type": "source_attribution",
+                }
+            ],
+            "policies": {
+                "retention": {"status": "enforced"},
+                "deletion": {"status": "enforced"},
+                "redaction": {"status": "enforced"},
+                "tenant_isolation": {"status": "enforced"},
+                "audit": {"status": "enforced"},
+            },
+            "poison_tests": [{"id": "canary", "status": "blocked"}],
+            "isolation_tests": [{"id": "tenant", "status": "passed"}],
+            "retention_tests": [{"id": "retention", "status": "passed"}],
+            "observability": {"traces": ["trace_read"]},
+            "artifacts": [{"id": "memory-audit", "type": "json"}],
+            "required_evidence": [
+                "source_attribution",
+                "tenant_isolation",
+                "audit",
+                "retention_policy",
+                "deletion_policy",
+                "redaction",
+                "canary",
+            ],
+            "required_signals": ["memory_lineage", "source_attribution", "audit"],
+        },
+    }
+
+    result = simulate.run_memory_layer_probe(
+        memory_candidate,
+        cases=[{"id": "refund-memory", "input": "Recall refund policy memory."}],
+        target="memory_shims.py:build_memory",
+        metadata={"suite": "memory-probe"},
+    )
+
+    assert result["kind"] == "agent-learning.memory-layer-probe.v1"
+    assert result["status"] == "passed"
+    assert result["contract"]["kind"] == "agent-learning.memory-layer-contract.v1"
+    assert result["contract"]["local_executable_fixture"] is True
+    assert result["summary"]["retrieval_citations_current"] is True
+    assert result["summary"]["memory_required_operations_present"] is True
+    assert result["summary"]["has_tenant_isolation"] is True
+    assert result["summary"]["blocking_gap_count"] == 0
+    assert [env["type"] for env in result["environments"]] == [
+        "retrieval_memory",
+        "agent_memory_lineage",
+    ]
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.run_memory_layer_probe(
+            memory_candidate,
+            target="https://example.com/memory",
         )
 
 

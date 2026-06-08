@@ -35,6 +35,9 @@ AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND = (
 AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND = (
     "agent-learning.optimization.memory-lineage-proof.v1"
 )
+AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.memory-layer-probe-proof.v1"
+)
 AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND = (
     "agent-learning.optimization.multi-agent-coordination-proof.v1"
 )
@@ -7384,6 +7387,611 @@ def optimize_memory_layer(
         name=result_name,
         dry_run=dry_run,
     )
+
+
+def optimize_memory_layer_probe(
+    *,
+    name: str,
+    memory_candidates: Sequence[Mapping[str, Any]],
+    cases: Sequence[Mapping[str, Any]] = (),
+    target: str | None = None,
+    threshold: float = 0.9,
+    allow_external_target: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    max_candidates: Optional[int] = None,
+    include_seed: bool = True,
+) -> dict[str, Any]:
+    """Optimize local memory/retrieval candidates with direct probes."""
+
+    if not name:
+        raise ValueError("name is required")
+    if not memory_candidates:
+        raise ValueError("memory_candidates must contain at least one candidate")
+
+    candidate_configs = [
+        _memory_probe_candidate_config(
+            candidate,
+            target=target,
+            allow_external_target=allow_external_target,
+        )
+        for candidate in memory_candidates
+    ]
+    opt = _opt()
+    optimizer_module = optional_module("fi.opt.optimizers", _OPTIMIZE_EXTRA)
+    optimization_target = opt.OptimizationTarget(
+        name=name,
+        layers=["retrieval", "memory", "policy", "harness", "evaluator"],
+        base_config={"memory": copy.deepcopy(candidate_configs[0])},
+        search_space={"memory": copy.deepcopy(candidate_configs)},
+        metadata={
+            "source": "agent_learning.optimize.optimize_memory_layer_probe",
+            "task_kind": "memory_layer_probe",
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+
+    def evaluate_candidate(candidate: Any) -> Any:
+        memory = _plain_mapping(_plain_mapping(candidate.config).get("memory"))
+        probe_result = _run_memory_probe_candidate(
+            memory=memory,
+            cases=cases,
+            target=target,
+            metadata=metadata,
+            default_allow_external_target=allow_external_target,
+        )
+        scoring = score_memory_layer_probe_result(probe_result)
+        return opt.CandidateEvaluation(
+            candidate=candidate,
+            score=float(scoring["score"]),
+            reason=str(scoring["reason"]),
+            report=copy.deepcopy(probe_result),
+            metadata={
+                "candidate_patch": copy.deepcopy(candidate.patch),
+                "patch": copy.deepcopy(candidate.patch),
+                "search_paths": list(candidate.metadata.get("search_paths", [])),
+                "metrics": copy.deepcopy(scoring["metrics"]),
+                "findings": copy.deepcopy(probe_result.get("findings", [])),
+                "report_summary": copy.deepcopy(probe_result.get("summary", {})),
+                "evaluation_score": float(scoring["score"]),
+                "evaluation_passed": bool(scoring["passed"]),
+            },
+        )
+
+    optimizer = optimizer_module.AgentOptimizer(
+        target=optimization_target,
+        evaluate_candidate=evaluate_candidate,
+        max_candidates=max_candidates,
+        include_seed=include_seed,
+        auto_diagnose=False,
+    )
+    optimization_result = optimizer.optimize()
+    payload = _memory_probe_optimization_payload(
+        name=name,
+        threshold=threshold,
+        optimization_result=optimization_result,
+        metadata=metadata,
+    )
+    payload = with_optimization_candidate_lineage(payload)
+    payload = with_optimization_governance(payload)
+    payload = _with_memory_layer_probe_proof(payload)
+    return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
+
+
+def build_memory_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    evaluation_config: Mapping[str, Any],
+    name: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    agent: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    metadata: Optional[Mapping[str, Any]] = None,
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+) -> dict[str, Any]:
+    """Promote a verified memory probe optimization into a run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    optimization = _plain_mapping(payload.get("optimization"))
+    best_config = _plain_mapping(optimization.get("best_config"))
+    memory = _memory_probe_manifest_candidate(_plain_mapping(best_config.get("memory")))
+    if not memory:
+        raise ValueError("optimization.best_config.memory is required")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    proof = _plain_mapping(
+        payload.get("memory_layer_probe_proof")
+        or optimization.get("memory_layer_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND:
+        raise ValueError("memory_layer_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("memory_layer_probe_proof must be passed")
+
+    from . import simulate as _agent_simulate
+
+    merged_metadata = {
+        "source": (
+            "agent_learning.optimize."
+            "build_memory_run_manifest_from_probe_optimization"
+        ),
+        "promoted_from_memory_layer_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+            or proof.get("selected_candidate_id")
+        ),
+        "memory_layer_probe_proof": copy.deepcopy(proof),
+        **copy.deepcopy(dict(metadata or {})),
+    }
+    manifest = _agent_simulate.build_memory_layer_run_manifest(
+        name=str(name or f"{payload.get('name') or 'memory-layer-probe'}-run"),
+        memory=memory,
+        evaluation_config=evaluation_config,
+        agent=agent,
+        scenario=scenario,
+        required_env=required_env,
+        threshold=threshold,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        auto_execute_tools=auto_execute_tools,
+        metadata=merged_metadata,
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_memory_layer_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": merged_metadata["probe_selected_candidate_id"],
+        "memory_layer_probe_proof_status": proof.get("status"),
+    }
+    return manifest
+
+
+def score_memory_layer_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Score a memory-layer probe artifact into local optimizer metrics."""
+
+    summary = _plain_mapping(result.get("summary"))
+    case_count = max(_as_int(summary.get("case_count")), 1)
+    passed_cases = _as_int(summary.get("passed_case_count"))
+    case_pass_rate = passed_cases / case_count
+    local_contract_quality = 1.0 if (
+        summary.get("local_executable_fixture") is True
+        and summary.get("requires_external_service") is False
+    ) else 0.0
+    retrieval_grounding = 1.0 if (
+        _as_int(summary.get("retrieval_current_document_count")) > 0
+        and _as_int(summary.get("retrieval_citation_count")) > 0
+        and summary.get("retrieval_citations_current") is True
+        and _as_int(summary.get("retrieval_freshness_checked_count"))
+        >= _as_int(summary.get("retrieval_citation_count"))
+    ) else 0.0
+    lineage_quality = 1.0 if (
+        _as_int(summary.get("memory_record_count")) > 0
+        and summary.get("has_source_attribution") is True
+        and summary.get("memory_required_operations_present") is True
+        and _as_int(summary.get("memory_audited_operation_count"))
+        >= _as_int(summary.get("memory_operation_count"))
+    ) else 0.0
+    governance_quality = 1.0 if (
+        all(
+            summary.get(key) is True
+            for key in (
+                "has_tenant_isolation",
+                "has_audit",
+                "has_retention_policy",
+                "has_deletion_policy",
+                "has_redaction",
+                "has_canaries",
+                "has_observability",
+                "has_artifacts",
+            )
+        )
+        and _as_int(summary.get("policy_violation_count")) == 0
+        and _as_int(summary.get("open_poisoning_count")) == 0
+        and _as_int(summary.get("isolation_violation_count")) == 0
+        and _as_int(summary.get("retention_violation_count")) == 0
+        and _as_int(summary.get("blocking_gap_count")) == 0
+    ) else 0.0
+    finding_quality = 1.0 if len(_plain_list(result.get("findings"))) == 0 else 0.0
+    score = round(
+        (
+            case_pass_rate * 0.25
+            + retrieval_grounding * 0.2
+            + lineage_quality * 0.25
+            + governance_quality * 0.2
+            + local_contract_quality * 0.05
+            + finding_quality * 0.05
+        ),
+        6,
+    )
+    return {
+        "kind": "agent-learning.memory-layer-probe-score.v1",
+        "score": score,
+        "passed": bool(result.get("passed")) and score >= 0.9,
+        "reason": (
+            "memory probe passed with retrieval, lineage, and governance evidence"
+            if bool(result.get("passed")) and score >= 0.9
+            else "memory probe did not close retrieval, lineage, and governance evidence"
+        ),
+        "metrics": {
+            "memory_layer_probe_pass_rate": round(case_pass_rate, 6),
+            "memory_layer_probe_local_contract_quality": local_contract_quality,
+            "memory_layer_probe_retrieval_grounding": retrieval_grounding,
+            "memory_layer_probe_lineage_quality": lineage_quality,
+            "memory_layer_probe_governance_quality": governance_quality,
+            "memory_layer_probe_finding_quality": finding_quality,
+            "memory_layer_probe_score": score,
+        },
+        "summary": copy.deepcopy(dict(summary)),
+    }
+
+
+def _memory_probe_candidate_config(
+    candidate: Mapping[str, Any],
+    *,
+    target: str | None,
+    allow_external_target: bool,
+) -> dict[str, Any]:
+    config = copy.deepcopy(dict(candidate))
+    config.setdefault("target", target)
+    config.setdefault("allow_external_target", allow_external_target)
+    return config
+
+
+def _memory_probe_manifest_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    config = copy.deepcopy(dict(candidate))
+    for key in ("target", "allow_external_target", "cases", "metadata", "namespace"):
+        config.pop(key, None)
+    return config
+
+
+def _run_memory_probe_candidate(
+    *,
+    memory: Mapping[str, Any],
+    cases: Sequence[Mapping[str, Any]],
+    target: str | None,
+    metadata: Optional[Mapping[str, Any]],
+    default_allow_external_target: bool,
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    probe_metadata = {
+        **copy.deepcopy(dict(metadata or {})),
+        **copy.deepcopy(dict(memory.get("metadata") or {})),
+    }
+    try:
+        return _agent_simulate.run_memory_layer_probe(
+            memory,
+            cases=list(memory.get("cases") or cases or []),
+            target=str(memory.get("target") or target or ""),
+            namespace=memory.get("namespace"),
+            metadata=probe_metadata,
+            allow_external_target=bool(
+                memory.get("allow_external_target", default_allow_external_target)
+            ),
+        )
+    except Exception as exc:
+        return _failed_memory_layer_probe(
+            memory=memory,
+            cases=list(memory.get("cases") or cases or []),
+            target=target,
+            error=exc,
+            metadata=probe_metadata,
+        )
+
+
+def _failed_memory_layer_probe(
+    *,
+    memory: Mapping[str, Any],
+    cases: Sequence[Mapping[str, Any]],
+    target: str | None,
+    error: Exception,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    from . import simulate as _agent_simulate
+
+    try:
+        contract = _agent_simulate.memory_layer_contract(
+            target=str(memory.get("target") or target or ""),
+            namespace=memory.get("namespace"),
+            metadata=dict(metadata),
+        )
+    except Exception:
+        contract = {
+            "kind": "agent-learning.memory-layer-contract.v1",
+            "requires_external_service": False,
+            "local_executable_fixture": bool(memory or target),
+        }
+    message = str(error)
+    return {
+        "kind": "agent-learning.memory-layer-probe.v1",
+        "status": "failed",
+        "passed": False,
+        "requires_external_service": bool(contract.get("requires_external_service")),
+        "contract": contract,
+        "summary": {
+            "case_count": max(len(cases), 1),
+            "passed_case_count": 0,
+            "failed_case_count": max(len(cases), 1),
+            "finding_count": 1,
+            "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+            "requires_external_service": bool(contract.get("requires_external_service")),
+        },
+        "environments": [],
+        "cases": [],
+        "findings": [
+            {
+                "check": "memory_layer_probe_exception",
+                "level": "error",
+                "message": message,
+                "observed": type(error).__name__,
+            }
+        ],
+    }
+
+
+def _memory_probe_optimization_payload(
+    *,
+    name: str,
+    threshold: float,
+    optimization_result: Any,
+    metadata: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    final_score = float(getattr(optimization_result, "final_score", 0.0) or 0.0)
+    best_candidate = getattr(optimization_result, "best_candidate", None)
+    best_candidate_id = getattr(best_candidate, "id", None)
+    best_config = _json_plain(getattr(best_candidate, "config", {}) or {})
+    history = _memory_probe_history(optimization_result)
+    search_paths = _unique_strings(
+        [
+            *[
+                str(path)
+                for row in history
+                for path in _plain_list(row.get("search_paths"))
+                if str(path)
+            ]
+        ]
+    )
+    metric_averages = _metric_averages_from_history(history)
+    passed = final_score >= float(threshold)
+    evaluation = {
+        "kind": "agent-learning.memory-layer-probe-evaluation.v1",
+        "score": final_score,
+        "passed": passed,
+        "summary": {
+            "metric_averages": metric_averages,
+            "history_count": len(history),
+            "finding_count": sum(len(_plain_list(row.get("findings"))) for row in history),
+        },
+    }
+    return {
+        "schema_version": "agent-learning.cli.v1",
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "exit_code": 0 if passed else 1,
+        "summary": {
+            "optimization_score": final_score,
+            "optimization_passed": passed,
+            "evaluation_score": final_score,
+            "evaluation_passed": passed,
+            "metric_averages": metric_averages,
+            "threshold": float(threshold),
+            "total_iterations": getattr(optimization_result, "total_iterations", None),
+            "total_evaluations": getattr(optimization_result, "total_evaluations", None),
+            "best_candidate_id": best_candidate_id,
+            "search_paths": search_paths,
+        },
+        "optimization": {
+            "final_score": final_score,
+            "best_candidate_id": best_candidate_id,
+            "best_config": best_config,
+            "source_manifest": {
+                "name": name,
+                "metadata": {
+                    "source": "agent_learning.optimize.optimize_memory_layer_probe",
+                    "task_kind": "memory_layer_probe",
+                    **copy.deepcopy(dict(metadata or {})),
+                },
+            },
+            "history": history,
+            "manifest_optimization": {
+                "kind": "memory_layer_probe_optimization",
+                "name": name,
+                "final_score": final_score,
+                "threshold": float(threshold),
+                "passed": passed,
+                "best_candidate_id": best_candidate_id,
+                "best_config": copy.deepcopy(best_config),
+                "search_paths": search_paths,
+                "metrics": metric_averages,
+                "history": copy.deepcopy(history),
+            },
+        },
+        "evaluation": evaluation,
+    }
+
+
+def _memory_probe_history(optimization_result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(optimization_result, "history", []) or []):
+        metadata = _plain_mapping(getattr(item, "metadata", {}) or {})
+        report = _json_plain(metadata.get("report") or {})
+        report_summary = _plain_mapping(metadata.get("report_summary"))
+        if not report_summary and isinstance(report, Mapping):
+            report_summary = _plain_mapping(report.get("summary"))
+        patch = _plain_mapping(metadata.get("patch") or metadata.get("candidate_patch"))
+        score = getattr(item, "average_score", None)
+        rows.append(
+            {
+                "candidate_id": getattr(item, "candidate_id", None),
+                "score": score,
+                "patch": patch,
+                "candidate_patch": patch,
+                "candidate_config": _json_plain(getattr(item, "candidate_config", {}) or {}),
+                "search_paths": list(metadata.get("search_paths") or []),
+                "metrics": _plain_mapping(metadata.get("metrics")),
+                "findings": _plain_list(metadata.get("findings")),
+                "evaluation_score": metadata.get("evaluation_score", score),
+                "evaluation_passed": metadata.get("evaluation_passed"),
+                "report": report,
+                "report_summary": report_summary,
+            }
+        )
+    return rows
+
+
+def _with_memory_layer_probe_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not optimization:
+        return result
+    proof = _memory_layer_probe_proof(result, optimization)
+    result["memory_layer_probe_proof"] = proof
+    optimization["memory_layer_probe_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+    summary = _plain_mapping(result.get("summary"))
+    summary["memory_layer_probe_proof_status"] = proof["status"]
+    summary["memory_layer_probe_proof_passed"] = proof["passed"]
+    summary["memory_layer_probe_proof_assurance_level"] = proof["assurance_level"]
+    summary["memory_layer_probe_proof_check_count"] = proof["check_count"]
+    summary["memory_layer_probe_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def _memory_layer_probe_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    selected_summary = _plain_mapping(selected_report.get("summary"))
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    governance = _plain_mapping(payload.get("optimization_governance"))
+    contract = _plain_mapping(selected_report.get("contract"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold")) or 0.9
+    checks = [
+        _proof_check(
+            "memory_layer_probe_report_present",
+            passed=selected_report.get("kind") == "agent-learning.memory-layer-probe.v1"
+            and selected_report.get("status") == "passed",
+            required=True,
+            reason="selected candidate carries a passing memory layer probe",
+            evidence={"kind": selected_report.get("kind"), "status": selected_report.get("status")},
+        ),
+        _proof_check(
+            "memory_layer_probe_local_contract_closed",
+            passed=contract.get("kind") == "agent-learning.memory-layer-contract.v1"
+            and contract.get("requires_external_service") is False
+            and contract.get("local_executable_fixture") is True,
+            required=True,
+            reason="selected memory contract is local and no-external-service",
+            evidence={"memory_layer_contract": copy.deepcopy(contract)},
+        ),
+        _proof_check(
+            "memory_layer_probe_retrieval_grounding_closed",
+            passed=selected_summary.get("retrieval_citations_current") is True
+            and _as_int(selected_summary.get("retrieval_current_document_count")) > 0
+            and _as_int(selected_summary.get("retrieval_freshness_checked_count"))
+            >= _as_int(selected_summary.get("retrieval_citation_count")),
+            required=True,
+            reason="selected memory probe cites current documents with freshness checks",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "memory_layer_probe_lineage_closed",
+            passed=selected_summary.get("memory_required_operations_present") is True
+            and selected_summary.get("has_source_attribution") is True
+            and _as_int(selected_summary.get("memory_audited_operation_count"))
+            >= _as_int(selected_summary.get("memory_operation_count")),
+            required=True,
+            reason="selected memory probe has source attribution and audited operations",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "memory_layer_probe_governance_closed",
+            passed=all(
+                selected_summary.get(key) is True
+                for key in (
+                    "has_tenant_isolation",
+                    "has_audit",
+                    "has_retention_policy",
+                    "has_deletion_policy",
+                    "has_redaction",
+                    "has_canaries",
+                    "has_observability",
+                    "has_artifacts",
+                )
+            )
+            and _as_int(selected_summary.get("policy_violation_count")) == 0
+            and _as_int(selected_summary.get("open_poisoning_count")) == 0
+            and _as_int(selected_summary.get("blocking_gap_count")) == 0,
+            required=True,
+            reason="selected memory probe closes governance and poisoning checks",
+            evidence=copy.deepcopy(selected_summary),
+        ),
+        _proof_check(
+            "memory_layer_probe_metric_evidence_closed",
+            passed=_as_float(selected_metrics.get("memory_layer_probe_score")) >= threshold
+            and _as_float(selected_metrics.get("memory_layer_probe_lineage_quality")) >= 1.0
+            and _as_float(selected_metrics.get("memory_layer_probe_governance_quality")) >= 1.0,
+            required=True,
+            reason="selected memory probe metrics meet threshold",
+            evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
+        ),
+        _proof_check(
+            "memory_layer_probe_patch_surface_present",
+            passed=bool(selected_patch) and "memory" in selected_patch,
+            required=True,
+            reason="optimizer selected a concrete memory candidate",
+            evidence={"selected_patch": copy.deepcopy(selected_patch)},
+        ),
+        _proof_check(
+            "memory_layer_probe_optimizer_governance_passed",
+            passed=governance.get("status") == "passed"
+            and governance.get("passed") is True,
+            required=True,
+            reason="candidate lineage and optimizer governance closed for memory probe search",
+            evidence={"governance_status": governance.get("status")},
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l2_native_memory_layer_probe_verified"
+            if passed
+            else "memory_layer_probe_proof_failed"
+        ),
+        "selected_candidate_id": optimization.get("best_candidate_id"),
+        "requires_external_service": False,
+        "evidence": {
+            "memory": copy.deepcopy(_plain_mapping(best_config.get("memory"))),
+            "selected_report_summary": copy.deepcopy(selected_summary),
+            "selected_metrics": copy.deepcopy(selected_metrics),
+            "memory_layer_contract": copy.deepcopy(contract),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "checks": checks,
+    }
 
 
 def build_artifact_optimization_suite(
@@ -24164,6 +24772,7 @@ __all__ = [
     "AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_FRAMEWORK_RUNTIME_PROOF_KIND",
+    "AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND",
     "AGENT_LEARNING_MEMORY_LINEAGE_PROOF_KIND",
     "AGENT_LEARNING_MULTI_AGENT_COORDINATION_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
@@ -24194,6 +24803,7 @@ __all__ = [
     "build_framework_optimization_manifest",
     "build_long_horizon_redteam_optimization_manifest",
     "build_memory_optimization_manifest",
+    "build_memory_run_manifest_from_probe_optimization",
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_multimodal_image_optimization_manifest",
@@ -24247,6 +24857,7 @@ __all__ = [
     "optimize_manifest",
     "optimize_manifest_file",
     "optimize_memory_layer",
+    "optimize_memory_layer_probe",
     "optimize_multi_agent_framework_handoff",
     "optimize_multi_agent_coordination",
     "optimize_multimodal_image",
@@ -24284,6 +24895,7 @@ __all__ = [
     "problem_from_simulate_manifest_file",
     "relevant_search_paths",
     "score_framework_adapter_probe_result",
+    "score_memory_layer_probe_result",
     "with_framework_adapter_matrix_proof",
     "with_framework_certification_proof",
     "with_framework_runtime_proof",

@@ -356,7 +356,11 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_component is not None
     assert optimize.build_memory_optimization_manifest is not None
     assert optimize.optimize_memory_layer is not None
+    assert optimize.optimize_memory_layer_probe is not None
+    assert optimize.score_memory_layer_probe_result is not None
+    assert optimize.build_memory_run_manifest_from_probe_optimization is not None
     assert simulate.build_memory_layer_run_manifest is not None
+    assert simulate.run_memory_layer_probe is not None
     assert optimize.build_multi_agent_optimization_manifest is not None
     assert optimize.optimize_multi_agent_coordination is not None
     assert simulate.build_multi_agent_coordination_run_manifest is not None
@@ -4313,6 +4317,93 @@ def test_sdk_memory_optimization_example_runs(monkeypatch, tmp_path):
         "memory_observability_artifacts_closed",
         "memory_metric_evidence_closed",
     }
+
+
+def test_optimize_memory_layer_probe_selects_and_promotes_strong_candidate(
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    example_path = PROJECT_ROOT / "examples" / "sdk_memory_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_memory_optimization_probe",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = optimize.optimize_memory_layer_probe(
+        name="sdk-memory-layer-probe-optimization",
+        memory_candidates=[module.weak_candidate(), module.strong_candidate()],
+        cases=[
+            {
+                "id": "refund-memory",
+                "input": "Recall the current refund policy memory.",
+                "required_operations": ["read", "write", "recall"],
+            }
+        ],
+        metadata={"cookbook": "sdk-memory-layer-probe-optimization"},
+    )
+
+    assert result["kind"] == "agent-learning.optimization.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["memory_layer_probe_proof_passed"] is True
+    assert result["memory_layer_probe_proof"]["kind"] == (
+        optimize.AGENT_LEARNING_MEMORY_LAYER_PROBE_PROOF_KIND
+    )
+    assert result["memory_layer_probe_proof"]["failed_check_ids"] == []
+    best_memory = result["optimization"]["best_config"]["memory"]
+    assert best_memory["retrieval_memory"]["documents"][0]["id"] == (
+        "doc_refund_2026"
+    )
+    history_by_doc = {
+        item["candidate_config"]["memory"]["retrieval_memory"]["documents"][0]["id"]: item
+        for item in result["optimization"]["history"]
+    }
+    assert history_by_doc["doc_refund_2025"]["score"] < history_by_doc[
+        "doc_refund_2026"
+    ]["score"]
+    assert history_by_doc["doc_refund_2026"]["metrics"][
+        "memory_layer_probe_lineage_quality"
+    ] == pytest.approx(1.0)
+    assert history_by_doc["doc_refund_2026"]["metrics"][
+        "memory_layer_probe_governance_quality"
+    ] == pytest.approx(1.0)
+
+    manifest = optimize.build_memory_run_manifest_from_probe_optimization(
+        result,
+        name="promoted-memory-layer-probe-run",
+        evaluation_config=module.evaluation_config(),
+        metadata={"cookbook": "sdk-memory-layer-probe-optimization"},
+    )
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["metadata"]["promoted_from_memory_layer_probe"] is True
+    assert [env["type"] for env in manifest["simulation"]["environments"]] == [
+        "retrieval_memory",
+        "agent_memory_lineage",
+    ]
+    assert manifest["simulation"]["environments"][0]["data"]["documents"][0][
+        "id"
+    ] == "doc_refund_2026"
+    assert manifest["evaluation"]["agent_report"]["config"] == module.evaluation_config()
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-memory-layer-probe-run.json",
+    )
+    run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert run_result["status"] == "passed"
+    assert run_result["summary"]["metric_averages"][
+        "agent_memory_lineage_quality"
+    ] == pytest.approx(1.0)
+    state = run_result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["retrieval_memory"]["citations"][0]["doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert state["agent_memory_lineage"]["summary"]["blocking_gap_count"] == 0
 
 
 def test_sdk_memory_simulation_example_runs(monkeypatch, tmp_path):

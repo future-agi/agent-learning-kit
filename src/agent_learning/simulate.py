@@ -32,8 +32,11 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "FrameworkAdapterSpec",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
+    "memory_layer_contract",
     "probe_framework_adapter",
+    "probe_memory_layer",
     "run_framework_adapter_probe",
+    "run_memory_layer_probe",
     "supported_frameworks",
     "wrap_agent",
     "wrap_framework",
@@ -240,6 +243,7 @@ _SIMULATE_SUBMODULE_ALIASES = {
     "agent.frameworks": "fi.simulate.agent.frameworks",
     "agent.generic": "fi.simulate.agent.generic",
     "agent.import_probe": "fi.simulate.agent.import_probe",
+    "agent.memory": "fi.simulate.agent.memory",
     "agent.mocks": "fi.simulate.agent.mocks",
     "agent.wrapper": "fi.simulate.agent.wrapper",
     "agent.wrappers": "fi.simulate.agent.wrappers",
@@ -4807,12 +4811,24 @@ def run_framework_adapter_probe(*args: Any, **kwargs: Any) -> Any:
     return _simulate().run_framework_adapter_probe(*args, **kwargs)
 
 
+async def probe_memory_layer(*args: Any, **kwargs: Any) -> Any:
+    return await _simulate().probe_memory_layer(*args, **kwargs)
+
+
+def run_memory_layer_probe(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().run_memory_layer_probe(*args, **kwargs)
+
+
 def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract(*args, **kwargs)
 
 
 def framework_adapter_contract_matrix(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract_matrix(*args, **kwargs)
+
+
+def memory_layer_contract(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().memory_layer_contract(*args, **kwargs)
 
 
 def _default_framework_adapter_matrix_scenario(

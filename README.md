@@ -767,6 +767,15 @@ For retrieval and memory layers, pass candidates with `retrieval_memory` and
 searches current-document grounding, source attribution, memory writes, policy
 checks, canaries, observability, and memory-lineage artifacts as one coherent
 candidate bundle.
+Before committing to a full memory manifest, use
+`simulate.run_memory_layer_probe()` or
+`optimize.optimize_memory_layer_probe()` to test local memory candidates for
+current retrieval citations, read/write/recall operations, source attribution,
+tenant isolation, audit, retention/deletion/redaction, canaries, and artifacts.
+`optimize.build_memory_run_manifest_from_probe_optimization(...)` promotes the
+selected candidate into the normal `agent-learning.run.v1` memory simulation
+path. See `examples/sdk_memory_layer_probe_optimization.py` for an end-to-end
+probe, promotion, and evaluated run cookbook.
 Memory optimization artifacts also emit
 `agent-learning.optimization.memory-lineage-proof.v1`, a native proof derived
 from the selected candidate and selected report. It checks that the selected
@@ -905,6 +914,9 @@ AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_simulation.py \
   artifacts/sdk-memory-simulation.json
+
+PYTHONPATH=src python examples/sdk_memory_layer_probe_optimization.py \
+  artifacts/sdk-memory-layer-probe-optimization.json
 
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
