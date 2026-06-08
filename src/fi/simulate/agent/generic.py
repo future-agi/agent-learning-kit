@@ -394,6 +394,10 @@ class GenericAgentWrapper(AgentWrapper):
                 "data",
             ):
                 if key in raw_mapping and raw_mapping[key] is not None:
+                    if key == "content":
+                        block_text = _content_blocks_text(raw_mapping[key])
+                        if block_text:
+                            return block_text
                     return _stringify(raw_mapping[key])
             if "message" in raw_mapping:
                 return _message_content(raw_mapping["message"])
@@ -418,21 +422,30 @@ class GenericAgentWrapper(AgentWrapper):
         return str(raw)
 
     def _extract_tool_calls(self, raw: Any) -> Optional[List[Dict[str, Any]]]:
-        return _extract_list_field(
+        tool_calls = _extract_list_field(
             raw,
             ("tool_calls", "toolCalls", "tool_call_chunks", "toolCallChunks"),
         )
+        provider_tool_calls = _provider_tool_calls(raw)
+        return [*(tool_calls or []), *provider_tool_calls] or None
 
     def _extract_tool_responses(self, raw: Any) -> Optional[List[Dict[str, Any]]]:
         return _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
 
     def _extract_metadata(self, raw: Any) -> Dict[str, Any]:
         raw_mapping = _object_mapping(raw)
+        metadata: Dict[str, Any] = {}
         if raw_mapping is not None:
             value = raw_mapping.get("metadata")
-            return dict(value) if isinstance(value, dict) else {}
+            if isinstance(value, dict):
+                metadata.update(dict(value))
+            metadata.update(_provider_metadata(raw_mapping))
+            return metadata
         value = getattr(raw, "metadata", None)
-        return dict(value) if isinstance(value, dict) else {}
+        if isinstance(value, dict):
+            metadata.update(dict(value))
+        metadata.update(_provider_metadata(raw))
+        return metadata
 
     def _extract_memory_updates(self, raw: Any) -> Optional[Dict[str, Any]]:
         raw_mapping = _object_mapping(raw)
@@ -465,6 +478,9 @@ class GenericAgentWrapper(AgentWrapper):
                 and "typed_output" not in state
             ):
                 state["typed_output"] = dict(output_payload)
+            provider_state = _provider_response_state(raw_mapping)
+            if provider_state:
+                state.setdefault("provider_response", provider_state)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -485,6 +501,7 @@ class GenericAgentWrapper(AgentWrapper):
                 events.append(SimulationEvent(**value))
             except Exception:
                 continue
+        events.extend(_provider_events(raw))
         return events
 
 
@@ -547,6 +564,202 @@ def _extract_list_field(raw: Any, names: Iterable[str]) -> Optional[List[Dict[st
         if item_mapping is not None:
             items.append(dict(item_mapping))
     return items or None
+
+
+def _provider_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        calls.extend(_tool_calls_from_message(raw_mapping, include_direct_keys=False))
+        for choice in _provider_choices(raw_mapping):
+            message = _provider_choice_message(choice)
+            calls.extend(_tool_calls_from_message(message))
+    return calls
+
+
+def _tool_calls_from_message(
+    message: Mapping[str, Any],
+    *,
+    include_direct_keys: bool = True,
+) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    if include_direct_keys:
+        for key in ("tool_calls", "toolCalls", "tool_call_chunks", "toolCallChunks"):
+            calls.extend(_list_of_mappings(message.get(key)))
+    function_call = _object_mapping(message.get("function_call"))
+    if function_call:
+        calls.append(
+            {
+                "id": str(function_call.get("id") or "function_call"),
+                "type": "function",
+                "function": {
+                    "name": function_call.get("name"),
+                    "arguments": function_call.get("arguments"),
+                },
+            }
+        )
+    for block in _content_blocks(message.get("content")):
+        if str(block.get("type") or "") != "tool_use":
+            continue
+        name = str(block.get("name") or block.get("tool") or "")
+        calls.append(
+            {
+                "id": str(block.get("id") or name or "tool_use"),
+                "type": "tool_use",
+                "name": name,
+                "arguments": block.get("input") or block.get("arguments") or {},
+                "function": {
+                    "name": name,
+                    "arguments": block.get("input") or block.get("arguments") or {},
+                },
+            }
+        )
+    return calls
+
+
+def _provider_events(raw: Any) -> List[SimulationEvent]:
+    events: List[SimulationEvent] = []
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is None:
+        return events
+    for index, choice in enumerate(_provider_choices(raw_mapping), start=1):
+        finish_reason = str(choice.get("finish_reason") or choice.get("stop_reason") or "")
+        if finish_reason:
+            events.append(
+                SimulationEvent(
+                    type="provider_choice",
+                    name=finish_reason,
+                    payload={
+                        "index": index,
+                        "finish_reason": finish_reason,
+                    },
+                )
+            )
+    for index, call in enumerate(_provider_tool_calls(raw_mapping), start=1):
+        name = str(
+            call.get("name")
+            or call.get("tool")
+            or dict(call.get("function") or {}).get("name")
+            or f"provider_tool_call_{index}"
+        )
+        events.append(
+            SimulationEvent(
+                type="provider_tool_call",
+                name=name,
+                payload=call,
+            )
+        )
+    return events
+
+
+def _provider_metadata(raw: Any) -> Dict[str, Any]:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is None:
+        return {}
+    metadata: Dict[str, Any] = {}
+    for key in ("id", "model", "object", "type", "role", "stop_reason", "stop_sequence"):
+        value = raw_mapping.get(key)
+        if value not in (None, "", [], {}):
+            metadata[f"provider_{key}"] = value
+    usage = _object_mapping(raw_mapping.get("usage"))
+    if usage:
+        metadata["provider_usage"] = usage
+    return metadata
+
+
+def _provider_response_state(raw: Any) -> Dict[str, Any]:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is None:
+        return {}
+    choices = _provider_choices(raw_mapping)
+    tool_calls = _provider_tool_calls(raw_mapping)
+    usage = _object_mapping(raw_mapping.get("usage"))
+    finish_reasons = sorted(
+        {
+            str(choice.get("finish_reason") or choice.get("stop_reason") or "")
+            for choice in choices
+            if choice.get("finish_reason") or choice.get("stop_reason")
+        }
+    )
+    state: Dict[str, Any] = {}
+    if choices:
+        state["choice_count"] = len(choices)
+    if finish_reasons:
+        state["finish_reasons"] = finish_reasons
+    if tool_calls:
+        state["tool_call_count"] = len(tool_calls)
+        state["tool_names"] = sorted(
+            {
+                str(
+                    call.get("name")
+                    or call.get("tool")
+                    or dict(call.get("function") or {}).get("name")
+                    or ""
+                )
+                for call in tool_calls
+                if isinstance(call, Mapping)
+            }
+        )
+    if usage:
+        state["usage"] = usage
+    for key in ("id", "model", "object", "type", "role", "stop_reason"):
+        value = raw_mapping.get(key)
+        if value not in (None, "", [], {}):
+            state[key] = value
+    return state
+
+
+def _provider_choices(raw: Any) -> List[Dict[str, Any]]:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is None:
+        return []
+    return _list_of_mappings(raw_mapping.get("choices"))
+
+
+def _provider_choice_message(choice: Mapping[str, Any]) -> Dict[str, Any]:
+    for key in ("message", "delta"):
+        mapping = _object_mapping(choice.get(key))
+        if mapping:
+            return mapping
+    return dict(choice)
+
+
+def _content_blocks(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return _list_of_mappings(value)
+
+
+def _content_blocks_text(value: Any) -> str:
+    parts: List[str] = []
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, (list, tuple)):
+        return ""
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        block = _object_mapping(item)
+        if not block:
+            continue
+        for key in ("text", "content"):
+            text = block.get(key)
+            if text not in (None, "", [], {}):
+                parts.append(_stringify(text))
+                break
+    return " ".join(part for part in parts if part)
+
+
+def _list_of_mappings(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    items: List[Dict[str, Any]] = []
+    for item in value:
+        mapping = _object_mapping(item)
+        if mapping:
+            items.append(mapping)
+    return items
 
 
 def _resolve_callable_attr_path(root: Any, path: str | None) -> Callable[..., Any] | None:
@@ -1036,6 +1249,9 @@ def _message_content(message: Any) -> str:
         return message
     if isinstance(message, dict):
         if "content" in message and message["content"] is not None:
+            block_text = _content_blocks_text(message["content"])
+            if block_text:
+                return block_text
             return _stringify(message["content"])
         if "text" in message and message["text"] is not None:
             return _stringify(message["text"])

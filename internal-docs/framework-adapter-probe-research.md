@@ -52,6 +52,12 @@ the local-first adapter contract.
   users to write wrapper functions. Sources:
   https://platform.openai.com/docs/api-reference/chat/create and
   https://docs.anthropic.com/en/api/messages
+- Provider responses carry critical evidence in nested response envelopes:
+  OpenAI-compatible choices contain assistant messages, finish reasons, usage,
+  and tool calls, while Anthropic messages can carry content blocks such as
+  `tool_use`. Probe implication: normalization must preserve those nested
+  signals as tool calls, events, metadata, and `provider_response` state so
+  evals can score provider evidence directly.
 - Instructor and OpenAI Agents-style structured output paths use Pydantic or
   dataclass-like response models. Probe implication: `model_dump()`/dataclass
   payloads should normalize into content, tools, events, metadata, and state so
@@ -117,6 +123,10 @@ Keep framework support local-first:
   `chat.completions.create` or `messages.create`, the adapter candidate, probe
   proof, promoted manifest, runtime trace, and generated eval config should
   carry the full dotted method path instead of only the leaf method name.
+- Preserve provider response envelopes. `choices[].message.tool_calls`,
+  finish reasons, usage blocks, and content `tool_use` blocks should normalize
+  into ordinary `AgentResponse.tool_calls`, `provider_choice` /
+  `provider_tool_call` events, provider metadata, and `provider_response` state.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

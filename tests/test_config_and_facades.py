@@ -8,6 +8,7 @@ import os
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -1543,6 +1544,122 @@ def test_nested_method_framework_adapter_promotes_method_path(tmp_path):
     assert runtime["summary"]["input_keys"] == ["messages"]
     assert runtime["invocations"][0]["method"] == "chat.completions.create"
     assert state["nested_client"]["method_path"] == "chat.completions.create"
+
+
+def test_provider_response_framework_adapter_preserves_nested_tool_evidence(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = (
+        PROJECT_ROOT / "examples" / "sdk_framework_adapter_provider_response.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_provider_response_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "chat.completions.create"
+    assert manifest["agent"]["input_mode"] == "messages"
+    assert manifest["agent"]["input_key"] == "messages"
+    assert manifest["agent"]["input_kwargs"] == {"model": "local-provider-model"}
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == ["framework_trace_status"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_tools"] == ["framework_trace_status"]
+    assert runtime_contract["required_input_kwargs"] == ["model"]
+    assert runtime_contract["required_state_keys"] == ["provider_response"]
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-provider-response-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    provider_response = state["provider_response"]
+    assert provider_response["choice_count"] == 1
+    assert provider_response["finish_reasons"] == ["tool_calls"]
+    assert provider_response["tool_call_count"] == 1
+    assert provider_response["tool_names"] == ["framework_trace_status"]
+    assert provider_response["usage"]["total_tokens"] == 19
+    runtime = state["framework_runtime"]
+    invocation = runtime["invocations"][0]
+    assert invocation["output"]["tool_names"] == ["framework_trace_status"]
+    assert invocation["output"]["event_types"] == [
+        "provider_choice",
+        "provider_tool_call",
+    ]
+    assert runtime["summary"]["input_kwargs_keys"] == ["model"]
+
+    class LocalAnthropicMessages:
+        async def create(
+            self,
+            *,
+            messages: list[dict[str, Any]],
+            model: str,
+        ) -> dict[str, Any]:
+            assert messages
+            assert model == "local-claude"
+            return {
+                "id": "msg_provider_response",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Anthropic block adapter approved refund.",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_provider_status",
+                        "name": "framework_trace_status",
+                        "input": {"status": "passed"},
+                    },
+                ],
+                "usage": {"input_tokens": 8, "output_tokens": 5},
+            }
+
+    class LocalAnthropicClient:
+        def __init__(self) -> None:
+            self.messages = LocalAnthropicMessages()
+
+    anthropic_probe = simulate.run_framework_adapter_probe(
+        "anthropic",
+        LocalAnthropicClient(),
+        method="messages.create",
+        input_mode="messages",
+        input_key="messages",
+        input_kwargs={"model": "local-claude"},
+        cases=[
+            {
+                "id": "anthropic-tool-use",
+                "input": "Approve the refund through content block evidence.",
+                "expected_contains": ["approved refund"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["provider_tool_call"],
+                "required_state_keys": ["framework_runtime", "provider_response"],
+            }
+        ],
+    )
+
+    assert anthropic_probe["status"] == "passed"
+    anthropic_case = anthropic_probe["cases"][0]
+    assert "approved refund" in anthropic_case["response"]["content"]
+    assert anthropic_case["response"]["tool_names"] == ["framework_trace_status"]
+    assert anthropic_case["runtime_trace"]["summary"]["input_kwargs_keys"] == ["model"]
 
 
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():

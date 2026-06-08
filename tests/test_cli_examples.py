@@ -1698,6 +1698,40 @@ def test_sdk_framework_adapter_nested_method_example_runs(tmp_path):
     assert state["nested_client"]["method_path"] == "chat.completions.create"
 
 
+def test_sdk_framework_adapter_provider_response_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_provider_response.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_provider_response",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-provider-response.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_provider_response_manifest"]
+    assert manifest["agent"]["method"] == "chat.completions.create"
+    assert manifest["agent"]["input_kwargs"] == {"model": "local-provider-model"}
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_tools"] == ["framework_trace_status"]
+    assert runtime_contract["required_input_kwargs"] == ["model"]
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["provider_response"]["tool_names"] == ["framework_trace_status"]
+    assert state["provider_response"]["usage"]["total_tokens"] == 19
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["framework_trace_status"]
+    assert output["event_types"] == ["provider_choice", "provider_tool_call"]
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

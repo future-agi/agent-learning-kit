@@ -647,6 +647,13 @@ resolution can promote paths such as OpenAI-compatible
 keeps the full method path for eval gates. See
 `examples/sdk_framework_adapter_nested_method.py`.
 
+Provider-style response objects are normalized too. OpenAI-compatible
+`choices[].message.tool_calls`, finish reasons, usage blocks, and Anthropic-style
+content `tool_use` blocks become ordinary `tool_calls`, `provider_choice` /
+`provider_tool_call` events, provider metadata, and `provider_response` state, so
+the same agent-report gates can require nested provider evidence. See
+`examples/sdk_framework_adapter_provider_response.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1255,6 +1262,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_side_kwargs.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_nested_method.py \
   artifacts/sdk-framework-adapter-nested-method.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_provider_response.py \
+  artifacts/sdk-framework-adapter-provider-response.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \
