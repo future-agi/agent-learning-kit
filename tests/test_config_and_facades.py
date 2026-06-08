@@ -1267,6 +1267,68 @@ def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
     assert proof_checks["framework_adapter_probe_discovery_closed"]["required"] is True
 
 
+def test_streaming_framework_adapter_discovery_promotes_streaming_manifest(
+    tmp_path,
+):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_streaming.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_streaming_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "custom_streaming_graph",
+        module.LocalStreamingGraphAgent(),
+        target=module.TARGET,
+        method_candidates=["run", "astream"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=4,
+    )
+
+    assert discovery["status"] == "passed"
+    assert discovery["adapter_candidates"][0]["method"] == "astream"
+    assert discovery["adapter_candidates"][0]["input_mode"] == "dict"
+    assert "streaming_adapter_surface" in discovery["candidates"][0]["reasons"]
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "astream"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["framework_runtime_contract"]["require_streaming"] is True
+    assert "streaming" in config["framework_runtime_contract"]["required_signals"]
+    assert set(config["required_streaming_trace"]) >= {
+        "chunk",
+        "tool_delta",
+        "final",
+    }
+    assert config["metric_weights"]["streaming_trace_coverage"] == 4.0
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-streaming-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["streaming_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["framework_runtime"]["summary"]["streamed"] is True
+    assert state["framework_runtime"]["summary"]["methods"] == ["astream"]
+    assert state["streaming_trace"]["summary"]["tool_delta_count"] == 1
+    assert state["streaming_trace"]["summary"]["completion_status"] == "completed"
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

@@ -15728,12 +15728,26 @@ def build_framework_adapter_probe_evaluation_config(
             *_framework_probe_response_values(selected_report, "tool_names"),
         ]
     )
+    state_keys = _unique_strings(
+        _framework_probe_response_values(selected_report, "state_keys")
+    )
+    streaming_trace_signals = _unique_strings(
+        _framework_probe_response_values(selected_report, "streaming_trace_signals")
+    )
+    streaming_observed = (
+        _as_int(selected_report_summary.get("streaming_trace_count")) > 0
+        or "streaming_trace" in state_keys
+        or bool(streaming_trace_signals)
+    )
+    if streaming_observed and not streaming_trace_signals:
+        streaming_trace_signals = ["chunk"]
     required_signals = _unique_strings(
         [
             "method",
             "input",
             "output",
             "metadata",
+            *(["streaming"] if streaming_observed else []),
             *(["tool"] if tool_names else []),
         ]
     )
@@ -15742,6 +15756,7 @@ def build_framework_adapter_probe_evaluation_config(
         or [
             f"{method} runtime evidence",
             "framework adapter contract quality",
+            *(["streaming trace evidence"] if streaming_observed else []),
             *(["tool evidence"] if tool_names else []),
         ]
     )
@@ -15753,6 +15768,7 @@ def build_framework_adapter_probe_evaluation_config(
             "tool_calls",
             "runtime_trace",
             "structured_input",
+            "streaming_trace",
         ]
         if capability in contract_capabilities
     ]
@@ -15772,6 +15788,8 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if tool_names:
         runtime_contract["required_tools"] = tool_names
+    if streaming_observed:
+        runtime_contract["require_streaming"] = True
 
     contract_quality: dict[str, Any] = {
         "kind": "agent-learning.framework-adapter-contract.v1",
@@ -15806,8 +15824,10 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if tool_names:
         metric_weights["tool_selection_accuracy"] = 4.0
+    if streaming_observed:
+        metric_weights["streaming_trace_coverage"] = 4.0
 
-    return {
+    config = {
         "task_description": task_description
         or f"Validate the promoted {framework} framework adapter.",
         "expected_result": expected_result
@@ -15824,12 +15844,16 @@ def build_framework_adapter_probe_evaluation_config(
             "input",
             "output",
             "metadata",
+            *(["streaming"] if streaming_observed else []),
             *(["tool"] if tool_names else []),
         ],
         "framework_runtime_contract": runtime_contract,
         "framework_adapter_contract_quality": contract_quality,
         "metric_weights": metric_weights,
     }
+    if streaming_observed:
+        config["required_streaming_trace"] = streaming_trace_signals
+    return config
 
 
 def _framework_probe_response_values(

@@ -79,6 +79,10 @@ Keep framework support local-first:
   framework onboarding local and cheap, then promotes the selected adapter into a
   full simulation manifest, framework certification, or framework-runtime
   optimization.
+- Treat `astream`, `stream`, `stream_events`, and `run_stream` as first-class
+  local adapter candidates. If a selected candidate emits chunks, the probe
+  should preserve normalized streaming signals and promotion should require both
+  framework-runtime streaming and streaming-trace coverage.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

@@ -1543,6 +1543,38 @@ def test_sdk_framework_adapter_trinity_suite_optimization_example_runs(tmp_path)
     ][1]["command"] == "suite"
 
 
+def test_sdk_framework_adapter_streaming_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_streaming.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_streaming",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-streaming.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["streaming_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    manifest = result["framework_adapter_streaming_manifest"]
+    assert manifest["agent"]["method"] == "astream"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]["require_streaming"] is True
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["framework_runtime"]["summary"]["streamed"] is True
+    assert state["streaming_trace"]["summary"]["tool_delta_count"] == 1
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

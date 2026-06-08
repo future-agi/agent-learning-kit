@@ -612,6 +612,13 @@ If you want the SDK to execute the promoted manifest immediately, call async
 `framework_adapter_run_manifest` for audit or CI storage. See
 `examples/sdk_framework_adapter_one_call_run.py`.
 
+Streaming framework entrypoints are discovered and promoted through the same
+path. Methods such as `astream`, `stream`, `stream_events`, and `run_stream`
+are treated as adapter candidates; when the selected candidate emits streaming
+chunks, the generated eval config requires `framework_runtime_contract` to prove
+streaming and `streaming_trace_coverage` to score the normalized chunk/tool/final
+trace. See `examples/sdk_framework_adapter_streaming.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1205,6 +1212,9 @@ AGENT_LEARNING_SDK_FRAMEWORK_OPT_KEY=... \
 AGENT_LEARNING_SDK_FRAMEWORK_CERTIFICATION_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_framework_certification_simulation.py \
   artifacts/sdk-framework-certification-simulation.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_streaming.py \
+  artifacts/sdk-framework-adapter-streaming.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

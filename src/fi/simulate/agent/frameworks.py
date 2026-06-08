@@ -86,6 +86,9 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
 _DISCOVERY_METHOD_ORDER = (
     "ainvoke",
     "invoke",
+    "astream",
+    "stream",
+    "stream_events",
     "execute_task",
     "call",
     "achat",
@@ -95,6 +98,7 @@ _DISCOVERY_METHOD_ORDER = (
     "process",
     "respond",
     "run",
+    "run_stream",
     "arun",
     "send",
     "completion",
@@ -108,6 +112,9 @@ _DISCOVERY_METHOD_ORDER = (
 _DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
     "ainvoke": "dict",
     "invoke": "dict",
+    "astream": "dict",
+    "stream": "dict",
+    "stream_events": "dict",
     "execute_task": "dict",
     "kickoff": "dict",
     "process": "dict",
@@ -122,9 +129,12 @@ _DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
     "query": "text",
     "respond": "text",
     "run": "text",
+    "run_stream": "text",
     "arun": "text",
     "send": "text",
 }
+
+_STREAMING_METHODS = {"astream", "stream", "stream_events", "run_stream"}
 
 _DISCOVERY_INPUT_MODE_ORDER: tuple[InputMode, ...] = (
     "dict",
@@ -906,6 +916,9 @@ def _adapter_discovery_score(
     if method_name == "execute_task" and input_mode == "dict":
         score += 0.1
         reasons.append("task_payload_adapter")
+    if method_name in _STREAMING_METHODS:
+        score += 0.1
+        reasons.append("streaming_adapter_surface")
     if input_mode == "auto":
         score -= 0.05
         reasons.append("auto_input_mode_requires_runtime_inference")
@@ -1075,6 +1088,8 @@ def _default_capabilities(modality: str, input_mode: str) -> tuple[str, ...]:
     ]
     if input_mode == "dict":
         capabilities.append("structured_input")
+    if input_mode in {"dict", "messages"}:
+        capabilities.append("streaming_trace")
     if modality == "voice":
         capabilities.extend(["voice_frames", "realtime_events"])
     elif modality == "cua":
@@ -1365,6 +1380,11 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
     artifacts = [artifact.model_dump() for artifact in response.artifacts]
     state = dict(response.state or {})
     metadata = dict(response.metadata or {})
+    streaming_trace = (
+        state.get("streaming_trace")
+        if isinstance(state.get("streaming_trace"), Mapping)
+        else {}
+    )
     return {
         "content": response.content,
         "tool_call_count": len(tool_calls),
@@ -1386,6 +1406,15 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
         "artifact_types": sorted({str(artifact.get("type") or "") for artifact in artifacts}),
         "state_keys": sorted(str(key) for key in state),
         "metadata_keys": sorted(str(key) for key in metadata),
+        "streaming": bool(streaming_trace or metadata.get("streaming")),
+        "streaming_trace_signals": sorted(
+            str(signal)
+            for signal in (dict(streaming_trace).get("signals") or [])
+            if str(signal)
+        ),
+        "streaming_trace_summary": dict(
+            dict(streaming_trace).get("summary") or {}
+        ),
     }
 
 
@@ -1400,11 +1429,15 @@ def _probe_summary(
         for case in cases
     )
     runtime_trace_count = sum(1 for case in cases if case.get("runtime_trace"))
+    streaming_trace_count = sum(
+        1 for case in cases if dict(case.get("response") or {}).get("streaming")
+    )
     return {
         "case_count": len(cases),
         "passed_case_count": passed,
         "failed_case_count": failed,
         "runtime_trace_count": runtime_trace_count,
+        "streaming_trace_count": streaming_trace_count,
         "tool_call_count": response_tool_count,
         "framework": contract.get("framework"),
         "method": contract.get("method"),

@@ -20,9 +20,9 @@ class GenericAgentWrapper(AgentWrapper):
 
     The wrapper intentionally depends on conventions instead of optional imports:
     LangChain/LangGraph expose invoke/ainvoke, AutoGen and OpenAI-style runners often
-    expose run/arun, voice stacks usually expose send/respond/chat, and plain Python
-    agents are just callables. Users can override method/input_mode when a framework
-    has a custom shape.
+    expose run/arun/run_stream, voice stacks usually expose send/respond/chat, and
+    plain Python agents are just callables. Users can override method/input_mode when
+    a framework has a custom shape.
     """
 
     def __init__(
@@ -104,7 +104,20 @@ class GenericAgentWrapper(AgentWrapper):
                 return candidate
             raise AttributeError(f"Agent does not expose method '{self.method}'.")
 
-        for name in ("call", "ainvoke", "invoke", "arun", "run", "send", "respond", "chat"):
+        for name in (
+            "call",
+            "ainvoke",
+            "invoke",
+            "astream",
+            "stream",
+            "stream_events",
+            "run_stream",
+            "arun",
+            "run",
+            "send",
+            "respond",
+            "chat",
+        ):
             candidate = getattr(self.agent, name, None)
             if callable(candidate):
                 return candidate
@@ -154,9 +167,9 @@ class GenericAgentWrapper(AgentWrapper):
         return input
 
     def _infer_input_mode(self, method_name: str | None) -> InputMode:
-        if method_name in {"ainvoke", "invoke"}:
+        if method_name in {"ainvoke", "invoke", "astream", "stream", "stream_events"}:
             return "dict"
-        if method_name in {"arun", "run", "send", "respond", "chat"}:
+        if method_name in {"arun", "run", "run_stream", "send", "respond", "chat"}:
             return "text"
         return "agent_input"
 
