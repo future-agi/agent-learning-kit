@@ -1813,6 +1813,56 @@ def test_sdk_framework_adapter_handoff_transcript_example_runs(tmp_path):
     } <= event_types
 
 
+def test_sdk_framework_adapter_realtime_trace_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_realtime_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_realtime_trace",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-realtime-trace.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_realtime_trace_manifest"]
+    assert manifest["agent"]["method"] == "run_session"
+    runtime_contract = manifest["evaluation"]["agent_report"]["config"][
+        "framework_runtime_contract"
+    ]
+    assert runtime_contract["required_state_keys"] == ["realtime_trace"]
+    assert set(manifest["evaluation"]["agent_report"]["config"]["required_events"]) >= {
+        "realtime_frame",
+        "realtime_tool_call",
+        "realtime_tool_response",
+        "realtime_transcript",
+        "realtime_lifecycle",
+    }
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    realtime = state["realtime_trace"]
+    assert realtime["frame_count"] == 5
+    assert realtime["event_count"] == 5
+    assert realtime["tool_call_count"] >= 1
+    assert realtime["tool_response_count"] >= 1
+    assert "lookup_refund_policy" in realtime["tool_names"]
+    event_types = set(
+        state["framework_runtime"]["invocations"][0]["output"]["event_types"]
+    )
+    assert {
+        "realtime_frame",
+        "realtime_tool_call",
+        "realtime_tool_response",
+        "realtime_transcript",
+        "realtime_lifecycle",
+    } <= event_types
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

@@ -43,6 +43,12 @@ Keep realtime support local-first:
   `voice_interaction_quality`, `voice_timing_distribution_quality`,
   `streaming_trace_coverage`, and `streaming_interaction_quality` metrics can
   score the promoted run.
+- For framework adapter outputs, normalize local Pipecat-like `frames` and
+  LiveKit-like `session_events` into `realtime_trace` state, trace artifacts,
+  ordinary tool calls/results, and `realtime_*` events before promotion. This
+  keeps release proofs import-free while still preserving frame categories,
+  directions, transcript turns, lifecycle changes, tool calls, and completion
+  evidence.
 - Require transcript, route call, TTS, audio frames, sample-rate closure, timing
   stages, audio quality, stream chunks, stream tool deltas, completion, and no
   dropped/error stream events before a probe is considered closed.

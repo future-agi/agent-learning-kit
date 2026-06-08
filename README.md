@@ -667,6 +667,13 @@ Framework handoff transcripts get a compact coordination view. Messages with
 plus `framework_handoffs` state with participants, handoffs, reviews, and
 reconciliations. See `examples/sdk_framework_adapter_handoff_transcript.py`.
 
+Realtime framework exports are normalized from local session traces. Pipecat-like
+`frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
+artifact, `realtime_frame` / `realtime_tool_call` /
+`realtime_tool_response` / `realtime_transcript` / `realtime_lifecycle` events,
+and ordinary tool-call evidence, so voice adapters can be optimized without a
+hosted room. See `examples/sdk_framework_adapter_realtime_trace.py`.
+
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
 optimized framework run manifest, a red-team campaign manifest pinned to the
@@ -1284,6 +1291,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_message_history.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_handoff_transcript.py \
   artifacts/sdk-framework-adapter-handoff-transcript.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_realtime_trace.py \
+  artifacts/sdk-framework-adapter-realtime-trace.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

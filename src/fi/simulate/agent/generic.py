@@ -405,6 +405,9 @@ class GenericAgentWrapper(AgentWrapper):
                 return _last_message_content(raw_mapping["messages"])
             if "choices" in raw_mapping:
                 return _choices_content(raw_mapping["choices"])
+            realtime_text = _realtime_last_text(raw_mapping)
+            if realtime_text:
+                return realtime_text
 
         for attr in ("content", "output", "response", "text", "final_output", "answer"):
             if hasattr(raw, attr):
@@ -418,6 +421,9 @@ class GenericAgentWrapper(AgentWrapper):
             return _last_message_content(getattr(raw, "messages"))
         if isinstance(raw, (list, tuple)):
             return _last_message_content(raw)
+        realtime_text = _realtime_last_text(raw)
+        if realtime_text:
+            return realtime_text
 
         return str(raw)
 
@@ -428,12 +434,23 @@ class GenericAgentWrapper(AgentWrapper):
         )
         provider_tool_calls = _provider_tool_calls(raw)
         history_tool_calls = _message_history_tool_calls(raw)
-        return [*(tool_calls or []), *provider_tool_calls, *history_tool_calls] or None
+        realtime_tool_calls = _realtime_tool_calls(raw)
+        return [
+            *(tool_calls or []),
+            *provider_tool_calls,
+            *history_tool_calls,
+            *realtime_tool_calls,
+        ] or None
 
     def _extract_tool_responses(self, raw: Any) -> Optional[List[Dict[str, Any]]]:
         tool_responses = _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
         history_tool_responses = _message_history_tool_responses(raw)
-        return [*(tool_responses or []), *history_tool_responses] or None
+        realtime_tool_responses = _realtime_tool_responses(raw)
+        return [
+            *(tool_responses or []),
+            *history_tool_responses,
+            *realtime_tool_responses,
+        ] or None
 
     def _extract_metadata(self, raw: Any) -> Dict[str, Any]:
         raw_mapping = _object_mapping(raw)
@@ -490,6 +507,9 @@ class GenericAgentWrapper(AgentWrapper):
         handoff_state = _message_history_handoff_state(raw)
         if handoff_state:
             state.setdefault("framework_handoffs", handoff_state)
+        realtime_state = _realtime_trace_state(raw)
+        if realtime_state:
+            state.setdefault("realtime_trace", realtime_state)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -500,6 +520,19 @@ class GenericAgentWrapper(AgentWrapper):
                 artifacts.append(SimulationArtifact(**value))
             except Exception:
                 continue
+        realtime_state = _realtime_trace_state(raw)
+        if realtime_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=realtime_state,
+                    metadata={
+                        "kind": "realtime_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
         return artifacts
 
     def _extract_events(self, raw: Any) -> List[SimulationEvent]:
@@ -513,6 +546,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_provider_events(raw))
         events.extend(_message_history_events(raw))
         events.extend(_message_history_coordination_events(raw))
+        events.extend(_realtime_trace_events(raw))
         return events
 
 
@@ -1094,6 +1128,591 @@ def _reconciliation_payload_from_message(
         "message_type": str(message.get("type") or message.get("kind") or ""),
         "content": _message_content(message),
     }
+
+
+def _realtime_trace_state(raw: Any) -> Dict[str, Any]:
+    frames = _realtime_frames(raw)
+    events = _realtime_session_events(raw)
+    if not frames and not events:
+        return {}
+
+    frame_entries = [
+        _realtime_item_entry(frame, index=index, source="frame")
+        for index, frame in enumerate(frames, start=1)
+    ]
+    event_entries = [
+        _realtime_item_entry(event, index=index, source="event")
+        for index, event in enumerate(events, start=1)
+    ]
+    items = [*frame_entries, *event_entries]
+    frame_types = sorted(
+        {
+            str(item.get("item_type") or "")
+            for item in frame_entries
+            if item.get("item_type")
+        }
+    )
+    event_types = sorted(
+        {
+            str(item.get("item_type") or "")
+            for item in event_entries
+            if item.get("item_type")
+        }
+    )
+    categories = sorted(
+        {
+            str(item.get("category") or "")
+            for item in items
+            if item.get("category")
+        }
+    )
+    directions = sorted(
+        {
+            str(item.get("direction") or "")
+            for item in items
+            if item.get("direction")
+        }
+    )
+    modalities = sorted(
+        {
+            str(item.get("modality") or "")
+            for item in items
+            if item.get("modality")
+        }
+    )
+    tool_names = sorted(
+        {
+            str(tool.get("name") or "")
+            for tool in _realtime_tool_calls(raw)
+            if tool.get("name")
+        }
+    )
+    transcripts = [
+        _realtime_compact_transcript(item)
+        for item in items
+        if _realtime_compact_transcript(item)
+    ]
+    signals = sorted(
+        {
+            signal
+            for item in items
+            for signal in _realtime_item_signals(item)
+        }
+    )
+    kind_counts: Dict[str, int] = {}
+    for item in items:
+        kind = str(item.get("kind") or "event")
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
+    return {
+        "kind": "framework_realtime_trace",
+        "frame_count": len(frame_entries),
+        "event_count": len(event_entries),
+        "tool_call_count": len(_realtime_tool_calls(raw)),
+        "tool_response_count": len(_realtime_tool_responses(raw)),
+        "transcript_count": kind_counts.get("transcript", 0),
+        "audio_frame_count": kind_counts.get("audio", 0),
+        "lifecycle_event_count": kind_counts.get("lifecycle", 0),
+        "interruption_count": kind_counts.get("interruption", 0),
+        "error_count": kind_counts.get("error", 0),
+        "completion_count": kind_counts.get("completion", 0),
+        "signals": signals,
+        "frame_types": frame_types,
+        "event_types": event_types,
+        "categories": categories,
+        "directions": directions,
+        "modalities": modalities,
+        "tool_names": tool_names,
+        "transcripts": transcripts,
+        "frames": frame_entries,
+        "events": event_entries,
+        "summary": {
+            "frame_count": len(frame_entries),
+            "event_count": len(event_entries),
+            "tool_call_count": len(_realtime_tool_calls(raw)),
+            "tool_response_count": len(_realtime_tool_responses(raw)),
+            "transcript_count": kind_counts.get("transcript", 0),
+            "audio_frame_count": kind_counts.get("audio", 0),
+            "lifecycle_event_count": kind_counts.get("lifecycle", 0),
+            "completion_count": kind_counts.get("completion", 0),
+            "error_count": kind_counts.get("error", 0),
+        },
+    }
+
+
+def _realtime_trace_events(raw: Any) -> List[SimulationEvent]:
+    frames = _realtime_frames(raw)
+    events = _realtime_session_events(raw)
+    normalized: List[SimulationEvent] = []
+    for index, frame in enumerate(frames, start=1):
+        entry = _realtime_item_entry(frame, index=index, source="frame")
+        normalized.append(
+            SimulationEvent(
+                type="realtime_frame",
+                name=str(entry.get("name") or entry.get("item_type") or f"frame_{index}"),
+                payload=entry,
+                timestamp_ms=_realtime_timestamp_ms(frame),
+                metadata={
+                    "kind": "realtime_trace",
+                    "source": "frame",
+                    "category": str(entry.get("category") or ""),
+                },
+            )
+        )
+        specialized = _realtime_specialized_event_type(entry)
+        if specialized != "realtime_frame":
+            normalized.append(
+                SimulationEvent(
+                    type=specialized,
+                    name=str(entry.get("name") or entry.get("item_type") or specialized),
+                    payload=entry,
+                    timestamp_ms=_realtime_timestamp_ms(frame),
+                    metadata={
+                        "kind": "realtime_trace",
+                        "source": "frame",
+                        "category": str(entry.get("category") or ""),
+                    },
+                )
+            )
+    for index, event in enumerate(events, start=1):
+        entry = _realtime_item_entry(event, index=index, source="event")
+        event_type = _realtime_specialized_event_type(entry)
+        normalized.append(
+            SimulationEvent(
+                type=event_type,
+                name=str(entry.get("name") or entry.get("item_type") or f"event_{index}"),
+                payload=entry,
+                timestamp_ms=_realtime_timestamp_ms(event),
+                metadata={
+                    "kind": "realtime_trace",
+                    "source": "event",
+                    "category": str(entry.get("category") or ""),
+                },
+            )
+        )
+    return normalized
+
+
+def _realtime_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    for index, item in enumerate([*_realtime_frames(raw), *_realtime_session_events(raw)], start=1):
+        item_type = _realtime_item_type(item).lower()
+        if not _realtime_is_tool_call(item, item_type):
+            continue
+        name = _realtime_tool_name(item) or f"realtime_tool_{index}"
+        calls.append(
+            {
+                "id": str(
+                    item.get("id")
+                    or item.get("call_id")
+                    or item.get("tool_call_id")
+                    or name
+                ),
+                "type": "function",
+                "name": name,
+                "arguments": _plain_value(
+                    item.get("arguments")
+                    if "arguments" in item
+                    else item.get("args", item.get("input", item.get("payload", {})))
+                ),
+                "function": {
+                    "name": name,
+                    "arguments": _plain_value(
+                        item.get("arguments")
+                        if "arguments" in item
+                        else item.get("args", item.get("input", item.get("payload", {})))
+                    ),
+                },
+            }
+        )
+    return calls
+
+
+def _realtime_tool_responses(raw: Any) -> List[Dict[str, Any]]:
+    responses: List[Dict[str, Any]] = []
+    for index, item in enumerate([*_realtime_frames(raw), *_realtime_session_events(raw)], start=1):
+        item_type = _realtime_item_type(item).lower()
+        if not _realtime_is_tool_response(item, item_type):
+            continue
+        name = _realtime_tool_name(item) or f"realtime_tool_{index}"
+        content = item.get("result", item.get("output", item.get("response", item.get("content", ""))))
+        responses.append(
+            {
+                "id": str(
+                    item.get("id")
+                    or item.get("call_id")
+                    or item.get("tool_call_id")
+                    or name
+                ),
+                "name": name,
+                "content": _plain_value(content),
+                "is_error": bool(item.get("is_error") or item.get("error")),
+            }
+        )
+    return responses
+
+
+def _realtime_last_text(raw: Any) -> str:
+    entries = [
+        *[
+            _realtime_item_entry(frame, index=index, source="frame")
+            for index, frame in enumerate(_realtime_frames(raw), start=1)
+        ],
+        *[
+            _realtime_item_entry(event, index=index, source="event")
+            for index, event in enumerate(_realtime_session_events(raw), start=1)
+        ],
+    ]
+    for entry in reversed(entries):
+        text = str(entry.get("text") or "")
+        if text:
+            return text
+    return ""
+
+
+def _realtime_frames(raw: Any) -> List[Dict[str, Any]]:
+    frames = _extract_list_field(
+        raw,
+        (
+            "frames",
+            "frame_trace",
+            "pipeline_frames",
+            "pipecat_frames",
+            "media_frames",
+        ),
+    )
+    return [dict(frame) for frame in frames or []]
+
+
+def _realtime_session_events(raw: Any) -> List[Dict[str, Any]]:
+    candidates = _extract_list_field(
+        raw,
+        (
+            "session_events",
+            "sessionEvents",
+            "livekit_events",
+            "realtime_events",
+            "events",
+            "trajectory",
+            "spans",
+        ),
+    )
+    return [
+        dict(event)
+        for event in candidates or []
+        if _is_realtime_item(event)
+    ]
+
+
+def _is_realtime_item(item: Mapping[str, Any]) -> bool:
+    keys = set(item)
+    if keys & {
+        "frame_type",
+        "frameType",
+        "direction",
+        "sample_rate",
+        "sample_rate_hz",
+        "audio",
+        "transcript",
+        "utterance",
+        "agent_state",
+        "user_state",
+        "from_state",
+        "to_state",
+        "tool_name",
+        "function_name",
+        "speech_id",
+        "interrupted",
+    }:
+        return True
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ("type", "event", "name", "kind", "category", "source")
+    ).lower()
+    return any(
+        token in text
+        for token in (
+            "audio",
+            "speech",
+            "tts",
+            "stt",
+            "vad",
+            "transcript",
+            "utterance",
+            "session",
+            "participant",
+            "agent_state",
+            "user_state",
+            "tool_execution",
+            "function_call",
+            "interruption",
+            "turn_start",
+            "turn_end",
+        )
+    )
+
+
+def _realtime_item_entry(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+    source: str,
+) -> Dict[str, Any]:
+    item_type = _realtime_item_type(item)
+    text = _realtime_item_text(item)
+    entry: Dict[str, Any] = {
+        "index": index,
+        "source": source,
+        "item_type": item_type,
+        "name": _realtime_item_name(item, item_type=item_type),
+        "kind": _realtime_item_kind(item, item_type=item_type),
+        "category": _realtime_item_category(item, item_type=item_type),
+        "direction": str(item.get("direction") or item.get("frame_direction") or ""),
+        "modality": str(item.get("modality") or _realtime_item_modality(item, item_type)),
+        "payload": _plain_value(dict(item)),
+    }
+    timestamp = _realtime_timestamp_ms(item)
+    if timestamp is not None:
+        entry["timestamp_ms"] = timestamp
+    if text:
+        entry["text"] = text
+        entry["text_length"] = len(text)
+    for key in (
+        "participant",
+        "participant_id",
+        "agent",
+        "speaker",
+        "role",
+        "from_state",
+        "to_state",
+        "state",
+        "sample_rate",
+        "sample_rate_hz",
+        "duration_ms",
+    ):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            entry[key] = _plain_value(value)
+    tool_name = _realtime_tool_name(item)
+    if tool_name:
+        entry["tool_name"] = tool_name
+    return entry
+
+
+def _realtime_item_type(item: Mapping[str, Any]) -> str:
+    for key in ("frame_type", "frameType", "type", "event", "kind", "name"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            return str(value)
+    return "realtime_item"
+
+
+def _realtime_item_name(item: Mapping[str, Any], *, item_type: str) -> str:
+    for key in ("name", "event", "id", "tool_name", "function_name"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            return str(value)
+    return item_type
+
+
+def _realtime_item_kind(item: Mapping[str, Any], *, item_type: str) -> str:
+    normalized = _realtime_key(
+        " ".join(
+            str(item.get(key) or "")
+            for key in ("type", "event", "kind", "name", "frame_type", "frameType")
+        )
+        or item_type
+    )
+    if "error" in normalized or item.get("error"):
+        return "error"
+    if "interrupt" in normalized or item.get("interrupted"):
+        return "interruption"
+    if _realtime_is_tool_response(item, normalized):
+        return "tool_response"
+    if _realtime_is_tool_call(item, normalized):
+        return "tool_call"
+    if "transcript" in normalized or "utterance" in normalized or item.get("transcript"):
+        return "transcript"
+    if (
+        "audio" in normalized
+        or "tts" in normalized
+        or "stt" in normalized
+        or "vad" in normalized
+        or item.get("audio")
+        or item.get("sample_rate")
+        or item.get("sample_rate_hz")
+    ):
+        return "audio"
+    if (
+        "complete" in normalized
+        or "completed" in normalized
+        or "final" in normalized
+        or "closed" in normalized
+        or "end" in normalized
+    ):
+        return "completion"
+    if (
+        "session" in normalized
+        or "state" in normalized
+        or "participant" in normalized
+        or "start" in normalized
+        or "connect" in normalized
+        or item.get("from_state")
+        or item.get("to_state")
+    ):
+        return "lifecycle"
+    return "frame" if "frame" in normalized else "event"
+
+
+def _realtime_is_tool_call(item: Mapping[str, Any], item_type: str) -> bool:
+    normalized = _realtime_key(item_type)
+    return bool(
+        item.get("tool_name")
+        or item.get("function_name")
+        or item.get("function")
+        or "functioncall" in normalized
+        or "toolcall" in normalized
+        or "toolexecutionstarted" in normalized
+        or "toolexecutionrequested" in normalized
+    ) and not _realtime_is_tool_response(item, item_type)
+
+
+def _realtime_is_tool_response(item: Mapping[str, Any], item_type: str) -> bool:
+    normalized = _realtime_key(item_type)
+    return bool(
+        item.get("result") not in (None, "", [], {})
+        or item.get("tool_result") not in (None, "", [], {})
+        or "functioncallresult" in normalized
+        or "toolresult" in normalized
+        or "toolexecutioncompleted" in normalized
+        or "toolexecutionfailed" in normalized
+    )
+
+
+def _realtime_tool_name(item: Mapping[str, Any]) -> str:
+    function = _object_mapping(item.get("function")) or {}
+    tool_call = _object_mapping(item.get("tool_call")) or {}
+    for value in (
+        item.get("tool_name"),
+        item.get("function_name"),
+        item.get("tool"),
+        function.get("name"),
+        tool_call.get("name"),
+        item.get("name"),
+    ):
+        if value not in (None, "", [], {}):
+            return str(value)
+    return ""
+
+
+def _realtime_item_category(item: Mapping[str, Any], *, item_type: str) -> str:
+    for key in ("category", "frame_category", "frameCategory"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            return str(value)
+    normalized = _realtime_key(item_type)
+    if "systemframe" in normalized:
+        return "system"
+    if "controlframe" in normalized:
+        return "control"
+    if "dataframe" in normalized or "audio" in normalized or "transcript" in normalized:
+        return "data"
+    if "frame" in normalized:
+        return "frame"
+    return "event"
+
+
+def _realtime_item_modality(item: Mapping[str, Any], item_type: str) -> str:
+    normalized = _realtime_key(item_type)
+    if (
+        item.get("audio")
+        or item.get("sample_rate")
+        or item.get("sample_rate_hz")
+        or "audio" in normalized
+        or "speech" in normalized
+        or "tts" in normalized
+        or "stt" in normalized
+        or "vad" in normalized
+    ):
+        return "voice"
+    if "video" in normalized:
+        return "video"
+    return ""
+
+
+def _realtime_item_text(item: Mapping[str, Any]) -> str:
+    for key in ("transcript", "text", "content", "utterance", "delta"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            return _stringify(value)
+    payload = _object_mapping(item.get("payload"))
+    if payload:
+        for key in ("transcript", "text", "content", "utterance", "delta"):
+            value = payload.get(key)
+            if value not in (None, "", [], {}):
+                return _stringify(value)
+    return ""
+
+
+def _realtime_timestamp_ms(item: Mapping[str, Any]) -> Optional[int]:
+    for key in ("timestamp_ms", "time_ms", "start_ms", "elapsed_ms"):
+        value = item.get(key)
+        if isinstance(value, (int, float)):
+            return int(value)
+    value = item.get("timestamp")
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _realtime_specialized_event_type(entry: Mapping[str, Any]) -> str:
+    kind = str(entry.get("kind") or "")
+    return {
+        "audio": "realtime_audio_frame",
+        "completion": "realtime_completion",
+        "error": "realtime_error",
+        "interruption": "realtime_interruption",
+        "lifecycle": "realtime_lifecycle",
+        "tool_call": "realtime_tool_call",
+        "tool_response": "realtime_tool_response",
+        "transcript": "realtime_transcript",
+    }.get(kind, "realtime_frame")
+
+
+def _realtime_item_signals(entry: Mapping[str, Any]) -> set[str]:
+    signals = {"realtime"}
+    source = str(entry.get("source") or "")
+    kind = str(entry.get("kind") or "")
+    category = str(entry.get("category") or "")
+    if source:
+        signals.add(source)
+    if kind:
+        signals.add(kind)
+    if category:
+        signals.add(f"{category}_frame" if category != "event" else "event")
+    if entry.get("direction"):
+        signals.add("direction")
+    if entry.get("tool_name"):
+        signals.add("tool")
+    if entry.get("modality"):
+        signals.add(str(entry["modality"]))
+    return signals
+
+
+def _realtime_compact_transcript(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    if entry.get("kind") != "transcript" or not entry.get("text"):
+        return {}
+    return {
+        "index": entry.get("index"),
+        "source": entry.get("source"),
+        "role": entry.get("role"),
+        "speaker": entry.get("speaker") or entry.get("participant"),
+        "text": entry.get("text"),
+    }
+
+
+def _realtime_key(value: Any) -> str:
+    return str(value or "").lower().replace("_", "").replace("-", "").replace(" ", "")
 
 
 def _message_history_state(raw: Any) -> Dict[str, Any]:

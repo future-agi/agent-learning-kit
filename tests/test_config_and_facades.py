@@ -1819,6 +1819,89 @@ def test_handoff_transcript_framework_adapter_preserves_coordination(tmp_path):
     } <= event_types
 
 
+def test_realtime_trace_framework_adapter_preserves_frames_and_session_events(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_realtime_trace.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_realtime_trace_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "livekit",
+        module.LocalRealtimeVoiceStack(),
+        target=module.TARGET,
+        method_candidates=["respond", "run_session"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=8,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("run_session", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "run_session"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["realtime_trace"]
+    assert set(config["required_events"]) >= {
+        "realtime_frame",
+        "realtime_tool_call",
+        "realtime_tool_response",
+        "realtime_transcript",
+        "realtime_lifecycle",
+    }
+    assert set(runtime_contract["required_signals"]) >= {"event", "state", "tool"}
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-realtime-trace-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    realtime = state["realtime_trace"]
+    assert realtime["frame_count"] == 5
+    assert realtime["event_count"] == 5
+    assert realtime["tool_call_count"] >= 1
+    assert realtime["tool_response_count"] >= 1
+    assert realtime["transcript_count"] >= 1
+    assert realtime["audio_frame_count"] >= 1
+    assert realtime["lifecycle_event_count"] >= 1
+    assert "lookup_refund_policy" in realtime["tool_names"]
+    assert set(realtime["directions"]) == {"inbound", "outbound"}
+    assert {"AudioRawFrame", "FunctionCallFrame", "FunctionCallResultFrame"} <= set(
+        realtime["frame_types"]
+    )
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert output["tool_names"] == ["lookup_refund_policy"]
+    assert "realtime_trace" in output["state_keys"]
+    assert {
+        "realtime_frame",
+        "realtime_tool_call",
+        "realtime_tool_response",
+        "realtime_transcript",
+        "realtime_lifecycle",
+    } <= set(output["event_types"])
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

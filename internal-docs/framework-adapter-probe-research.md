@@ -136,6 +136,12 @@ Keep framework support local-first:
   into `framework_handoff`, `framework_review`, and
   `framework_reconciliation` events plus `framework_handoffs` state so
   multi-agent framework handoffs can be scored without a separate parser.
+- Preserve realtime framework trace semantics. Local Pipecat-style frame exports
+  and LiveKit-style session event exports should normalize into
+  `realtime_trace` state, trace artifacts, `realtime_frame`,
+  `realtime_tool_call`, `realtime_tool_response`, `realtime_transcript`, and
+  `realtime_lifecycle` events so voice adapters can be scored without a hosted
+  room or imported framework package.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe
