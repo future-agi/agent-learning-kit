@@ -667,6 +667,13 @@ Framework handoff transcripts get a compact coordination view. Messages with
 plus `framework_handoffs` state with participants, handoffs, reviews, and
 reconciliations. See `examples/sdk_framework_adapter_handoff_transcript.py`.
 
+MCP client/server sessions normalize protocol-native tool evidence. Outputs
+carrying MCP `tools/list`, `tools/call`, resource, JSON-RPC, or `{tools, calls}`
+exports become `mcp_tool_session` state, a trace artifact, `mcp_*` events,
+ordinary tool calls, and tool responses, so MCP servers can be optimized through
+the same local framework adapter path. See
+`examples/sdk_framework_adapter_mcp_tool_session.py`.
+
 Realtime framework exports are normalized from local session traces. Pipecat-like
 `frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
 artifact, `realtime_frame` / `realtime_tool_call` /
@@ -1336,6 +1343,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_workflow_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_lifecycle_trace.py \
   artifacts/sdk-framework-adapter-lifecycle-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_mcp_tool_session.py \
+  artifacts/sdk-framework-adapter-mcp-tool-session.json
 
 AGENT_LEARNING_SDK_ARTIFACT_ACTION_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_action_optimization.py \

@@ -168,6 +168,11 @@ Keep framework support local-first:
   `framework_lifecycle_*` events, and selected-output-derived lifecycle
   coverage/quality gates so reliability regressions are visible during adapter
   optimization.
+- Preserve MCP tool protocol semantics. Local framework outputs carrying MCP
+  `tools/list`, `tools/call`, resources, JSON-RPC request/result records, or
+  `{tools, calls}` fixtures should normalize into `mcp_tool_session` state,
+  trace artifacts, `mcp_*` events, ordinary tool calls, and tool responses so
+  MCP client/server integrations can be optimized through the same adapter path.
 - Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
   promotion step when the selected probe should become a normal
   `agent-learning.run.v1` manifest. The promoted manifest must retain the probe

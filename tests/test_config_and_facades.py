@@ -2388,6 +2388,99 @@ def test_lifecycle_framework_adapter_preserves_recovery_trace(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_mcp_framework_adapter_preserves_tool_session_trace(tmp_path):
+    from agent_learning import simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_mcp_tool_session.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_mcp_tool_session_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "mcp",
+        module.LocalMCPToolSessionAgent(),
+        target=module.TARGET,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict"],
+        max_candidates=6,
+    )
+
+    assert discovery["status"] == "passed"
+    assert {
+        (candidate.get("method"), candidate.get("input_mode"))
+        for candidate in discovery["adapter_candidates"]
+    } >= {("execute_task", "dict")}
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["mcp_tool_session"]
+    assert runtime_contract["required_tools"] == [
+        "refund_policy_lookup",
+        "refund_status",
+    ]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_events"]) >= {
+        "mcp_server",
+        "mcp_tool_schema",
+        "mcp_resource",
+        "mcp_tool_call",
+        "mcp_tool_result",
+        "mcp_tool_session",
+    }
+    assert set(runtime_contract["required_signals"]) >= {
+        "artifact",
+        "event",
+        "state",
+        "tool",
+    }
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-mcp-tool-session-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    mcp_session = state["mcp_tool_session"]
+    summary = mcp_session["summary"]
+    assert summary["schema_count"] == 2
+    assert summary["resource_count"] == 1
+    assert summary["call_count"] == 2
+    assert summary["result_count"] == 2
+    assert summary["error_count"] == 0
+    assert summary["tool_names"] == ["refund_policy_lookup", "refund_status"]
+    assert summary["server_names"] == ["refund-tools"]
+    assert summary["session_ids"] == ["mcp-session-refund-42"]
+    runtime = state["framework_runtime"]
+    output = runtime["invocations"][0]["output"]
+    assert output["tool_names"] == ["refund_policy_lookup", "refund_status"]
+    assert "mcp_tool_session" in output["state_keys"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "mcp_server",
+        "mcp_tool_schema",
+        "mcp_resource",
+        "mcp_tool_call",
+        "mcp_tool_result",
+        "mcp_tool_session",
+    } <= set(output["event_types"])
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 

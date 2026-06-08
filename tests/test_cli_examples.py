@@ -2087,6 +2087,62 @@ def test_sdk_framework_adapter_lifecycle_trace_example_runs(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_sdk_framework_adapter_mcp_tool_session_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_mcp_tool_session.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_mcp_tool_session",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-mcp-tool-session.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_mcp_tool_session_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["mcp_tool_session"]
+    assert runtime_contract["required_tools"] == [
+        "refund_policy_lookup",
+        "refund_status",
+    ]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert {
+        "mcp_server",
+        "mcp_tool_schema",
+        "mcp_resource",
+        "mcp_tool_call",
+        "mcp_tool_result",
+        "mcp_tool_session",
+    } <= set(config["required_events"])
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    summary = state["mcp_tool_session"]["summary"]
+    assert summary["schema_count"] == 2
+    assert summary["resource_count"] == 1
+    assert summary["call_count"] == 2
+    assert summary["result_count"] == 2
+    assert summary["tool_names"] == ["refund_policy_lookup", "refund_status"]
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["refund_policy_lookup", "refund_status"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "mcp_server",
+        "mcp_tool_schema",
+        "mcp_resource",
+        "mcp_tool_call",
+        "mcp_tool_result",
+        "mcp_tool_session",
+    } <= set(output["event_types"])
+
+
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_memory_layer_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

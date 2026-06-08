@@ -4,7 +4,10 @@ import time
 from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Union
 
-from fi.simulate.environment import normalize_framework_lifecycle_trace
+from fi.simulate.environment import (
+    normalize_framework_lifecycle_trace,
+    normalize_mcp_tool_session_export,
+)
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -436,6 +439,7 @@ class GenericAgentWrapper(AgentWrapper):
         provider_tool_calls = _provider_tool_calls(raw)
         history_tool_calls = _message_history_tool_calls(raw)
         realtime_tool_calls = _realtime_tool_calls(raw)
+        mcp_tool_calls = _mcp_tool_session_tool_calls(raw)
         workflow_tool_calls = _workflow_trace_tool_calls(raw)
         browser_tool_calls = _browser_cua_tool_calls(raw)
         return [
@@ -443,6 +447,7 @@ class GenericAgentWrapper(AgentWrapper):
             *provider_tool_calls,
             *history_tool_calls,
             *realtime_tool_calls,
+            *mcp_tool_calls,
             *workflow_tool_calls,
             *browser_tool_calls,
         ] or None
@@ -451,10 +456,12 @@ class GenericAgentWrapper(AgentWrapper):
         tool_responses = _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
         history_tool_responses = _message_history_tool_responses(raw)
         realtime_tool_responses = _realtime_tool_responses(raw)
+        mcp_tool_responses = _mcp_tool_session_tool_responses(raw)
         return [
             *(tool_responses or []),
             *history_tool_responses,
             *realtime_tool_responses,
+            *mcp_tool_responses,
         ] or None
 
     def _extract_metadata(self, raw: Any) -> Dict[str, Any]:
@@ -521,6 +528,9 @@ class GenericAgentWrapper(AgentWrapper):
         lifecycle_state = _framework_lifecycle_state(raw)
         if lifecycle_state:
             state.setdefault("framework_lifecycle_trace", lifecycle_state)
+        mcp_state = _mcp_tool_session_state(raw)
+        if mcp_state:
+            state.setdefault("mcp_tool_session", mcp_state)
         workflow_state = _workflow_trace_state(raw)
         if workflow_state:
             state.setdefault("workflow_trace", workflow_state)
@@ -568,6 +578,19 @@ class GenericAgentWrapper(AgentWrapper):
                     data=lifecycle_state,
                     metadata={
                         "kind": "framework_lifecycle_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+        mcp_state = _mcp_tool_session_state(raw)
+        if mcp_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=mcp_state,
+                    metadata={
+                        "kind": "mcp_tool_session",
                         "source": "generic_agent_wrapper",
                     },
                 )
@@ -642,6 +665,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_message_history_coordination_events(raw))
         events.extend(_realtime_trace_events(raw))
         events.extend(_framework_lifecycle_events(raw))
+        events.extend(_mcp_tool_session_events(raw))
         events.extend(_workflow_trace_events(raw))
         events.extend(_framework_memory_events(raw))
         events.extend(_browser_cua_events(raw))
@@ -1394,6 +1418,547 @@ def _framework_lifecycle_field(raw: Any, name: str) -> Any:
     if raw_mapping is not None:
         return raw_mapping.get(name)
     return getattr(raw, name, None)
+
+
+def _mcp_tool_session_state(raw: Any) -> Dict[str, Any]:
+    spans = _mcp_tool_session_spans(raw)
+    if not spans:
+        return {}
+    tool_calls = _mcp_tool_session_tool_calls(raw)
+    tool_responses = _mcp_tool_session_tool_responses(raw)
+    tool_names = sorted(
+        {
+            _mcp_span_tool_name(span)
+            for span in spans
+            if _mcp_span_has_tool_signal(span) and _mcp_span_tool_name(span)
+        }
+    )
+    server_names = sorted(
+        {
+            str(_plain_mapping(span.get("attributes")).get("mcp.server.name") or "")
+            for span in spans
+            if _plain_mapping(span.get("attributes")).get("mcp.server.name")
+        }
+    )
+    session_ids = sorted(
+        {
+            str(_plain_mapping(span.get("attributes")).get("mcp.session.id") or "")
+            for span in spans
+            if _plain_mapping(span.get("attributes")).get("mcp.session.id")
+        }
+    )
+    record_types = sorted(
+        {
+            _mcp_span_event_type(span)
+            for span in spans
+            if _mcp_span_event_type(span)
+        }
+    )
+    signals = sorted(
+        {
+            str(signal)
+            for span in spans
+            for signal in _plain_list(span.get("signals"))
+            if str(signal)
+        }
+    )
+    result_count = sum(1 for span in spans if _mcp_span_has_signal(span, "mcp_tool_result"))
+    error_count = sum(1 for span in spans if _mcp_span_has_signal(span, "mcp_tool_error"))
+    schema_count = sum(1 for span in spans if _mcp_span_has_signal(span, "mcp_tool_schema"))
+    resource_count = sum(1 for span in spans if _mcp_span_event_type(span) == "mcp_resource")
+    server_count = sum(1 for span in spans if _mcp_span_event_type(span) == "mcp_server")
+    summary = {
+        "span_count": len(spans),
+        "server_count": server_count,
+        "schema_count": schema_count,
+        "resource_count": resource_count,
+        "call_count": len(tool_calls),
+        "result_count": result_count,
+        "error_count": error_count,
+        "tool_response_count": len(tool_responses),
+        "tool_count": len(tool_names),
+        "tool_names": tool_names,
+        "server_names": server_names,
+        "session_ids": session_ids,
+        "record_types": record_types,
+        "signals": signals,
+    }
+    return {
+        "kind": "mcp_tool_session",
+        "framework": _mcp_tool_session_framework(raw),
+        "server_name": next(iter(server_names), ""),
+        "session_id": next(iter(session_ids), ""),
+        **summary,
+        "spans": spans,
+        "tool_calls": tool_calls,
+        "tool_responses": tool_responses,
+        "summary": summary,
+    }
+
+
+def _mcp_tool_session_events(raw: Any) -> List[SimulationEvent]:
+    spans = _mcp_tool_session_spans(raw)
+    if not spans:
+        return []
+    events: List[SimulationEvent] = []
+    for index, span in enumerate(spans, start=1):
+        span_dict = _plain_mapping(span)
+        event_type = _mcp_span_event_type(span_dict)
+        events.append(
+            SimulationEvent(
+                type=event_type,
+                name=str(span_dict.get("name") or event_type),
+                payload={**span_dict, "sequence": index},
+                metadata={
+                    "kind": "mcp_tool_session",
+                    "source": "framework_adapter_output",
+                },
+            )
+        )
+    state = _mcp_tool_session_state(raw)
+    events.append(
+        SimulationEvent(
+            type="mcp_tool_session",
+            name=str(state.get("server_name") or "mcp_tool_session"),
+            payload=state,
+            metadata={
+                "kind": "mcp_tool_session",
+                "source": "framework_adapter_output",
+            },
+        )
+    )
+    return events
+
+
+def _mcp_tool_session_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, span in enumerate(_mcp_tool_session_spans(raw), start=1):
+        if not _mcp_span_has_signal(span, "mcp_tool_call"):
+            continue
+        name = _mcp_span_tool_name(span)
+        if not name:
+            continue
+        call_id = _mcp_span_call_id(span, index=index)
+        signature = f"{call_id}:{name}"
+        if signature in seen:
+            continue
+        seen.add(signature)
+        arguments = _mcp_span_arguments(span)
+        calls.append(
+            {
+                "id": call_id,
+                "type": "mcp_tool_call",
+                "name": name,
+                "arguments": arguments,
+                "function": {
+                    "name": name,
+                    "arguments": arguments,
+                },
+            }
+        )
+    return calls
+
+
+def _mcp_tool_session_tool_responses(raw: Any) -> List[Dict[str, Any]]:
+    responses: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, span in enumerate(_mcp_tool_session_spans(raw), start=1):
+        is_result = _mcp_span_has_signal(span, "mcp_tool_result")
+        is_error = _mcp_span_has_signal(span, "mcp_tool_error")
+        output = _mcp_span_output(span)
+        error = _mcp_span_error(span)
+        if not is_result and not is_error and output in (None, "", [], {}) and not error:
+            continue
+        name = _mcp_span_tool_name(span)
+        if not name:
+            continue
+        call_id = _mcp_span_call_id(span, index=index)
+        signature = f"{call_id}:{name}:{bool(error)}"
+        if signature in seen:
+            continue
+        seen.add(signature)
+        content = error if error else output
+        responses.append(
+            {
+                "id": f"{call_id}_response",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": _plain_value(content),
+                "success": not bool(error),
+                "result": _plain_value(output),
+                "error": _plain_value(error),
+            }
+        )
+    return responses
+
+
+def _mcp_tool_session_spans(raw: Any) -> List[Dict[str, Any]]:
+    if not _has_mcp_tool_session_shape(raw):
+        return []
+    session_export = _mcp_tool_session_export(raw)
+    if session_export in (None, "", [], {}):
+        return []
+    return [
+        _plain_mapping(span)
+        for span in normalize_mcp_tool_session_export(
+            session_export,
+            framework=_mcp_tool_session_framework(raw),
+            server_name=_mcp_tool_session_server_name(raw) or None,
+        )
+        if _plain_mapping(span)
+    ]
+
+
+def _has_mcp_tool_session_shape(raw: Any) -> bool:
+    if raw in (None, "", [], {}):
+        return False
+    if isinstance(raw, (list, tuple)):
+        return any(_looks_like_mcp_session_record(item) for item in raw)
+    raw_mapping = _object_mapping(raw)
+    explicit_names = (
+        "mcp_tool_session",
+        "mcp_session",
+        "mcp_sessions",
+        "mcp_records",
+        "mcp_events",
+        "mcp_messages",
+        "mcp_requests",
+        "mcp_responses",
+        "mcp_tools",
+        "mcp_tool_specs",
+        "mcp_tool_schemas",
+        "mcp_resources",
+        "mcp_resource_templates",
+        "mcp_calls",
+        "mcp_tool_calls",
+        "mcp_tool_results",
+        "tool_session_export",
+        "tool_protocol_trace",
+    )
+    if raw_mapping is None:
+        return any(
+            hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+            for name in explicit_names
+        )
+    if any(raw_mapping.get(name) not in (None, "", [], {}) for name in explicit_names):
+        return True
+    if _looks_like_mcp_session_record(raw_mapping):
+        return True
+    if not _mcp_has_protocol_marker(raw_mapping):
+        return False
+    protocol_fields = (
+        "sessions",
+        "runs",
+        "tools",
+        "tool_specs",
+        "toolSchemas",
+        "tool_schemas",
+        "schemas",
+        "available_tools",
+        "calls",
+        "tool_calls",
+        "invocations",
+        "executions",
+        "tool_invocations",
+        "events",
+        "records",
+        "requests",
+        "responses",
+        "items",
+        "resources",
+        "resource_templates",
+    )
+    if any(raw_mapping.get(name) not in (None, "", [], {}) for name in protocol_fields):
+        return True
+    return _mcp_jsonrpc_sequence(raw_mapping.get("messages"))
+
+
+def _mcp_tool_session_export(raw: Any) -> Any:
+    if isinstance(raw, (list, tuple)):
+        return [_plain_value(item) for item in raw]
+    for name in (
+        "mcp_tool_session",
+        "mcp_session",
+        "tool_session_export",
+        "tool_protocol_trace",
+    ):
+        value = _mcp_tool_session_field(raw, name)
+        plain = _plain_value(value)
+        if plain in (None, "", [], {}):
+            continue
+        if isinstance(plain, Mapping):
+            return _mcp_tool_session_payload_with_defaults(dict(plain), raw)
+        return plain
+
+    raw_mapping = _object_mapping(raw) or {}
+    payload = _mcp_tool_session_payload_aliases(raw_mapping)
+    return _mcp_tool_session_payload_with_defaults(payload, raw)
+
+
+def _mcp_tool_session_payload_aliases(source: Mapping[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    alias_targets = {
+        "mcp_sessions": "sessions",
+        "mcp_records": "records",
+        "mcp_events": "events",
+        "mcp_messages": "messages",
+        "mcp_requests": "requests",
+        "mcp_responses": "responses",
+        "mcp_tools": "tools",
+        "mcp_tool_specs": "tools",
+        "mcp_tool_schemas": "tools",
+        "mcp_resources": "resources",
+        "mcp_resource_templates": "resource_templates",
+        "mcp_calls": "calls",
+        "mcp_tool_calls": "calls",
+        "mcp_tool_results": "calls",
+    }
+    for source_key, target_key in alias_targets.items():
+        value = source.get(source_key)
+        if value not in (None, "", [], {}):
+            payload[target_key] = _plain_value(value)
+    for key in (
+        "sessions",
+        "runs",
+        "tools",
+        "tool_specs",
+        "toolSchemas",
+        "tool_schemas",
+        "schemas",
+        "available_tools",
+        "calls",
+        "tool_calls",
+        "invocations",
+        "executions",
+        "tool_invocations",
+        "events",
+        "records",
+        "requests",
+        "responses",
+        "items",
+        "messages",
+        "resources",
+        "resource_templates",
+        "server",
+        "server_name",
+        "serverName",
+        "session_id",
+        "sessionId",
+        "protocol_version",
+        "protocolVersion",
+    ):
+        value = source.get(key)
+        if value not in (None, "", [], {}) and key not in payload:
+            payload[key] = _plain_value(value)
+    return payload
+
+
+def _mcp_tool_session_payload_with_defaults(
+    payload: Mapping[str, Any],
+    raw: Any,
+) -> Dict[str, Any]:
+    normalized = _mcp_tool_session_payload_aliases(payload)
+    for key, value in _plain_mapping(payload).items():
+        if value not in (None, "", [], {}) and key not in normalized:
+            normalized[key] = _plain_value(value)
+    server_name = _mcp_tool_session_server_name(raw)
+    session_id = _mcp_tool_session_session_id(raw)
+    framework = _mcp_tool_session_framework(raw)
+    if server_name:
+        normalized.setdefault("server_name", server_name)
+    if session_id:
+        normalized.setdefault("session_id", session_id)
+    if framework:
+        normalized.setdefault("framework", framework)
+    return normalized
+
+
+def _mcp_tool_session_framework(raw: Any) -> str:
+    value = (
+        _mcp_tool_session_field(raw, "framework")
+        or _mcp_tool_session_field(raw, "protocol")
+        or _plain_mapping(_mcp_tool_session_field(raw, "metadata")).get("framework")
+    )
+    text = str(value or "")
+    return "mcp" if _mcp_protocol_key(text) in {"mcp", "modelcontextprotocol"} else (text or "mcp")
+
+
+def _mcp_tool_session_server_name(raw: Any) -> str:
+    server = _mcp_tool_session_field(raw, "server")
+    server_mapping = _plain_mapping(server)
+    value = (
+        _mcp_tool_session_field(raw, "mcp_server_name")
+        or _mcp_tool_session_field(raw, "server_name")
+        or _mcp_tool_session_field(raw, "serverName")
+        or server_mapping.get("name")
+        or _plain_mapping(_mcp_tool_session_field(raw, "metadata")).get("server_name")
+    )
+    return str(value or "")
+
+
+def _mcp_tool_session_session_id(raw: Any) -> str:
+    value = (
+        _mcp_tool_session_field(raw, "mcp_session_id")
+        or _mcp_tool_session_field(raw, "session_id")
+        or _mcp_tool_session_field(raw, "sessionId")
+        or _mcp_tool_session_field(raw, "thread_id")
+        or _plain_mapping(_mcp_tool_session_field(raw, "metadata")).get("session_id")
+    )
+    return str(value or "")
+
+
+def _mcp_tool_session_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
+
+
+def _mcp_has_protocol_marker(value: Mapping[str, Any]) -> bool:
+    for key in ("framework", "protocol", "type", "kind"):
+        if _mcp_protocol_key(value.get(key)) in {"mcp", "modelcontextprotocol"}:
+            return True
+    metadata = _plain_mapping(value.get("metadata"))
+    for key in ("framework", "protocol"):
+        if _mcp_protocol_key(metadata.get(key)) in {"mcp", "modelcontextprotocol"}:
+            return True
+    return False
+
+
+def _mcp_protocol_key(value: Any) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("_", "")
+        .replace("-", "")
+        .replace(" ", "")
+    )
+
+
+def _looks_like_mcp_session_record(value: Any) -> bool:
+    record = _plain_mapping(value)
+    if not record:
+        return False
+    method = str(record.get("method") or "").lower()
+    if method.startswith("tools/") or method.startswith("resources/"):
+        return True
+    if record.get("jsonrpc") and (record.get("result") or record.get("error")):
+        return True
+    params = _plain_mapping(record.get("params"))
+    if params.get("name") and ("arguments" in params or "input" in params):
+        return True
+    result = _plain_mapping(record.get("result"))
+    return bool(result.get("tools") or result.get("resources"))
+
+
+def _mcp_jsonrpc_sequence(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)):
+        return False
+    return any(_looks_like_mcp_session_record(item) for item in value)
+
+
+def _mcp_span_event_type(span: Mapping[str, Any]) -> str:
+    span_type = str(span.get("type") or "")
+    if span_type.startswith("mcp_"):
+        return span_type
+    if _mcp_span_has_signal(span, "mcp_tool_error"):
+        return "mcp_tool_error"
+    if _mcp_span_has_signal(span, "mcp_tool_result"):
+        return "mcp_tool_result"
+    if _mcp_span_has_signal(span, "mcp_tool_call"):
+        return "mcp_tool_call"
+    if _mcp_span_has_signal(span, "mcp_tool_schema"):
+        return "mcp_tool_schema"
+    if _mcp_span_has_signal(span, "mcp_resource"):
+        return "mcp_resource"
+    if _mcp_span_has_signal(span, "mcp_server"):
+        return "mcp_server"
+    return "mcp_tool_span"
+
+
+def _mcp_span_has_signal(span: Mapping[str, Any], signal: str) -> bool:
+    normalized = signal.lower()
+    return normalized in {
+        str(item).lower()
+        for item in _plain_list(span.get("signals"))
+        if str(item)
+    }
+
+
+def _mcp_span_has_tool_signal(span: Mapping[str, Any]) -> bool:
+    return any(
+        _mcp_span_has_signal(span, signal)
+        for signal in (
+            "mcp_tool_schema",
+            "mcp_tool_call",
+            "mcp_tool_result",
+            "mcp_tool_error",
+        )
+    )
+
+
+def _mcp_span_tool_name(span: Mapping[str, Any]) -> str:
+    event = _plain_mapping(span.get("framework_event"))
+    attributes = _plain_mapping(span.get("attributes"))
+    for source in (span, event, attributes):
+        for key in ("tool_name", "tool", "mcp.tool.name", "gen_ai.tool.name"):
+            value = source.get(key)
+            if value not in (None, "", [], {}):
+                return str(value)
+    name = str(span.get("name") or "")
+    lowered = name.lower()
+    for prefix in (
+        "mcp tool result ",
+        "mcp tool error ",
+        "mcp tool call ",
+        "mcp tool schema ",
+    ):
+        if lowered.startswith(prefix):
+            return name[len(prefix):].strip()
+    return ""
+
+
+def _mcp_span_call_id(span: Mapping[str, Any], *, index: int) -> str:
+    attributes = _plain_mapping(span.get("attributes"))
+    return str(
+        attributes.get("mcp.request.id")
+        or span.get("call_id")
+        or span.get("tool_call_id")
+        or span.get("id")
+        or span.get("span_id")
+        or f"mcp_tool_call_{index}"
+    )
+
+
+def _mcp_span_arguments(span: Mapping[str, Any]) -> Dict[str, Any]:
+    attributes = _plain_mapping(span.get("attributes"))
+    return (
+        _plain_mapping(span.get("arguments"))
+        or _plain_mapping(span.get("input"))
+        or _plain_mapping(attributes.get("arguments"))
+        or _plain_mapping(attributes.get("mcp.tool.arguments"))
+    )
+
+
+def _mcp_span_output(span: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(span.get("attributes"))
+    if span.get("output") not in (None, "", [], {}):
+        return _plain_value(span.get("output"))
+    for key in ("result", "mcp.tool.result"):
+        if attributes.get(key) not in (None, "", [], {}):
+            return _plain_value(attributes.get(key))
+    return None
+
+
+def _mcp_span_error(span: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(span.get("attributes"))
+    return _plain_value(
+        span.get("error")
+        or attributes.get("error")
+        or attributes.get("exception")
+    )
 
 
 def _workflow_trace_state(raw: Any) -> Dict[str, Any]:
