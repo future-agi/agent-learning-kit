@@ -79,3 +79,9 @@ Keep framework support local-first:
   framework onboarding local and cheap, then promotes the selected adapter into a
   full simulation manifest, framework certification, or framework-runtime
   optimization.
+- Use `optimize.build_framework_run_manifest_from_probe_optimization()` for the
+  promotion step when the selected probe should become a normal
+  `agent-learning.run.v1` manifest. The promoted manifest must retain the probe
+  proof, selected contract metadata, method/input mode, target, and optional
+  `agent_report` config so the next run is evaluated through the same simulator
+  path as hand-written framework manifests.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import importlib
 import json
@@ -1145,6 +1146,90 @@ def test_optimize_framework_adapter_probe_selects_working_adapter():
     assert history_by_method["execute_task"]["metrics"][
         "framework_adapter_probe_local_contract_quality"
     ] == pytest.approx(1.0)
+
+
+def test_probe_optimization_promotes_to_framework_run_manifest(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import optimize, simulate
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_probe_promotion.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_probe_promotion_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    target = f"{shim_path.resolve()}:LocalRefundOrchestrator"
+    optimization_result = optimize.optimize_framework_adapter_probe(
+        name="sdk-framework-adapter-probe-promotion",
+        framework="custom_refund_orchestrator",
+        target=target,
+        agent_factory=module.LocalRefundOrchestrator,
+        adapter_candidates=[
+            {"method": "run", "input_mode": "text"},
+            {"method": "execute_task", "input_mode": "dict"},
+        ],
+        cases=[
+            {
+                "id": "refund-status",
+                "input": "Approve the refund and emit adapter evidence.",
+                "expected_contains": ["approved"],
+                "required_tools": ["framework_trace_status"],
+                "required_events": ["framework_trace"],
+                "required_state_keys": ["framework_runtime"],
+            }
+        ],
+        metadata={"cookbook": "sdk-framework-adapter-probe-promotion"},
+    )
+    evaluation_config = module.evaluation_config()
+    manifest = optimize.build_framework_run_manifest_from_probe_optimization(
+        optimization_result,
+        name="promoted-framework-adapter-probe-run",
+        required_env=["AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROMOTION_KEY"],
+        evaluation_config=evaluation_config,
+        metadata={"cookbook": "sdk-framework-adapter-probe-promotion"},
+    )
+
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["agent"]["target"] == target
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["metadata"]["promoted_from_framework_adapter_probe"] is True
+    assert manifest["agent"]["metadata"]["framework_adapter_probe_proof"][
+        "status"
+    ] == "passed"
+    assert manifest["agent"]["metadata"]["framework_adapter_probe_contract"][
+        "method"
+    ] == "execute_task"
+    assert manifest["metadata"]["promoted_from_framework_adapter_probe"] is True
+    assert manifest["evaluation"]["enabled"] is True
+    assert manifest["evaluation"]["agent_report"]["config"] == evaluation_config
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROMOTION_KEY",
+        "real-local-framework-adapter-probe-promotion-key",
+    )
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-framework-adapter-probe-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert state["framework_runtime"]["summary"]["methods"] == ["execute_task"]
+    assert state["framework_runtime"]["summary"]["input_modes"] == ["dict"]
 
 
 def test_sdk_social_memory_framework_optimization_example_runs(

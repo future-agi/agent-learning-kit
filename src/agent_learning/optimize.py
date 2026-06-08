@@ -10634,6 +10634,164 @@ def optimize_framework_adapter_probe(
     return public_payload(payload, kind=AGENT_LEARNING_OPTIMIZATION_KIND)
 
 
+def build_framework_run_manifest_from_probe_optimization(
+    optimization_result: Mapping[str, Any],
+    *,
+    name: Optional[str] = None,
+    target: Optional[str] = None,
+    required_env: Sequence[str] = (),
+    scenario: Optional[Mapping[str, Any]] = None,
+    framework_trace: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    metadata: Optional[Mapping[str, Any]] = None,
+    factory: Optional[bool] = None,
+    min_turns: int = 1,
+    max_turns: int = 1,
+) -> dict[str, Any]:
+    """Promote a verified adapter-probe optimization into a run manifest."""
+
+    payload = _plain_mapping(optimization_result)
+    if not payload:
+        raise ValueError("optimization_result must be a mapping")
+    if payload.get("kind") and payload.get("kind") != AGENT_LEARNING_OPTIMIZATION_KIND:
+        raise ValueError("optimization_result must be an agent-learning optimization")
+
+    optimization = _plain_mapping(payload.get("optimization"))
+    if not optimization:
+        raise ValueError("optimization_result must contain optimization")
+    best_config = _plain_mapping(optimization.get("best_config"))
+    adapter = _plain_mapping(best_config.get("adapter"))
+    if not adapter:
+        raise ValueError("optimization.best_config.adapter is required")
+
+    summary = _plain_mapping(payload.get("summary"))
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    proof = _plain_mapping(
+        payload.get("framework_adapter_probe_proof")
+        or optimization.get("framework_adapter_probe_proof")
+    )
+    if proof.get("kind") != AGENT_LEARNING_FRAMEWORK_ADAPTER_PROBE_PROOF_KIND:
+        raise ValueError("framework_adapter_probe_proof is required")
+    if proof.get("passed") is not True or proof.get("status") != "passed":
+        raise ValueError("framework_adapter_probe_proof must be passed")
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_report = _plain_mapping(selected_history.get("report"))
+    if selected_report and selected_report.get("status") != "passed":
+        raise ValueError("selected framework adapter probe report must be passed")
+    proof_evidence = _plain_mapping(proof.get("evidence"))
+    selected_report_summary = _plain_mapping(
+        selected_report.get("summary")
+        or proof_evidence.get("selected_report_summary")
+    )
+    selected_contract = _plain_mapping(
+        selected_report.get("contract")
+        or proof_evidence.get("framework_adapter_contract")
+    )
+
+    framework = str(
+        best_config.get("framework")
+        or summary.get("framework")
+        or proof.get("framework")
+        or selected_report.get("framework")
+        or source_metadata.get("framework")
+        or ""
+    )
+    selected_target = str(
+        target
+        or adapter.get("target")
+        or best_config.get("target")
+        or source_metadata.get("target")
+        or ""
+    )
+    if not framework:
+        raise ValueError("selected framework is required")
+    if not selected_target:
+        raise ValueError("selected adapter target is required")
+
+    method = adapter.get("method") or proof.get("method") or selected_report.get("method")
+    input_mode = (
+        adapter.get("input_mode")
+        or proof.get("input_mode")
+        or selected_report.get("input_mode")
+    )
+    trace_runtime = bool(
+        adapter.get(
+            "trace_runtime",
+            selected_contract.get("trace_runtime", True),
+        )
+    )
+    selected_factory = (
+        bool(factory)
+        if factory is not None
+        else bool(adapter.get("factory", best_config.get("factory", True)))
+    )
+    adapter_metadata = _plain_mapping(adapter.get("metadata"))
+    merged_metadata = {
+        **copy.deepcopy(adapter_metadata),
+        **copy.deepcopy(dict(metadata or {})),
+        "source": (
+            "agent_learning.optimize."
+            "build_framework_run_manifest_from_probe_optimization"
+        ),
+        "promoted_from_framework_adapter_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or summary.get("best_candidate_id")
+            or proof.get("selected_candidate_id")
+        ),
+        "framework_adapter_probe_proof": copy.deepcopy(proof),
+        "framework_adapter_probe_contract": copy.deepcopy(selected_contract),
+        "framework_adapter_probe_report_summary": copy.deepcopy(
+            selected_report_summary
+        ),
+    }
+
+    from . import simulate as _agent_simulate
+
+    manifest = _agent_simulate.build_framework_run_manifest(
+        name=str(name or f"{payload.get('name') or 'framework-adapter-probe'}-run"),
+        framework=framework,
+        target=selected_target,
+        required_env=required_env,
+        method=str(method) if method else None,
+        input_mode=str(input_mode) if input_mode else None,
+        factory=selected_factory,
+        trace_runtime=trace_runtime,
+        metadata=merged_metadata,
+        scenario=scenario,
+        framework_trace=framework_trace,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        evaluation_enabled=evaluation_config is not None,
+        output_key=str(adapter["output_key"]) if adapter.get("output_key") else None,
+        system_prompt=(
+            str(adapter["system_prompt"]) if adapter.get("system_prompt") else None
+        ),
+    )
+    manifest["metadata"] = {
+        **_plain_mapping(manifest.get("metadata")),
+        "promoted_from_framework_adapter_probe": True,
+        "probe_optimization_name": payload.get("name"),
+        "probe_selected_candidate_id": merged_metadata[
+            "probe_selected_candidate_id"
+        ],
+        "framework_adapter_probe_proof_status": proof.get("status"),
+    }
+    if evaluation_config is not None:
+        manifest["evaluation"] = {
+            "enabled": True,
+            "agent_report": {
+                "threshold": float(threshold),
+                "config": copy.deepcopy(dict(evaluation_config)),
+            },
+        }
+    return manifest
+
+
 def score_framework_adapter_probe_result(
     result: Mapping[str, Any],
     *,
@@ -24030,6 +24188,7 @@ __all__ = [
     "build_evaluation_hook_optimization_manifest",
     "build_external_agent_adapter_optimization_manifest",
     "build_framework_adapter_matrix_optimization_manifest",
+    "build_framework_run_manifest_from_probe_optimization",
     "build_framework_certification_optimization_manifest",
     "build_framework_import_repair_optimization_manifest",
     "build_framework_optimization_manifest",
