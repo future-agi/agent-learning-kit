@@ -171,6 +171,11 @@ def test_facades_expose_unified_agent_learning_modules():
         matrix["frameworks"]
     )
     assert simulate.framework_adapter_contract_matrix is not None
+    discovery = simulate.discover_framework_adapter("langgraph")
+    assert discovery["kind"] == "agent-learning.framework-adapter-discovery.v1"
+    assert discovery["adapter_candidates"][0]["method"] == "ainvoke"
+    assert discovery["adapter_candidates"][0]["input_mode"] == "dict"
+    assert simulate.discover_framework_adapter is not None
     assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
     assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
     assert simulate.run_eval_suite_file is not None

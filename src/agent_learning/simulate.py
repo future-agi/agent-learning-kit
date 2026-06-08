@@ -31,6 +31,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
     "browser_cua_contract",
+    "discover_framework_adapter",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
     "memory_layer_contract",
@@ -4824,6 +4825,10 @@ async def probe_framework_adapter(*args: Any, **kwargs: Any) -> Any:
 
 def run_framework_adapter_probe(*args: Any, **kwargs: Any) -> Any:
     return _simulate().run_framework_adapter_probe(*args, **kwargs)
+
+
+def discover_framework_adapter(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().discover_framework_adapter(*args, **kwargs)
 
 
 async def probe_memory_layer(*args: Any, **kwargs: Any) -> Any:

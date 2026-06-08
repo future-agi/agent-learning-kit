@@ -500,6 +500,29 @@ CLI manifests. Use `simulate.framework_adapter_contract("langgraph", ...)` to
 inspect the local adapter method, input mode, modality, transport, lifecycle
 hooks, capabilities, schemas, trace requirements, and executable-fixture status
 without importing the target framework.
+If you have a local object but are not sure which method/input shape to probe,
+use `simulate.discover_framework_adapter()` first. It inspects callable
+attributes without importing or executing the framework, rejects HTTP targets by
+default, and returns both ranked discovery contracts and an `adapter_candidates`
+list that can be passed directly to `optimize.optimize_framework_adapter_probe`:
+
+```python
+from agent_learning import simulate
+
+discovery = simulate.discover_framework_adapter(
+    "custom_refund_orchestrator",
+    LocalRefundOrchestrator(),
+    target="framework_shims.py:build_custom_refund_orchestrator",
+    method_candidates=["run", "execute_task"],
+    input_mode_candidates=["text", "dict", "agent_input"],
+)
+assert discovery["adapter_candidates"][0] == {
+    "method": "execute_task",
+    "input_mode": "dict",
+    "trace_runtime": True,
+    "target": "framework_shims.py:build_custom_refund_orchestrator",
+}
+```
 Before writing a full manifest, use `simulate.run_framework_adapter_probe()` to
 point at any local framework object or callable and prove the adapter method,
 input shape, output content, tool calls, events, runtime trace, and local-first

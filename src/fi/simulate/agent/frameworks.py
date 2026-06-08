@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 from urllib.parse import urlparse
@@ -80,6 +81,58 @@ FRAMEWORK_PRESETS: Dict[str, FrameworkAdapterSpec] = {
     "playwright": FrameworkAdapterSpec("playwright", "run", "dict", modality="cua", notes="Playwright-backed agent harness."),
     "vision_agent": FrameworkAdapterSpec("vision_agent", "run", "dict", modality="image", notes="Image or multimodal agent."),
 }
+
+
+_DISCOVERY_METHOD_ORDER = (
+    "ainvoke",
+    "invoke",
+    "execute_task",
+    "call",
+    "achat",
+    "chat",
+    "kickoff",
+    "query",
+    "process",
+    "respond",
+    "run",
+    "arun",
+    "send",
+    "completion",
+    "call_tool",
+    "invoke_model",
+    "generate_content",
+    "generate",
+    "__call__",
+)
+
+_DISCOVERY_METHOD_INPUT_MODES: dict[str, InputMode] = {
+    "ainvoke": "dict",
+    "invoke": "dict",
+    "execute_task": "dict",
+    "kickoff": "dict",
+    "process": "dict",
+    "completion": "dict",
+    "call_tool": "dict",
+    "invoke_model": "dict",
+    "generate_content": "dict",
+    "generate": "dict",
+    "call": "agent_input",
+    "achat": "text",
+    "chat": "text",
+    "query": "text",
+    "respond": "text",
+    "run": "text",
+    "arun": "text",
+    "send": "text",
+}
+
+_DISCOVERY_INPUT_MODE_ORDER: tuple[InputMode, ...] = (
+    "dict",
+    "text",
+    "agent_input",
+    "messages",
+    "auto",
+)
 
 
 def supported_frameworks() -> list[str]:
@@ -452,6 +505,163 @@ def run_framework_adapter_probe(
     )
 
 
+def discover_framework_adapter(
+    framework: str,
+    agent: Any = None,
+    *,
+    target: str | None = None,
+    method_candidates: Sequence[str | None] | None = None,
+    input_mode_candidates: Sequence[InputMode] | None = None,
+    modality: str | None = None,
+    trace_runtime: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+    allow_external_target: bool = False,
+    max_candidates: int | None = 24,
+) -> dict[str, Any]:
+    """Discover local adapter candidates for an arbitrary framework object.
+
+    Discovery never imports optional framework packages or calls the supplied
+    agent. It inspects callable attributes, combines them with the built-in
+    framework presets, and returns ranked method/input-mode contracts that can
+    be passed directly to ``optimize_framework_adapter_probe``.
+    """
+
+    if target and _is_external_target(target) and not allow_external_target:
+        raise ValueError(
+            "external targets are disabled for framework adapter discovery; "
+            "set allow_external_target=True only when the user explicitly "
+            "wants to document that live workload"
+        )
+    if max_candidates is not None and int(max_candidates) <= 0:
+        raise ValueError("max_candidates must be greater than zero")
+
+    key = _framework_key(framework)
+    spec = FRAMEWORK_PRESETS.get(key)
+    selected_metadata = dict(metadata or {})
+    inventory = _adapter_discovery_inventory(agent)
+    methods = _adapter_discovery_methods(
+        agent,
+        spec=spec,
+        method_candidates=method_candidates,
+    )
+    input_modes = _adapter_discovery_input_modes(
+        spec=spec,
+        input_mode_candidates=input_mode_candidates,
+    )
+
+    candidates: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    explicit_methods = {
+        str(method)
+        for method in method_candidates or []
+        if method is not None and str(method)
+    }
+
+    for method_name in methods:
+        for input_mode in _adapter_discovery_modes_for_method(
+            method_name,
+            input_modes,
+            spec=spec,
+        ):
+            pair = (str(method_name or ""), str(input_mode))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            contract = framework_adapter_contract(
+                key,
+                target=target,
+                method=method_name,
+                input_mode=input_mode,
+                modality=modality,
+                trace_runtime=trace_runtime,
+                metadata=selected_metadata,
+            )
+            scoring = _adapter_discovery_score(
+                method_name,
+                input_mode,
+                spec=spec,
+                inventory=inventory,
+                explicit_methods=explicit_methods,
+            )
+            adapter_candidate: dict[str, Any] = {
+                "input_mode": input_mode,
+                "trace_runtime": bool(trace_runtime),
+            }
+            if method_name:
+                adapter_candidate["method"] = method_name
+            if target:
+                adapter_candidate["target"] = str(target)
+            candidates.append(
+                {
+                    "rank": 0,
+                    "framework": key,
+                    "method": method_name or "auto",
+                    "input_mode": input_mode,
+                    "score": scoring["score"],
+                    "reasons": scoring["reasons"],
+                    "agent_method_present": _adapter_method_present(
+                        inventory,
+                        method_name,
+                    ),
+                    "contract": contract,
+                    "adapter_candidate": adapter_candidate,
+                }
+            )
+
+    candidates.sort(
+        key=lambda item: (
+            -float(item["score"]),
+            _adapter_method_rank(str(item.get("method") or "")),
+            _adapter_input_mode_rank(str(item.get("input_mode") or "")),
+        )
+    )
+    if max_candidates is not None:
+        candidates = candidates[: int(max_candidates)]
+    for rank, candidate in enumerate(candidates, start=1):
+        candidate["rank"] = rank
+
+    adapter_candidates = [
+        dict(candidate["adapter_candidate"]) for candidate in candidates
+    ]
+    findings = _adapter_discovery_findings(inventory, candidates)
+    status = "passed" if candidates else "failed"
+    top = candidates[0] if candidates else {}
+    return {
+        "kind": "agent-learning.framework-adapter-discovery.v1",
+        "status": status,
+        "passed": status == "passed",
+        "framework": key,
+        "target": str(target) if target else None,
+        "requires_external_service": False,
+        "allow_external_target": bool(allow_external_target),
+        "trace_runtime": bool(trace_runtime),
+        "agent": inventory,
+        "summary": {
+            "framework": key,
+            "candidate_count": len(candidates),
+            "adapter_candidate_count": len(adapter_candidates),
+            "max_candidates": max_candidates,
+            "top_method": top.get("method"),
+            "top_input_mode": top.get("input_mode"),
+            "top_score": top.get("score"),
+            "agent_provided": bool(inventory.get("provided")),
+            "agent_callable": bool(inventory.get("callable")),
+            "method_count": len(inventory.get("exposed_methods", [])),
+            "local_executable_fixture": not bool(target and _is_external_target(target)),
+        },
+        "candidates": candidates,
+        "adapter_candidates": adapter_candidates,
+        "findings": findings,
+        "evidence_requirements": [
+            "local_introspection",
+            "framework_adapter_contract",
+            "adapter_candidates",
+            "framework_adapter_probe",
+            "metric_evidence",
+        ],
+    }
+
+
 def _framework_key(value: str) -> str:
     return str(value or "custom").strip().lower().replace("-", "_") or "custom"
 
@@ -489,6 +699,277 @@ def _local_fixture_target(framework: str) -> str:
 
 def _is_external_target(target: str) -> bool:
     return urlparse(str(target or "")).scheme.lower() in {"http", "https"}
+
+
+def _adapter_discovery_inventory(agent: Any) -> dict[str, Any]:
+    if agent is None:
+        return {
+            "provided": False,
+            "callable": False,
+            "type": None,
+            "exposed_methods": [],
+            "wrapper": False,
+        }
+
+    exposed_methods = _adapter_public_callable_names(agent)
+    return {
+        "provided": True,
+        "callable": callable(agent),
+        "type": _adapter_agent_type(agent),
+        "exposed_methods": exposed_methods,
+        "wrapper": isinstance(agent, AgentWrapper),
+    }
+
+
+def _adapter_agent_type(agent: Any) -> str:
+    if inspect.isfunction(agent) or inspect.ismethod(agent):
+        module = getattr(agent, "__module__", "")
+        qualname = getattr(agent, "__qualname__", getattr(agent, "__name__", "callable"))
+        return f"{module}.{qualname}".strip(".")
+    cls = type(agent)
+    module = getattr(cls, "__module__", "")
+    qualname = getattr(cls, "__qualname__", getattr(cls, "__name__", "object"))
+    return f"{module}.{qualname}".strip(".")
+
+
+def _adapter_public_callable_names(agent: Any) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+
+    for name in _DISCOVERY_METHOD_ORDER:
+        if name == "__call__" and not callable(agent):
+            continue
+        if name != "__call__" and not _adapter_has_callable_method(agent, name):
+            continue
+        seen.add(name)
+        names.append(name)
+
+    try:
+        members = inspect.getmembers_static(agent)
+    except Exception:
+        members = []
+
+    public_names: list[str] = []
+    for name, value in members:
+        if name in seen:
+            continue
+        if name.startswith("_"):
+            continue
+        if not (
+            inspect.isroutine(value)
+            or isinstance(value, (classmethod, staticmethod))
+            or _adapter_has_callable_method(agent, name)
+        ):
+            continue
+        if not _adapter_has_callable_method(agent, name):
+            continue
+        public_names.append(name)
+
+    public_names.sort(key=lambda item: (_adapter_method_rank(item), item))
+    names.extend(public_names[:24])
+    return names
+
+
+def _adapter_has_callable_method(agent: Any, method_name: str) -> bool:
+    if not method_name:
+        return callable(agent)
+    try:
+        candidate = getattr(agent, method_name)
+    except Exception:
+        return False
+    return callable(candidate)
+
+
+def _adapter_discovery_methods(
+    agent: Any,
+    *,
+    spec: FrameworkAdapterSpec | None,
+    method_candidates: Sequence[str | None] | None,
+) -> list[str | None]:
+    methods: list[str | None] = []
+
+    for method in method_candidates or []:
+        methods.append(str(method) if method is not None and str(method) else None)
+    if spec and spec.method:
+        methods.append(spec.method)
+    methods.extend(_adapter_public_callable_names(agent) if agent is not None else [])
+    if agent is not None and callable(agent):
+        methods.append(None)
+    methods.extend(_DISCOVERY_METHOD_ORDER)
+    if spec is None:
+        methods.append(None)
+
+    unique: list[str | None] = []
+    seen: set[str] = set()
+    for method in methods:
+        key = str(method or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(method)
+    return unique or [None]
+
+
+def _adapter_discovery_input_modes(
+    *,
+    spec: FrameworkAdapterSpec | None,
+    input_mode_candidates: Sequence[InputMode] | None,
+) -> list[InputMode]:
+    modes: list[InputMode] = []
+    if input_mode_candidates is not None:
+        modes.extend(input_mode_candidates)
+    elif spec is not None and spec.input_mode != "auto":
+        modes.append(spec.input_mode)
+    modes.extend(_DISCOVERY_INPUT_MODE_ORDER)
+
+    unique: list[InputMode] = []
+    seen: set[str] = set()
+    for mode in modes:
+        normalized = str(mode or "auto")
+        if normalized not in _DISCOVERY_INPUT_MODE_ORDER:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)  # type: ignore[arg-type]
+    return unique or ["auto"]
+
+
+def _adapter_discovery_modes_for_method(
+    method_name: str | None,
+    input_modes: Sequence[InputMode],
+    *,
+    spec: FrameworkAdapterSpec | None,
+) -> list[InputMode]:
+    modes: list[InputMode] = []
+    inferred = _adapter_inferred_input_mode(method_name)
+    if inferred:
+        modes.append(inferred)
+    elif method_name is None and spec is not None:
+        modes.append(spec.input_mode)
+    modes.extend(input_modes)
+
+    unique: list[InputMode] = []
+    seen: set[str] = set()
+    for mode in modes:
+        normalized = str(mode or "auto")
+        if normalized not in _DISCOVERY_INPUT_MODE_ORDER:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)  # type: ignore[arg-type]
+    return unique or ["auto"]
+
+
+def _adapter_inferred_input_mode(method_name: str | None) -> InputMode | None:
+    if method_name is None:
+        return "agent_input"
+    return _DISCOVERY_METHOD_INPUT_MODES.get(method_name)
+
+
+def _adapter_discovery_score(
+    method_name: str | None,
+    input_mode: InputMode,
+    *,
+    spec: FrameworkAdapterSpec | None,
+    inventory: Mapping[str, Any],
+    explicit_methods: set[str],
+) -> dict[str, Any]:
+    score = 0.15
+    reasons: list[str] = ["local_contract_candidate"]
+    method_present = _adapter_method_present(inventory, method_name)
+    inferred_mode = _adapter_inferred_input_mode(method_name)
+
+    if method_name and method_name in explicit_methods:
+        score += 0.15
+        reasons.append("explicit_method_candidate")
+    if method_present:
+        score += 0.35
+        reasons.append("agent_exposes_method")
+    elif method_name is None and inventory.get("callable"):
+        score += 0.35
+        reasons.append("agent_is_direct_callable")
+    elif inventory.get("provided") and method_name:
+        score -= 0.15
+        reasons.append("method_not_found_on_agent")
+
+    if spec and method_name and method_name == spec.method:
+        score += 0.2
+        reasons.append("matches_framework_preset_method")
+    if spec and input_mode == spec.input_mode:
+        score += 0.15
+        reasons.append("matches_framework_preset_input_mode")
+    if inferred_mode and input_mode == inferred_mode:
+        score += 0.15
+        reasons.append("matches_inferred_input_mode")
+    if method_name == "execute_task" and input_mode == "dict":
+        score += 0.1
+        reasons.append("task_payload_adapter")
+    if input_mode == "auto":
+        score -= 0.05
+        reasons.append("auto_input_mode_requires_runtime_inference")
+
+    normalized = max(0.0, min(1.0, score))
+    return {"score": round(normalized, 3), "reasons": reasons}
+
+
+def _adapter_method_present(
+    inventory: Mapping[str, Any],
+    method_name: str | None,
+) -> bool:
+    if method_name is None:
+        return bool(inventory.get("callable"))
+    return method_name in set(inventory.get("exposed_methods", []) or [])
+
+
+def _adapter_method_rank(method_name: str) -> int:
+    normalized = str(method_name or "")
+    if normalized == "auto":
+        normalized = ""
+    try:
+        return _DISCOVERY_METHOD_ORDER.index(normalized)
+    except ValueError:
+        return len(_DISCOVERY_METHOD_ORDER)
+
+
+def _adapter_input_mode_rank(input_mode: str) -> int:
+    try:
+        return _DISCOVERY_INPUT_MODE_ORDER.index(input_mode)  # type: ignore[arg-type]
+    except ValueError:
+        return len(_DISCOVERY_INPUT_MODE_ORDER)
+
+
+def _adapter_discovery_findings(
+    inventory: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    if not inventory.get("provided"):
+        findings.append(
+            {
+                "level": "info",
+                "type": "agent_not_provided",
+                "message": "Discovery used framework presets without inspecting an agent.",
+            }
+        )
+    elif not inventory.get("callable") and not inventory.get("exposed_methods"):
+        findings.append(
+            {
+                "level": "warning",
+                "type": "no_callable_adapter_surface",
+                "message": "Agent does not expose a discovered callable adapter method.",
+            }
+        )
+    if not candidates:
+        findings.append(
+            {
+                "level": "error",
+                "type": "adapter_candidates_missing",
+                "message": "No framework adapter candidates were discovered.",
+            }
+        )
+    return findings
 
 
 def _framework_matrix_summary(contracts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

@@ -1268,6 +1268,30 @@ def test_sdk_framework_adapter_probe_example_runs(tmp_path):
     ] == result["contract"]
 
 
+def test_sdk_framework_adapter_discovery_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_discovery.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_discovery",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-discovery.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.framework-adapter-discovery.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["top_method"] == "execute_task"
+    assert result["summary"]["top_input_mode"] == "dict"
+    assert result["adapter_candidates"][0]["method"] == "execute_task"
+    assert result["adapter_candidates"][0]["input_mode"] == "dict"
+
+
 def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_probe_optimization.py"
     spec = importlib.util.spec_from_file_location(

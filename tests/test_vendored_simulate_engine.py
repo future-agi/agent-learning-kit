@@ -221,6 +221,7 @@ def test_agent_learning_simulate_exports_are_vendored_from_src_fi() -> None:
         _assert_vendored_under_agent_learning_kit(exported)
 
     assert "langgraph" in simulate.supported_frameworks()
+    assert callable(simulate.discover_framework_adapter)
     assert callable(simulate.probe_framework_adapter)
     assert callable(simulate.run_framework_adapter_probe)
     assert callable(simulate.memory_layer_contract)
@@ -592,6 +593,47 @@ def test_framework_adapter_probe_runs_custom_framework_runtime() -> None:
     assert case["runtime_trace"]["metadata"]["framework_adapter_contract"] == (
         result["contract"]
     )
+
+
+def test_framework_adapter_discovery_ranks_custom_methods_and_rejects_external_target() -> None:
+    class CustomRefundOrchestrator:
+        def run(self, text):
+            return f"weak text adapter: {text}"
+
+        async def execute_task(self, payload):
+            return {
+                "content": "structured refund task",
+                "metadata": {"framework": payload["metadata"]["framework"]},
+            }
+
+    result = simulate.discover_framework_adapter(
+        "custom_refund_orchestrator",
+        CustomRefundOrchestrator(),
+        target="framework_shims.py:build_custom_refund_orchestrator",
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        metadata={"suite": "adapter-discovery"},
+    )
+
+    assert result["kind"] == "agent-learning.framework-adapter-discovery.v1"
+    assert result["status"] == "passed"
+    assert result["requires_external_service"] is False
+    assert result["summary"]["top_method"] == "execute_task"
+    assert result["summary"]["top_input_mode"] == "dict"
+    assert result["adapter_candidates"][0]["method"] == "execute_task"
+    assert result["adapter_candidates"][0]["input_mode"] == "dict"
+    assert result["candidates"][0]["contract"]["kind"] == (
+        "agent-learning.framework-adapter-contract.v1"
+    )
+    assert result["candidates"][0]["contract"]["method"] == "execute_task"
+    assert "execute_task" in result["agent"]["exposed_methods"]
+
+    with pytest.raises(ValueError, match="external targets are disabled"):
+        simulate.discover_framework_adapter(
+            "langchain",
+            CustomRefundOrchestrator(),
+            target="https://example.com/agent",
+        )
 
 
 def test_framework_adapter_probe_runs_sync_callable_and_rejects_external_target() -> None:
