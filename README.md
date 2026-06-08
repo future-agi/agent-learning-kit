@@ -672,7 +672,7 @@ adapter outputs. OTLP-style `resourceSpans` / `scopeSpans`, TraceAI/Future AGI
 wrappers, and explicit `framework_trace` span/event records become
 `framework_trace` state, trace artifacts, `framework_trace_*` events, ordinary
 tool-call evidence, adapter conformance summaries, and generated
-`framework_trace_coverage` eval gates. See
+`framework_trace_coverage` / `framework_trace_quality` eval gates. See
 `examples/sdk_framework_adapter_trace_export.py`.
 
 A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs

@@ -1623,8 +1623,61 @@ def _probe_framework_lifecycle_summary(value: Any) -> dict[str, Any]:
 
 def _probe_framework_trace_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
-    summary = trace.get("summary")
-    return dict(summary) if isinstance(summary, Mapping) else {}
+    if not trace:
+        return {}
+    summary = (
+        dict(trace.get("summary") or {})
+        if isinstance(trace.get("summary"), Mapping)
+        else {}
+    )
+    for count_key, trace_key in (
+        ("span_count", "spans"),
+        ("event_count", "events"),
+        ("checkpoint_count", "checkpoints"),
+        ("session_count", "sessions"),
+    ):
+        if count_key not in summary and isinstance(trace.get(trace_key), list):
+            summary[count_key] = len(trace.get(trace_key, []))
+        elif count_key not in summary and trace.get(count_key) is not None:
+            summary[count_key] = trace.get(count_key)
+    for key in ("signals", "tool_names"):
+        if trace.get(key):
+            summary[key] = sorted(str(item) for item in trace.get(key, []) if str(item))
+    adapter_conformance = (
+        dict(trace.get("adapter_conformance"))
+        if isinstance(trace.get("adapter_conformance"), Mapping)
+        else {}
+    )
+    if adapter_conformance:
+        summary["adapter_conformance_passed"] = bool(
+            adapter_conformance.get("passed")
+        )
+        findings = _probe_mappings(adapter_conformance.get("findings"))
+        summary["adapter_conformance_finding_count"] = len(findings)
+        required_signals = adapter_conformance.get("required_signals")
+        if required_signals:
+            summary["adapter_required_signals"] = sorted(
+                str(item) for item in _probe_list(required_signals) if str(item)
+            )
+    spans = _probe_mappings(trace.get("spans"))
+    events = _probe_mappings(trace.get("events"))
+    if spans and "span_names" not in summary:
+        summary["span_names"] = sorted(
+            {
+                str(span.get("name") or span.get("id") or "")
+                for span in spans
+                if span.get("name") or span.get("id")
+            }
+        )
+    if events and "event_names" not in summary:
+        summary["event_names"] = sorted(
+            {
+                str(event.get("name") or event.get("id") or event.get("type") or "")
+                for event in events
+                if event.get("name") or event.get("id") or event.get("type")
+            }
+        )
+    return summary
 
 
 def _probe_orchestration_trace_summary(value: Any) -> dict[str, Any]:

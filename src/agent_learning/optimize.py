@@ -15820,6 +15820,14 @@ def build_framework_adapter_probe_evaluation_config(
         if framework_trace_observed
         else []
     )
+    framework_trace_quality = (
+        _framework_probe_trace_quality_requirements(
+            framework,
+            framework_trace_summary,
+        )
+        if framework_trace_observed
+        else {}
+    )
     orchestration_trace_summary = _framework_probe_first_response_mapping(
         selected_report,
         "orchestration_trace_summary",
@@ -16066,6 +16074,7 @@ def build_framework_adapter_probe_evaluation_config(
         metric_weights["realtime_trace_quality"] = 4.0
     if framework_trace_observed:
         metric_weights["framework_trace_coverage"] = 4.0
+        metric_weights["framework_trace_quality"] = 4.0
     if orchestration_trace_observed:
         metric_weights["orchestration_trace_coverage"] = 4.0
         metric_weights["orchestration_flow_quality"] = 4.0
@@ -16138,6 +16147,7 @@ def build_framework_adapter_probe_evaluation_config(
         ]
     if framework_trace_observed:
         config["required_framework_trace"] = required_framework_trace
+        config["framework_trace_quality"] = framework_trace_quality
     if orchestration_trace_observed:
         config["required_orchestration_trace"] = orchestration_requirements[
             "required_orchestration_trace"
@@ -16696,6 +16706,57 @@ def _framework_probe_trace_requirements(
     if framework:
         requirements.append("framework")
     return _unique_strings(str(item) for item in requirements if str(item))
+
+
+def _framework_probe_trace_quality_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _plain_mapping(summary)
+    quality: dict[str, Any] = {"framework": framework}
+    for summary_key, quality_key in (
+        ("span_count", "min_span_count"),
+        ("event_count", "min_event_count"),
+        ("signal_count", "min_signal_count"),
+        ("model_span_count", "min_model_span_count"),
+        ("tool_span_count", "min_tool_span_count"),
+        ("retrieval_span_count", "min_retrieval_span_count"),
+        ("memory_span_count", "min_memory_span_count"),
+        ("state_span_count", "min_state_span_count"),
+        ("latency_span_count", "min_latency_span_count"),
+        ("cost_span_count", "min_cost_span_count"),
+        ("checkpoint_count", "min_checkpoint_count"),
+        ("session_count", "min_session_count"),
+        ("tool_count", "min_tool_count"),
+    ):
+        count = _as_int(summary.get(summary_key))
+        if count > 0:
+            quality[quality_key] = count
+    signals = _unique_strings(summary.get("signals"))
+    if signals:
+        quality["required_signals"] = signals
+    tool_names = _unique_strings(summary.get("tool_names"))
+    if tool_names:
+        quality["required_tools"] = tool_names
+    span_names = _unique_strings(summary.get("span_names"))
+    if span_names:
+        quality["required_spans"] = span_names[:10]
+    event_names = _unique_strings(summary.get("event_names"))
+    if event_names:
+        quality["required_events"] = event_names[:10]
+    if summary.get("adapter_conformance_passed") is True:
+        quality["require_adapter_conformance"] = True
+    finding_count = _as_int(summary.get("adapter_conformance_finding_count"))
+    if finding_count >= 0:
+        quality["max_adapter_conformance_findings"] = finding_count
+    error_count = _as_int(summary.get("error_count"))
+    if error_count >= 0:
+        quality["max_error_count"] = error_count
+    return {
+        key: value
+        for key, value in quality.items()
+        if value not in (None, "", [], {})
+    }
 
 
 def _framework_probe_orchestration_requirements(

@@ -47,9 +47,13 @@ Those outputs normalize into:
 - Ordinary tool calls and tool responses extracted from tool spans.
 - Generated adapter-probe eval configs with `required_framework_trace` and
   `framework_trace_coverage` when the selected candidate emits trace evidence.
+- Selected-output-derived `framework_trace_quality` gates for framework,
+  span/event counts, model/tool/state/latency/cost signals, tool names, zero
+  errors, and adapter-conformance findings.
 
 The cookbook in `examples/sdk_framework_adapter_trace_export.py` covers the
 strongest local path: adapter discovery selects `execute_task(dict)`, the
 adapter emits an OTLP `resourceSpans` export with model, tool, state, latency,
 and cost signals, and the promoted run requires the resulting trace state,
-events, artifact, tool evidence, adapter conformance, and trace coverage metric.
+events, artifact, tool evidence, adapter conformance, trace coverage, and trace
+quality metrics.

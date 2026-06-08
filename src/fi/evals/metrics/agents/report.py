@@ -203,6 +203,7 @@ class AgentReportEvalConfig(BaseModel):
     required_red_team_readiness: List[str] = Field(default_factory=list)
     red_team_readiness_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_trace: List[str] = Field(default_factory=list)
+    framework_trace_quality: Dict[str, Any] = Field(default_factory=dict)
     required_mcp_tool_session: List[str] = Field(default_factory=list)
     mcp_tool_session_quality: Dict[str, Any] = Field(default_factory=dict)
     required_a2a_protocol: List[str] = Field(default_factory=list)
@@ -450,6 +451,7 @@ class AgentReportEvaluator:
                 _autonomy_loop_coverage_metric(report_context, config),
                 _autonomy_loop_quality_metric(report_context, config),
                 _framework_trace_coverage_metric(report_context, config),
+                *_framework_trace_quality_metrics(report_context, config),
                 *_mcp_tool_session_coverage_metrics(report_context, config),
                 *_mcp_tool_session_quality_metrics(report_context, config),
                 *_a2a_protocol_coverage_metrics(report_context, config),
@@ -10203,6 +10205,183 @@ def _framework_trace_coverage_metric(
             "observed": sorted(observed),
             "missing": missing,
             "findings": findings,
+        },
+    )
+
+
+def _framework_trace_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    if not config.framework_trace_quality:
+        return []
+    return [_framework_trace_quality_metric(context, config.framework_trace_quality)]
+
+
+def _framework_trace_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    requirements = _as_dict(requirements)
+    observed = _framework_trace_summary(_framework_trace_payloads_from_context(context))
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    expected_framework = requirements.get("framework") or requirements.get("required_framework")
+    if expected_framework not in (None, "", [], {}):
+        normalized = _normalize_framework_trace_key(expected_framework)
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="framework",
+            expected=normalized,
+            actual=observed["frameworks"],
+            match=normalized in observed["frameworks"],
+            finding_type="framework_trace_framework_mismatch",
+        )
+
+    count_checks = (
+        ("min_span_count", "span_count", "framework_trace_span_count_low"),
+        ("min_event_count", "event_count", "framework_trace_event_count_low"),
+        ("min_signal_count", "signal_count", "framework_trace_signal_count_low"),
+        ("min_model_span_count", "model_span_count", "framework_trace_model_span_count_low"),
+        ("min_tool_span_count", "tool_span_count", "framework_trace_tool_span_count_low"),
+        (
+            "min_retrieval_span_count",
+            "retrieval_span_count",
+            "framework_trace_retrieval_span_count_low",
+        ),
+        ("min_memory_span_count", "memory_span_count", "framework_trace_memory_span_count_low"),
+        ("min_state_span_count", "state_span_count", "framework_trace_state_span_count_low"),
+        ("min_latency_span_count", "latency_span_count", "framework_trace_latency_span_count_low"),
+        ("min_cost_span_count", "cost_span_count", "framework_trace_cost_span_count_low"),
+        (
+            "min_checkpoint_count",
+            "checkpoint_count",
+            "framework_trace_checkpoint_count_low",
+        ),
+        ("min_session_count", "session_count", "framework_trace_session_count_low"),
+        ("min_tool_count", "tool_count", "framework_trace_tool_count_low"),
+    )
+    for requirement_key, observed_key, finding_type in count_checks:
+        expected_min = _as_int(requirements.get(requirement_key))
+        if expected_min is None:
+            continue
+        actual = observed[observed_key]
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check=requirement_key,
+            expected=expected_min,
+            actual=actual,
+            match=actual >= expected_min,
+            finding_type=finding_type,
+        )
+
+    for signal in _string_list(
+        requirements.get("required_signals")
+        or requirements.get("signals")
+        or requirements.get("required_trace_signals")
+    ):
+        normalized = _normalize_framework_trace_key(signal)
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="required_signal",
+            expected=normalized,
+            actual=observed["signals"],
+            match=normalized in observed["signals"],
+            finding_type="framework_trace_signal_missing",
+        )
+
+    for tool in _string_list(requirements.get("required_tools") or requirements.get("tools")):
+        normalized = _normalize_framework_trace_name(tool)
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="required_tool",
+            expected=normalized,
+            actual=observed["tool_names"],
+            match=normalized in observed["tool_names"],
+            finding_type="framework_trace_tool_missing",
+        )
+
+    for span in _string_list(requirements.get("required_spans") or requirements.get("spans")):
+        normalized = _normalize_framework_trace_name(span)
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="required_span",
+            expected=normalized,
+            actual=observed["span_names"],
+            match=normalized in observed["span_names"],
+            finding_type="framework_trace_span_missing",
+        )
+
+    for event in _string_list(requirements.get("required_events") or requirements.get("events")):
+        normalized = _normalize_framework_trace_name(event)
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="required_event",
+            expected=normalized,
+            actual=observed["event_names"],
+            match=normalized in observed["event_names"],
+            finding_type="framework_trace_event_missing",
+        )
+
+    if requirements.get("require_adapter_conformance") is not None:
+        required = bool(requirements.get("require_adapter_conformance"))
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="adapter_conformance",
+            expected=required,
+            actual=observed["adapter_conformance_passed"],
+            match=observed["adapter_conformance_passed"] is required,
+            finding_type="framework_trace_adapter_conformance_missing",
+        )
+
+    max_findings = _as_int(requirements.get("max_adapter_conformance_findings"))
+    if max_findings is not None:
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="max_adapter_conformance_findings",
+            expected=max_findings,
+            actual=observed["adapter_conformance_finding_count"],
+            match=observed["adapter_conformance_finding_count"] <= max_findings,
+            finding_type="framework_trace_adapter_conformance_findings_high",
+        )
+
+    max_error_count = _as_int(requirements.get("max_error_count") or requirements.get("max_errors"))
+    if max_error_count is not None:
+        _append_framework_trace_quality_check(
+            checks,
+            findings,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=observed["error_count"],
+            match=observed["error_count"] <= max_error_count,
+            finding_type="framework_trace_error_count_high",
+        )
+
+    if not checks:
+        return AgentReportMetricResult(
+            name="framework_trace_quality",
+            score=1.0,
+            reason="No framework trace quality checks were configured.",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name="framework_trace_quality",
+        score=round(matched / len(checks), 4),
+        reason=f"{matched}/{len(checks)} framework trace quality check(s) matched.",
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
         },
     )
 
@@ -23720,6 +23899,182 @@ def _framework_trace_records_from_context(context: Mapping[str, Any]) -> List[Di
             if record_dict:
                 records.append(record_dict)
     return records
+
+
+def _framework_trace_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    frameworks: set[str] = set()
+    signals: set[str] = set()
+    tool_names: set[str] = set()
+    span_names: set[str] = set()
+    event_names: set[str] = set()
+    counts = {
+        "span_count": 0,
+        "event_count": 0,
+        "signal_count": 0,
+        "model_span_count": 0,
+        "tool_span_count": 0,
+        "retrieval_span_count": 0,
+        "memory_span_count": 0,
+        "state_span_count": 0,
+        "latency_span_count": 0,
+        "cost_span_count": 0,
+        "checkpoint_count": 0,
+        "session_count": 0,
+        "tool_count": 0,
+        "error_count": 0,
+        "adapter_conformance_finding_count": 0,
+    }
+    adapter_conformance_passed = False
+
+    for payload in payloads:
+        payload_dict = _as_dict(payload)
+        framework = _normalize_framework_trace_key(payload_dict.get("framework"))
+        if framework:
+            frameworks.add(framework)
+        summary = _as_dict(payload_dict.get("summary"))
+        for count_key in counts:
+            counts[count_key] = max(counts[count_key], _as_int(summary.get(count_key)) or 0)
+            counts[count_key] = max(counts[count_key], _as_int(payload_dict.get(count_key)) or 0)
+
+        spans = [_as_dict(item) for item in _as_list(payload_dict.get("spans")) if _as_dict(item)]
+        events = [_as_dict(item) for item in _as_list(payload_dict.get("events")) if _as_dict(item)]
+        checkpoints = [
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("checkpoints"))
+            if _as_dict(item)
+        ]
+        sessions = [
+            _as_dict(item)
+            for item in _as_list(payload_dict.get("sessions"))
+            if _as_dict(item)
+        ]
+        counts["span_count"] = max(counts["span_count"], len(spans))
+        counts["event_count"] = max(counts["event_count"], len(events))
+        counts["checkpoint_count"] = max(counts["checkpoint_count"], len(checkpoints))
+        counts["session_count"] = max(counts["session_count"], len(sessions))
+
+        for signal in _as_list(summary.get("signals") or payload_dict.get("signals")):
+            normalized = _normalize_framework_trace_key(signal)
+            if normalized:
+                signals.add(normalized)
+        for tool in _as_list(summary.get("tool_names") or payload_dict.get("tool_names")):
+            normalized = _normalize_framework_trace_name(tool)
+            if normalized:
+                tool_names.add(normalized)
+        for name in _as_list(summary.get("span_names")):
+            normalized = _normalize_framework_trace_name(name)
+            if normalized:
+                span_names.add(normalized)
+        for name in _as_list(summary.get("event_names")):
+            normalized = _normalize_framework_trace_name(name)
+            if normalized:
+                event_names.add(normalized)
+
+        payload_counts = {
+            "model_span_count": 0,
+            "tool_span_count": 0,
+            "retrieval_span_count": 0,
+            "memory_span_count": 0,
+            "state_span_count": 0,
+            "latency_span_count": 0,
+            "cost_span_count": 0,
+            "error_count": 0,
+        }
+        for records, name_target in ((spans, span_names), (events, event_names)):
+            for record in records:
+                name = _normalize_framework_trace_name(
+                    record.get("name") or record.get("id") or record.get("type")
+                )
+                if name:
+                    name_target.add(name)
+                record_signals = {
+                    _normalize_framework_trace_key(signal)
+                    for signal in _as_list(record.get("signals"))
+                    if _normalize_framework_trace_key(signal)
+                }
+                signals.update(record_signals)
+                for signal, count_key in (
+                    ("model", "model_span_count"),
+                    ("tool", "tool_span_count"),
+                    ("retrieval", "retrieval_span_count"),
+                    ("memory", "memory_span_count"),
+                    ("state", "state_span_count"),
+                    ("latency", "latency_span_count"),
+                    ("cost", "cost_span_count"),
+                ):
+                    if signal in record_signals:
+                        payload_counts[count_key] += 1
+                if "error" in record_signals or record.get("error"):
+                    payload_counts["error_count"] += 1
+                attributes = _as_dict(record.get("attributes"))
+                tool = _framework_trace_record_tool_name(record, attributes)
+                if tool:
+                    tool_names.add(_normalize_framework_trace_name(tool))
+        for count_key, count in payload_counts.items():
+            counts[count_key] = max(counts[count_key], count)
+
+        adapter_conformance = _as_dict(payload_dict.get("adapter_conformance"))
+        if adapter_conformance:
+            adapter_conformance_passed = (
+                adapter_conformance_passed
+                or adapter_conformance.get("passed") is True
+            )
+            findings = _as_list(adapter_conformance.get("findings"))
+            counts["adapter_conformance_finding_count"] = max(
+                counts["adapter_conformance_finding_count"],
+                len(findings),
+            )
+        if summary.get("adapter_conformance_passed") is True:
+            adapter_conformance_passed = True
+        counts["adapter_conformance_finding_count"] = max(
+            counts["adapter_conformance_finding_count"],
+            _as_int(summary.get("adapter_conformance_finding_count")) or 0,
+        )
+
+    counts["signal_count"] = max(counts["signal_count"], len(signals))
+    counts["tool_count"] = max(counts["tool_count"], len(tool_names))
+    return {
+        **counts,
+        "frameworks": sorted(frameworks),
+        "signals": sorted(signals),
+        "tool_names": sorted(tool_names),
+        "span_names": sorted(span_names),
+        "event_names": sorted(event_names),
+        "adapter_conformance_passed": adapter_conformance_passed,
+    }
+
+
+def _normalize_framework_trace_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _append_framework_trace_quality_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": bool(match),
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
 
 
 def _observability_replay_payloads_from_context(context: Mapping[str, Any]) -> List[Dict[str, Any]]:

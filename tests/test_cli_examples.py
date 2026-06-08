@@ -2342,8 +2342,33 @@ def test_sdk_framework_adapter_trace_export_example_runs(tmp_path):
         "cost",
         "span",
     }
+    trace_quality = config["framework_trace_quality"]
+    assert trace_quality["framework"] == "langgraph"
+    assert trace_quality["min_span_count"] == 3
+    assert trace_quality["min_model_span_count"] == 1
+    assert trace_quality["min_tool_span_count"] == 1
+    assert trace_quality["min_state_span_count"] == 1
+    assert trace_quality["min_latency_span_count"] == 3
+    assert trace_quality["min_cost_span_count"] == 1
+    assert trace_quality["min_tool_count"] == 1
+    assert trace_quality["max_error_count"] == 0
+    assert trace_quality["require_adapter_conformance"] is True
+    assert trace_quality["max_adapter_conformance_findings"] == 0
+    assert trace_quality["required_tools"] == ["policy_lookup"]
+    assert {"model", "tool", "state", "latency", "cost"} <= set(
+        trace_quality["required_signals"]
+    )
+    assert set(trace_quality["required_spans"]) >= {
+        "langgraph checkpoint refund decision",
+        "langgraph refund model chat",
+        "tool call policy_lookup",
+    }
     assert config["metric_weights"]["framework_trace_coverage"] == pytest.approx(4.0)
+    assert config["metric_weights"]["framework_trace_quality"] == pytest.approx(4.0)
     assert result["summary"]["metric_averages"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["framework_trace_quality"] == (
         pytest.approx(1.0)
     )
     state = result["report"]["results"][0]["metadata"]["environment_state"]
