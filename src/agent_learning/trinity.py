@@ -5,7 +5,7 @@ import importlib
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from .config import current_config
 
@@ -375,6 +375,10 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
     "examples/sdk_framework_adapter_realtime_trace.py",
     "examples/sdk_framework_adapter_browser_cua_trace.py",
+    "examples/sdk_framework_adapter_memory_trace.py",
+    "examples/sdk_framework_adapter_workflow_trace.py",
+    "examples/sdk_framework_adapter_orchestration_trace.py",
+    "examples/sdk_framework_adapter_lifecycle_trace.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -748,6 +752,206 @@ V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
         "state_equals": {
             "layout_shift_present": True,
             "storage_present": True,
+        },
+    },
+]
+
+V1_STATEFUL_FRAMEWORK_ADAPTER_FILES = [
+    "examples/sdk_framework_adapter_memory_trace.py",
+    "examples/sdk_framework_adapter_workflow_trace.py",
+    "examples/sdk_framework_adapter_orchestration_trace.py",
+    "examples/sdk_framework_adapter_lifecycle_trace.py",
+    "internal-docs/memory-layer-probe-research.md",
+    "internal-docs/workflow-graph-probe-research.md",
+    "internal-docs/orchestration-trace-adapter-research.md",
+    "internal-docs/framework-lifecycle-adapter-research.md",
+]
+
+V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS = [
+    {
+        "surface": "memory_trace",
+        "path": "examples/sdk_framework_adapter_memory_trace.py",
+        "manifest_key": "framework_adapter_memory_trace_manifest",
+        "framework": "langgraph",
+        "method": "ainvoke",
+        "input_mode": "dict",
+        "state_key": "framework_memory",
+        "required_state_keys": [
+            "agent_memory_lineage",
+            "framework_memory",
+            "retrieval_memory",
+        ],
+        "coverage_metric": "agent_memory_lineage_coverage",
+        "quality_metrics": [
+            "agent_memory_lineage_quality",
+            "retrieval_memory_attribution",
+        ],
+        "required_events": [
+            "framework_memory_operation",
+            "framework_memory_checkpoint",
+            "framework_memory_retrieval",
+            "framework_memory_record",
+        ],
+        "required_artifact_kinds": [
+            "framework_memory",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "state_minimums": {
+            "operation_count": 4,
+            "checkpoint_count": 1,
+            "memory_count": 1,
+            "retrieval_count": 1,
+            "store_count": 1,
+            "policy_count": 6,
+        },
+        "state_contains": {
+            "operation_types": ["read", "recall", "update", "write"],
+            "source_ids": ["refund_policy_doc"],
+            "namespaces": ["tenant_refunds"],
+            "policy_keys": [
+                "audit",
+                "canary",
+                "deletion",
+                "redaction",
+                "retention",
+                "tenant_isolation",
+            ],
+        },
+    },
+    {
+        "surface": "workflow_trace",
+        "path": "examples/sdk_framework_adapter_workflow_trace.py",
+        "manifest_key": "framework_adapter_workflow_trace_manifest",
+        "framework": "langgraph",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "state_key": "workflow_trace",
+        "coverage_metric": "workflow_trace_coverage",
+        "quality_metrics": ["workflow_graph_quality"],
+        "required_tools": ["policy_lookup"],
+        "required_events": [
+            "workflow_step",
+            "workflow_route",
+            "workflow_checkpoint",
+            "workflow_interrupt",
+            "workflow_replay",
+            "workflow_trace",
+        ],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+            "workflow_trace",
+        ],
+        "state_minimums": {
+            "node_count": 4,
+            "edge_count": 3,
+            "step_count": 4,
+            "checkpoint_count": 2,
+            "route_decision_count": 1,
+            "interrupt_count": 1,
+            "replay_count": 1,
+            "write_count": 1,
+            "tool_call_count": 1,
+        },
+        "state_contains": {
+            "tool_names": ["policy_lookup"],
+            "final_state_keys": ["approval", "decision", "policy_result"],
+            "topology.entry_nodes": ["intake"],
+            "topology.terminal_nodes": ["finalize"],
+        },
+        "state_equals": {
+            "has_replay": True,
+            "has_interrupts": True,
+            "has_routes": True,
+        },
+    },
+    {
+        "surface": "orchestration_trace",
+        "path": "examples/sdk_framework_adapter_orchestration_trace.py",
+        "manifest_key": "framework_adapter_orchestration_trace_manifest",
+        "framework": "langgraph",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "state_key": "orchestration_trace",
+        "state_summary_key": "summary",
+        "coverage_metric": "orchestration_trace_coverage",
+        "quality_metrics": ["orchestration_flow_quality"],
+        "required_tools": ["policy_lookup"],
+        "required_events": [
+            "orchestration_step",
+            "orchestration_trace",
+        ],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+            "orchestration_trace",
+        ],
+        "state_minimums": {
+            "node_count": 4,
+            "edge_count": 3,
+            "step_count": 6,
+            "agent_count": 4,
+            "spawn_count": 1,
+            "delegation_count": 2,
+            "communication_count": 2,
+            "aggregation_count": 2,
+            "stop_count": 1,
+            "failure_count": 1,
+            "retry_count": 1,
+            "recovered_failures": 1,
+        },
+        "state_contains": {
+            "signals": ["delegate", "handoff", "recovered", "stop", "tool"],
+        },
+        "state_equals": {"terminal_status": "success"},
+    },
+    {
+        "surface": "lifecycle_trace",
+        "path": "examples/sdk_framework_adapter_lifecycle_trace.py",
+        "manifest_key": "framework_adapter_lifecycle_trace_manifest",
+        "framework": "livekit",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "state_key": "framework_lifecycle_trace",
+        "state_summary_key": "summary",
+        "coverage_metric": "framework_lifecycle_coverage",
+        "quality_metrics": ["framework_lifecycle_quality"],
+        "required_tools": ["framework_lifecycle_status"],
+        "required_events": [
+            "framework_lifecycle_phase",
+            "framework_lifecycle_trace",
+        ],
+        "required_artifact_kinds": [
+            "framework_lifecycle_trace",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "state_minimums": {
+            "phase_count": 10,
+            "session_count": 1,
+            "retry_count": 1,
+            "error_count": 1,
+            "recovered_error_count": 1,
+            "cancellation_count": 1,
+            "resume_count": 1,
+            "cleanup_count": 1,
+            "checkpoint_count": 2,
+        },
+        "state_contains": {
+            "signals": [
+                "checkpoint",
+                "recovery",
+                "resume",
+                "retry",
+                "state_persistence",
+                "tool_registration",
+            ],
+        },
+        "state_equals": {
+            "state_persistence": True,
+            "cleanup_complete": True,
+            "terminal_status": "completed",
         },
     },
 ]
@@ -1138,6 +1342,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=browser_realtime_adapter,
     )
+    stateful_framework_adapter = _release_stateful_framework_adapter_status(root)
+    _append_release_check(
+        checks,
+        check_id="stateful_framework_adapter_readiness",
+        passed=(
+            not stateful_framework_adapter["missing_files"]
+            and not stateful_framework_adapter["adapter_errors"]
+            and not stateful_framework_adapter["event_errors"]
+            and not stateful_framework_adapter["artifact_errors"]
+            and not stateful_framework_adapter["metric_errors"]
+            and not stateful_framework_adapter["state_errors"]
+            and not stateful_framework_adapter["errors"]
+        ),
+        milestone="M6",
+        evidence=stateful_framework_adapter,
+    )
     trinity_stack_probe = _release_trinity_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -1263,6 +1483,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_browser_realtime_adapter_contracts": copy.deepcopy(
             V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
+        ),
+        "required_stateful_framework_adapter_files": list(
+            V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
+        ),
+        "required_stateful_framework_adapter_contracts": copy.deepcopy(
+            V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS
         ),
         "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_trinity_stack_probe_environment_types": list(
@@ -3589,7 +3815,28 @@ def _release_protocol_adapter_status(root: Path) -> dict[str, Any]:
 
 
 def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
-    missing_files = _missing_relative_paths(root, V1_BROWSER_REALTIME_ADAPTER_FILES)
+    return _release_semantic_framework_adapter_status(
+        root,
+        required_files=V1_BROWSER_REALTIME_ADAPTER_FILES,
+        contracts=V1_BROWSER_REALTIME_ADAPTER_CONTRACTS,
+    )
+
+
+def _release_stateful_framework_adapter_status(root: Path) -> dict[str, Any]:
+    return _release_semantic_framework_adapter_status(
+        root,
+        required_files=V1_STATEFUL_FRAMEWORK_ADAPTER_FILES,
+        contracts=V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS,
+    )
+
+
+def _release_semantic_framework_adapter_status(
+    root: Path,
+    *,
+    required_files: Sequence[str],
+    contracts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, required_files)
     adapter_errors: list[dict[str, Any]] = []
     event_errors: list[dict[str, Any]] = []
     artifact_errors: list[dict[str, Any]] = []
@@ -3599,7 +3846,7 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
     adapters: list[dict[str, Any]] = []
 
     if not missing_files:
-        for contract in V1_BROWSER_REALTIME_ADAPTER_CONTRACTS:
+        for contract in contracts:
             surface = str(contract["surface"])
             relative_path = str(contract["path"])
             example_path = root / relative_path
@@ -3639,7 +3886,12 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
             metadata = _as_mapping(case.get("metadata"))
             environment_state = _as_mapping(metadata.get("environment_state"))
             state_key = str(contract["state_key"])
+            required_state_keys = [
+                str(item) for item in _as_list(contract.get("required_state_keys"))
+            ] or [state_key]
             adapter_state = _as_mapping(environment_state.get(state_key))
+            state_summary_key = str(contract.get("state_summary_key") or "")
+            state_values = _as_mapping(adapter_state.get(state_summary_key))
             events = [item for item in _as_list(case.get("events")) if isinstance(item, Mapping)]
             event_types = sorted(
                 {str(event.get("type") or "") for event in events if event.get("type")}
@@ -3696,7 +3948,12 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
                     ),
                 },
                 "state_summary": {
-                    field: adapter_state.get(field) for field in state_fields
+                    field: _release_adapter_state_value(
+                        adapter_state,
+                        state_values,
+                        field,
+                    )
+                    for field in state_fields
                 },
             }
             adapters.append(record)
@@ -3731,17 +3988,25 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
                         "observed": manifest.get("required_env"),
                     }
                 )
-            if state_key not in environment_state:
+            missing_environment_state_keys = sorted(
+                set(required_state_keys) - set(str(key) for key in environment_state)
+            )
+            if missing_environment_state_keys:
                 adapter_errors.append(
                     {
                         "surface": surface,
                         "path": relative_path,
                         "field": "environment_state",
-                        "expected": state_key,
+                        "expected": required_state_keys,
                         "observed": sorted(str(key) for key in environment_state),
+                        "missing": missing_environment_state_keys,
                     }
                 )
-            if state_key not in set(runtime_contract.get("required_state_keys") or []):
+            missing_runtime_state_keys = sorted(
+                set(required_state_keys)
+                - set(str(key) for key in runtime_contract.get("required_state_keys") or [])
+            )
+            if missing_runtime_state_keys:
                 adapter_errors.append(
                     {
                         "surface": surface,
@@ -3750,8 +4015,9 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
                             "evaluation.agent_report.config."
                             "framework_runtime_contract.required_state_keys"
                         ),
-                        "expected": state_key,
+                        "expected": required_state_keys,
                         "observed": runtime_contract.get("required_state_keys"),
+                        "missing": missing_runtime_state_keys,
                     }
                 )
             missing_tools = sorted(
@@ -3819,29 +4085,32 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
                         }
                     )
             for field, minimum in _as_mapping(contract.get("state_minimums")).items():
-                if _float_or_zero(adapter_state.get(field)) < float(minimum):
+                observed = _release_adapter_state_value(adapter_state, state_values, field)
+                if _float_or_zero(observed) < float(minimum):
                     state_errors.append(
                         {
                             "surface": surface,
                             "path": relative_path,
                             "field": f"{state_key}.{field}",
                             "expected": f">={minimum}",
-                            "observed": adapter_state.get(field),
+                            "observed": observed,
                         }
                     )
             for field, maximum in _as_mapping(contract.get("state_maximums")).items():
-                if _float_or_zero(adapter_state.get(field)) > float(maximum):
+                observed = _release_adapter_state_value(adapter_state, state_values, field)
+                if _float_or_zero(observed) > float(maximum):
                     state_errors.append(
                         {
                             "surface": surface,
                             "path": relative_path,
                             "field": f"{state_key}.{field}",
                             "expected": f"<={maximum}",
-                            "observed": adapter_state.get(field),
+                            "observed": observed,
                         }
                     )
             for field, required_values in _as_mapping(contract.get("state_contains")).items():
-                observed_values = {str(item) for item in _as_list(adapter_state.get(field))}
+                observed = _release_adapter_state_value(adapter_state, state_values, field)
+                observed_values = {str(item) for item in _as_list(observed)}
                 missing_values = sorted(
                     {str(item) for item in _as_list(required_values)} - observed_values
                 )
@@ -3857,7 +4126,7 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
                         }
                     )
             for field, expected in _as_mapping(contract.get("state_equals")).items():
-                observed = adapter_state.get(field)
+                observed = _release_adapter_state_value(adapter_state, state_values, field)
                 if observed != expected:
                     state_errors.append(
                         {
@@ -3870,8 +4139,8 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
                     )
 
     return {
-        "required_files": list(V1_BROWSER_REALTIME_ADAPTER_FILES),
-        "required_contracts": copy.deepcopy(V1_BROWSER_REALTIME_ADAPTER_CONTRACTS),
+        "required_files": list(required_files),
+        "required_contracts": copy.deepcopy(list(contracts)),
         "missing_files": missing_files,
         "adapter_errors": adapter_errors,
         "event_errors": event_errors,
@@ -3881,6 +4150,24 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
         "errors": errors,
         "adapters": adapters,
     }
+
+
+def _release_adapter_state_value(
+    adapter_state: Mapping[str, Any],
+    state_values: Mapping[str, Any],
+    field: str,
+) -> Any:
+    for source in (adapter_state, state_values):
+        current: Any = source
+        for part in str(field).split("."):
+            current_mapping = _as_mapping(current)
+            if part not in current_mapping:
+                current = None
+                break
+            current = current_mapping.get(part)
+        if current is not None:
+            return current
+    return None
 
 
 def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
@@ -4395,6 +4682,10 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
+    "V1_BROWSER_REALTIME_ADAPTER_CONTRACTS",
+    "V1_BROWSER_REALTIME_ADAPTER_FILES",
+    "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
+    "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
     "V1_REDTEAM_EXAMPLES",
     "V1_REDTEAM_CORPUS_EXECUTION_CHANNELS",

@@ -64,3 +64,6 @@ emits LangGraph-style supervisor orchestration records with delegation, handoff,
 communication, aggregation, retry recovery, latency, cost, tool, and stop
 signals, and the promoted run requires the resulting trace state, events,
 artifact, tool evidence, and orchestration coverage/quality metrics.
+`agent-learn release-check` now runs this cookbook as
+`stateful_framework_adapter_readiness` and additionally requires the framework
+runtime contract to close at 1.0 for the orchestration signal.

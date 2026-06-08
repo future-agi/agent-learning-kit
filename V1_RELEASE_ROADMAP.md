@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `harness_diagnosis_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -241,6 +241,14 @@ Current checkpoint:
   `examples/sdk_framework_adapter_browser_cua_trace.py` must run locally, select
   the local trace-capable adapter methods, emit realtime/browser state, events,
   and artifacts, and pass coverage, grounding, mutation, and quality metrics.
+- Stateful framework adapter readiness is now an executable release-check gate:
+  `examples/sdk_framework_adapter_memory_trace.py`,
+  `examples/sdk_framework_adapter_workflow_trace.py`,
+  `examples/sdk_framework_adapter_orchestration_trace.py`, and
+  `examples/sdk_framework_adapter_lifecycle_trace.py` must run locally, select
+  the local stateful adapter methods, emit memory/workflow/orchestration/
+  lifecycle state, events, and artifacts, and pass framework runtime, coverage,
+  quality, retrieval, and recovery metrics.
 
 Acceptance gates:
 
@@ -290,6 +298,11 @@ Next implementation focus:
   prompt-injection-surface avoidance, voice frames, session events, lifecycle
   events, and realtime tool calls before expanding to live browser or voice
   transports.
+- Keep stateful framework adapters on the same bar: local release gates should
+  prove governed memory lineage, retrieval attribution, durable workflow
+  checkpoints/replay, supervisor orchestration, lifecycle retry/recovery, and
+  full runtime-contract evidence before expanding to additional framework
+  control planes.
 
 ### M7: Release Packaging And Proof
 

@@ -37,6 +37,11 @@ Keep lifecycle support local-first:
   the selected adapter output summary. Do not require unobserved lifecycle
   signals, and do not turn wrapper-generated runtime trace artifacts into
   lifecycle proof.
+- `agent-learn release-check` now runs
+  `examples/sdk_framework_adapter_lifecycle_trace.py` as
+  `stateful_framework_adapter_readiness`; the gate requires local
+  `execute_task(dict)` selection, retry/recovery, cancellation, resume, cleanup,
+  state persistence, artifacts, and passing lifecycle coverage/quality metrics.
 
 ## Cookbook Contract
 

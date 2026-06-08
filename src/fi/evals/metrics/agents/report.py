@@ -20861,6 +20861,8 @@ def _framework_runtime_observed(context: Mapping[str, Any]) -> set[str]:
                 observed.add("memory")
             if _framework_runtime_output_has_browser_evidence(output):
                 observed.add("browser")
+            if _framework_runtime_output_has_orchestration_evidence(output):
+                observed.add("orchestration")
             if _framework_runtime_output_has_workflow_evidence(output):
                 observed.add("workflow")
             if _framework_runtime_output_has_openenv_evidence(output):
@@ -21016,6 +21018,8 @@ def _framework_runtime_summary(payloads: Sequence[Mapping[str, Any]]) -> Dict[st
                 signals.add("memory")
             if _framework_runtime_output_has_browser_evidence(output):
                 signals.add("browser")
+            if _framework_runtime_output_has_orchestration_evidence(output):
+                signals.add("orchestration")
             if _framework_runtime_output_has_workflow_evidence(output):
                 signals.add("workflow")
 
@@ -21140,6 +21144,25 @@ def _framework_runtime_output_has_browser_evidence(output: Mapping[str, Any]) ->
             or value.startswith("browser_")
             or value.startswith("playwright_")
             or value.startswith("computer_")
+        )
+        for value in normalized
+    )
+
+
+def _framework_runtime_output_has_orchestration_evidence(output: Mapping[str, Any]) -> bool:
+    values = [
+        *_as_list(output.get("state_keys", [])),
+        *_as_list(output.get("event_types", [])),
+        *_as_list(output.get("artifact_types", [])),
+        *_as_list(output.get("metadata_keys", [])),
+    ]
+    normalized = {_normalize_framework_runtime_key(value) for value in values}
+    return any(
+        value
+        and (
+            value == "orchestration_trace"
+            or value.startswith("orchestration_")
+            or value in {"agent_orchestration_trace", "agent_graph_trace"}
         )
         for value in normalized
     )

@@ -59,6 +59,11 @@ Keep memory support local-first:
   `agent_memory_lineage_quality`, and `required_retrieval_memory_trace` from
   the selected output and weight `agent_memory_lineage_coverage`,
   `agent_memory_lineage_quality`, and `retrieval_memory_attribution`.
+- `agent-learn release-check` now runs
+  `examples/sdk_framework_adapter_memory_trace.py` as
+  `stateful_framework_adapter_readiness`; the gate requires local `ainvoke(dict)`
+  selection, memory/retrieval/lineage state, memory events, artifacts, and
+  passing memory lineage plus retrieval attribution metrics.
 - Require current-document citations, freshness checks, source attribution,
   audited read/write/recall operations, tenant isolation, audit, retention,
   deletion, redaction, canaries, observability, and artifacts before a probe is

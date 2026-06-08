@@ -15184,6 +15184,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_browser_realtime_adapter_contracts"] == (
         trinity.V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
     )
+    assert payload["required_stateful_framework_adapter_files"] == (
+        trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
+    )
+    assert payload["required_stateful_framework_adapter_contracts"] == (
+        trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS
+    )
     assert payload["required_trinity_stack_probe_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES
     )
@@ -15219,6 +15225,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "openenv_optimizer_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
+        "stateful_framework_adapter_readiness",
         "trinity_stack_probe_readiness",
         "package_metadata",
     }
@@ -15815,6 +15822,147 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert browser_adapter["state_summary"]["layout_shift_present"] is True
     assert browser_adapter["state_summary"]["storage_present"] is True
     assert browser_adapter["state_summary"]["tool_names"] == ["browser_click"]
+    stateful_adapter = checks["stateful_framework_adapter_readiness"]["evidence"]
+    assert stateful_adapter["required_files"] == (
+        trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
+    )
+    assert stateful_adapter["required_contracts"] == (
+        trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS
+    )
+    assert stateful_adapter["missing_files"] == []
+    assert stateful_adapter["adapter_errors"] == []
+    assert stateful_adapter["event_errors"] == []
+    assert stateful_adapter["artifact_errors"] == []
+    assert stateful_adapter["metric_errors"] == []
+    assert stateful_adapter["state_errors"] == []
+    assert stateful_adapter["errors"] == []
+    stateful_adapters = {
+        adapter["surface"]: adapter for adapter in stateful_adapter["adapters"]
+    }
+
+    memory_adapter = stateful_adapters["memory_trace"]
+    assert memory_adapter["result_kind"] == "agent-learning.run.v1"
+    assert memory_adapter["result_status"] == "passed"
+    assert memory_adapter["agent_framework"] == "langgraph"
+    assert memory_adapter["agent_method"] == "ainvoke"
+    assert memory_adapter["agent_input_mode"] == "dict"
+    assert memory_adapter["trace_runtime"] is True
+    assert {
+        "agent_memory_lineage",
+        "framework_memory",
+        "retrieval_memory",
+    } <= set(memory_adapter["runtime_required_state_keys"])
+    assert {
+        "framework_memory_operation",
+        "framework_memory_checkpoint",
+        "framework_memory_retrieval",
+        "framework_memory_record",
+    } <= set(memory_adapter["event_types"])
+    assert {"framework_memory", "framework_runtime", "framework_trace"} <= set(
+        memory_adapter["artifact_kinds"]
+    )
+    assert memory_adapter["metrics"] == {
+        "agent_memory_lineage_coverage": pytest.approx(1.0),
+        "agent_memory_lineage_quality": pytest.approx(1.0),
+        "retrieval_memory_attribution": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert memory_adapter["state_summary"]["operation_count"] == 4
+    assert memory_adapter["state_summary"]["checkpoint_count"] == 1
+    assert memory_adapter["state_summary"]["store_count"] == 1
+    assert memory_adapter["state_summary"]["operation_types"] == [
+        "read",
+        "recall",
+        "update",
+        "write",
+    ]
+    assert memory_adapter["state_summary"]["source_ids"] == ["refund_policy_doc"]
+
+    workflow_adapter = stateful_adapters["workflow_trace"]
+    assert workflow_adapter["result_kind"] == "agent-learning.run.v1"
+    assert workflow_adapter["result_status"] == "passed"
+    assert workflow_adapter["agent_framework"] == "langgraph"
+    assert workflow_adapter["agent_method"] == "execute_task"
+    assert workflow_adapter["agent_input_mode"] == "dict"
+    assert workflow_adapter["runtime_required_state_keys"] == ["workflow_trace"]
+    assert workflow_adapter["runtime_required_tools"] == ["policy_lookup"]
+    assert {
+        "workflow_step",
+        "workflow_route",
+        "workflow_checkpoint",
+        "workflow_interrupt",
+        "workflow_replay",
+        "workflow_trace",
+    } <= set(workflow_adapter["event_types"])
+    assert workflow_adapter["metrics"] == {
+        "workflow_trace_coverage": pytest.approx(1.0),
+        "workflow_graph_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert workflow_adapter["state_summary"]["node_count"] == 4
+    assert workflow_adapter["state_summary"]["edge_count"] == 3
+    assert workflow_adapter["state_summary"]["step_count"] == 4
+    assert workflow_adapter["state_summary"]["checkpoint_count"] == 2
+    assert workflow_adapter["state_summary"]["has_replay"] is True
+    assert workflow_adapter["state_summary"]["has_interrupts"] is True
+    assert workflow_adapter["state_summary"]["tool_names"] == ["policy_lookup"]
+    assert workflow_adapter["state_summary"]["topology.entry_nodes"] == ["intake"]
+    assert workflow_adapter["state_summary"]["topology.terminal_nodes"] == ["finalize"]
+
+    orchestration_adapter = stateful_adapters["orchestration_trace"]
+    assert orchestration_adapter["result_kind"] == "agent-learning.run.v1"
+    assert orchestration_adapter["result_status"] == "passed"
+    assert orchestration_adapter["agent_framework"] == "langgraph"
+    assert orchestration_adapter["agent_method"] == "execute_task"
+    assert orchestration_adapter["agent_input_mode"] == "dict"
+    assert orchestration_adapter["runtime_required_state_keys"] == [
+        "orchestration_trace"
+    ]
+    assert orchestration_adapter["runtime_required_tools"] == ["policy_lookup"]
+    assert {"orchestration_step", "orchestration_trace"} <= set(
+        orchestration_adapter["event_types"]
+    )
+    assert orchestration_adapter["metrics"] == {
+        "orchestration_trace_coverage": pytest.approx(1.0),
+        "orchestration_flow_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert orchestration_adapter["state_summary"]["node_count"] == 4
+    assert orchestration_adapter["state_summary"]["step_count"] == 6
+    assert orchestration_adapter["state_summary"]["delegation_count"] == 2
+    assert orchestration_adapter["state_summary"]["retry_count"] == 1
+    assert orchestration_adapter["state_summary"]["recovered_failures"] == 1
+    assert orchestration_adapter["state_summary"]["terminal_status"] == "success"
+
+    lifecycle_adapter = stateful_adapters["lifecycle_trace"]
+    assert lifecycle_adapter["result_kind"] == "agent-learning.run.v1"
+    assert lifecycle_adapter["result_status"] == "passed"
+    assert lifecycle_adapter["agent_framework"] == "livekit"
+    assert lifecycle_adapter["agent_method"] == "execute_task"
+    assert lifecycle_adapter["agent_input_mode"] == "dict"
+    assert lifecycle_adapter["runtime_required_state_keys"] == [
+        "framework_lifecycle_trace"
+    ]
+    assert lifecycle_adapter["runtime_required_tools"] == [
+        "framework_lifecycle_status"
+    ]
+    assert {
+        "framework_lifecycle_phase",
+        "framework_lifecycle_trace",
+    } <= set(lifecycle_adapter["event_types"])
+    assert lifecycle_adapter["metrics"] == {
+        "framework_lifecycle_coverage": pytest.approx(1.0),
+        "framework_lifecycle_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
+    assert lifecycle_adapter["state_summary"]["phase_count"] == 10
+    assert lifecycle_adapter["state_summary"]["retry_count"] == 1
+    assert lifecycle_adapter["state_summary"]["recovered_error_count"] == 1
+    assert lifecycle_adapter["state_summary"]["cancellation_count"] == 1
+    assert lifecycle_adapter["state_summary"]["resume_count"] == 1
+    assert lifecycle_adapter["state_summary"]["cleanup_count"] == 1
+    assert lifecycle_adapter["state_summary"]["state_persistence"] is True
+    assert lifecycle_adapter["state_summary"]["terminal_status"] == "completed"
     trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
     assert trinity_stack_probe["required_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES

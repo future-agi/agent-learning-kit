@@ -75,11 +75,12 @@ Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
 CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, and
 A2A, requires local fixture targets with no external service dependency, and
-validates representative text, voice, CUA, realtime, browser/CUA, protocol, and
-OpenEnv framework manifests. It also runs the composed trinity-stack probe
-readiness gate, proving that the selected orchestration stack agent can pass a
-localhost task evaluator and promote into one run manifest with world, framework,
-retrieval, memory, multi-agent, and evaluation-hook evidence.
+validates representative text, voice, CUA, realtime, browser/CUA, memory,
+workflow, orchestration, lifecycle, protocol, and OpenEnv framework manifests.
+It also runs the composed trinity-stack probe readiness gate, proving that the
+selected orchestration stack agent can pass a localhost task evaluator and
+promote into one run manifest with world, framework, retrieval, memory,
+multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -731,7 +732,10 @@ memory operations/searches, memory records, stores, and policies become
 `framework_memory_retrieval`, and `framework_memory_record` events. Generated
 adapter eval configs derive memory-lineage coverage/quality and retrieval-memory
 attribution gates from that selected output. See
-`examples/sdk_framework_adapter_memory_trace.py`.
+`examples/sdk_framework_adapter_memory_trace.py`. `agent-learn release-check`
+now runs this cookbook locally and requires the selected `ainvoke(dict)` adapter
+to emit memory lineage, retrieval, framework memory state, memory events,
+artifacts, and passing memory/retrieval metrics.
 
 Browser/CUA framework exports normalize into evaluator-visible computer-use
 evidence. Browser-use/OpenAI-computer-use-style actions, DOM/screenshot
@@ -753,14 +757,20 @@ CrewAI Flow-style routes/state, and LlamaIndex workflow step/event traces become
 ordinary tool calls from step-level tool evidence. Generated adapter eval
 configs derive workflow trace coverage and graph-quality gates from the
 selected output. See
-`examples/sdk_framework_adapter_workflow_trace.py`.
+`examples/sdk_framework_adapter_workflow_trace.py`. `agent-learn release-check`
+now runs this cookbook locally and requires the selected `execute_task(dict)`
+adapter to emit graph topology, checkpoints, route decisions, interrupts,
+replay, tool evidence, artifacts, and passing workflow coverage/quality metrics.
 
 Orchestration framework exports normalize multi-agent control semantics.
 Supervisor/delegate/handoff traces, CrewAI-style routed coordination records,
 and agent graph communication/aggregation/stop decisions become
 `orchestration_trace` state, trace artifacts, `orchestration_*` events,
 ordinary tool evidence, and generated orchestration coverage/quality gates. See
-`examples/sdk_framework_adapter_orchestration_trace.py`.
+`examples/sdk_framework_adapter_orchestration_trace.py`. `agent-learn
+release-check` now runs this cookbook locally and requires supervisor
+delegation, handoff, communication, retry recovery, stop-state evidence, and full
+framework runtime-contract closure.
 
 Framework lifecycle exports normalize reliability and recovery semantics.
 LiveKit/Pipecat/LangGraph-style setup, tool registration, sessions, invocation
@@ -768,6 +778,9 @@ errors, retries, streaming, checkpoints, cancellation, resume, and cleanup becom
 `framework_lifecycle_trace` state, trace artifacts, `framework_lifecycle_*`
 events, and lifecycle coverage/quality eval gates derived from the selected
 adapter output. See `examples/sdk_framework_adapter_lifecycle_trace.py`.
+`agent-learn release-check` now runs this cookbook locally and requires retry,
+cancellation, resume, cleanup, state persistence, artifacts, and passing
+lifecycle metrics.
 
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the

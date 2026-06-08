@@ -38,6 +38,12 @@ Keep workflow graph support local-first:
   wrapper-generated `framework_runtime` trace artifacts from promoted hard
   artifact requirements so instrumentation does not become a false adapter
   output contract.
+- `agent-learn release-check` now runs
+  `examples/sdk_framework_adapter_workflow_trace.py` as
+  `stateful_framework_adapter_readiness`; the gate requires local
+  `execute_task(dict)` selection, durable graph topology, checkpoints, route
+  decisions, interrupts, replay, tool evidence, artifacts, and passing workflow
+  coverage/quality metrics.
 
 ## Cookbook Contract
 
