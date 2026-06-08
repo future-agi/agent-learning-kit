@@ -243,14 +243,20 @@ Next implementation focus:
 - Avoid adding hosted optimizer/eval dependencies.
 - Add real-key live-target checks only for explicitly selected user workloads
   and keep those results out of release metadata.
-- Add OpenEnv as a competitive robustness target: support local-first OpenEnv
-  adapter probes for Gymnasium-style `reset()`, `step()`, and `state()`
-  contracts; container/HTTP/WebSocket-backed environment replay; MCP/tool
-  action routing; reward/done/metadata capture; and sandbox/isolation evidence.
-  The Agent Learning Kit framework/provider surface should be strictly more
-  robust than OpenEnv by also proving cross-framework simulation, eval,
-  red-team, memory, browser/CUA, realtime, protocol, multi-agent, replay, and
-  optimizer gates in one artifact.
+- Add a 10x OpenEnv robustness target: support local-first OpenEnv adapter
+  probes for Gymnasium-style `reset()`, `step()`, and `state()` contracts;
+  container/HTTP/WebSocket-backed environment replay; MCP/tool action routing;
+  reward/done/metadata capture; and sandbox/isolation evidence. The Agent
+  Learning Kit framework/provider surface should be strictly more robust than
+  OpenEnv by proving cross-framework simulation, eval, red-team, memory,
+  browser/CUA, realtime, protocol, multi-agent, replay, optimizer, and
+  regression-promotion gates in one artifact.
+- Treat the OpenEnv comparison as an executable roadmap bar, not a marketing
+  claim: V1 should exercise deterministic resets, failure-injection scenarios,
+  adversarial environment states, tool/action contract drift, transcript/replay
+  fidelity, sandbox escape evidence, and optimizer recovery loops across
+  representative framework, provider, protocol, browser, voice, and multi-agent
+  fixtures before calling the framework materially more robust.
 
 ### M7: Release Packaging And Proof
 
