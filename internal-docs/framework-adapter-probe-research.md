@@ -136,6 +136,12 @@ Keep framework support local-first:
   into `framework_handoff`, `framework_review`, and
   `framework_reconciliation` events plus `framework_handoffs` state so
   multi-agent framework handoffs can be scored without a separate parser.
+- Preserve framework trace export semantics. Local outputs carrying OTLP-style
+  `resourceSpans` / `scopeSpans`, TraceAI/Future AGI wrappers, or explicit
+  `framework_trace` span/event records should normalize into `framework_trace`
+  state, trace artifacts, `framework_trace_*` events, tool calls extracted from
+  tool spans, adapter conformance summaries, and selected-output-derived
+  `framework_trace_coverage` gates.
 - Preserve realtime framework trace semantics. Local Pipecat-style frame exports
   and LiveKit-style session event exports should normalize into
   `realtime_trace` state, trace artifacts, `realtime_frame`,

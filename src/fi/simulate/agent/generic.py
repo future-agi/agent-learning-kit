@@ -5,7 +5,10 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Union
 
 from fi.simulate.environment import (
+    normalize_framework_adapter_conformance,
     normalize_framework_lifecycle_trace,
+    normalize_framework_trace_events,
+    normalize_framework_trace_export,
     normalize_mcp_tool_session_export,
 )
 from fi.simulate.agent.wrapper import (
@@ -445,6 +448,7 @@ class GenericAgentWrapper(AgentWrapper):
         provider_tool_calls = _provider_tool_calls(raw)
         history_tool_calls = _message_history_tool_calls(raw)
         realtime_tool_calls = _realtime_tool_calls(raw)
+        framework_trace_tool_calls = _framework_trace_tool_calls(raw)
         mcp_tool_calls = _mcp_tool_session_tool_calls(raw)
         workflow_tool_calls = _workflow_trace_tool_calls(raw)
         browser_tool_calls = _browser_cua_tool_calls(raw)
@@ -453,6 +457,7 @@ class GenericAgentWrapper(AgentWrapper):
             *provider_tool_calls,
             *history_tool_calls,
             *realtime_tool_calls,
+            *framework_trace_tool_calls,
             *mcp_tool_calls,
             *workflow_tool_calls,
             *browser_tool_calls,
@@ -462,11 +467,13 @@ class GenericAgentWrapper(AgentWrapper):
         tool_responses = _extract_list_field(raw, ("tool_responses", "toolResponses", "tool_outputs", "toolOutputs"))
         history_tool_responses = _message_history_tool_responses(raw)
         realtime_tool_responses = _realtime_tool_responses(raw)
+        framework_trace_tool_responses = _framework_trace_tool_responses(raw)
         mcp_tool_responses = _mcp_tool_session_tool_responses(raw)
         return [
             *(tool_responses or []),
             *history_tool_responses,
             *realtime_tool_responses,
+            *framework_trace_tool_responses,
             *mcp_tool_responses,
         ] or None
 
@@ -534,6 +541,9 @@ class GenericAgentWrapper(AgentWrapper):
         lifecycle_state = _framework_lifecycle_state(raw)
         if lifecycle_state:
             state.setdefault("framework_lifecycle_trace", lifecycle_state)
+        framework_trace_state = _framework_trace_state(raw)
+        if framework_trace_state:
+            state.setdefault("framework_trace", framework_trace_state)
         mcp_state = _mcp_tool_session_state(raw)
         if mcp_state:
             state.setdefault("mcp_tool_session", mcp_state)
@@ -587,6 +597,20 @@ class GenericAgentWrapper(AgentWrapper):
                     data=lifecycle_state,
                     metadata={
                         "kind": "framework_lifecycle_trace",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+        framework_trace_state = _framework_trace_state(raw)
+        if framework_trace_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=framework_trace_state,
+                    metadata={
+                        "kind": "framework_trace",
+                        "framework": framework_trace_state.get("framework", "generic"),
                         "source": "generic_agent_wrapper",
                     },
                 )
@@ -701,6 +725,7 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_message_history_coordination_events(raw))
         events.extend(_realtime_trace_events(raw))
         events.extend(_framework_lifecycle_events(raw))
+        events.extend(_framework_trace_events(raw))
         events.extend(_mcp_tool_session_events(raw))
         events.extend(_a2a_protocol_events(raw))
         events.extend(_workflow_trace_events(raw))
@@ -1455,6 +1480,722 @@ def _framework_lifecycle_field(raw: Any, name: str) -> Any:
     if raw_mapping is not None:
         return raw_mapping.get(name)
     return getattr(raw, name, None)
+
+
+def _framework_trace_state(raw: Any) -> Dict[str, Any]:
+    spans = _framework_trace_spans(raw)
+    events = _framework_trace_event_records(raw)
+    if not spans and not events:
+        return {}
+
+    framework = _framework_trace_framework(raw)
+    records = [*spans, *events]
+    signals = sorted(
+        {
+            "framework_trace",
+            *[
+                str(signal)
+                for record in records
+                for signal in _plain_list(record.get("signals"))
+                if str(signal)
+            ],
+        }
+    )
+    tool_names = sorted(
+        {
+            _framework_trace_record_tool_name(record)
+            for record in records
+            if _framework_trace_record_has_tool_signal(record)
+            and _framework_trace_record_tool_name(record)
+        }
+    )
+    checkpoints = _dedupe_framework_trace_mappings(
+        _plain_mapping(record.get("checkpoint"))
+        for record in records
+        if _plain_mapping(record.get("checkpoint"))
+    )
+    sessions = _dedupe_framework_trace_mappings(
+        _plain_mapping(record.get("session"))
+        for record in records
+        if _plain_mapping(record.get("session"))
+    )
+    metadata = _framework_trace_metadata(raw)
+    summary = {
+        "span_count": len(spans),
+        "event_count": len(events),
+        "signal_count": len(signals),
+        "signals": signals,
+        "tool_count": len(tool_names),
+        "tool_names": tool_names,
+        "model_span_count": _framework_trace_signal_count(records, "model"),
+        "tool_span_count": _framework_trace_signal_count(records, "tool"),
+        "retrieval_span_count": _framework_trace_signal_count(records, "retrieval"),
+        "memory_span_count": _framework_trace_signal_count(records, "memory"),
+        "state_span_count": _framework_trace_signal_count(records, "state"),
+        "latency_span_count": _framework_trace_signal_count(records, "latency"),
+        "cost_span_count": _framework_trace_signal_count(records, "cost"),
+        "error_count": sum(
+            1
+            for record in records
+            if record.get("error") or _framework_trace_record_has_signal(record, "error")
+        ),
+        "checkpoint_count": len(checkpoints),
+        "session_count": len(sessions),
+    }
+    state = {
+        "kind": "framework_trace",
+        "framework": framework,
+        "spans": spans,
+        "events": events,
+        "checkpoints": checkpoints,
+        "sessions": sessions,
+        "signals": signals,
+        "state": _framework_trace_runtime_state(raw),
+        "summary": summary,
+        "metadata": metadata,
+    }
+    adapter_spec = _framework_trace_adapter_spec(raw)
+    if adapter_spec:
+        state["adapter_conformance"] = normalize_framework_adapter_conformance(
+            framework,
+            records,
+            required_signals=adapter_spec.get("required_signals")
+            or adapter_spec.get("signals"),
+            required_mappings=(
+                adapter_spec.get("required_mappings")
+                or adapter_spec.get("mappings")
+                or adapter_spec.get("field_mappings")
+            ),
+            metadata=adapter_spec,
+        )
+    return state
+
+
+def _framework_trace_events(raw: Any) -> List[SimulationEvent]:
+    state = _framework_trace_state(raw)
+    if not state:
+        return []
+    events: List[SimulationEvent] = []
+    for index, span in enumerate(_plain_list(state.get("spans")), start=1):
+        span_dict = _plain_mapping(span)
+        events.append(
+            SimulationEvent(
+                type="framework_trace_span",
+                name=str(span_dict.get("name") or span_dict.get("id") or f"span_{index}"),
+                payload={**span_dict, "sequence": index},
+                metadata={
+                    "kind": "framework_trace",
+                    "source": "framework_adapter_output",
+                    "signals": _plain_list(span_dict.get("signals")),
+                },
+            )
+        )
+    for index, event in enumerate(_plain_list(state.get("events")), start=1):
+        event_dict = _plain_mapping(event)
+        events.append(
+            SimulationEvent(
+                type="framework_trace_event",
+                name=str(event_dict.get("name") or event_dict.get("id") or f"event_{index}"),
+                payload={**event_dict, "sequence": index},
+                metadata={
+                    "kind": "framework_trace",
+                    "source": "framework_adapter_output",
+                    "signals": _plain_list(event_dict.get("signals")),
+                },
+            )
+        )
+    events.append(
+        SimulationEvent(
+            type="framework_trace",
+            name="framework_trace",
+            payload=state,
+            metadata={
+                "kind": "framework_trace",
+                "source": "framework_adapter_output",
+            },
+        )
+    )
+    return events
+
+
+def _framework_trace_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, record in enumerate(_framework_trace_spans(raw), start=1):
+        if not _framework_trace_record_has_tool_call_shape(record):
+            continue
+        name = _framework_trace_record_tool_name(record)
+        if not name:
+            continue
+        call_id = _framework_trace_record_call_id(record, index=index)
+        arguments = _framework_trace_record_arguments(record)
+        signature = f"{call_id}:{name}"
+        if signature in seen:
+            continue
+        seen.add(signature)
+        calls.append(
+            {
+                "id": call_id,
+                "type": "framework_trace_tool_call",
+                "name": name,
+                "arguments": arguments,
+                "function": {
+                    "name": name,
+                    "arguments": arguments,
+                },
+            }
+        )
+    return calls
+
+
+def _framework_trace_tool_responses(raw: Any) -> List[Dict[str, Any]]:
+    responses: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, record in enumerate(_framework_trace_spans(raw), start=1):
+        if not _framework_trace_record_has_tool_signal(record):
+            continue
+        output = _framework_trace_record_output(record)
+        error = _framework_trace_record_error(record)
+        if output in (None, "", [], {}) and not error and not (
+            _framework_trace_record_has_signal(record, "tool_result")
+            or _framework_trace_record_has_signal(record, "mcp_tool_result")
+            or _framework_trace_record_has_signal(record, "tool_error")
+            or _framework_trace_record_has_signal(record, "mcp_tool_error")
+        ):
+            continue
+        name = _framework_trace_record_tool_name(record)
+        if not name:
+            continue
+        call_id = _framework_trace_record_call_id(record, index=index)
+        signature = f"{call_id}:{name}:{bool(error)}"
+        if signature in seen:
+            continue
+        seen.add(signature)
+        responses.append(
+            {
+                "id": f"{call_id}_response",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": _plain_value(error if error else output),
+                "success": not bool(error),
+                "result": _plain_value(output),
+                "error": _plain_value(error),
+            }
+        )
+    return responses
+
+
+def _framework_trace_spans(raw: Any) -> List[Dict[str, Any]]:
+    if not _has_framework_trace_shape(raw):
+        return []
+    framework = _framework_trace_framework(raw)
+    spans: List[Dict[str, Any]] = []
+    for trace_export in _framework_trace_exports(raw):
+        spans.extend(
+            _plain_mapping(span)
+            for span in normalize_framework_trace_export(
+                trace_export,
+                framework=framework,
+            )
+            if _plain_mapping(span)
+        )
+    span_records = _framework_trace_span_records(raw)
+    if span_records:
+        spans.extend(
+            _plain_mapping(span)
+            for span in normalize_framework_trace_events(
+                framework,
+                span_records,
+                category="span",
+            )
+            if _plain_mapping(span)
+        )
+    return _dedupe_framework_trace_records(spans)
+
+
+def _framework_trace_event_records(raw: Any) -> List[Dict[str, Any]]:
+    if not _has_framework_trace_shape(raw):
+        return []
+    framework = _framework_trace_framework(raw)
+    records = _framework_trace_raw_event_records(raw)
+    if not records:
+        return []
+    return _dedupe_framework_trace_records(
+        _plain_mapping(event)
+        for event in normalize_framework_trace_events(
+            framework,
+            records,
+            category="event",
+        )
+        if _plain_mapping(event)
+    )
+
+
+def _has_framework_trace_shape(raw: Any) -> bool:
+    if raw in (None, "", [], {}):
+        return False
+    if isinstance(raw, (list, tuple)):
+        return any(_looks_like_framework_trace_record(item) for item in raw)
+    raw_mapping = _object_mapping(raw)
+    explicit_names = (
+        "framework_trace",
+        "framework_trace_export",
+        "trace_export",
+        "traceai_export",
+        "otel_trace_export",
+        "otlp_export",
+        "opentelemetry_export",
+        "open_telemetry_export",
+        "framework_spans",
+        "trace_spans",
+        "span_records",
+        "framework_events",
+        "trace_events",
+        "framework_trace_events",
+    )
+    if raw_mapping is None:
+        return any(
+            hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
+            for name in explicit_names
+        )
+    if any(raw_mapping.get(name) not in (None, "", [], {}) for name in explicit_names):
+        return True
+    if any(
+        raw_mapping.get(name) not in (None, "", [], {})
+        for name in ("resourceSpans", "resource_spans", "scopeSpans", "scope_spans")
+    ):
+        return True
+    if _looks_like_framework_trace_record(raw_mapping):
+        return True
+    if not _framework_trace_has_marker(raw_mapping):
+        return False
+    return any(
+        raw_mapping.get(name) not in (None, "", [], {})
+        for name in ("spans", "events", "records", "items", "results")
+    )
+
+
+def _framework_trace_exports(raw: Any) -> List[Any]:
+    exports: List[Any] = []
+    for name in (
+        "framework_trace_export",
+        "trace_export",
+        "traceai_export",
+        "otel_trace_export",
+        "otlp_export",
+        "opentelemetry_export",
+        "open_telemetry_export",
+    ):
+        value = _plain_value(_framework_trace_field(raw, name))
+        if value not in (None, "", [], {}):
+            exports.append(value)
+    explicit = _framework_trace_explicit_payload(raw)
+    if explicit and _framework_trace_payload_is_export(explicit):
+        exports.append(explicit)
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _framework_trace_payload_is_export(raw_mapping):
+        exports.append(raw_mapping)
+    return _dedupe_framework_trace_values(exports)
+
+
+def _framework_trace_span_records(raw: Any) -> List[Any]:
+    if isinstance(raw, (list, tuple)):
+        return [_plain_value(item) for item in raw]
+    records: List[Any] = []
+    explicit = _framework_trace_explicit_payload(raw)
+    for key in ("spans", "records", "items", "results"):
+        records.extend(_plain_list(explicit.get(key)))
+    for name in ("framework_spans", "trace_spans", "span_records"):
+        records.extend(_plain_list(_framework_trace_field(raw, name)))
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _framework_trace_has_marker(raw_mapping):
+        for key in ("spans", "records", "items", "results"):
+            records.extend(_plain_list(raw_mapping.get(key)))
+    if raw_mapping and _looks_like_framework_trace_record(raw_mapping):
+        records.append(raw_mapping)
+    return [
+        _plain_value(record)
+        for record in records
+        if _plain_value(record) not in (None, "", [], {})
+    ]
+
+
+def _framework_trace_raw_event_records(raw: Any) -> List[Any]:
+    records: List[Any] = []
+    explicit = _framework_trace_explicit_payload(raw)
+    for key in ("events", "framework_events", "trace_events"):
+        records.extend(_plain_list(explicit.get(key)))
+    for name in ("framework_events", "trace_events", "framework_trace_events"):
+        records.extend(_plain_list(_framework_trace_field(raw, name)))
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping and _framework_trace_has_marker(raw_mapping):
+        records.extend(_plain_list(raw_mapping.get("events")))
+    return [
+        _plain_value(record)
+        for record in records
+        if _plain_value(record) not in (None, "", [], {})
+    ]
+
+
+def _framework_trace_explicit_payload(raw: Any) -> Dict[str, Any]:
+    for name in ("framework_trace", "trace"):
+        value = _plain_mapping(_framework_trace_field(raw, name))
+        if value:
+            return value
+    return {}
+
+
+def _framework_trace_payload_is_export(value: Mapping[str, Any]) -> bool:
+    return any(
+        value.get(name) not in (None, "", [], {})
+        for name in (
+            "resourceSpans",
+            "resource_spans",
+            "scopeSpans",
+            "scope_spans",
+            "traces",
+        )
+    )
+
+
+def _framework_trace_framework(raw: Any) -> str:
+    explicit = _framework_trace_explicit_payload(raw)
+    metadata = _plain_mapping(_framework_trace_field(raw, "metadata"))
+    value = (
+        _framework_trace_field(raw, "framework")
+        or _framework_trace_field(raw, "trace_framework")
+        or _framework_trace_field(raw, "trace_provider")
+        or explicit.get("framework")
+        or explicit.get("trace_provider")
+        or metadata.get("framework")
+        or metadata.get("trace_provider")
+        or "generic"
+    )
+    key = _framework_trace_key(value)
+    if key in {"otel", "opentelemetry", "open_telemetry", "otlp"}:
+        return "opentelemetry"
+    if key in {"traceai", "futureagi", "future_agi"}:
+        return "traceai"
+    return str(value or "generic")
+
+
+def _framework_trace_metadata(raw: Any) -> Dict[str, Any]:
+    explicit = _framework_trace_explicit_payload(raw)
+    metadata = {
+        **_plain_mapping(explicit.get("metadata")),
+        **_plain_mapping(_framework_trace_field(raw, "trace_metadata")),
+        **_plain_mapping(_framework_trace_field(raw, "metadata")),
+    }
+    if _framework_trace_exports(raw):
+        metadata.setdefault("trace_export", {})["source"] = "framework_adapter_output"
+    return metadata
+
+
+def _framework_trace_runtime_state(raw: Any) -> Dict[str, Any]:
+    explicit = _framework_trace_explicit_payload(raw)
+    return (
+        _plain_mapping(_framework_trace_field(raw, "framework_state"))
+        or _plain_mapping(_framework_trace_field(raw, "trace_state"))
+        or _plain_mapping(explicit.get("state"))
+    )
+
+
+def _framework_trace_adapter_spec(raw: Any) -> Dict[str, Any]:
+    explicit = _framework_trace_explicit_payload(raw)
+    metadata = _plain_mapping(_framework_trace_field(raw, "metadata"))
+    explicit_metadata = _plain_mapping(explicit.get("metadata"))
+    spec: Dict[str, Any] = {}
+    for source in (
+        _plain_mapping(metadata.get("adapter_conformance")),
+        _plain_mapping(metadata.get("adapter_spec")),
+        _plain_mapping(metadata.get("framework_adapter")),
+        _plain_mapping(explicit_metadata.get("adapter_conformance")),
+        _plain_mapping(explicit_metadata.get("adapter_spec")),
+        _plain_mapping(explicit.get("adapter_conformance")),
+        _plain_mapping(explicit.get("adapter_spec")),
+        _plain_mapping(_framework_trace_field(raw, "adapter_conformance")),
+        _plain_mapping(_framework_trace_field(raw, "adapter_spec")),
+        _plain_mapping(_framework_trace_field(raw, "framework_adapter")),
+    ):
+        spec.update(source)
+    required_signals = (
+        _framework_trace_field(raw, "adapter_required_signals")
+        or explicit.get("adapter_required_signals")
+        or metadata.get("adapter_required_signals")
+    )
+    if required_signals not in (None, "", [], {}):
+        spec["required_signals"] = _plain_list(required_signals)
+    required_mappings = (
+        _framework_trace_field(raw, "adapter_required_mappings")
+        or explicit.get("adapter_required_mappings")
+        or metadata.get("adapter_required_mappings")
+    )
+    if required_mappings not in (None, "", [], {}):
+        spec["required_mappings"] = _plain_mapping(required_mappings)
+    return {key: _plain_value(value) for key, value in spec.items() if value not in (None, "", [], {})}
+
+
+def _framework_trace_field(raw: Any, name: str) -> Any:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        return raw_mapping.get(name)
+    return getattr(raw, name, None)
+
+
+def _framework_trace_has_marker(value: Mapping[str, Any]) -> bool:
+    markers = {
+        "framework_trace",
+        "traceai",
+        "futureagi",
+        "future_agi",
+        "otel",
+        "otlp",
+        "opentelemetry",
+        "open_telemetry",
+        "langchain",
+        "langgraph",
+        "openai_agents",
+        "crewai",
+        "autogen",
+        "llamaindex",
+        "dspy",
+        "livekit",
+        "pipecat",
+    }
+    for key in ("kind", "type", "framework", "protocol", "telemetry", "trace_provider", "provider"):
+        marker = _framework_trace_key(value.get(key))
+        if marker in markers:
+            return True
+    metadata = _plain_mapping(value.get("metadata"))
+    return bool(metadata) and _framework_trace_has_marker(metadata)
+
+
+def _looks_like_framework_trace_record(value: Any) -> bool:
+    record = _plain_mapping(value)
+    if not record:
+        return False
+    if any(
+        record.get(key) not in (None, "", [], {})
+        for key in ("spanId", "span_id", "traceId", "trace_id", "parentSpanId", "parent_span_id")
+    ):
+        return True
+    if record.get("run_id") not in (None, "", [], {}) and any(
+        key in record for key in ("name", "type", "kind", "event", "attributes", "span_data", "status")
+    ):
+        return True
+    if any(key in record for key in ("attributes", "attrs", "span_data", "resource", "scope")) and any(
+        key in record for key in ("name", "type", "kind", "event", "status")
+    ):
+        return True
+    if _framework_trace_has_marker(record) and any(
+        record.get(key) not in (None, "", [], {})
+        for key in ("name", "attributes", "spans", "events", "records")
+    ):
+        return True
+    return False
+
+
+def _framework_trace_record_has_signal(record: Mapping[str, Any], signal: str) -> bool:
+    normalized = _framework_trace_key(signal)
+    return normalized in {
+        _framework_trace_key(item)
+        for item in _plain_list(record.get("signals"))
+        if _framework_trace_key(item)
+    }
+
+
+def _framework_trace_record_has_tool_signal(record: Mapping[str, Any]) -> bool:
+    attributes = _plain_mapping(record.get("attributes"))
+    if attributes.get("mcp.tool.name") or attributes.get("gen_ai.tool.name") or attributes.get("tool.name"):
+        return True
+    return any(
+        _framework_trace_record_has_signal(record, signal)
+        for signal in (
+            "tool",
+            "tool_call",
+            "tool_result",
+            "tool_error",
+            "mcp_tool_call",
+            "mcp_tool_result",
+            "mcp_tool_error",
+        )
+    )
+
+
+def _framework_trace_record_has_tool_call_shape(record: Mapping[str, Any]) -> bool:
+    if not _framework_trace_record_has_tool_signal(record):
+        return False
+    text = " ".join(
+        [
+            str(record.get("type") or ""),
+            str(record.get("name") or ""),
+            " ".join(str(signal) for signal in _plain_list(record.get("signals"))),
+        ]
+    ).lower()
+    return not (
+        ("schema" in text or "tools/list" in text)
+        and not any(token in text for token in ("call", "result", "error"))
+    )
+
+
+def _framework_trace_record_tool_name(record: Mapping[str, Any]) -> str:
+    attributes = _plain_mapping(record.get("attributes"))
+    event = _plain_mapping(record.get("framework_event"))
+    for source in (record, event, attributes):
+        for key in ("tool_name", "tool", "name", "mcp.tool.name", "gen_ai.tool.name", "tool.name"):
+            value = source.get(key)
+            if value in (None, "", [], {}):
+                continue
+            parsed = _framework_trace_tool_name_from_span_name(str(value))
+            if parsed:
+                return parsed
+            if key == "name" and source is record:
+                continue
+            return str(value)
+    return _framework_trace_tool_name_from_span_name(str(record.get("name") or ""))
+
+
+def _framework_trace_tool_name_from_span_name(name: str) -> str:
+    lowered = name.lower()
+    prefixes = (
+        "mcp tool result ",
+        "mcp tool error ",
+        "mcp tool call ",
+        "tool result ",
+        "tool error ",
+        "tool call ",
+        "function call ",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            return name[len(prefix):].strip(" :")
+    return ""
+
+
+def _framework_trace_record_call_id(record: Mapping[str, Any], *, index: int) -> str:
+    attributes = _plain_mapping(record.get("attributes"))
+    return str(
+        record.get("tool_call_id")
+        or record.get("call_id")
+        or attributes.get("tool_call_id")
+        or attributes.get("mcp.tool.call_id")
+        or record.get("span_id")
+        or record.get("id")
+        or f"framework_trace_tool_call_{index}"
+    )
+
+
+def _framework_trace_record_arguments(record: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(record.get("attributes"))
+    return _plain_value(
+        record.get("arguments")
+        if "arguments" in record
+        else record.get(
+            "input",
+            attributes.get(
+                "arguments",
+                attributes.get("mcp.tool.arguments", attributes.get("gen_ai.tool.arguments", {})),
+            ),
+        )
+    )
+
+
+def _framework_trace_record_output(record: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(record.get("attributes"))
+    return _plain_value(
+        record.get("result")
+        if "result" in record
+        else record.get(
+            "output",
+            attributes.get(
+                "result",
+                attributes.get("mcp.tool.result", attributes.get("gen_ai.tool.result")),
+            ),
+        )
+    )
+
+
+def _framework_trace_record_error(record: Mapping[str, Any]) -> Any:
+    attributes = _plain_mapping(record.get("attributes"))
+    error = record.get("error") or attributes.get("error") or attributes.get("exception")
+    if error:
+        return _plain_value(error)
+    if _framework_trace_record_has_signal(record, "tool_error") or _framework_trace_record_has_signal(record, "mcp_tool_error"):
+        return "tool_error"
+    return None
+
+
+def _framework_trace_signal_count(records: Sequence[Mapping[str, Any]], signal: str) -> int:
+    return sum(1 for record in records if _framework_trace_record_has_signal(record, signal))
+
+
+def _dedupe_framework_trace_records(records: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        record_dict = _plain_mapping(record)
+        if not record_dict:
+            continue
+        signature = json.dumps(
+            {
+                "id": record_dict.get("id"),
+                "span_id": record_dict.get("span_id"),
+                "name": record_dict.get("name"),
+                "type": record_dict.get("type"),
+            },
+            sort_keys=True,
+            default=str,
+        )
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(record_dict)
+    return deduped
+
+
+def _dedupe_framework_trace_values(values: Iterable[Any]) -> List[Any]:
+    deduped: List[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        signature = json.dumps(_plain_value(value), sort_keys=True, default=str)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(value)
+    return deduped
+
+
+def _dedupe_framework_trace_mappings(values: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        mapping = _plain_mapping(value)
+        signature = json.dumps(mapping, sort_keys=True, default=str)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(mapping)
+    return deduped
+
+
+def _framework_trace_key(value: Any) -> str:
+    aliases = {
+        "llm": "model",
+        "generation": "model",
+        "chat_model": "model",
+        "function": "tool",
+        "function_call": "tool",
+        "tool_call": "tool",
+        "tool_output": "tool_result",
+        "exception": "error",
+        "failure": "error",
+        "duration": "latency",
+        "duration_ms": "latency",
+        "tokens": "cost",
+        "usage": "cost",
+    }
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+    return aliases.get(normalized, normalized)
 
 
 def _mcp_tool_session_state(raw: Any) -> Dict[str, Any]:
@@ -3548,7 +4289,9 @@ def _browser_cua_state(raw: Any) -> Dict[str, Any]:
 def _browser_cua_trace_payload(raw: Any) -> Dict[str, Any]:
     explicit_trace = _plain_mapping(_browser_cua_field(raw, "browser_trace"))
     if not explicit_trace:
-        explicit_trace = _plain_mapping(_browser_cua_field(raw, "trace_export"))
+        trace_export = _plain_mapping(_browser_cua_field(raw, "trace_export"))
+        if _browser_cua_trace_export_has_browser_shape(trace_export):
+            explicit_trace = trace_export
     snapshots = _browser_cua_snapshots(raw, explicit_trace=explicit_trace)
     actions = _browser_cua_actions(raw, explicit_trace=explicit_trace)
     regions = (
@@ -3820,7 +4563,6 @@ def _has_browser_cua_shape(raw: Any) -> bool:
     raw_mapping = _object_mapping(raw)
     names = (
         "browser_trace",
-        "trace_export",
         "browser_actions",
         "computer_actions",
         "cua_actions",
@@ -3835,10 +4577,60 @@ def _has_browser_cua_shape(raw: Any) -> bool:
         "browser_mutations",
     )
     if raw_mapping is not None:
-        return any(raw_mapping.get(name) not in (None, "", [], {}) for name in names)
+        return any(raw_mapping.get(name) not in (None, "", [], {}) for name in names) or (
+            _browser_cua_trace_export_has_browser_shape(
+                _plain_mapping(raw_mapping.get("trace_export"))
+            )
+        )
     return any(
         hasattr(raw, name) and getattr(raw, name) not in (None, "", [], {})
         for name in names
+    ) or _browser_cua_trace_export_has_browser_shape(
+        _plain_mapping(getattr(raw, "trace_export", None))
+    )
+
+
+def _browser_cua_trace_export_has_browser_shape(trace_export: Mapping[str, Any]) -> bool:
+    if not trace_export:
+        return False
+    if any(
+        trace_export.get(name) not in (None, "", [], {})
+        for name in (
+            "browser_actions",
+            "computer_actions",
+            "cua_actions",
+            "action_replay",
+            "browser_snapshots",
+            "dom_snapshots",
+            "screenshots",
+            "screenshot_diffs",
+            "prompt_injections",
+            "prompt_injection_surfaces",
+            "mutation_pack",
+            "browser_mutations",
+            "regions",
+        )
+    ):
+        return True
+    kind = _memory_key(
+        trace_export.get("kind")
+        or trace_export.get("type")
+        or trace_export.get("trace_provider")
+    )
+    if any(token in kind for token in ("browser", "computer", "cua")):
+        return True
+    return bool(
+        (
+            trace_export.get("actions")
+            or trace_export.get("snapshots")
+            or trace_export.get("url")
+        )
+        and not (
+            trace_export.get("resourceSpans")
+            or trace_export.get("resource_spans")
+            or trace_export.get("scopeSpans")
+            or trace_export.get("scope_spans")
+        )
     )
 
 

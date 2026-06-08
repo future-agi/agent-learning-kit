@@ -15791,6 +15791,19 @@ def build_framework_adapter_probe_evaluation_config(
     )
     if streaming_observed and not streaming_trace_signals:
         streaming_trace_signals = ["chunk"]
+    framework_trace_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "framework_trace_summary",
+    )
+    framework_trace_observed = (
+        "framework_trace" in state_keys
+        or bool(framework_trace_summary)
+    )
+    required_framework_trace = (
+        _framework_probe_trace_requirements(framework, framework_trace_summary)
+        if framework_trace_observed
+        else []
+    )
     lifecycle_summary = _framework_probe_first_response_mapping(
         selected_report,
         "framework_lifecycle_summary",
@@ -15824,6 +15837,7 @@ def build_framework_adapter_probe_evaluation_config(
             "framework adapter contract quality",
             *(["typed state evidence"] if runtime_state_keys else []),
             *(["streaming trace evidence"] if streaming_observed else []),
+            *(["framework trace evidence"] if framework_trace_observed else []),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
             *(["artifact evidence"] if artifact_types else []),
@@ -15904,6 +15918,8 @@ def build_framework_adapter_probe_evaluation_config(
         metric_weights["tool_selection_accuracy"] = 4.0
     if streaming_observed:
         metric_weights["streaming_trace_coverage"] = 4.0
+    if framework_trace_observed:
+        metric_weights["framework_trace_coverage"] = 4.0
     if lifecycle_observed:
         metric_weights["framework_lifecycle_coverage"] = 4.0
         metric_weights["framework_lifecycle_quality"] = 4.0
@@ -15939,6 +15955,8 @@ def build_framework_adapter_probe_evaluation_config(
     }
     if streaming_observed:
         config["required_streaming_trace"] = streaming_trace_signals
+    if framework_trace_observed:
+        config["required_framework_trace"] = required_framework_trace
     if lifecycle_observed:
         config["required_framework_lifecycle"] = lifecycle_requirements[
             "required_framework_lifecycle"
@@ -16028,6 +16046,37 @@ def _framework_probe_lifecycle_requirements(
         "required_framework_lifecycle": _unique_strings(required_lifecycle),
         "framework_lifecycle_quality": quality,
     }
+
+
+def _framework_probe_trace_requirements(
+    framework: str,
+    summary: Mapping[str, Any],
+) -> list[str]:
+    summary = _plain_mapping(summary)
+    requirements = ["framework_trace"]
+    requirements.extend(_plain_list(summary.get("signals")))
+    signal_checks = (
+        ("model_span_count", "model"),
+        ("tool_span_count", "tool"),
+        ("retrieval_span_count", "retrieval"),
+        ("memory_span_count", "memory"),
+        ("state_span_count", "state"),
+        ("latency_span_count", "latency"),
+        ("cost_span_count", "cost"),
+        ("error_count", "error"),
+        ("checkpoint_count", "checkpoint"),
+        ("session_count", "session"),
+    )
+    for summary_key, signal in signal_checks:
+        if _as_int(summary.get(summary_key)) > 0:
+            requirements.append(signal)
+    if _as_int(summary.get("span_count")) > 0 or _as_int(summary.get("event_count")) > 0:
+        requirements.append("span")
+    if _plain_list(summary.get("tool_names")):
+        requirements.append("tool")
+    if framework:
+        requirements.append("framework")
+    return _unique_strings(str(item) for item in requirements if str(item))
 
 
 def _framework_probe_output_artifact_types(

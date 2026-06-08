@@ -667,6 +667,14 @@ Framework handoff transcripts get a compact coordination view. Messages with
 plus `framework_handoffs` state with participants, handoffs, reviews, and
 reconciliations. See `examples/sdk_framework_adapter_handoff_transcript.py`.
 
+Framework trace exports normalize OpenTelemetry/TraceAI evidence directly from
+adapter outputs. OTLP-style `resourceSpans` / `scopeSpans`, TraceAI/Future AGI
+wrappers, and explicit `framework_trace` span/event records become
+`framework_trace` state, trace artifacts, `framework_trace_*` events, ordinary
+tool-call evidence, adapter conformance summaries, and generated
+`framework_trace_coverage` eval gates. See
+`examples/sdk_framework_adapter_trace_export.py`.
+
 A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs
 carrying agent cards, JSON-RPC `SendMessage` records, messages, tasks, task
 status updates, task artifact updates, or protocol artifacts become
@@ -1350,6 +1358,9 @@ PYTHONPATH=src python examples/sdk_framework_adapter_workflow_trace.py \
 
 PYTHONPATH=src python examples/sdk_framework_adapter_lifecycle_trace.py \
   artifacts/sdk-framework-adapter-lifecycle-trace.json
+
+PYTHONPATH=src python examples/sdk_framework_adapter_trace_export.py \
+  artifacts/sdk-framework-adapter-trace-export.json
 
 PYTHONPATH=src python examples/sdk_framework_adapter_a2a_protocol_trace.py \
   artifacts/sdk-framework-adapter-a2a-protocol-trace.json

@@ -2087,6 +2087,62 @@ def test_sdk_framework_adapter_lifecycle_trace_example_runs(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_sdk_framework_adapter_trace_export_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_trace_export.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_trace_export",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-trace-export.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_trace_export_manifest"]
+    assert manifest["agent"]["method"] == "execute_task"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == ["framework_trace"]
+    assert runtime_contract["required_tools"] == ["policy_lookup"]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(config["required_framework_trace"]) >= {
+        "framework_trace",
+        "model",
+        "tool",
+        "state",
+        "latency",
+        "cost",
+        "span",
+    }
+    assert config["metric_weights"]["framework_trace_coverage"] == pytest.approx(4.0)
+    assert result["summary"]["metric_averages"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    trace = state["framework_trace"]
+    summary = trace["summary"]
+    assert summary["span_count"] == 3
+    assert summary["tool_names"] == ["policy_lookup"]
+    assert summary["model_span_count"] == 1
+    assert summary["tool_span_count"] == 1
+    assert summary["state_span_count"] == 1
+    assert trace["adapter_conformance"]["passed"] is True
+    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert output["tool_names"] == ["policy_lookup"]
+    assert {"trace"} <= set(output["artifact_types"])
+    assert {
+        "framework_trace_span",
+        "framework_trace",
+    } <= set(output["event_types"])
+
+
 def test_sdk_framework_adapter_mcp_tool_session_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_mcp_tool_session.py"
     spec = importlib.util.spec_from_file_location(
