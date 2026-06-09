@@ -1061,10 +1061,33 @@ The dedicated cookbook for that SDK path is
 `custom_refund_orchestrator` adapter from a weak `run/text` candidate to the
 verified `execute_task/dict` runtime with local framework trace evidence.
 
+For generic target optimization, pass a runnable manifest body plus explicit
+dot-path candidates. `optimize_target` does not inject an `agent` search path;
+the optimizer searches exactly the paths you provide, so it can tune a world,
+framework, memory layer, retrieval bundle, policy, or any other manifest
+surface without treating prompts or agents as the center:
+
+```python
+from agent_learning import optimize
+
+result = optimize.optimize_target(
+    name="refund-world-target-optimization",
+    base_config=run_manifest_without_optimization,
+    evaluation_config=agent_report_config,
+    target_candidates={
+        "simulation.environments.0.data.transitions": [
+            [],
+            [approve_refund_transition],
+        ],
+    },
+    required_env=["AGENT_LEARNING_API_KEY"],
+)
+```
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
-world environments and eval config. Extra search paths can target any manifest
-path, so the same helper covers memory, policy, provider, red-team, and custom
-framework knobs:
+world environments and eval config. `optimize_task` is the convenience helper
+for complete agent candidates and task/world defaults; extra search paths can
+still target any manifest path:
 
 ```python
 from agent_learning import optimize
@@ -1371,6 +1394,10 @@ Runnable SDK cookbook:
 AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_task_world_optimization.py \
   artifacts/sdk-task-world-optimization.json
+
+AGENT_LEARNING_SDK_TARGET_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_target_optimization.py \
+  artifacts/sdk-target-optimization.json
 
 AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY=... \
   PYTHONPATH=src python examples/sdk_behavior_entropy_optimization.py \

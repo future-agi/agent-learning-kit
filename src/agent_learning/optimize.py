@@ -1035,6 +1035,116 @@ def optimize_task(
     )
 
 
+def build_target_optimization_manifest(
+    *,
+    name: str,
+    base_config: Mapping[str, Any],
+    target_candidates: Mapping[str, Sequence[Any]],
+    evaluation_config: Mapping[str, Any],
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    optimizer: Optional[Mapping[str, Any]] = None,
+    threshold: float = 0.9,
+    layers: Sequence[str] = ("harness", "world", "framework", "evaluator"),
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    auto_execute_tools: bool = True,
+    target_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a manifest optimization over explicit arbitrary target paths.
+
+    This is the lowest-friction public helper for non-prompt optimization:
+    callers provide a runnable manifest body as ``base_config`` and a
+    dot-path search space as ``target_candidates``. No ``agent`` search path is
+    added unless the caller explicitly includes one.
+    """
+
+    if not name:
+        raise ValueError("name is required")
+    if not isinstance(base_config, Mapping) or not base_config:
+        raise ValueError("base_config must be a non-empty mapping")
+    if not evaluation_config:
+        raise ValueError("evaluation_config is required")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    optimization_search_space = _search_space_from_candidates(
+        target_candidates,
+        field_name="target_candidates",
+    )
+
+    manifest = copy.deepcopy(dict(base_config))
+    manifest.pop("optimization", None)
+    manifest["version"] = "agent-learning.optimization.v1"
+    manifest["name"] = name
+    manifest["required_env"] = [str(key) for key in required_env]
+    manifest["scenario"] = copy.deepcopy(dict(scenario or _default_task_scenario(name)))
+
+    simulation = manifest.setdefault("simulation", {})
+    if not isinstance(simulation, dict):
+        raise ValueError("base_config.simulation must be a mapping when provided")
+    simulation.setdefault("engine", simulation_engine)
+    simulation.setdefault("max_turns", max_turns_value)
+    simulation.setdefault("min_turns", int(min_turns))
+    simulation.setdefault("auto_execute_tools", bool(auto_execute_tools))
+    simulation.setdefault("environments", [])
+
+    manifest["evaluation"] = {
+        "agent_report": {
+            "threshold": float(threshold),
+            "config": copy.deepcopy(dict(evaluation_config)),
+        }
+    }
+
+    target_base = copy.deepcopy(dict(base_config))
+    for key in ("version", "name", "required_env", "optimization"):
+        target_base.pop(key, None)
+    metadata = {
+        "source": "agent_learning.optimize.build_target_optimization_manifest",
+        "task_kind": "generic_target",
+        **copy.deepcopy(dict(target_metadata or {})),
+    }
+    manifest["optimization"] = {
+        "threshold": float(threshold),
+        "target": {
+            "name": name,
+            "layers": [str(layer) for layer in layers],
+            "base_config": target_base,
+            "search_space": optimization_search_space,
+            "metadata": metadata,
+        },
+        "optimizer": copy.deepcopy(
+            dict(optimizer or _default_task_optimizer(optimization_search_space))
+        ),
+    }
+    return manifest
+
+
+def optimize_target(
+    *,
+    manifest_path: str | Path = ".",
+    options: Optional[Any] = None,
+    result_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    **manifest_kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute optimization over explicit arbitrary target paths."""
+
+    manifest = build_target_optimization_manifest(**manifest_kwargs)
+    return optimize_manifest(
+        manifest,
+        manifest_path=manifest_path,
+        options=options,
+        name=result_name,
+        dry_run=dry_run,
+    )
+
+
 def build_external_agent_adapter_optimization_manifest(
     *,
     name: str = "external-http-agent-adapter-optimization",
@@ -22894,22 +23004,47 @@ def _task_search_space(
             for candidate in environment_candidates
         ]
 
-    for path, choices in (search_space or {}).items():
-        path_key = str(path)
-        if not path_key:
-            raise ValueError("search_space paths must be non-empty")
+    for path_key, values in _search_space_from_candidates(
+        search_space or {},
+        field_name="search_space",
+        allow_empty=True,
+    ).items():
         if path_key in optimization_search_space:
             raise ValueError(f"search_space path {path_key!r} is already defined")
-        if isinstance(choices, (str, bytes)) or isinstance(choices, Mapping):
-            raise ValueError(
-                f"search_space.{path_key} must be a sequence of candidate values"
-            )
-        values = [copy.deepcopy(value) for value in choices]
-        if not values:
-            raise ValueError(f"search_space.{path_key} must not be empty")
         optimization_search_space[path_key] = values
 
     return optimization_search_space
+
+
+def _search_space_from_candidates(
+    candidates: Mapping[str, Sequence[Any]],
+    *,
+    field_name: str,
+    allow_empty: bool = False,
+) -> dict[str, list[Any]]:
+    if not isinstance(candidates, Mapping):
+        raise ValueError(f"{field_name} must be a mapping of paths to candidates")
+    if not candidates and not allow_empty:
+        raise ValueError(f"{field_name} must contain at least one target path")
+
+    search_space: dict[str, list[Any]] = {}
+    for path, choices in candidates.items():
+        path_key = str(path)
+        if not path_key:
+            raise ValueError(f"{field_name} paths must be non-empty")
+        if (
+            isinstance(choices, (str, bytes))
+            or isinstance(choices, Mapping)
+            or not isinstance(choices, Sequence)
+        ):
+            raise ValueError(
+                f"{field_name}.{path_key} must be a sequence of candidate values"
+            )
+        values = [copy.deepcopy(value) for value in choices]
+        if not values:
+            raise ValueError(f"{field_name}.{path_key} must not be empty")
+        search_space[path_key] = values
+    return search_space
 
 
 def _string_matrix(name: str, values: Sequence[Sequence[str]]) -> list[list[str]]:
@@ -33148,6 +33283,7 @@ __all__ = [
     "build_retrieval_hook_optimization_manifest",
     "build_social_memory_framework_optimization_manifest",
     "build_stateful_tool_world_optimization_manifest",
+    "build_target_optimization_manifest",
     "build_task_optimization_manifest",
     "build_trinity_run_manifest_from_probe_optimization",
     "build_workflow_hook_optimization_manifest",
@@ -33212,6 +33348,7 @@ __all__ = [
     "optimize_retrieval_hooks",
     "optimize_social_memory_framework",
     "optimize_stateful_tool_world",
+    "optimize_target",
     "optimize_task",
     "optimize_trinity_stack_probe",
     "optimize_workflow_hooks",

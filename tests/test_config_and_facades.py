@@ -381,6 +381,8 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.build_optimizer_governance_optimization_manifest is not None
     assert optimize.optimize_optimizer_governance is not None
     assert simulate.build_optimizer_governance_run_manifest is not None
+    assert optimize.build_target_optimization_manifest is not None
+    assert optimize.optimize_target is not None
     assert optimize.build_task_optimization_manifest is not None
     assert optimize.optimize_task is not None
     assert optimize.build_external_agent_adapter_optimization_manifest is not None
@@ -3581,6 +3583,224 @@ def test_sdk_social_memory_framework_simulation_example_runs(
         "execute_task",
     } <= event_names
     assert len(report_case["events"]) == 7
+
+
+def test_optimize_facade_builds_and_runs_generic_target_manifest(monkeypatch):
+    from agent_learning import optimize
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TARGET_OPT_KEY",
+        "real-local-sdk-target-opt-key",
+    )
+
+    approve_refund_tool_call = {
+        "id": "approve_refund",
+        "name": "apply_world_transition",
+        "arguments": {"id": "approve_refund"},
+    }
+    approve_refund_transition = {
+        "id": "approve_refund",
+        "actor": "agent",
+        "resource": "refund",
+        "action": "approve_refund",
+        "required": True,
+        "preconditions": {"refund.status": "pending"},
+        "effects": {"refund.status": "approved"},
+        "postconditions": {"refund.status": "approved"},
+        "signals": ["refund_resolution"],
+    }
+    base_config = {
+        "agent": {
+            "type": "scripted",
+            "responses": [
+                {
+                    "content": "I will apply the refund transition.",
+                    "tool_calls": [approve_refund_tool_call],
+                }
+            ],
+        },
+        "simulation": {
+            "engine": "local_text",
+            "min_turns": 1,
+            "max_turns": 1,
+            "auto_execute_tools": True,
+            "environments": [
+                {
+                    "type": "world_contract",
+                    "data": {
+                        "name": "generic-target-refund-world",
+                        "actors": ["agent", "customer"],
+                        "resources": ["refund"],
+                        "initial_state": {
+                            "policy": {"can_refund": True},
+                            "refund": {"status": "pending"},
+                        },
+                        "transitions": [],
+                        "invariants": [
+                            {
+                                "id": "policy_allows_refunds",
+                                "must": {"policy.can_refund": True},
+                            }
+                        ],
+                        "success_conditions": [
+                            {
+                                "id": "refund_approved",
+                                "must": {"refund.status": "approved"},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+    evaluation_config = {
+        "task_description": "Optimize a manifest target path from the SDK.",
+        "expected_result": "The selected world contract approves the refund.",
+        "required_tools": ["apply_world_transition"],
+        "available_tools": ["world_contract_status", "apply_world_transition"],
+        "success_criteria": [
+            "refund transition applied",
+            "world contract terminal status is success",
+        ],
+        "required_world_contract": [
+            "world_contract",
+            "transition",
+            "success_condition",
+            "refund",
+        ],
+        "world_contract_quality": {
+            "required_actors": ["agent", "customer"],
+            "required_resources": ["refund"],
+            "required_transitions": ["approve_refund"],
+            "min_completed_transitions": 1,
+            "require_all_required_transitions": True,
+            "require_all_invariants_pass": True,
+            "required_success_conditions": ["refund_approved"],
+            "terminal_status": "success",
+            "max_violation_count": 0,
+            "expected_state": {"refund": {"status": "approved"}},
+        },
+        "metric_weights": {
+            "world_contract_quality": 8.0,
+            "world_contract_coverage": 3.0,
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 1.0,
+        },
+    }
+    target_candidates = {
+        "simulation.environments.0.data.transitions": [
+            [],
+            [approve_refund_transition],
+        ],
+    }
+
+    manifest = optimize.build_target_optimization_manifest(
+        name="sdk-target-optimization",
+        required_env=["AGENT_LEARNING_SDK_TARGET_OPT_KEY"],
+        base_config=base_config,
+        evaluation_config=evaluation_config,
+        target_candidates=target_candidates,
+        layers=["world", "environment", "evaluator"],
+    )
+
+    search_space = manifest["optimization"]["target"]["search_space"]
+    assert set(search_space) == {"simulation.environments.0.data.transitions"}
+    assert "agent" not in search_space
+    assert manifest["agent"] == base_config["agent"]
+    assert manifest["optimization"]["target"]["base_config"]["agent"] == (
+        base_config["agent"]
+    )
+    assert manifest["optimization"]["target"]["layers"] == [
+        "world",
+        "environment",
+        "evaluator",
+    ]
+    assert manifest["optimization"]["optimizer"]["max_candidates"] == 3
+    assert manifest["optimization"]["target"]["metadata"]["source"] == (
+        "agent_learning.optimize.build_target_optimization_manifest"
+    )
+
+    no_agent_manifest = optimize.build_target_optimization_manifest(
+        name="sdk-target-no-agent-build-only",
+        base_config={
+            "simulation": {
+                "environments": [{"type": "world_contract", "data": {"transitions": []}}]
+            }
+        },
+        evaluation_config={"metric_weights": {"task_completion": 1.0}},
+        target_candidates={"simulation.environments": [[{"type": "noop"}]]},
+    )
+    assert "agent" not in _nested_keys(no_agent_manifest)
+
+    result = optimize.optimize_target(
+        name="sdk-target-optimization",
+        required_env=["AGENT_LEARNING_SDK_TARGET_OPT_KEY"],
+        base_config=base_config,
+        evaluation_config=evaluation_config,
+        target_candidates=target_candidates,
+        layers=["world", "environment", "evaluator"],
+        manifest_path=PROJECT_ROOT / "examples" / "sdk-target-optimization.json",
+    )
+
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    best_world = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_world["data"]["transitions"][0]["id"] == "approve_refund"
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {
+        "simulation.environments.0.data.transitions"
+    }
+    assert "agent" not in best_history["patch"]
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    assert best_history["report"]["results"][0]["metadata"]["environment_state"][
+        "world_contract"
+    ]["summary"]["terminal_status"] == "success"
+
+
+def test_sdk_target_optimization_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TARGET_OPTIMIZATION_KEY",
+        "real-local-sdk-target-optimization-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_target_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_target_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_TARGET_OPTIMIZATION_KEY"
+    ]
+    search_space = manifest["optimization"]["target"]["search_space"]
+    assert set(search_space) == {"simulation.environments.0.data.transitions"}
+    assert "agent" not in search_space
+
+    output_path = tmp_path / "sdk-target-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {
+        "simulation.environments.0.data.transitions"
+    }
+    assert "agent" not in best_history["patch"]
+    assert best_history["metrics"]["world_contract_quality"] == pytest.approx(1.0)
+    best_world = result["optimization"]["best_config"]["simulation"]["environments"][0]
+    assert best_world["data"]["transitions"][0]["id"] == "approve_refund"
 
 
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
