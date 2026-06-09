@@ -2970,6 +2970,49 @@ V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
     "metric_evidence_present",
 ]
 
+V1_OPTIMIZER_PORTFOLIO_FILES = [
+    "examples/sdk_optimizer_portfolio_optimization.py",
+]
+
+V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES = [
+    "optimizer_backend_portfolio",
+]
+
+V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS = [
+    "optimizer_portfolio_quality",
+    "optimizer_portfolio_coverage",
+]
+
+V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS = [
+    "tool_coverage",
+    "optimizer_portfolio",
+]
+
+V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS = [
+    "native_no_external_optimizer_portfolio_dependency",
+    "optimizer_portfolio_environment_present",
+    "optimizer_backend_search_breadth_closed",
+    "optimizer_backend_lineage_closed",
+    "optimizer_ablation_consensus_closed",
+    "optimizer_diagnosis_feedback_search_closed",
+    "optimizer_portfolio_metric_evidence_closed",
+    "optimizer_portfolio_report_evidence_closed",
+]
+
+V1_OPTIMIZER_PORTFOLIO_CONTRACTS = {
+    "examples/sdk_optimizer_portfolio_optimization.py": {
+        "env_name": "AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY",
+        "module_name": "agent_learning_release_optimizer_portfolio",
+        "task_kind": "optimizer_backend_portfolio",
+        "required_search_paths": ["simulation.environments"],
+        "required_completed_backends": ["agent", "tpe", "bandit"],
+        "required_dependencies": ["backend_consensus"],
+        "selected_optimizer": "bandit",
+        "proof_kind": "agent-learning.optimization.optimizer-portfolio-proof.v1",
+        "proof_assurance_level": "l3_native_optimizer_portfolio_verified",
+    },
+}
+
 V1_AGENT_CONTROL_PLANE_FILES = [
     "examples/sdk_agent_control_plane_optimization.py",
     "examples/sdk_agent_control_plane_simulation.py",
@@ -3310,6 +3353,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         milestone="M3",
         evidence=optimizer_governance,
+    )
+    optimizer_portfolio = _release_optimizer_portfolio_status(root)
+    _append_release_check(
+        checks,
+        check_id="optimizer_portfolio_readiness",
+        passed=(
+            not optimizer_portfolio["missing_files"]
+            and not optimizer_portfolio["execution_errors"]
+            and not optimizer_portfolio["manifest_errors"]
+            and not optimizer_portfolio["optimization_errors"]
+            and not optimizer_portfolio["portfolio_errors"]
+            and not optimizer_portfolio["proof_errors"]
+            and not optimizer_portfolio["component_errors"]
+            and not optimizer_portfolio["metric_errors"]
+            and not optimizer_portfolio["security_errors"]
+        ),
+        milestone="M3",
+        evidence=optimizer_portfolio,
     )
     world_hooks_readiness = _release_world_hooks_readiness_status(root)
     _append_release_check(
@@ -4120,6 +4181,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_optimizer_governance_checks": list(
             V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
         ),
+        "required_optimizer_portfolio_files": list(V1_OPTIMIZER_PORTFOLIO_FILES),
+        "required_optimizer_portfolio_environment_types": list(
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_optimizer_portfolio_metrics": list(
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS
+        ),
+        "required_optimizer_portfolio_components": list(
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS
+        ),
+        "required_optimizer_portfolio_proof_checks": list(
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS
+        ),
+        "required_optimizer_portfolio_contracts": {
+            path: dict(contract)
+            for path, contract in V1_OPTIMIZER_PORTFOLIO_CONTRACTS.items()
+        },
         "required_agent_control_plane_files": list(V1_AGENT_CONTROL_PLANE_FILES),
         "required_agent_control_plane_environment_types": list(
             V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
@@ -8376,6 +8454,903 @@ def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
         "optimization_errors": optimization_errors,
         "governance_errors": governance_errors,
         "metric_errors": metric_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_optimizer_portfolio_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_OPTIMIZER_PORTFOLIO_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    portfolio_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    component_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def nested_key_names(value: Any) -> set[str]:
+        names: set[str] = set()
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                names.add(str(key))
+                names.update(nested_key_names(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                names.update(nested_key_names(item))
+        return names
+
+    def first_case_report(report: Mapping[str, Any]) -> Mapping[str, Any]:
+        cases = [
+            item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+        ]
+        return _as_mapping(cases[0]) if cases else {}
+
+    def selected_history(optimization: Mapping[str, Any]) -> Mapping[str, Any]:
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        return _as_mapping(
+            max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+        )
+
+    def validate_manifest(
+        path: str,
+        manifest: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        optimization = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization.get("target"))
+        metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        evaluation_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        portfolio_config = _as_mapping(
+            evaluation_config.get("optimizer_portfolio_quality")
+        )
+        required_search_paths = [str(item) for item in contract["required_search_paths"]]
+        first_search_path = required_search_paths[0]
+        candidates = [
+            item
+            for item in _as_list(search_space.get(first_search_path))
+            if isinstance(item, list)
+        ]
+        candidate_types = [
+            [str(_as_mapping(item).get("type")) for item in _as_list(candidate)]
+            for candidate in candidates
+        ]
+        candidate_data = [
+            _as_mapping(_as_mapping(_as_list(candidate)[0]).get("data"))
+            for candidate in candidates
+            if _as_list(candidate)
+        ]
+        example_evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "task_kind": metadata.get("task_kind"),
+            "threshold": optimization.get("threshold"),
+            "search_paths": sorted(str(path) for path in search_space),
+            "candidate_count": len(candidates),
+            "candidate_environment_types": candidate_types,
+            "target_layers": list(target.get("layers") or []),
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+            "portfolio_quality_config": {
+                "required_completed_backends": list(
+                    portfolio_config.get("required_completed_backends") or []
+                ),
+                "required_dependencies": list(
+                    portfolio_config.get("required_dependencies") or []
+                ),
+                "max_failed_backends": portfolio_config.get("max_failed_backends"),
+                "min_backend_run_count": portfolio_config.get(
+                    "min_backend_run_count"
+                ),
+                "min_lineage_count": portfolio_config.get("min_lineage_count"),
+            },
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                [contract["env_name"]],
+            ),
+            "metadata.task_kind": (metadata.get("task_kind"), contract["task_kind"]),
+            "optimization.target.search_space": (
+                sorted(str(path) for path in search_space),
+                required_search_paths,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(optimization.get("threshold")) < 0.95:
+            append_error(
+                manifest_errors,
+                path=path,
+                field="optimization.threshold",
+                expected=">=0.95",
+                observed=optimization.get("threshold"),
+            )
+        if len(candidates) < 2:
+            append_error(
+                manifest_errors,
+                path=path,
+                field=f"optimization.target.search_space.{first_search_path}",
+                expected=">=2 candidates",
+                observed=len(candidates),
+            )
+        for types in candidate_types:
+            if types != V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=(
+                        "optimization.target.search_space."
+                        "simulation.environments.type"
+                    ),
+                    expected=V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES,
+                    observed=types,
+                )
+        missing_metric_weights = missing_values(
+            metric_weights,
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS,
+        )
+        if missing_metric_weights:
+            append_error(
+                manifest_errors,
+                path=path,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS,
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+        portfolio_config_expectations = {
+            "required_completed_backends": (
+                portfolio_config.get("required_completed_backends") or [],
+                contract["required_completed_backends"],
+            ),
+            "required_dependencies": (
+                portfolio_config.get("required_dependencies") or [],
+                contract["required_dependencies"],
+            ),
+            "max_failed_backends": (
+                portfolio_config.get("max_failed_backends"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in portfolio_config_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=f"evaluation.agent_report.config.optimizer_portfolio_quality.{field}",
+                    expected=expected,
+                    observed=observed,
+                )
+        if candidate_data:
+            verified_portfolio = _as_mapping(candidate_data[-1])
+            verified_summary = _as_mapping(verified_portfolio.get("summary"))
+            verified_metadata = _as_mapping(verified_portfolio.get("metadata"))
+            example_evidence["manifest"]["verified_candidate"] = {
+                "kind": verified_portfolio.get("kind"),
+                "selected_optimizer": verified_portfolio.get("selected_optimizer"),
+                "backend_run_count": verified_summary.get("backend_run_count"),
+                "completed_backend_count": verified_summary.get(
+                    "completed_backend_count"
+                ),
+                "consensus_backend_count": verified_summary.get(
+                    "consensus_backend_count"
+                ),
+                "has_diagnostics": verified_summary.get("has_diagnostics"),
+                "requires_external_service": verified_metadata.get(
+                    "requires_external_service"
+                ),
+            }
+            manifest_portfolio_expectations = {
+                "optimization.target.search_space.verified.kind": (
+                    verified_portfolio.get("kind"),
+                    "optimizer_backend_portfolio",
+                ),
+                "optimization.target.search_space.verified.selected_optimizer": (
+                    verified_portfolio.get("selected_optimizer"),
+                    contract["selected_optimizer"],
+                ),
+                "optimization.target.search_space.verified.requires_external_service": (
+                    verified_metadata.get("requires_external_service"),
+                    False,
+                ),
+            }
+            for field, (observed, expected) in (
+                manifest_portfolio_expectations.items()
+            ):
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            for field, minimum in (
+                ("backend_run_count", 3),
+                ("completed_backend_count", 3),
+                ("consensus_backend_count", 2),
+            ):
+                if _int_or_zero(verified_summary.get(field)) < minimum:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=f"optimization.target.search_space.verified.summary.{field}",
+                        expected=f">={minimum}",
+                        observed=verified_summary.get(field),
+                    )
+
+    def validate_optimization(
+        path: str,
+        manifest: Mapping[str, Any],
+        result: Mapping[str, Any],
+        saved: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_history = selected_history(optimization)
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_report = _as_mapping(best_history.get("report"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(item)
+            for item in _as_list(best_simulation.get("environments"))
+            if isinstance(item, Mapping)
+        ]
+        best_environment = (
+            _as_mapping(best_environments[0]) if best_environments else {}
+        )
+        case = first_case_report(best_report)
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        portfolio = _as_mapping(state.get("optimizer_backend_portfolio"))
+        forbidden_keys = sorted(
+            {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+            & nested_key_names(best_config)
+        )
+        example_evidence["optimization"] = {
+            "schema_version": result.get("schema_version"),
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "best_score": best_history.get("score"),
+            "best_patch_keys": sorted(
+                str(key) for key in _as_mapping(best_history.get("patch"))
+            ),
+            "best_metrics": {
+                metric: best_metrics.get(metric)
+                for metric in V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS
+            },
+            "best_environment_type": best_environment.get("type"),
+            "state_keys": sorted(str(key) for key in state),
+            "portfolio_present": bool(portfolio),
+            "forbidden_external_keys": forbidden_keys,
+        }
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "optimization.best_config.simulation.environments.type": (
+                best_environment.get("type"),
+                V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES[0],
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        threshold = _float_or_zero(
+            _as_mapping(manifest.get("optimization")).get("threshold")
+        )
+        if _float_or_zero(summary.get("optimization_score")) < threshold:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.optimization_score",
+                expected=f">={threshold}",
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.evaluation_score",
+                expected=">=1.0",
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.candidate_lineage_count",
+                expected=">=2",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 2:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.total_evaluations",
+                expected=">=2",
+                observed=summary.get("total_evaluations"),
+            )
+        if set(_as_mapping(best_history.get("patch"))) != {"simulation.environments"}:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.history.best.patch",
+                expected=["simulation.environments"],
+                observed=sorted(
+                    str(key) for key in _as_mapping(best_history.get("patch"))
+                ),
+            )
+        if not portfolio:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.history.best.report.environment_state",
+                expected="optimizer_backend_portfolio",
+                observed=sorted(str(key) for key in state),
+            )
+        for metric in V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS:
+            if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field=f"optimization.history.best.metrics.{metric}",
+                    expected=">=1.0",
+                    observed=best_metrics.get(metric),
+                )
+        if forbidden_keys:
+            append_error(
+                security_errors,
+                path=path,
+                field="optimization.best_config.external_dependency_keys",
+                expected=[],
+                observed=forbidden_keys,
+            )
+        return best_config, best_report, portfolio
+
+    def validate_portfolio(
+        path: str,
+        portfolio: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(portfolio.get("summary"))
+        metadata = _as_mapping(portfolio.get("metadata"))
+        example_evidence["portfolio"] = {
+            "kind": portfolio.get("kind"),
+            "selected_optimizer": portfolio.get("selected_optimizer"),
+            "backend_run_count": summary.get("backend_run_count"),
+            "completed_backend_count": summary.get("completed_backend_count"),
+            "failed_backend_count": summary.get("failed_backend_count"),
+            "consensus_backend_count": summary.get("consensus_backend_count"),
+            "diagnostic_count": summary.get("diagnostic_count"),
+            "feedback_case_count": summary.get("feedback_case_count"),
+            "improved_backend_count": summary.get("improved_backend_count"),
+            "lineage_count": summary.get("lineage_count"),
+            "search_path_count": summary.get("search_path_count"),
+            "dependency": summary.get("dependency"),
+            "blocking_gaps": summary.get("blocking_gaps") or [],
+            "local_only": metadata.get("local_only"),
+            "requires_external_service": metadata.get("requires_external_service"),
+            "external_dependency_count": metadata.get("external_dependency_count"),
+        }
+        portfolio_expectations = {
+            "optimizer_backend_portfolio.kind": (
+                portfolio.get("kind"),
+                "optimizer_backend_portfolio",
+            ),
+            "optimizer_backend_portfolio.selected_optimizer": (
+                portfolio.get("selected_optimizer"),
+                contract["selected_optimizer"],
+            ),
+            "optimizer_backend_portfolio.summary.failed_backend_count": (
+                summary.get("failed_backend_count"),
+                0,
+            ),
+            "optimizer_backend_portfolio.summary.dependency": (
+                summary.get("dependency"),
+                contract["required_dependencies"][0],
+            ),
+            "optimizer_backend_portfolio.summary.blocking_gaps": (
+                summary.get("blocking_gaps") or [],
+                [],
+            ),
+            "optimizer_backend_portfolio.summary.missing_required_evidence": (
+                summary.get("missing_required_evidence") or [],
+                [],
+            ),
+            "optimizer_backend_portfolio.summary.missing_required_signals": (
+                summary.get("missing_required_signals") or [],
+                [],
+            ),
+            "optimizer_backend_portfolio.metadata.local_only": (
+                metadata.get("local_only"),
+                True,
+            ),
+            "optimizer_backend_portfolio.metadata.requires_external_service": (
+                metadata.get("requires_external_service"),
+                False,
+            ),
+            "optimizer_backend_portfolio.metadata.external_dependency_count": (
+                metadata.get("external_dependency_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in portfolio_expectations.items():
+            if observed != expected:
+                append_error(
+                    portfolio_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        minima = {
+            "backend_run_count": 3,
+            "completed_backend_count": 3,
+            "consensus_backend_count": 2,
+            "diagnostic_count": 2,
+            "feedback_case_count": 2,
+            "improved_backend_count": 3,
+            "lineage_count": 3,
+            "search_path_count": 2,
+            "final_score": 1,
+        }
+        for field, minimum in minima.items():
+            if _float_or_zero(summary.get(field)) < float(minimum):
+                append_error(
+                    portfolio_errors,
+                    path=path,
+                    field=f"optimizer_backend_portfolio.summary.{field}",
+                    expected=f">={minimum}",
+                    observed=summary.get(field),
+                )
+        for field in (
+            "has_ablation",
+            "has_backend_lineage",
+            "has_backend_plan",
+            "has_backend_runs",
+            "has_completed_backend",
+            "has_consensus",
+            "has_diagnostics",
+            "has_feedback",
+            "has_improvement",
+            "has_rollback_decision",
+            "has_search_paths",
+            "has_selected_optimizer",
+            "has_selected_relation",
+        ):
+            if summary.get(field) is not True:
+                append_error(
+                    portfolio_errors,
+                    path=path,
+                    field=f"optimizer_backend_portfolio.summary.{field}",
+                    expected=True,
+                    observed=summary.get(field),
+                )
+        missing_completed_backends = missing_values(
+            summary.get("completed_backends"),
+            contract["required_completed_backends"],
+        )
+        if missing_completed_backends:
+            append_error(
+                portfolio_errors,
+                path=path,
+                field="optimizer_backend_portfolio.summary.completed_backends",
+                expected=contract["required_completed_backends"],
+                observed=summary.get("completed_backends") or [],
+            )
+
+    def validate_proof(
+        path: str,
+        result: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(result.get("summary"))
+        proof = _as_mapping(result.get("optimizer_portfolio_proof"))
+        checks = [
+            _as_mapping(check)
+            for check in _as_list(proof.get("checks"))
+            if isinstance(check, Mapping)
+        ]
+        passed_check_ids = [
+            str(check.get("id")) for check in checks if check.get("passed") is True
+        ]
+        example_evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "selected_optimizer": proof.get("selected_optimizer"),
+            "failed_check_ids": proof.get("failed_check_ids") or [],
+            "warning_check_ids": proof.get("warning_check_ids") or [],
+            "passed_check_ids": passed_check_ids,
+        }
+        proof_expectations = {
+            "optimizer_portfolio_proof.kind": (
+                proof.get("kind"),
+                contract["proof_kind"],
+            ),
+            "optimizer_portfolio_proof.status": (proof.get("status"), "passed"),
+            "optimizer_portfolio_proof.passed": (proof.get("passed"), True),
+            "optimizer_portfolio_proof.assurance_level": (
+                proof.get("assurance_level"),
+                contract["proof_assurance_level"],
+            ),
+            "optimizer_portfolio_proof.requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "optimizer_portfolio_proof.selected_optimizer": (
+                proof.get("selected_optimizer"),
+                contract["selected_optimizer"],
+            ),
+            "optimizer_portfolio_proof.failed_check_ids": (
+                proof.get("failed_check_ids") or [],
+                [],
+            ),
+            "optimizer_portfolio_proof.warning_check_ids": (
+                proof.get("warning_check_ids") or [],
+                [],
+            ),
+            "summary.optimizer_portfolio_proof_status": (
+                summary.get("optimizer_portfolio_proof_status"),
+                "passed",
+            ),
+            "summary.optimizer_portfolio_proof_passed": (
+                summary.get("optimizer_portfolio_proof_passed"),
+                True,
+            ),
+            "summary.optimizer_portfolio_proof_failed_check_count": (
+                summary.get("optimizer_portfolio_proof_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_checks = missing_values(
+            passed_check_ids,
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS,
+        )
+        if missing_checks:
+            append_error(
+                proof_errors,
+                path=path,
+                field="optimizer_portfolio_proof.checks",
+                expected=V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS,
+                observed=passed_check_ids,
+            )
+
+    def validate_components(
+        path: str,
+        manifest: Mapping[str, Any],
+        result: Mapping[str, Any],
+        best_report: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        from . import optimize as agent_optimize
+
+        target = _as_mapping(_as_mapping(manifest.get("optimization")).get("target"))
+        evaluation_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        candidate = agent_optimize.AgentCandidate.from_config(
+            _as_mapping(_as_mapping(result.get("optimization")).get("best_config")),
+            target_name=str(target.get("name")),
+            metadata=_as_mapping(target.get("metadata")),
+            layers=list(target.get("layers") or []),
+        )
+        score = agent_optimize.score_simulation_evidence(
+            best_report,
+            manifest=manifest,
+            candidate=candidate,
+            config=evaluation_config,
+        )
+        score_metadata = _as_mapping(getattr(score, "metadata", {}))
+        simulation_evidence = _as_mapping(
+            score_metadata.get("simulation_evidence_score")
+        )
+        components = [
+            _as_mapping(component)
+            for component in _as_list(simulation_evidence.get("components"))
+            if isinstance(component, Mapping)
+        ]
+        component_names = [str(component.get("name")) for component in components]
+        portfolio_component = next(
+            (
+                component
+                for component in components
+                if component.get("name") == "optimizer_portfolio"
+            ),
+            {},
+        )
+        portfolio_details = _as_mapping(portfolio_component.get("details"))
+        portfolio_summary = _as_mapping(portfolio_details.get("summary"))
+        portfolio_metadata = _as_mapping(portfolio_details.get("metadata"))
+        component_checks = [
+            _as_mapping(check)
+            for check in _as_list(portfolio_details.get("checks"))
+            if isinstance(check, Mapping)
+        ]
+        failing_component_checks = [
+            check for check in component_checks if check.get("match") is not True
+        ]
+        example_evidence["score_simulation_evidence"] = {
+            "score": getattr(score, "score", None),
+            "component_names": component_names,
+            "portfolio_component_score": portfolio_component.get("score"),
+            "portfolio_component_missing": portfolio_details.get("missing") or [],
+            "portfolio_component_selected_optimizer": portfolio_details.get(
+                "selected_optimizer"
+            ),
+            "portfolio_component_completed_backend_count": (
+                portfolio_summary.get("completed_backend_count")
+            ),
+            "portfolio_component_external_dependency_count": (
+                portfolio_metadata.get("external_dependency_count")
+            ),
+            "portfolio_component_local_only": portfolio_metadata.get("local_only"),
+            "portfolio_component_failing_checks": failing_component_checks,
+        }
+        if sorted(component_names) != sorted(V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS):
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.components",
+                expected=V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS,
+                observed=component_names,
+            )
+        if _float_or_zero(getattr(score, "score", None)) < 1.0:
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.score",
+                expected=">=1.0",
+                observed=getattr(score, "score", None),
+            )
+        component_expectations = {
+            "score_simulation_evidence.optimizer_portfolio.score": (
+                portfolio_component.get("score"),
+                1.0,
+            ),
+            "score_simulation_evidence.optimizer_portfolio.missing": (
+                portfolio_details.get("missing") or [],
+                [],
+            ),
+            "score_simulation_evidence.optimizer_portfolio.selected_optimizer": (
+                portfolio_details.get("selected_optimizer"),
+                contract["selected_optimizer"],
+            ),
+            "score_simulation_evidence.optimizer_portfolio.completed_backend_count": (
+                portfolio_summary.get("completed_backend_count"),
+                3,
+            ),
+            "score_simulation_evidence.optimizer_portfolio.external_dependency_count": (
+                portfolio_metadata.get("external_dependency_count"),
+                0,
+            ),
+            "score_simulation_evidence.optimizer_portfolio.local_only": (
+                portfolio_metadata.get("local_only"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in component_expectations.items():
+            if observed != expected:
+                append_error(
+                    component_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if failing_component_checks:
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.optimizer_portfolio.checks",
+                expected=[],
+                observed=failing_component_checks,
+            )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        for path in V1_OPTIMIZER_PORTFOLIO_FILES:
+            contract = V1_OPTIMIZER_PORTFOLIO_CONTRACTS[path]
+            env_name = str(contract["env_name"])
+            env_value = f"release-check-{Path(path).stem}-key"
+            previous_config_env = {
+                name: os.environ.get(name) for name in config_env_names
+            }
+            previous_config = agent_config.current_config()
+            previous_example_env = os.environ.get(env_name)
+            manifest: Mapping[str, Any] = {}
+            result: Mapping[str, Any] = {}
+            saved: Mapping[str, Any] = {}
+            try:
+                example_path = root / path
+                spec = importlib.util.spec_from_file_location(
+                    str(contract["module_name"]),
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                os.environ[env_name] = env_value
+                manifest = module.build_manifest()
+                with tempfile.TemporaryDirectory(
+                    prefix="agent-learning-optimizer-portfolio-"
+                ) as tmpdir:
+                    output_path = Path(tmpdir) / "optimizer-portfolio.json"
+                    result = module.run(output_path)
+                    saved = json.loads(output_path.read_text(encoding="utf-8"))
+                example_evidence: dict[str, Any] = {}
+                evidence["examples"][path] = example_evidence
+                validate_manifest(path, manifest, contract, example_evidence)
+                _best_config, best_report, portfolio = validate_optimization(
+                    path,
+                    manifest,
+                    result,
+                    saved,
+                    contract,
+                    example_evidence,
+                )
+                validate_portfolio(path, portfolio, contract, example_evidence)
+                validate_proof(path, result, contract, example_evidence)
+                validate_components(
+                    path,
+                    manifest,
+                    result,
+                    best_report,
+                    contract,
+                    example_evidence,
+                )
+                serialized = json.dumps(
+                    {"manifest": manifest, "result": result, "saved": saved},
+                    sort_keys=True,
+                    default=str,
+                )
+                if env_value in serialized:
+                    append_error(
+                        security_errors,
+                        path=path,
+                        field="runtime.output.secret_leakage",
+                        expected=f"{env_name} value absent",
+                        observed=f"{env_name} value present",
+                    )
+            except Exception as exc:
+                execution_errors.append({"path": path, "error": str(exc)})
+                evidence["examples"].setdefault(path, {})
+            finally:
+                agent_config._CONFIG = previous_config
+                for name, value in previous_config_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                if previous_example_env is None:
+                    os.environ.pop(env_name, None)
+                else:
+                    os.environ[env_name] = previous_example_env
+
+    return {
+        "required_files": list(V1_OPTIMIZER_PORTFOLIO_FILES),
+        "required_environment_types": list(
+            V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_metrics": list(V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS),
+        "required_components": list(V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS),
+        "required_proof_checks": list(V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS),
+        "required_contracts": {
+            path: dict(contract)
+            for path, contract in V1_OPTIMIZER_PORTFOLIO_CONTRACTS.items()
+        },
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "portfolio_errors": portfolio_errors,
+        "proof_errors": proof_errors,
+        "component_errors": component_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
         "evidence": evidence,
     }
 
@@ -24379,6 +25354,12 @@ __all__ = [
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS",
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS",
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS",
+    "V1_OPTIMIZER_PORTFOLIO_CONTRACTS",
+    "V1_OPTIMIZER_PORTFOLIO_FILES",
+    "V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS",
+    "V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS",
+    "V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS",
     "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID",
     "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE",
     "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES",

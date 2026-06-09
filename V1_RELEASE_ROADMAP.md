@@ -50,7 +50,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M0 | One public SDK boundary | `single_public_boundary`, `typescript_sdk_consolidation_boundary` |
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `task_artifact_evaluation_readiness`, `task_evaluation_synthesis_readiness`, `task_world_optimizer_readiness`, `evaluation_hook_probe_readiness` |
-| M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `world_hooks_readiness` |
+| M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
 | M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
@@ -162,6 +162,13 @@ Current checkpoint:
   `SocietyAgentOptimizer` trace, preserve candidate lineage and top-rank
   governance checks, and close optimizer trace coverage/quality plus tool
   selection metrics.
+- Optimizer portfolio readiness is now an executable release-check gate:
+  `examples/sdk_optimizer_portfolio_optimization.py` must run local search over
+  weak and verified optimizer backend portfolios, select `bandit`, prove three
+  completed backend runs and two consensus backends, close
+  `optimizer_portfolio_quality` plus `optimizer_portfolio_coverage`, and keep
+  proof/component/security evidence local-only. This makes optimizer backend
+  selection executable evidence for the testing/simulation/optimization trinity.
 - World hooks readiness is now an executable release-check gate:
   `examples/sdk_world_hooks_optimization.py` must optimize the native
   in-process world-state hook bundle, pass L3 world-hook proof, emit the

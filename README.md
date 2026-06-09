@@ -102,7 +102,10 @@ report, promote-to-regression, and replay lifecycle so optimized or red-team
 evidence can become replayable CI artifacts. Optimizer governance readiness
 executes local governed optimizer-society search and verifies candidate lineage,
 role credit, top-ranked selection, rollback, locality, dependency audit, and
-optimizer trace metrics. Evaluation hook probe readiness executes a localhost
+optimizer trace metrics. Optimizer portfolio readiness makes backend selection
+executable too: release-check verifies AgentOptimizer can select, prove, and
+locally audit an optimization backend portfolio without external optimizer
+services. Evaluation hook probe readiness executes a localhost
 task evaluator, requires AgentOptimizer to select the policy-grounded candidate,
 promotes it to `agent-learning.run.v1`, and reruns it through simulate with
 `external_task_quality` closed. Agent control-plane readiness executes local optimizer
@@ -2195,6 +2198,13 @@ are `simulate.optimizer_backend_portfolio_artifact()`,
 dependency, and closed `optimizer_portfolio_quality` plus
 `optimizer_portfolio_coverage` metrics. The generated manifest is also runnable
 from the promptfoo-style CLI with `agent-learn optimize <manifest>`.
+`agent-learn release-check` gates this path as `optimizer_portfolio_readiness`:
+the cookbook must run locally, preserve the optimizer portfolio manifest
+contract, select the `bandit` backend portfolio, prove three completed backend
+runs and two consensus backends, and keep proof/component/security evidence
+closed. This gives the testing/simulation/optimization trinity executable
+evidence that AgentOptimizer can choose and verify optimization backends rather
+than only optimizing prompts.
 `optimize.score_simulation_evidence()` now emits native `optimizer_governance`
 and `optimizer_portfolio` components from those same local environment-state
 artifacts. This lets AgentOptimizer diagnose the optimizer itself from role

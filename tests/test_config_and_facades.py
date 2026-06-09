@@ -15847,6 +15847,24 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_optimizer_governance_checks"] == (
         trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
     )
+    assert payload["required_optimizer_portfolio_files"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_FILES
+    )
+    assert payload["required_optimizer_portfolio_environment_types"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_optimizer_portfolio_metrics"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS
+    )
+    assert payload["required_optimizer_portfolio_components"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS
+    )
+    assert payload["required_optimizer_portfolio_proof_checks"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS
+    )
+    assert payload["required_optimizer_portfolio_contracts"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_CONTRACTS
+    )
     assert payload["required_agent_control_plane_files"] == (
         trinity.V1_AGENT_CONTROL_PLANE_FILES
     )
@@ -15906,6 +15924,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "evaluation_hook_probe_readiness",
         "native_optimizer_evidence_components",
         "optimizer_governance_readiness",
+        "optimizer_portfolio_readiness",
         "world_hooks_readiness",
         "redteam_core_examples_present",
         "redteam_research_coverage",
@@ -20034,6 +20053,127 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS) <= set(
         governance["check_ids"]
     )
+    optimizer_portfolio = checks["optimizer_portfolio_readiness"]["evidence"]
+    assert optimizer_portfolio["required_files"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_FILES
+    )
+    assert optimizer_portfolio["required_environment_types"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert optimizer_portfolio["required_metrics"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS
+    )
+    assert optimizer_portfolio["required_components"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS
+    )
+    assert optimizer_portfolio["required_proof_checks"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS
+    )
+    assert optimizer_portfolio["required_contracts"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_CONTRACTS
+    )
+    assert optimizer_portfolio["missing_files"] == []
+    assert optimizer_portfolio["execution_errors"] == []
+    assert optimizer_portfolio["manifest_errors"] == []
+    assert optimizer_portfolio["optimization_errors"] == []
+    assert optimizer_portfolio["metric_errors"] == []
+    assert optimizer_portfolio["portfolio_errors"] == []
+    assert optimizer_portfolio["proof_errors"] == []
+    assert optimizer_portfolio["component_errors"] == []
+    assert optimizer_portfolio["security_errors"] == []
+    portfolio_contract = trinity.V1_OPTIMIZER_PORTFOLIO_CONTRACTS[
+        "examples/sdk_optimizer_portfolio_optimization.py"
+    ]
+    portfolio_examples = optimizer_portfolio["evidence"]["examples"]
+    assert set(portfolio_examples) == set(trinity.V1_OPTIMIZER_PORTFOLIO_FILES)
+    portfolio_evidence = portfolio_examples[
+        "examples/sdk_optimizer_portfolio_optimization.py"
+    ]
+    portfolio_manifest = portfolio_evidence["manifest"]
+    assert portfolio_manifest["version"] == "agent-learning.optimization.v1"
+    assert portfolio_manifest["required_env"] == [portfolio_contract["env_name"]]
+    assert portfolio_manifest["search_paths"] == portfolio_contract[
+        "required_search_paths"
+    ]
+    assert portfolio_manifest["task_kind"] == portfolio_contract["task_kind"]
+    assert portfolio_manifest["candidate_count"] == 2
+    assert portfolio_manifest["candidate_environment_types"] == [
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES,
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES,
+    ]
+    assert portfolio_manifest["verified_candidate"]["selected_optimizer"] == (
+        portfolio_contract["selected_optimizer"]
+    )
+    assert portfolio_manifest["verified_candidate"]["backend_run_count"] == 3
+    assert portfolio_manifest["verified_candidate"]["completed_backend_count"] == 3
+    assert portfolio_manifest["verified_candidate"]["consensus_backend_count"] == 2
+    assert portfolio_manifest["verified_candidate"]["requires_external_service"] is False
+    assert set(portfolio_manifest["metric_weights"]) >= set(
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS
+    )
+    portfolio_result = portfolio_evidence["optimization"]
+    assert portfolio_result["kind"] == "agent-learning.optimization.v1"
+    assert portfolio_result["schema_version"] == "agent-learning.cli.v1"
+    assert portfolio_result["status"] == "passed"
+    assert portfolio_result["output_roundtrip"] is True
+    assert portfolio_result["optimization_passed"] is True
+    assert portfolio_result["evaluation_passed"] is True
+    assert portfolio_result["optimization_score"] >= 0.95
+    assert portfolio_result["evaluation_score"] == pytest.approx(1.0)
+    assert portfolio_result["candidate_lineage_count"] >= 2
+    assert portfolio_result["best_patch_keys"] == portfolio_contract[
+        "required_search_paths"
+    ]
+    assert portfolio_result["best_environment_type"] == (
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES[0]
+    )
+    assert portfolio_result["portfolio_present"] is True
+    assert portfolio_result["forbidden_external_keys"] == []
+    for metric in trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS:
+        floor = 1.0
+        assert portfolio_result["best_metrics"][metric] >= floor
+    portfolio = portfolio_evidence["portfolio"]
+    assert portfolio["kind"] == "optimizer_backend_portfolio"
+    assert portfolio["selected_optimizer"] == "bandit"
+    assert portfolio["backend_run_count"] == 3
+    assert portfolio["completed_backend_count"] == 3
+    assert portfolio["failed_backend_count"] == 0
+    assert portfolio["consensus_backend_count"] == 2
+    assert portfolio["lineage_count"] == 3
+    assert portfolio["diagnostic_count"] == 2
+    assert portfolio["feedback_case_count"] == 2
+    assert portfolio["search_path_count"] == 2
+    assert portfolio["blocking_gaps"] == []
+    assert portfolio["dependency"] == "backend_consensus"
+    assert portfolio["external_dependency_count"] == 0
+    assert portfolio["local_only"] is True
+    assert portfolio["requires_external_service"] is False
+    portfolio_proof = portfolio_evidence["proof"]
+    assert portfolio_proof["kind"] == portfolio_contract["proof_kind"]
+    assert portfolio_proof["status"] == "passed"
+    assert portfolio_proof["passed"] is True
+    assert portfolio_proof["requires_external_service"] is False
+    assert portfolio_proof["assurance_level"] == (
+        portfolio_contract["proof_assurance_level"]
+    )
+    assert portfolio_proof["selected_optimizer"] == "bandit"
+    assert portfolio_proof["failed_check_ids"] == []
+    assert portfolio_proof["warning_check_ids"] == []
+    assert set(portfolio_proof["passed_check_ids"]) >= set(
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS
+    )
+    portfolio_components = portfolio_evidence["score_simulation_evidence"]
+    assert portfolio_components["score"] == pytest.approx(1.0)
+    assert set(portfolio_components["component_names"]) == set(
+        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS
+    )
+    assert portfolio_components["portfolio_component_score"] == pytest.approx(1.0)
+    assert portfolio_components["portfolio_component_missing"] == []
+    assert portfolio_components["portfolio_component_failing_checks"] == []
+    assert portfolio_components["portfolio_component_selected_optimizer"] == "bandit"
+    assert portfolio_components["portfolio_component_completed_backend_count"] == 3
+    assert portfolio_components["portfolio_component_external_dependency_count"] == 0
+    assert portfolio_components["portfolio_component_local_only"] is True
     world_hooks = checks["world_hooks_readiness"]["evidence"]
     assert world_hooks["required_files"] == trinity.V1_WORLD_HOOKS_READINESS_FILES
     assert world_hooks["required_environment_types"] == (
@@ -20247,6 +20387,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "world_contract_quality": pytest.approx(1.0),
     }
     milestones = {milestone["id"]: milestone for milestone in payload["milestones"]}
+    assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
