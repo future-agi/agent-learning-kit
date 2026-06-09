@@ -1880,9 +1880,11 @@ bar as `environment_10x_robustness`. That check does not rely on wording alone:
 it requires the current release artifact to prove at least ten axes across the
 Agent Learning replay contract, framework simulation, local evals, optimizer
 recovery, adapter promotion, protocol routing, browser/CUA, realtime voice,
-memory lineage, multi-agent coordination, world orchestration, red-team suite
-coverage, and regression promotion/replay. OpenEnv/Gymnasium-shaped traces are
-compatibility evidence inside that bar.
+memory lineage, multi-agent coordination, world orchestration, workspace import
+certification, red-team suite coverage, and regression promotion/replay.
+Workspace import certification is counted as a native proof-backed axis for
+arbitrary repository and framework import surfaces; OpenEnv/Gymnasium-shaped
+traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

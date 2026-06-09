@@ -455,8 +455,10 @@ Current checkpoint:
   requires at least ten independent axes to pass across the Agent Learning
   replay contract, framework simulation, local evals, optimizer recovery,
   adapter promotion, protocol routing, browser/CUA, realtime, memory,
-  multi-agent coordination, world orchestration, red-team suite coverage, and
-  regression replay. OpenEnv/Gymnasium-shaped traces are compatibility inputs
+  multi-agent coordination, world orchestration, workspace import certification,
+  red-team suite coverage, and regression replay. Workspace import certification
+  is counted as a native proof-backed axis for arbitrary repository/framework
+  import surfaces; OpenEnv/Gymnasium-shaped traces are compatibility inputs
   inside that bar.
 
 Acceptance gates:

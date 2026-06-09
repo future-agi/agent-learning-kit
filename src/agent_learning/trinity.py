@@ -1713,6 +1713,7 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
+    "examples/sdk_workspace_import_certification_optimization.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
     "internal-docs/environment-10x-robustness-research.md",
 ]
@@ -1729,6 +1730,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "memory_lineage_retrieval",
     "multi_agent_coordination",
     "world_orchestration_replay",
+    "workspace_import_certification",
     "redteam_pen_test_suite",
     "regression_promotion_replay",
 ]
@@ -3990,6 +3992,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         memory_layer_probe=memory_layer_probe,
         multi_agent_room_probe=multi_agent_room_probe,
         orchestration_stack_probe=orchestration_stack_probe,
+        workspace_import_certification=workspace_import_certification,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -19234,6 +19237,7 @@ def _release_environment_10x_robustness_status(
     memory_layer_probe: Mapping[str, Any],
     multi_agent_room_probe: Mapping[str, Any],
     orchestration_stack_probe: Mapping[str, Any],
+    workspace_import_certification: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -19936,6 +19940,174 @@ def _release_environment_10x_robustness_status(
                 _as_mapping(orchestration_proof.get("selected_metrics"))
             ),
             "run_metrics": dict(_as_mapping(orchestration_run.get("metrics"))),
+        },
+    )
+
+    workspace_import_evidence = _as_mapping(
+        workspace_import_certification.get("evidence")
+    )
+    workspace_import_examples = _as_mapping(workspace_import_evidence.get("examples"))
+    workspace_import_example = _as_mapping(
+        workspace_import_examples.get(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_FILES[0],
+            {},
+        )
+    )
+    workspace_import_optimization = _as_mapping(
+        workspace_import_example.get("optimization")
+    )
+    workspace_import_proof = _as_mapping(workspace_import_example.get("proof"))
+    workspace_import_bundle = _as_mapping(
+        workspace_import_example.get("certification_bundle")
+    )
+    workspace_summary = _as_mapping(workspace_import_bundle.get("workspace_summary"))
+    framework_import_summary = _as_mapping(
+        workspace_import_bundle.get("framework_import_summary")
+    )
+    selected_metrics = _as_mapping(workspace_import_proof.get("selected_metrics"))
+    selected_frameworks = _as_list(workspace_import_proof.get("selected_frameworks"))
+    required_workspace_frameworks = sorted(
+        {
+            str(framework)
+            for contract in V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.values()
+            for framework in _as_list(contract.get("required_frameworks"))
+        }
+    )
+    passed_check_ids = _as_list(workspace_import_proof.get("passed_check_ids"))
+    append_axis(
+        "workspace_import_certification",
+        source_check="workspace_import_certification_readiness",
+        passed=(
+            empty_buckets(
+                workspace_import_certification,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "certification_errors",
+                    "readiness_errors",
+                    "component_errors",
+                    "proof_errors",
+                    "metric_errors",
+                    "security_errors",
+                ),
+            )
+            and workspace_import_proof.get("status") == "passed"
+            and workspace_import_proof.get("kind")
+            == V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
+            and workspace_import_proof.get("passed") is True
+            and workspace_import_proof.get("assurance_level")
+            == V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+            and workspace_import_proof.get("requires_external_service") is False
+            and contains_all(
+                workspace_import_proof.get("selected_environment_types") or [],
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+            )
+            and contains_all(
+                workspace_import_proof.get("selected_state_keys") or [],
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS,
+            )
+            and metrics_at_floor(
+                selected_metrics,
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS,
+            )
+            and contains_all(selected_frameworks, required_workspace_frameworks)
+            and _int_or_zero(workspace_summary.get("failed_command_count")) == 0
+            and _int_or_zero(workspace_summary.get("secret_leak_count")) == 0
+            and _int_or_zero(framework_import_summary.get("failed_source_count")) == 0
+            and not workspace_summary.get("missing_required_evidence")
+            and not framework_import_summary.get("missing_required_sources")
+            and not framework_import_summary.get("missing_required_frameworks")
+            and not framework_import_summary.get("missing_required_export_types")
+            and not framework_import_summary.get("missing_required_signals")
+            and contains_all(
+                passed_check_ids,
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS,
+            )
+            and workspace_import_optimization.get("optimization_passed") is True
+            and workspace_import_optimization.get("evaluation_passed") is True
+        ),
+        expected={
+            "proof_kind": V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND,
+            "proof_status": "passed",
+            "proof_passed": True,
+            "assurance_level": (
+                V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+            ),
+            "requires_external_service": False,
+            "environment_types": (
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+            ),
+            "state_keys": V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS,
+            "metrics": V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+            "frameworks": required_workspace_frameworks,
+            "failed_command_count": 0,
+            "failed_source_count": 0,
+            "secret_leak_count": 0,
+            "proof_checks": V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS,
+            "optimization_passed": True,
+            "evaluation_passed": True,
+        },
+        evidence={
+            "proof_status": workspace_import_proof.get("status"),
+            "proof_kind": workspace_import_proof.get("kind"),
+            "proof_passed": workspace_import_proof.get("passed"),
+            "proof_assurance_level": workspace_import_proof.get("assurance_level"),
+            "requires_external_service": workspace_import_proof.get(
+                "requires_external_service"
+            ),
+            "selected_environment_types": (
+                workspace_import_proof.get("selected_environment_types") or []
+            ),
+            "selected_state_keys": (
+                workspace_import_proof.get("selected_state_keys") or []
+            ),
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+            },
+            "selected_frameworks": selected_frameworks,
+            "workspace_summary": {
+                "failed_command_count": workspace_summary.get(
+                    "failed_command_count"
+                ),
+                "secret_leak_count": workspace_summary.get("secret_leak_count"),
+                "missing_required_evidence": workspace_summary.get(
+                    "missing_required_evidence"
+                )
+                or [],
+            },
+            "framework_import_summary": {
+                "passed_source_count": framework_import_summary.get(
+                    "passed_source_count"
+                ),
+                "failed_source_count": framework_import_summary.get(
+                    "failed_source_count"
+                ),
+                "observed_frameworks": framework_import_summary.get(
+                    "observed_frameworks"
+                )
+                or [],
+                "missing_required_sources": framework_import_summary.get(
+                    "missing_required_sources"
+                )
+                or [],
+                "missing_required_frameworks": framework_import_summary.get(
+                    "missing_required_frameworks"
+                )
+                or [],
+                "missing_required_export_types": framework_import_summary.get(
+                    "missing_required_export_types"
+                )
+                or [],
+                "missing_required_signals": framework_import_summary.get(
+                    "missing_required_signals"
+                )
+                or [],
+            },
+            "passed_check_ids": passed_check_ids,
         },
     )
 

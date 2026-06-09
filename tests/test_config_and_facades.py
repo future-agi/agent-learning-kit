@@ -18103,6 +18103,39 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(orchestration_axis["environment_types"]) >= set(
         trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
     )
+    assert environment_10x_axes["workspace_import_certification"][
+        "source_check"
+    ] == "workspace_import_certification_readiness"
+    workspace_axis = environment_10x_axes["workspace_import_certification"]["evidence"]
+    assert workspace_axis["proof_passed"] is True
+    assert workspace_axis["proof_kind"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
+    )
+    assert workspace_axis["proof_assurance_level"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert workspace_axis["requires_external_service"] is False
+    assert workspace_axis["selected_environment_types"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(workspace_axis["selected_state_keys"]) == set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    for metric in trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS:
+        assert workspace_axis["selected_metrics"][metric] == pytest.approx(1.0)
+    required_workspace_frameworks = {
+        framework
+        for contract in trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.values()
+        for framework in contract["required_frameworks"]
+    }
+    assert required_workspace_frameworks <= set(workspace_axis["selected_frameworks"])
+    assert workspace_axis["workspace_summary"]["failed_command_count"] == 0
+    assert workspace_axis["workspace_summary"]["secret_leak_count"] == 0
+    assert workspace_axis["framework_import_summary"]["failed_source_count"] == 0
+    assert workspace_axis["framework_import_summary"]["passed_source_count"] >= 3
+    assert set(trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS) <= set(
+        workspace_axis["passed_check_ids"]
+    )
     redteam_axis = environment_10x_axes["redteam_pen_test_suite"]["evidence"]
     assert redteam_axis["suite"]["status"] == "passed"
     assert {"run", "redteam"} <= set(redteam_axis["suite"]["child_commands"])
