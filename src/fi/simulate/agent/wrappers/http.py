@@ -202,6 +202,8 @@ class HTTPAgentWrapper(AgentWrapper):
             content=_content_text(payload.get("content") or payload.get("message")),
             tool_calls=_tool_call_list(payload.get("tool_calls")),
             tool_responses=_tool_response_list(payload.get("tool_responses")),
+            artifacts=_artifact_list(payload.get("artifacts")),
+            events=_event_list(payload.get("events")),
             memory_updates=_optional_mapping(payload.get("memory_updates")),
             state=_optional_mapping(payload.get("state")),
             metadata=_optional_mapping(payload.get("metadata")),
@@ -298,6 +300,30 @@ def _tool_response_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _artifact_list(value: Any) -> list[SimulationArtifact]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    artifacts: list[SimulationArtifact] = []
+    for item in value:
+        if isinstance(item, SimulationArtifact):
+            artifacts.append(item)
+        elif isinstance(item, Mapping):
+            artifacts.append(SimulationArtifact(**dict(item)))
+    return artifacts
+
+
+def _event_list(value: Any) -> list[SimulationEvent]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    events: list[SimulationEvent] = []
+    for item in value:
+        if isinstance(item, SimulationEvent):
+            events.append(item)
+        elif isinstance(item, Mapping):
+            events.append(SimulationEvent(**dict(item)))
+    return events
 
 
 def _optional_mapping(value: Any) -> Optional[dict[str, Any]]:

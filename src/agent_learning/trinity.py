@@ -1764,6 +1764,7 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_evaluation_hook_optimization.py",
+    "examples/sdk_framework_adapter_http_transport.py",
     "examples/sdk_openenv_environment_optimization.py",
     "examples/sdk_retrieval_hook_optimization.py",
     "examples/sdk_workflow_hook_optimization.py",
@@ -1775,6 +1776,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
 V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "environment_replay_contract",
     "cross_framework_simulation_matrix",
+    "local_http_framework_transport",
     "local_evaluation_gates",
     "adaptive_optimizer_recovery",
     "framework_adapter_promotion",
@@ -1893,6 +1895,60 @@ V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS = [
     "https://opentelemetry.io/docs/specs/semconv/gen-ai/",
     "https://arize-ai.github.io/openinference/spec/semantic_conventions.html",
     "https://www.w3.org/TR/trace-context/",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_FILES = [
+    "examples/sdk_framework_adapter_http_transport.py",
+    "internal-docs/framework-http-transport-readiness-research.md",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK = "langgraph"
+
+V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS = ["framework_http_status"]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS = [
+    "external_agent_trace",
+    "framework_http_status",
+    "framework_http_transport",
+    "framework_runtime",
+    "framework_trace",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS = [
+    "external_agent",
+    "framework_http_transport",
+    "framework_trace",
+    "framework_trace_span",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS = [
+    "external_agent_http_trace",
+    "framework_trace",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS = [
+    "tool_selection_accuracy",
+    "framework_runtime_contract",
+    "framework_trace_coverage",
+    "framework_trace_quality",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS = [
+    "framework_trace",
+    "span",
+    "model",
+    "tool",
+    "state",
+    "latency",
+    "http",
+    "transport",
+]
+
+V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS = [
+    "https://opentelemetry.io/docs/concepts/signals/traces/",
+    "https://www.w3.org/TR/trace-context/",
+    "https://arxiv.org/abs/2604.16762",
+    "https://arxiv.org/abs/2604.04820",
 ]
 
 V1_FRAMEWORK_ADAPTER_IO_FILES = [
@@ -3947,6 +4003,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_trace_export,
     )
+    framework_http_transport = _release_framework_http_transport_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_http_transport_readiness",
+        passed=(
+            not framework_http_transport["missing_files"]
+            and not framework_http_transport["execution_errors"]
+            and not framework_http_transport["manifest_errors"]
+            and not framework_http_transport["runtime_errors"]
+            and not framework_http_transport["metric_errors"]
+            and not framework_http_transport["security_errors"]
+            and not framework_http_transport["source_errors"]
+        ),
+        milestone="M6",
+        evidence=framework_http_transport,
+    )
     framework_optimizer = _release_framework_optimizer_status(root)
     _append_release_check(
         checks,
@@ -4198,6 +4270,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         workflow_hook=workflow_hook,
         retrieval_hook=retrieval_hook,
         evaluation_hook=evaluation_hook,
+        framework_http_transport=framework_http_transport,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -4776,6 +4849,33 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_trace_export_source_urls": list(
             V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
+        ),
+        "required_framework_http_transport_files": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_FILES
+        ),
+        "required_framework_http_transport_framework": (
+            V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK
+        ),
+        "required_framework_http_transport_tools": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS
+        ),
+        "required_framework_http_transport_state_keys": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS
+        ),
+        "required_framework_http_transport_events": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS
+        ),
+        "required_framework_http_transport_artifact_kinds": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+        ),
+        "required_framework_http_transport_metrics": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
+        ),
+        "required_framework_http_transport_trace_signals": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS
+        ),
+        "required_framework_http_transport_source_urls": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS
         ),
         "required_environment_10x_robustness_files": list(
             V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
@@ -19932,6 +20032,718 @@ def _release_framework_trace_export_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_FRAMEWORK_HTTP_TRANSPORT_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    source = "examples/sdk_framework_adapter_http_transport.py"
+    research_doc = "internal-docs/framework-http-transport-readiness-research.md"
+    release_key = "release-check-framework-http-transport-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        path: str = source,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_set = {str(item) for item in observed}
+        return sorted({str(item) for item in required} - observed_set)
+
+    def local_endpoint_host(value: Any) -> bool:
+        text = str(value or "")
+        parsed = urlparse(text)
+        host = parsed.hostname
+        if host is None and "://" not in text:
+            host = text.rsplit("@", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+        return str(host or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+    def load_module(path: Path, name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    result: Mapping[str, Any] = {}
+    saved: Mapping[str, Any] = {}
+    serialized_output = ""
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        example_env_names = (
+            "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+            "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_ENDPOINT",
+        )
+        previous_example_env = {
+            name: os.environ.get(name) for name in example_env_names
+        }
+        try:
+            example_path = root / source
+            module = load_module(
+                example_path,
+                "agent_learning_release_framework_http_transport",
+            )
+            required_env_name = str(
+                getattr(
+                    module,
+                    "REQUIRED_ENV",
+                    "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+                )
+            )
+            endpoint_env_name = str(
+                getattr(
+                    module,
+                    "ENDPOINT_ENV",
+                    "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_ENDPOINT",
+                )
+            )
+            os.environ[required_env_name] = release_key
+            os.environ.pop(endpoint_env_name, None)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-http-transport-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "framework-http-transport.json"
+                result = module.run(output_path)
+                serialized_output = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized_output)
+        except Exception as exc:
+            execution_errors.append({"path": source, "error": str(exc)})
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_example_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    if result:
+        manifest = _as_mapping(result.get("framework_http_transport_manifest"))
+        agent = _as_mapping(manifest.get("agent"))
+        agent_metadata = _as_mapping(agent.get("metadata"))
+        evaluation = _as_mapping(manifest.get("evaluation"))
+        agent_report = _as_mapping(evaluation.get("agent_report"))
+        config = _as_mapping(agent_report.get("config"))
+        runtime_contract = _as_mapping(config.get("framework_runtime_contract"))
+        trace_quality = _as_mapping(config.get("framework_trace_quality"))
+        metric_weights = _as_mapping(config.get("metric_weights"))
+        summary = _as_mapping(result.get("summary"))
+        metric_averages = _as_mapping(summary.get("metric_averages"))
+        report = _as_mapping(result.get("report"))
+        cases = [
+            item for item in _as_list(report.get("results"))
+            if isinstance(item, Mapping)
+        ]
+        case = _as_mapping(cases[0]) if cases else {}
+        metadata = _as_mapping(case.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        status_state = _as_mapping(environment_state.get("framework_http_status"))
+        transport_state = _as_mapping(
+            environment_state.get("framework_http_transport")
+        )
+        framework_runtime = _as_mapping(environment_state.get("framework_runtime"))
+        invocations = [
+            item for item in _as_list(framework_runtime.get("invocations"))
+            if isinstance(item, Mapping)
+        ]
+        invocation = _as_mapping(invocations[0]) if invocations else {}
+        runtime_output = _as_mapping(invocation.get("output"))
+        framework_trace = _as_mapping(environment_state.get("framework_trace"))
+        trace_summary = _as_mapping(framework_trace.get("summary"))
+        external_trace = _as_mapping(environment_state.get("external_agent_trace"))
+        transport_auth = _as_mapping(transport_state.get("auth"))
+        external_auth = _as_mapping(external_trace.get("auth"))
+        events = [
+            item for item in _as_list(case.get("events"))
+            if isinstance(item, Mapping)
+        ]
+        event_types = sorted(
+            str(event.get("type")) for event in events if event.get("type")
+        )
+        artifacts = [
+            item for item in _as_list(case.get("artifacts"))
+            if isinstance(item, Mapping)
+        ]
+        artifact_kinds = sorted(
+            str(_as_mapping(artifact.get("metadata")).get("kind"))
+            for artifact in artifacts
+            if _as_mapping(artifact.get("metadata")).get("kind")
+        )
+        tool_call_names = [
+            str(_as_mapping(call).get("name") or _as_mapping(call).get("tool"))
+            for call in _as_list(case.get("tool_calls"))
+            if isinstance(call, Mapping)
+        ]
+        required_framework_trace = [
+            str(item) for item in _as_list(config.get("required_framework_trace"))
+        ]
+        trace_required_signals = [
+            str(item) for item in _as_list(trace_quality.get("required_signals"))
+        ]
+        serialized_result = json.dumps(result, sort_keys=True, default=str)
+        serialized_transport = json.dumps(
+            transport_state,
+            sort_keys=True,
+            default=str,
+        )
+        serialized_external_trace = json.dumps(
+            external_trace,
+            sort_keys=True,
+            default=str,
+        )
+        endpoint = str(agent.get("endpoint") or external_trace.get("endpoint") or "")
+        state_keys = sorted(str(key) for key in environment_state)
+        relevant_metrics = {
+            metric: metric_averages.get(metric)
+            for metric in V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
+        }
+
+        evidence.update(
+            {
+                "result_kind": result.get("kind"),
+                "result_status": result.get("status"),
+                "output_roundtrip": result == saved,
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "manifest_version": manifest.get("version"),
+                "manifest_agent": {
+                    "type": agent.get("type"),
+                    "protocol": agent.get("protocol"),
+                    "api_key_env": agent.get("api_key_env"),
+                    "include_tools": agent.get("include_tools"),
+                    "endpoint_host_local": local_endpoint_host(endpoint),
+                    "framework": agent_metadata.get("framework"),
+                    "transport": agent_metadata.get("transport"),
+                    "requires_external_service": agent_metadata.get(
+                        "requires_external_service"
+                    ),
+                },
+                "required_env": list(manifest.get("required_env") or []),
+                "required_tools": list(config.get("required_tools") or []),
+                "required_framework_trace": required_framework_trace,
+                "runtime_contract": {
+                    "framework": runtime_contract.get("framework"),
+                    "method": runtime_contract.get("method"),
+                    "input_mode": runtime_contract.get("input_mode"),
+                    "call_style": runtime_contract.get("call_style"),
+                    "required_state_keys": list(
+                        runtime_contract.get("required_state_keys") or []
+                    ),
+                    "required_tools": list(
+                        runtime_contract.get("required_tools") or []
+                    ),
+                    "required_event_types": list(
+                        runtime_contract.get("required_event_types") or []
+                    ),
+                    "required_artifact_types": list(
+                        runtime_contract.get("required_artifact_types") or []
+                    ),
+                    "required_metadata_keys": list(
+                        runtime_contract.get("required_metadata_keys") or []
+                    ),
+                    "required_signals": list(
+                        runtime_contract.get("required_signals") or []
+                    ),
+                    "max_error_count": runtime_contract.get("max_error_count"),
+                },
+                "trace_quality": {
+                    "framework": trace_quality.get("framework"),
+                    "min_span_count": trace_quality.get("min_span_count"),
+                    "min_model_span_count": trace_quality.get("min_model_span_count"),
+                    "min_tool_span_count": trace_quality.get("min_tool_span_count"),
+                    "min_state_span_count": trace_quality.get("min_state_span_count"),
+                    "min_latency_span_count": trace_quality.get(
+                        "min_latency_span_count"
+                    ),
+                    "min_tool_count": trace_quality.get("min_tool_count"),
+                    "max_error_count": trace_quality.get("max_error_count"),
+                    "required_signals": trace_required_signals,
+                    "required_tools": list(trace_quality.get("required_tools") or []),
+                },
+                "metric_weights": {
+                    metric: metric_weights.get(metric)
+                    for metric in V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
+                },
+                "metric_averages": relevant_metrics,
+                "state_keys": state_keys,
+                "transport": {
+                    "kind": transport_state.get("kind"),
+                    "framework": transport_state.get("framework"),
+                    "transport": transport_state.get("transport"),
+                    "protocol": transport_state.get("protocol"),
+                    "status_code": transport_state.get("status_code"),
+                    "success": transport_state.get("success"),
+                    "requires_external_service": transport_state.get(
+                        "requires_external_service"
+                    ),
+                    "endpoint_host_local": local_endpoint_host(
+                        transport_state.get("endpoint_host")
+                    ),
+                    "auth": dict(transport_auth),
+                },
+                "external_trace": {
+                    "kind": external_trace.get("kind"),
+                    "protocol": external_trace.get("protocol"),
+                    "status_code": external_trace.get("status_code"),
+                    "success": external_trace.get("success"),
+                    "error": external_trace.get("error"),
+                    "endpoint_host_local": local_endpoint_host(endpoint),
+                    "request_tool_count": external_trace.get("request_tool_count"),
+                    "response_tool_call_count": external_trace.get(
+                        "response_tool_call_count"
+                    ),
+                    "framework": external_trace.get("framework"),
+                    "transport": external_trace.get("transport"),
+                    "requires_external_service": external_trace.get(
+                        "requires_external_service"
+                    ),
+                    "auth": dict(external_auth),
+                },
+                "status_state": dict(status_state),
+                "event_types": event_types,
+                "artifact_kinds": artifact_kinds,
+                "tool_call_names": tool_call_names,
+                "trace_summary": {
+                    "span_count": trace_summary.get("span_count"),
+                    "model_span_count": trace_summary.get("model_span_count"),
+                    "tool_span_count": trace_summary.get("tool_span_count"),
+                    "state_span_count": trace_summary.get("state_span_count"),
+                    "latency_span_count": trace_summary.get("latency_span_count"),
+                    "tool_count": trace_summary.get("tool_count"),
+                    "error_count": trace_summary.get("error_count"),
+                },
+                "runtime_output": {
+                    "state_keys": list(runtime_output.get("state_keys") or []),
+                    "artifact_types": list(runtime_output.get("artifact_types") or []),
+                    "event_types": list(runtime_output.get("event_types") or []),
+                    "metadata_keys": list(runtime_output.get("metadata_keys") or []),
+                    "tool_names": list(runtime_output.get("tool_names") or []),
+                },
+                "security": {
+                    "serialized_secret_absent": (
+                        release_key not in serialized_output
+                        and release_key not in serialized_result
+                        and release_key not in serialized_transport
+                        and release_key not in serialized_external_trace
+                    ),
+                    "transport_auth_redacted": transport_auth.get("redacted"),
+                    "external_auth_redacted": external_auth.get("redacted"),
+                },
+            }
+        )
+
+        for field, observed, expected in (
+            ("result.kind", result.get("kind"), "agent-learning.run.v1"),
+            ("result.status", result.get("status"), "passed"),
+            ("output_roundtrip", result == saved, True),
+            ("summary.evaluation_passed", summary.get("evaluation_passed"), True),
+            ("manifest.version", manifest.get("version"), "agent-learning.run.v1"),
+            (
+                "manifest.required_env",
+                list(manifest.get("required_env") or []),
+                ["AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"],
+            ),
+            ("agent.type", agent.get("type"), "http"),
+            ("agent.protocol", agent.get("protocol"), "agent_learning"),
+            (
+                "agent.api_key_env",
+                agent.get("api_key_env"),
+                "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+            ),
+            ("agent.include_tools", agent.get("include_tools"), True),
+            (
+                "agent.metadata.framework",
+                agent_metadata.get("framework"),
+                V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+            ),
+            ("agent.metadata.transport", agent_metadata.get("transport"), "http"),
+            (
+                "agent.metadata.requires_external_service",
+                agent_metadata.get("requires_external_service"),
+                False,
+            ),
+            (
+                "evaluation.agent_report.config.required_tools",
+                list(config.get("required_tools") or []),
+                V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS,
+            ),
+        ):
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if not local_endpoint_host(endpoint):
+            append_error(
+                manifest_errors,
+                field="agent.endpoint",
+                expected="local http loopback endpoint",
+                observed=endpoint,
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 0.95:
+            append_error(
+                runtime_errors,
+                field="summary.evaluation_score",
+                expected=">=0.95",
+                observed=summary.get("evaluation_score"),
+            )
+
+        missing_trace_requirements = missing_values(
+            required_framework_trace,
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS,
+        )
+        if missing_trace_requirements:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.required_framework_trace",
+                expected=V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS,
+                observed=required_framework_trace,
+            )
+        for field, observed, expected in (
+            (
+                "runtime_contract.framework",
+                runtime_contract.get("framework"),
+                V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+            ),
+            ("runtime_contract.method", runtime_contract.get("method"), "http"),
+            (
+                "runtime_contract.input_mode",
+                runtime_contract.get("input_mode"),
+                "json",
+            ),
+            (
+                "runtime_contract.call_style",
+                runtime_contract.get("call_style"),
+                "request_response",
+            ),
+            (
+                "trace_quality.framework",
+                trace_quality.get("framework"),
+                V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+            ),
+        ):
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.{field}",
+                    expected=expected,
+                    observed=observed,
+                )
+        if missing_values(
+            runtime_contract.get("required_state_keys") or [],
+            ["framework_http_transport", "framework_runtime", "framework_trace"],
+        ):
+            append_error(
+                manifest_errors,
+                field=(
+                    "evaluation.agent_report.config.framework_runtime_contract."
+                    "required_state_keys"
+                ),
+                expected=[
+                    "framework_http_transport",
+                    "framework_runtime",
+                    "framework_trace",
+                ],
+                observed=list(runtime_contract.get("required_state_keys") or []),
+            )
+        if missing_values(
+            trace_required_signals,
+            ["http", "transport", "model", "tool", "state", "latency"],
+        ):
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.framework_trace_quality.required_signals",
+                expected=["http", "transport", "model", "tool", "state", "latency"],
+                observed=trace_required_signals,
+            )
+
+        missing_state_keys = missing_values(
+            state_keys,
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS,
+        )
+        if missing_state_keys:
+            append_error(
+                runtime_errors,
+                field="report.results.metadata.environment_state",
+                expected=V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS,
+                observed=state_keys,
+            )
+        missing_events = missing_values(
+            event_types,
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS,
+        )
+        if missing_events:
+            append_error(
+                runtime_errors,
+                field="report.results.events.type",
+                expected=V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS,
+                observed=event_types,
+            )
+        missing_artifacts = missing_values(
+            artifact_kinds,
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS,
+        )
+        if missing_artifacts:
+            append_error(
+                runtime_errors,
+                field="report.results.artifacts.metadata.kind",
+                expected=V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS,
+                observed=artifact_kinds,
+            )
+        missing_tools = missing_values(
+            tool_call_names,
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS,
+        )
+        if missing_tools:
+            append_error(
+                runtime_errors,
+                field="report.results.tool_calls",
+                expected=V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS,
+                observed=tool_call_names,
+            )
+        for field, observed, expected in (
+            ("framework_http_status.status", status_state.get("status"), "verified"),
+            (
+                "framework_http_status.auth_redacted",
+                status_state.get("auth_redacted"),
+                True,
+            ),
+            (
+                "framework_http_transport.kind",
+                transport_state.get("kind"),
+                "agent-learning.framework-http-transport.v1",
+            ),
+            (
+                "framework_http_transport.framework",
+                transport_state.get("framework"),
+                V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+            ),
+            ("framework_http_transport.transport", transport_state.get("transport"), "http"),
+            (
+                "framework_http_transport.protocol",
+                transport_state.get("protocol"),
+                "agent_learning",
+            ),
+            ("framework_http_transport.status_code", transport_state.get("status_code"), 200),
+            ("framework_http_transport.success", transport_state.get("success"), True),
+            (
+                "framework_http_transport.requires_external_service",
+                transport_state.get("requires_external_service"),
+                False,
+            ),
+            (
+                "framework_http_transport.auth.redacted",
+                transport_auth.get("redacted"),
+                True,
+            ),
+            (
+                "framework_http_transport.auth.api_key_env",
+                transport_auth.get("api_key_env"),
+                "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+            ),
+            ("external_agent_trace.kind", external_trace.get("kind"), "external_agent_http_trace"),
+            ("external_agent_trace.protocol", external_trace.get("protocol"), "agent_learning"),
+            ("external_agent_trace.status_code", external_trace.get("status_code"), 200),
+            ("external_agent_trace.success", external_trace.get("success"), True),
+            ("external_agent_trace.error", external_trace.get("error"), None),
+            (
+                "external_agent_trace.framework",
+                external_trace.get("framework"),
+                V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+            ),
+            ("external_agent_trace.transport", external_trace.get("transport"), "http"),
+            (
+                "external_agent_trace.requires_external_service",
+                external_trace.get("requires_external_service"),
+                False,
+            ),
+            ("external_agent_trace.auth.redacted", external_auth.get("redacted"), True),
+            (
+                "external_agent_trace.auth.api_key_env",
+                external_auth.get("api_key_env"),
+                "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+            ),
+        ):
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if not local_endpoint_host(transport_state.get("endpoint_host")):
+            append_error(
+                runtime_errors,
+                field="framework_http_transport.endpoint_host",
+                expected="local loopback host",
+                observed=transport_state.get("endpoint_host"),
+            )
+        if _int_or_zero(external_trace.get("request_tool_count")) < 1:
+            append_error(
+                runtime_errors,
+                field="external_agent_trace.request_tool_count",
+                expected=">=1",
+                observed=external_trace.get("request_tool_count"),
+            )
+        if _int_or_zero(external_trace.get("response_tool_call_count")) < 1:
+            append_error(
+                runtime_errors,
+                field="external_agent_trace.response_tool_call_count",
+                expected=">=1",
+                observed=external_trace.get("response_tool_call_count"),
+            )
+
+        runtime_output_requirements = {
+            "state_keys": ["framework_http_transport", "framework_runtime", "framework_trace"],
+            "artifact_types": ["trace"],
+            "event_types": [
+                "framework_http_transport",
+                "framework_trace",
+                "framework_trace_span",
+            ],
+            "tool_names": V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS,
+        }
+        for field, required in runtime_output_requirements.items():
+            missing = missing_values(runtime_output.get(field) or [], required)
+            if missing:
+                append_error(
+                    runtime_errors,
+                    field=f"framework_runtime.invocations.output.{field}",
+                    expected=required,
+                    observed=list(runtime_output.get(field) or []),
+                )
+
+        trace_minima = {
+            "span_count": 3,
+            "model_span_count": 1,
+            "tool_span_count": 1,
+            "state_span_count": 1,
+            "latency_span_count": 2,
+            "tool_count": 1,
+        }
+        for field, minimum in trace_minima.items():
+            if _float_or_zero(trace_summary.get(field)) < minimum:
+                append_error(
+                    runtime_errors,
+                    field=f"framework_trace.summary.{field}",
+                    expected=f">={minimum}",
+                    observed=trace_summary.get(field),
+                )
+        if _int_or_zero(trace_summary.get("error_count")) > 0:
+            append_error(
+                runtime_errors,
+                field="framework_trace.summary.error_count",
+                expected=0,
+                observed=trace_summary.get("error_count"),
+            )
+
+        for metric in V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS:
+            if metric not in metric_weights:
+                append_error(
+                    metric_errors,
+                    field="evaluation.agent_report.config.metric_weights",
+                    expected=metric,
+                    observed=sorted(str(key) for key in metric_weights),
+                )
+            if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"summary.metric_averages.{metric}",
+                    expected=">=1.0",
+                    observed=metric_averages.get(metric),
+                )
+
+        if evidence["security"]["serialized_secret_absent"] is not True:
+            append_error(
+                security_errors,
+                field="security.serialized_secret_absent",
+                expected=True,
+                observed=False,
+            )
+        if transport_auth.get("redacted") is not True or external_auth.get("redacted") is not True:
+            append_error(
+                security_errors,
+                field="auth.redacted",
+                expected=True,
+                observed={
+                    "transport": transport_auth.get("redacted"),
+                    "external_trace": external_auth.get("redacted"),
+                },
+            )
+
+    if not missing_files:
+        doc_path = root / research_doc
+        doc_text = doc_path.read_text(encoding="utf-8") if doc_path.exists() else ""
+        documented_urls = [
+            url for url in V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS if url in doc_text
+        ]
+        evidence["source_urls"] = {
+            "research_doc": research_doc,
+            "documented_urls": documented_urls,
+        }
+        missing_doc_urls = missing_values(
+            documented_urls,
+            V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS,
+        )
+        if missing_doc_urls:
+            append_error(
+                source_errors,
+                path=research_doc,
+                field="source_urls",
+                expected=V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS,
+                observed=documented_urls,
+            )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_HTTP_TRANSPORT_FILES),
+        "required_framework": V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+        "required_tools": list(V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS),
+        "required_state_keys": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS
+        ),
+        "required_events": list(V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS),
+        "required_artifact_kinds": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+        ),
+        "required_metrics": list(V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS),
+        "required_trace_signals": list(
+            V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS
+        ),
+        "required_source_urls": list(V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "runtime_errors": runtime_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
+        "source_errors": source_errors,
+        "evidence": evidence,
+    }
+
+
 def _release_framework_adapter_io_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_FRAMEWORK_ADAPTER_IO_FILES)
     execution_errors: list[dict[str, Any]] = []
@@ -20457,6 +21269,7 @@ def _release_environment_10x_robustness_status(
     workflow_hook: Mapping[str, Any],
     retrieval_hook: Mapping[str, Any],
     evaluation_hook: Mapping[str, Any],
+    framework_http_transport: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -20584,6 +21397,94 @@ def _release_environment_10x_robustness_status(
             "frameworks": provider_frameworks,
             "modalities": provider_summary.get("modalities") or [],
             "transports": provider_summary.get("transports") or [],
+        },
+    )
+
+    framework_http_evidence = _as_mapping(framework_http_transport.get("evidence"))
+    framework_http_transport_state = _as_mapping(
+        framework_http_evidence.get("transport")
+    )
+    framework_http_external_trace = _as_mapping(
+        framework_http_evidence.get("external_trace")
+    )
+    framework_http_security = _as_mapping(framework_http_evidence.get("security"))
+    framework_http_metrics = _as_mapping(
+        framework_http_evidence.get("metric_averages")
+    )
+    append_axis(
+        "local_http_framework_transport",
+        source_check="framework_http_transport_readiness",
+        passed=(
+            empty_buckets(
+                framework_http_transport,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "runtime_errors",
+                    "metric_errors",
+                    "security_errors",
+                    "source_errors",
+                ),
+            )
+            and framework_http_evidence.get("result_status") == "passed"
+            and framework_http_evidence.get("output_roundtrip") is True
+            and framework_http_transport_state.get("framework")
+            == V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK
+            and framework_http_transport_state.get("transport") == "http"
+            and framework_http_transport_state.get("protocol") == "agent_learning"
+            and framework_http_transport_state.get("success") is True
+            and framework_http_transport_state.get("requires_external_service")
+            is False
+            and framework_http_transport_state.get("endpoint_host_local") is True
+            and _int_or_zero(framework_http_transport_state.get("status_code")) == 200
+            and _as_mapping(framework_http_transport_state.get("auth")).get(
+                "redacted"
+            )
+            is True
+            and framework_http_external_trace.get("success") is True
+            and _int_or_zero(framework_http_external_trace.get("status_code")) == 200
+            and _int_or_zero(
+                framework_http_external_trace.get("request_tool_count")
+            )
+            >= 1
+            and _int_or_zero(
+                framework_http_external_trace.get("response_tool_call_count")
+            )
+            >= 1
+            and metrics_at_floor(
+                framework_http_metrics,
+                V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS,
+            )
+            and framework_http_security.get("serialized_secret_absent") is True
+        ),
+        expected={
+            "framework": V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK,
+            "transport": "http",
+            "protocol": "agent_learning",
+            "status_code": 200,
+            "success": True,
+            "requires_external_service": False,
+            "endpoint_host_local": True,
+            "auth_redacted": True,
+            "request_tool_count": ">=1",
+            "response_tool_call_count": ">=1",
+            "metrics": V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+            "serialized_secret_absent": True,
+        },
+        evidence={
+            "result_status": framework_http_evidence.get("result_status"),
+            "output_roundtrip": framework_http_evidence.get("output_roundtrip"),
+            "transport": dict(framework_http_transport_state),
+            "external_trace": dict(framework_http_external_trace),
+            "metric_averages": {
+                metric: framework_http_metrics.get(metric)
+                for metric in V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
+            },
+            "serialized_secret_absent": framework_http_security.get(
+                "serialized_secret_absent"
+            ),
         },
     )
 
@@ -29989,6 +30890,15 @@ __all__ = [
     "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS",
     "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS",
     "V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_FILES",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS",
+    "V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
     "V1_ENVIRONMENT_10X_ROBUSTNESS_AXES",

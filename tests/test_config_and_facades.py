@@ -199,6 +199,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_retrieval_hook_run_manifest is not None
     assert simulate.build_evaluation_hook_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
+    assert simulate.build_framework_http_transport_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.build_realtime_run_manifest is not None
     assert simulate.build_browser_cua_run_manifest is not None
@@ -15627,6 +15628,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_trace_export_source_urls"] == (
         trinity.V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
     )
+    assert payload["required_framework_http_transport_files"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_FILES
+    )
+    assert payload["required_framework_http_transport_framework"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK
+    )
+    assert payload["required_framework_http_transport_tools"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS
+    )
+    assert payload["required_framework_http_transport_state_keys"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_framework_http_transport_events"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS
+    )
+    assert payload["required_framework_http_transport_artifact_kinds"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+    )
+    assert payload["required_framework_http_transport_metrics"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
+    )
+    assert payload["required_framework_http_transport_trace_signals"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS
+    )
+    assert payload["required_framework_http_transport_source_urls"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS
+    )
     assert payload["required_environment_10x_robustness_files"] == (
         trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
     )
@@ -16056,6 +16084,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "openenv_optimizer_readiness",
         "framework_openenv_adapter_readiness",
         "framework_trace_export_readiness",
+        "framework_http_transport_readiness",
         "framework_optimizer_readiness",
         "workspace_import_certification_readiness",
         "multi_agent_room_probe_readiness",
@@ -18231,6 +18260,167 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trace_runtime_output["event_types"]
     )
     assert trace_runtime_output["tool_names"] == ["policy_lookup"]
+    framework_http_transport = checks["framework_http_transport_readiness"][
+        "evidence"
+    ]
+    assert framework_http_transport["required_files"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_FILES
+    )
+    assert framework_http_transport["required_framework"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK
+    )
+    assert framework_http_transport["required_tools"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS
+    )
+    assert framework_http_transport["required_state_keys"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS
+    )
+    assert framework_http_transport["required_events"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS
+    )
+    assert framework_http_transport["required_artifact_kinds"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+    )
+    assert framework_http_transport["required_metrics"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
+    )
+    assert framework_http_transport["required_trace_signals"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS
+    )
+    assert framework_http_transport["required_source_urls"] == (
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS
+    )
+    assert framework_http_transport["missing_files"] == []
+    assert framework_http_transport["execution_errors"] == []
+    assert framework_http_transport["manifest_errors"] == []
+    assert framework_http_transport["runtime_errors"] == []
+    assert framework_http_transport["metric_errors"] == []
+    assert framework_http_transport["security_errors"] == []
+    assert framework_http_transport["source_errors"] == []
+    http_transport_evidence = framework_http_transport["evidence"]
+    assert http_transport_evidence["result_kind"] == "agent-learning.run.v1"
+    assert http_transport_evidence["result_status"] == "passed"
+    assert http_transport_evidence["output_roundtrip"] is True
+    assert http_transport_evidence["evaluation_passed"] is True
+    assert http_transport_evidence["evaluation_score"] >= 0.95
+    assert http_transport_evidence["manifest_version"] == "agent-learning.run.v1"
+    assert http_transport_evidence["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
+    ]
+    assert http_transport_evidence["manifest_agent"] == {
+        "type": "http",
+        "protocol": "agent_learning",
+        "api_key_env": "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+        "include_tools": True,
+        "endpoint_host_local": True,
+        "framework": "langgraph",
+        "transport": "http",
+        "requires_external_service": False,
+    }
+    assert http_transport_evidence["required_tools"] == ["framework_http_status"]
+    assert set(http_transport_evidence["required_framework_trace"]) >= set(
+        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS
+    )
+    runtime_contract = http_transport_evidence["runtime_contract"]
+    assert runtime_contract["framework"] == "langgraph"
+    assert runtime_contract["method"] == "http"
+    assert runtime_contract["input_mode"] == "json"
+    assert runtime_contract["call_style"] == "request_response"
+    assert runtime_contract["required_tools"] == ["framework_http_status"]
+    assert runtime_contract["required_state_keys"] == [
+        "framework_http_transport",
+        "framework_runtime",
+        "framework_trace",
+    ]
+    assert runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(runtime_contract["required_event_types"]) >= {
+        "framework_http_transport",
+        "framework_trace",
+    }
+    trace_quality = http_transport_evidence["trace_quality"]
+    assert trace_quality["framework"] == "langgraph"
+    assert trace_quality["min_span_count"] == 3
+    assert trace_quality["min_model_span_count"] == 1
+    assert trace_quality["min_tool_span_count"] == 1
+    assert trace_quality["min_state_span_count"] == 1
+    assert trace_quality["min_latency_span_count"] == 2
+    assert trace_quality["min_tool_count"] == 1
+    assert trace_quality["max_error_count"] == 0
+    assert set(trace_quality["required_signals"]) >= {
+        "http",
+        "transport",
+        "model",
+        "tool",
+        "state",
+        "latency",
+    }
+    for metric in trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS:
+        assert metric in http_transport_evidence["metric_weights"]
+        assert http_transport_evidence["metric_averages"][metric] == pytest.approx(
+            1.0
+        )
+    assert set(trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS) <= set(
+        http_transport_evidence["state_keys"]
+    )
+    assert set(trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS) <= set(
+        http_transport_evidence["event_types"]
+    )
+    assert set(trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS) <= set(
+        http_transport_evidence["artifact_kinds"]
+    )
+    assert http_transport_evidence["tool_call_names"] == ["framework_http_status"]
+    transport = http_transport_evidence["transport"]
+    assert transport["kind"] == "agent-learning.framework-http-transport.v1"
+    assert transport["framework"] == "langgraph"
+    assert transport["transport"] == "http"
+    assert transport["protocol"] == "agent_learning"
+    assert transport["status_code"] == 200
+    assert transport["success"] is True
+    assert transport["requires_external_service"] is False
+    assert transport["endpoint_host_local"] is True
+    assert transport["auth"]["redacted"] is True
+    assert transport["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
+    )
+    external_trace = http_transport_evidence["external_trace"]
+    assert external_trace["kind"] == "external_agent_http_trace"
+    assert external_trace["protocol"] == "agent_learning"
+    assert external_trace["status_code"] == 200
+    assert external_trace["success"] is True
+    assert external_trace["error"] is None
+    assert external_trace["endpoint_host_local"] is True
+    assert external_trace["request_tool_count"] == 1
+    assert external_trace["response_tool_call_count"] == 1
+    assert external_trace["framework"] == "langgraph"
+    assert external_trace["transport"] == "http"
+    assert external_trace["requires_external_service"] is False
+    assert external_trace["auth"]["redacted"] is True
+    assert external_trace["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
+    )
+    assert http_transport_evidence["status_state"]["status"] == "verified"
+    assert http_transport_evidence["status_state"]["auth_redacted"] is True
+    assert http_transport_evidence["trace_summary"] == {
+        "span_count": 3,
+        "model_span_count": 1,
+        "tool_span_count": 1,
+        "state_span_count": 1,
+        "latency_span_count": 3,
+        "tool_count": 1,
+        "error_count": 0,
+    }
+    http_runtime_output = http_transport_evidence["runtime_output"]
+    assert "framework_http_transport" in http_runtime_output["state_keys"]
+    assert "framework_runtime" in http_runtime_output["state_keys"]
+    assert "framework_trace" in http_runtime_output["state_keys"]
+    assert http_runtime_output["artifact_types"] == ["trace"]
+    assert {"framework_http_transport", "framework_trace"} <= set(
+        http_runtime_output["event_types"]
+    )
+    assert http_runtime_output["tool_names"] == ["framework_http_status"]
+    assert http_transport_evidence["security"]["serialized_secret_absent"] is True
+    assert http_transport_evidence["security"]["transport_auth_redacted"] is True
+    assert http_transport_evidence["security"]["external_auth_redacted"] is True
     environment_10x = checks["environment_10x_robustness"]["evidence"]
     assert environment_10x["required_files"] == (
         trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
@@ -18275,6 +18465,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert {"text", "voice", "cua"} <= set(matrix_axis["modalities"])
     assert matrix_axis["transports"] == ["in_process"]
+    http_transport_axis = environment_10x_axes["local_http_framework_transport"]
+    assert http_transport_axis["source_check"] == "framework_http_transport_readiness"
+    http_transport_axis_evidence = http_transport_axis["evidence"]
+    assert http_transport_axis_evidence["result_status"] == "passed"
+    assert http_transport_axis_evidence["output_roundtrip"] is True
+    assert http_transport_axis_evidence["transport"]["framework"] == "langgraph"
+    assert http_transport_axis_evidence["transport"]["transport"] == "http"
+    assert http_transport_axis_evidence["transport"]["protocol"] == "agent_learning"
+    assert http_transport_axis_evidence["transport"]["success"] is True
+    assert http_transport_axis_evidence["transport"]["status_code"] == 200
+    assert http_transport_axis_evidence["transport"][
+        "requires_external_service"
+    ] is False
+    assert http_transport_axis_evidence["transport"]["endpoint_host_local"] is True
+    assert http_transport_axis_evidence["transport"]["auth"]["redacted"] is True
+    assert http_transport_axis_evidence["external_trace"]["success"] is True
+    assert http_transport_axis_evidence["external_trace"][
+        "request_tool_count"
+    ] == 1
+    assert http_transport_axis_evidence["external_trace"][
+        "response_tool_call_count"
+    ] == 1
+    assert http_transport_axis_evidence["serialized_secret_absent"] is True
+    for metric in trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS:
+        assert http_transport_axis_evidence["metric_averages"][metric] == (
+            pytest.approx(1.0)
+        )
     runtime_axis = environment_10x_axes["environment_replay_contract"]["evidence"]
     assert set(runtime_axis["required_openenv"]) >= set(
         trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
@@ -21909,6 +22126,128 @@ def test_sdk_external_http_agent_optimization_example_runs(monkeypatch, tmp_path
     assert [call["function"]["name"] for call in case["tool_calls"]] == [
         "external_agent_status"
     ]
+
+
+def test_framework_http_transport_manifest_and_example_run(monkeypatch, tmp_path):
+    from agent_learning import simulate, trinity
+
+    key = "real-local-sdk-framework-http-transport-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY", key)
+    monkeypatch.delenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_ENDPOINT",
+        raising=False,
+    )
+
+    endpoint = "http://127.0.0.1:8767/agent-learning/framework"
+    manifest = simulate.build_framework_http_transport_run_manifest(
+        endpoint=endpoint,
+        framework="langgraph",
+        required_env=["AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"],
+        api_key_env="AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+    )
+    assert manifest["version"] == "agent-learning.run.v1"
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
+    ]
+    assert manifest["metadata"]["task_kind"] == "framework_http_transport"
+    assert manifest["metadata"]["requires_external_service"] is False
+    assert manifest["agent"]["type"] == "http"
+    assert manifest["agent"]["protocol"] == "agent_learning"
+    assert manifest["agent"]["endpoint"] == endpoint
+    assert manifest["agent"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
+    )
+    assert manifest["agent"]["metadata"]["framework"] == "langgraph"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == ["framework_http_status"]
+    assert set(config["required_framework_trace"]) >= {
+        "framework_trace",
+        "span",
+        "model",
+        "tool",
+        "state",
+        "latency",
+        "http",
+        "transport",
+    }
+    assert config["framework_runtime_contract"]["required_state_keys"] == [
+        "framework_http_transport",
+        "framework_runtime",
+        "framework_trace",
+    ]
+
+    with pytest.raises(ValueError, match="loopback"):
+        simulate.build_framework_http_transport_run_manifest(
+            endpoint="https://example.com/agent",
+        )
+
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_framework_adapter_http_transport.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_http_transport",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-http-transport.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert key not in output_path.read_text(encoding="utf-8")
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    metrics = result["summary"]["metric_averages"]
+    for metric in (
+        "tool_selection_accuracy",
+        "framework_runtime_contract",
+        "framework_trace_coverage",
+        "framework_trace_quality",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    case = result["report"]["results"][0]
+    state = case["metadata"]["environment_state"]
+    assert set(trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS) <= set(state)
+    transport = state["framework_http_transport"]
+    assert transport["kind"] == "agent-learning.framework-http-transport.v1"
+    assert transport["framework"] == "langgraph"
+    assert transport["transport"] == "http"
+    assert transport["protocol"] == "agent_learning"
+    assert transport["requires_external_service"] is False
+    assert transport["auth"]["redacted"] is True
+    assert transport["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY"
+    )
+    external_trace = state["external_agent_trace"]
+    assert external_trace["kind"] == "external_agent_http_trace"
+    assert external_trace["protocol"] == "agent_learning"
+    assert external_trace["success"] is True
+    assert external_trace["status_code"] == 200
+    assert external_trace["auth"]["redacted"] is True
+    assert external_trace["request_tool_count"] == 1
+    assert external_trace["response_tool_call_count"] == 1
+    assert external_trace["requires_external_service"] is False
+    assert key not in json.dumps(external_trace, sort_keys=True, default=str)
+    assert [call["name"] for call in case["tool_calls"]] == [
+        "framework_http_status"
+    ]
+    assert set(trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS) <= {
+        event["type"] for event in case["events"]
+    }
+    assert set(trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS) <= {
+        artifact["metadata"]["kind"] for artifact in case["artifacts"]
+    }
+    runtime_output = state["framework_runtime"]["invocations"][0]["output"]
+    assert "framework_http_transport" in runtime_output["state_keys"]
+    assert "trace" in runtime_output["artifact_types"]
+    assert "framework_trace" in runtime_output["event_types"]
+    assert runtime_output["tool_names"] == ["framework_http_status"]
 
 
 def test_workflow_hook_manifest_builds_research_backed_environment_candidates():

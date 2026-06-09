@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import urlparse
 
 from ._facade import optional_module
 from ._module_alias import install_lazy_module_aliases
@@ -556,6 +557,121 @@ def build_external_agent_run_manifest(
                 "format, separates auth from manifest content, and produces "
                 "redacted evidence that the optimizer can compare across "
                 "complete endpoint/protocol candidates."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
+    return manifest
+
+
+def build_framework_http_transport_run_manifest(
+    *,
+    name: str = "framework-http-transport-run",
+    endpoint: str,
+    framework: str = "langgraph",
+    api_key_env: str = "AGENT_LEARNING_SDK_FRAMEWORK_HTTP_TRANSPORT_KEY",
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a runnable manifest for local HTTP framework-adapter transport.
+
+    This is the loopback transport sibling to the in-process framework adapter
+    cookbooks. It keeps hosted external agents on
+    ``build_external_agent_run_manifest`` while proving that framework runtimes
+    can be simulated through an authenticated local HTTP boundary with native
+    framework runtime, trace, event, artifact, and tool evidence.
+    """
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    if not _is_loopback_http_endpoint(endpoint):
+        raise ValueError("endpoint must be a local http:// loopback URL")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    framework_key = _framework_key(framework)
+    agent_config = (
+        copy.deepcopy(dict(agent))
+        if agent is not None
+        else _framework_http_transport_agent(
+            endpoint=endpoint,
+            framework=framework_key,
+            api_key_env=api_key_env,
+        )
+    )
+    env_required = [api_key_env] if api_key_env else []
+    config = copy.deepcopy(
+        dict(
+            evaluation_config
+            or _framework_http_transport_evaluation_config(framework_key)
+        )
+    )
+    manifest = build_task_run_manifest(
+        name=name,
+        agent=agent_config,
+        task_description=(
+            "Verify an authenticated local HTTP framework transport with "
+            "native Agent Learning protocol payloads, framework runtime "
+            "evidence, trace artifacts, events, and tool routing."
+        ),
+        expected_result=(
+            "Framework HTTP transport verified: refund approved, no secrets "
+            "exposed, and framework_http_status verified."
+        ),
+        scenario=(
+            copy.deepcopy(dict(scenario))
+            if scenario is not None
+            else _default_framework_http_transport_scenario(name, framework_key)
+        ),
+        environments=[_framework_http_transport_status_environment(framework_key)],
+        required_env=_unique_strings([*required_env, *env_required]),
+        available_tools=["framework_http_status"],
+        required_tools=["framework_http_status"],
+        success_criteria=[
+            "loopback HTTP endpoint is called with auth redacted from traces",
+            "framework runtime state is preserved from the protocol response",
+            "framework trace artifact and events survive the HTTP boundary",
+            "framework_http_status tool routing executes in the local simulation",
+        ],
+        evaluation_config=config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=True,
+        metadata={
+            "source": (
+                "agent_learning.simulate."
+                "build_framework_http_transport_run_manifest"
+            ),
+            "cookbook": "framework-http-transport",
+            "task_kind": "framework_http_transport",
+            "framework": framework_key,
+            "transport": "http",
+            "requires_external_service": False,
+            "research_sources": _unique_research_sources(
+                [
+                    *_framework_http_transport_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Framework transport simulation should preserve runtime and "
+                "trace semantics across the same boundary users deploy: an "
+                "authenticated protocol call, a local replayable endpoint, "
+                "redacted auth evidence, and evaluator-visible tool/artifact "
+                "signals."
             ),
             **copy.deepcopy(dict(metadata or {})),
         },
@@ -3872,6 +3988,220 @@ def _external_agent_research_sources() -> list[dict[str, Any]]:
             "used_for": "protocol-normalized external agent interaction contracts",
         },
     ]
+
+
+def _framework_http_transport_agent(
+    *,
+    endpoint: str,
+    framework: str,
+    api_key_env: str,
+) -> dict[str, Any]:
+    return {
+        "type": "http",
+        "endpoint": str(endpoint),
+        "protocol": "agent_learning",
+        "model": "agent-learning-local-framework-http-transport",
+        "api_key_env": str(api_key_env),
+        "include_tools": True,
+        "timeout": 5.0,
+        "metadata": {
+            "candidate_profile": "local_framework_http_transport",
+            "framework": str(framework),
+            "transport": "http",
+            "framework_transport": "http",
+            "requires_external_service": False,
+        },
+    }
+
+
+def _framework_http_transport_status_environment(framework: str) -> dict[str, Any]:
+    return {
+        "type": "tool_mock",
+        "data": {
+            "tools": {
+                "framework_http_status": {
+                    "schema": {
+                        "description": (
+                            "Record local HTTP framework transport verification "
+                            "without exposing bearer tokens."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "framework": {"type": "string"},
+                                "transport": {"type": "string"},
+                                "status": {"type": "string"},
+                            },
+                        },
+                    },
+                    "response": {
+                        "content": "framework HTTP transport status verified",
+                        "result": {
+                            "framework": str(framework),
+                            "transport": "http",
+                            "status": "verified",
+                            "auth_redacted": True,
+                        },
+                        "state_updates": {
+                            "framework_http_status": {
+                                "framework": str(framework),
+                                "transport": "http",
+                                "status": "verified",
+                                "auth_redacted": True,
+                                "tool_evidence": True,
+                            }
+                        },
+                    },
+                }
+            }
+        },
+    }
+
+
+def _framework_http_transport_evaluation_config(framework: str) -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Verify a local HTTP framework transport with redacted auth, "
+            "framework runtime state, trace artifacts, events, and tool routing."
+        ),
+        "expected_result": (
+            "Framework HTTP transport verified: refund approved, no secrets "
+            "exposed, and framework_http_status verified."
+        ),
+        "available_tools": ["framework_http_status"],
+        "required_tools": ["framework_http_status"],
+        "success_criteria": [
+            "refund approved",
+            "no secrets exposed",
+            "framework_http_status verified",
+            "framework runtime state preserved",
+            "framework trace artifact preserved",
+        ],
+        "allow_extra_tool_arguments": True,
+        "required_framework_trace": [
+            "framework_trace",
+            "span",
+            "model",
+            "tool",
+            "state",
+            "latency",
+            "http",
+            "transport",
+        ],
+        "framework_runtime_contract": {
+            "framework": str(framework),
+            "method": "http",
+            "input_mode": "json",
+            "call_style": "request_response",
+            "required_tools": ["framework_http_status"],
+            "required_state_keys": [
+                "framework_http_transport",
+                "framework_runtime",
+                "framework_trace",
+            ],
+            "required_metadata_keys": ["framework_http_transport"],
+            "required_event_types": [
+                "framework_http_transport",
+                "framework_trace",
+            ],
+            "required_artifact_types": ["trace"],
+            "required_signals": ["http", "transport", "tool", "state"],
+            "max_error_count": 0,
+        },
+        "framework_trace_quality": {
+            "framework": str(framework),
+            "min_span_count": 3,
+            "min_model_span_count": 1,
+            "min_tool_span_count": 1,
+            "min_state_span_count": 1,
+            "min_latency_span_count": 2,
+            "min_tool_count": 1,
+            "max_error_count": 0,
+            "required_signals": [
+                "model",
+                "tool",
+                "state",
+                "latency",
+                "http",
+                "transport",
+            ],
+            "required_tools": ["framework_http_status"],
+            "required_spans": [
+                "local http framework request",
+                f"{framework} model dispatch",
+                "tool call framework_http_status",
+            ],
+        },
+        "metric_weights": {
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 2.0,
+            "final_response_quality": 2.0,
+            "framework_runtime_contract": 5.0,
+            "framework_trace_coverage": 4.0,
+            "framework_trace_quality": 4.0,
+        },
+    }
+
+
+def _framework_http_transport_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "OpenTelemetry Traces",
+            "year": 2026,
+            "url": "https://opentelemetry.io/docs/concepts/signals/traces/",
+            "used_for": "trace artifact and event shape across framework transports",
+        },
+        {
+            "title": "W3C Trace Context",
+            "year": 2021,
+            "url": "https://www.w3.org/TR/trace-context/",
+            "used_for": "portable cross-boundary trace context evidence",
+        },
+        {
+            "title": "CapSeal: Capability-Sealed Secret Mediation for Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.16762",
+            "used_for": "bearer-token separation and redacted auth traces",
+        },
+        {
+            "title": "Protocol-first Agent Interaction",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.04820",
+            "used_for": "protocol-normalized local HTTP agent transport contracts",
+        },
+    ]
+
+
+def _default_framework_http_transport_scenario(
+    name: str,
+    framework: str,
+) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {
+                    "name": "Maya",
+                    "role": "framework-platform-owner",
+                },
+                "situation": (
+                    f"Maya needs a {framework} agent replayed through a "
+                    "local authenticated HTTP transport before promoting the "
+                    "adapter beyond in-process simulation."
+                ),
+                "outcome": (
+                    "The refund is approved with framework runtime, trace, "
+                    "tool, and redacted-auth evidence."
+                ),
+            }
+        ],
+    }
+
+
+def _is_loopback_http_endpoint(endpoint: str) -> bool:
+    parsed = urlparse(str(endpoint))
+    host = (parsed.hostname or "").strip().lower()
+    return parsed.scheme == "http" and host in {"127.0.0.1", "localhost", "::1"}
 
 
 def _workflow_hook_agent(*, tool_name: str) -> dict[str, Any]:
@@ -8983,6 +9313,7 @@ __all__ = [
     "build_browser_cua_run_manifest",
     "build_framework_certification_run_manifest",
     "build_framework_adapter_matrix_run_manifest",
+    "build_framework_http_transport_run_manifest",
     "build_harness_trajectory_replay_run_manifest",
     "build_framework_import_run_manifest",
     "build_framework_run_manifest",
