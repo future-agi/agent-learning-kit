@@ -949,6 +949,10 @@ then searches weak versus verified matrix candidates through AgentOptimizer,
 selects the matrix from simulation evidence, and emits
 `agent-learning.optimization.framework-adapter-matrix-proof.v1` with local
 fixture, no-external-target, coverage, metric, and report-state checks.
+`agent-learn release-check` now gates that SDK cookbook as
+`framework_adapter_matrix_optimization_readiness`; the 10x robustness bar counts
+it separately as `framework_matrix_optimization`, because proving optimizer
+selection is stronger than proving static framework coverage alone.
 The attached 2026 paper references are provenance for the design direction,
 not runtime integrations; this cookbook runs through local simulation,
 Future AGI-native eval evidence, and the SDK optimizer.
@@ -1912,12 +1916,13 @@ gate.
 bar as `environment_10x_robustness`. That check does not rely on wording alone:
 it requires the current release artifact to prove at least ten axes across the
 Agent Learning replay contract, framework simulation, local HTTP framework
-transport, local evals, optimizer recovery, adapter promotion, protocol routing,
-browser/CUA, realtime voice, memory lineage, multi-agent coordination, world
-orchestration, workspace import certification, authenticated evaluation,
-workflow, and retrieval hooks, red-team suite coverage, and regression
-promotion/replay. Workspace import certification, local HTTP framework
-transport, and authenticated hooks are counted as native proof-backed axes;
+transport, framework matrix optimization, local evals, optimizer recovery,
+adapter promotion, protocol routing, browser/CUA, realtime voice, memory
+lineage, multi-agent coordination, world orchestration, workspace import
+certification, authenticated evaluation, workflow, and retrieval hooks, red-team
+suite coverage, and regression promotion/replay. Workspace import
+certification, local HTTP framework transport, framework matrix optimization,
+and authenticated hooks are counted as native proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:

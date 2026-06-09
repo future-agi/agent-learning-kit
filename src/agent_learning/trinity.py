@@ -1075,6 +1075,69 @@ V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS = ["in_process"]
 
 V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES = ["agent-learning-fixture"]
 
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES = [
+    "examples/sdk_framework_adapter_matrix_optimization.py",
+    "internal-docs/framework-adapter-matrix-optimization-readiness-research.md",
+]
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS = [
+    "langchain",
+    "langgraph",
+    "llamaindex",
+    "crewai",
+    "autogen",
+    "openai_agents",
+    "livekit",
+    "pipecat",
+]
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_FRAMEWORK_MATRIX_OPT_KEY"
+)
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS = [
+    "framework",
+    "integration",
+    "harness",
+    "evaluator",
+]
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments",
+]
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS = [
+    "framework_adapter_contract_quality",
+    "framework_trace_coverage",
+    "task_completion",
+    "tool_selection_accuracy",
+]
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND = (
+    "agent-learning.optimization.framework-adapter-matrix-proof.v1"
+)
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL = (
+    "l3_native_framework_adapter_matrix_verified"
+)
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS = [
+    "native_no_external_adapter_matrix_dependency",
+    "adapter_matrix_environment_present",
+    "adapter_matrix_status_closed",
+    "adapter_matrix_framework_coverage_closed",
+    "adapter_matrix_local_fixture_closed",
+    "adapter_matrix_metric_evidence_closed",
+    "adapter_matrix_report_evidence_closed",
+]
+
+V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS = [
+    "https://arxiv.org/abs/2605.18747",
+    "https://arxiv.org/abs/2605.13357",
+    "https://arxiv.org/abs/2606.04990",
+    "https://arxiv.org/abs/2606.05922",
+]
+
 V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
     {
         "path": "examples/framework_langchain_manifest.json",
@@ -1764,6 +1827,7 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_evaluation_hook_optimization.py",
+    "examples/sdk_framework_adapter_matrix_optimization.py",
     "examples/sdk_framework_adapter_http_transport.py",
     "examples/sdk_openenv_environment_optimization.py",
     "examples/sdk_retrieval_hook_optimization.py",
@@ -1776,6 +1840,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
 V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "environment_replay_contract",
     "cross_framework_simulation_matrix",
+    "framework_matrix_optimization",
     "local_http_framework_transport",
     "local_evaluation_gates",
     "adaptive_optimizer_recovery",
@@ -4019,6 +4084,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_http_transport,
     )
+    framework_adapter_matrix_optimization = (
+        _release_framework_adapter_matrix_optimization_status(root)
+    )
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_matrix_optimization_readiness",
+        passed=(
+            not framework_adapter_matrix_optimization["missing_files"]
+            and not framework_adapter_matrix_optimization["execution_errors"]
+            and not framework_adapter_matrix_optimization["manifest_errors"]
+            and not framework_adapter_matrix_optimization["optimization_errors"]
+            and not framework_adapter_matrix_optimization["proof_errors"]
+            and not framework_adapter_matrix_optimization["metric_errors"]
+            and not framework_adapter_matrix_optimization["security_errors"]
+            and not framework_adapter_matrix_optimization["source_errors"]
+        ),
+        milestone="M6",
+        evidence=framework_adapter_matrix_optimization,
+    )
     framework_optimizer = _release_framework_optimizer_status(root)
     _append_release_check(
         checks,
@@ -4271,6 +4355,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         retrieval_hook=retrieval_hook,
         evaluation_hook=evaluation_hook,
         framework_http_transport=framework_http_transport,
+        framework_adapter_matrix_optimization=framework_adapter_matrix_optimization,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -4659,6 +4744,36 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_provider_manifest_contracts": copy.deepcopy(
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+        ),
+        "required_framework_adapter_matrix_optimization_files": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES
+        ),
+        "required_framework_adapter_matrix_optimization_frameworks": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+        ),
+        "required_framework_adapter_matrix_optimization_env": (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV
+        ),
+        "required_framework_adapter_matrix_optimization_layers": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS
+        ),
+        "required_framework_adapter_matrix_optimization_search_paths": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+        ),
+        "required_framework_adapter_matrix_optimization_metrics": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
+        ),
+        "required_framework_adapter_matrix_optimization_proof_kind": (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+        ),
+        "required_framework_adapter_matrix_optimization_proof_assurance_level": (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_framework_adapter_matrix_optimization_proof_checks": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+        ),
+        "required_framework_adapter_matrix_optimization_source_urls": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS
         ),
         "required_workspace_import_certification_files": list(
             V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
@@ -20744,6 +20859,550 @@ def _release_framework_http_transport_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_framework_adapter_matrix_optimization_status(
+    root: Path,
+) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    source = "examples/sdk_framework_adapter_matrix_optimization.py"
+    research_doc = (
+        "internal-docs/framework-adapter-matrix-optimization-readiness-research.md"
+    )
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        path: str = source,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_set = {str(item) for item in observed}
+        return sorted({str(item) for item in required} - observed_set)
+
+    def load_module(path: Path, name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def matrix_from_environments(environments: Any) -> dict[str, Any]:
+        for environment in _as_list(environments):
+            env = _as_mapping(environment)
+            data = _as_mapping(env.get("data"))
+            for candidate in (
+                data.get("framework_adapter_contract_matrix"),
+                _as_mapping(data.get("metadata")).get(
+                    "framework_adapter_contract_matrix"
+                ),
+                _as_mapping(data.get("state")).get(
+                    "framework_adapter_contract_matrix"
+                ),
+            ):
+                matrix = _as_mapping(candidate)
+                if matrix.get("kind") == (
+                    "agent-learning.framework-adapter-contract-matrix.v1"
+                ):
+                    return dict(matrix)
+        return {}
+
+    def nested_key_names(value: Any) -> set[str]:
+        names: set[str] = set()
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                names.add(str(key))
+                names.update(nested_key_names(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                names.update(nested_key_names(item))
+        return names
+
+    forbidden_external_keys = {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+    manifest: Mapping[str, Any] = {}
+    result: Mapping[str, Any] = {}
+    saved: Mapping[str, Any] = {}
+    serialized_output = ""
+    release_key = ""
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        try:
+            module = load_module(
+                root / source,
+                "agent_learning_release_framework_adapter_matrix_optimization",
+            )
+            manifest = module.build_manifest()
+            required_env_name = str(
+                getattr(
+                    module,
+                    "REQUIRED_ENV",
+                    V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV,
+                )
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-adapter-matrix-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "framework-adapter-matrix.json"
+
+                def run_example() -> Mapping[str, Any]:
+                    nonlocal release_key
+                    release_key = os.environ.get(required_env_name, "")
+                    return module.run(output_path)
+
+                result = _release_run_with_local_env(
+                    [required_env_name],
+                    run_example,
+                )
+                serialized_output = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized_output)
+        except Exception as exc:
+            execution_errors.append({"path": source, "error": str(exc)})
+            manifest = {}
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+
+    if manifest:
+        optimization = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization.get("target"))
+        search_space = _as_mapping(target.get("search_space"))
+        candidates = _as_list(search_space.get("simulation.environments"))
+        weak_matrix = matrix_from_environments(candidates[0] if candidates else [])
+        verified_matrix = matrix_from_environments(candidates[-1] if candidates else [])
+        verified_summary = _as_mapping(verified_matrix.get("summary"))
+        evaluation = _as_mapping(manifest.get("evaluation"))
+        config = _as_mapping(_as_mapping(evaluation.get("agent_report")).get("config"))
+        quality_gate = _as_mapping(config.get("framework_adapter_contract_quality"))
+        manifest_evidence = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_layers": list(target.get("layers") or []),
+            "search_paths": sorted(str(path) for path in search_space),
+            "candidate_count": len(candidates),
+            "weak_framework_count": weak_matrix.get("framework_count"),
+            "verified_framework_count": verified_matrix.get("framework_count"),
+            "verified_matrix_summary": dict(verified_summary),
+            "quality_gate": {
+                "required_frameworks": list(
+                    quality_gate.get("required_frameworks") or []
+                ),
+                "required_modalities": list(
+                    quality_gate.get("required_modalities") or []
+                ),
+                "required_transports": list(
+                    quality_gate.get("required_transports") or []
+                ),
+            },
+        }
+        evidence["manifest"] = manifest_evidence
+        for field, observed, expected in (
+            ("version", manifest.get("version"), "agent-learning.optimization.v1"),
+            (
+                "required_env",
+                list(manifest.get("required_env") or []),
+                [V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV],
+            ),
+            (
+                "optimization.target.layers",
+                list(target.get("layers") or []),
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS,
+            ),
+            (
+                "optimization.target.search_space",
+                sorted(str(path) for path in search_space),
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS,
+            ),
+            (
+                "evaluation.agent_report.config.framework_adapter_contract_quality.required_frameworks",
+                list(quality_gate.get("required_frameworks") or []),
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS,
+            ),
+            (
+                "evaluation.agent_report.config.framework_adapter_contract_quality.required_transports",
+                list(quality_gate.get("required_transports") or []),
+                ["in_process"],
+            ),
+        ):
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if len(candidates) < 2:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.simulation.environments",
+                expected=">=2 candidates",
+                observed=len(candidates),
+            )
+        if _int_or_zero(weak_matrix.get("framework_count")) >= _int_or_zero(
+            verified_matrix.get("framework_count")
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.weak_vs_verified_framework_count",
+                expected="weak framework_count < verified framework_count",
+                observed={
+                    "weak": weak_matrix.get("framework_count"),
+                    "verified": verified_matrix.get("framework_count"),
+                },
+            )
+        for field in ("external_target_count", "requires_external_service_count"):
+            if _int_or_zero(verified_summary.get(field)) != 0:
+                append_error(
+                    manifest_errors,
+                    field=f"verified_matrix.summary.{field}",
+                    expected=0,
+                    observed=verified_summary.get(field),
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            item for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        best_history = _as_mapping(
+            max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+        )
+        best_patch = _as_mapping(best_history.get("patch"))
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        selected_environments = _as_list(
+            _as_mapping(best_config.get("simulation")).get("environments")
+        )
+        selected_matrix = matrix_from_environments(selected_environments)
+        selected_summary = _as_mapping(selected_matrix.get("summary"))
+        report = _as_mapping(best_history.get("report"))
+        cases = [
+            item for item in _as_list(report.get("results"))
+            if isinstance(item, Mapping)
+        ]
+        case = _as_mapping(cases[0]) if cases else {}
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        framework_trace = _as_mapping(state.get("framework_trace"))
+        report_matrix = _as_mapping(
+            _as_mapping(framework_trace.get("metadata")).get(
+                "framework_adapter_contract_matrix"
+            )
+        )
+        proof = _as_mapping(result.get("framework_adapter_matrix_proof"))
+        proof_checks = [
+            _as_mapping(check)
+            for check in _as_list(proof.get("checks"))
+            if isinstance(check, Mapping)
+        ]
+        passed_check_ids = [
+            str(check.get("id"))
+            for check in proof_checks
+            if check.get("passed") is True and check.get("id")
+        ]
+        serialized_result = json.dumps(result, sort_keys=True, default=str)
+        selected_forbidden_keys = sorted(
+            forbidden_external_keys & nested_key_names(selected_matrix)
+        )
+
+        evidence.update(
+            {
+                "result_kind": result.get("kind"),
+                "schema_version": result.get("schema_version"),
+                "result_status": result.get("status"),
+                "output_roundtrip": result == saved,
+                "required_env": list(manifest.get("required_env") or []),
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "optimization_passed": summary.get("optimization_passed"),
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "candidate_count": len(histories),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "total_evaluations": summary.get("total_evaluations"),
+                "total_iterations": summary.get("total_iterations"),
+                "selected_patch_keys": sorted(str(key) for key in best_patch),
+                "best_score": best_history.get("score"),
+                "best_metrics": {
+                    metric: best_metrics.get(metric)
+                    for metric in V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
+                },
+                "frameworks": list(selected_matrix.get("frameworks") or []),
+                "selected_matrix_status": selected_matrix.get("status"),
+                "selected_matrix_summary": dict(selected_summary),
+                "weak_framework_count": _as_mapping(
+                    evidence.get("manifest", {})
+                ).get("weak_framework_count"),
+                "verified_framework_count": _as_mapping(
+                    evidence.get("manifest", {})
+                ).get("verified_framework_count"),
+                "report_matrix_status": report_matrix.get("status"),
+                "report_matrix_frameworks": list(report_matrix.get("frameworks") or []),
+                "proof": {
+                    "kind": proof.get("kind"),
+                    "status": proof.get("status"),
+                    "passed": proof.get("passed"),
+                    "assurance_level": proof.get("assurance_level"),
+                    "frameworks": list(proof.get("frameworks") or []),
+                    "requires_external_service": proof.get(
+                        "requires_external_service"
+                    ),
+                    "failed_check_ids": list(proof.get("failed_check_ids") or []),
+                    "warning_check_ids": list(proof.get("warning_check_ids") or []),
+                    "passed_check_ids": passed_check_ids,
+                    "check_count": proof.get("check_count"),
+                    "passed_check_count": proof.get("passed_check_count"),
+                },
+                "serialized_secret_absent": (
+                    not release_key
+                    or (
+                        release_key not in serialized_output
+                        and release_key not in serialized_result
+                    )
+                ),
+                "selected_matrix_forbidden_external_keys": selected_forbidden_keys,
+            }
+        )
+
+        for field, observed, expected in (
+            ("kind", result.get("kind"), "agent-learning.optimization.v1"),
+            ("schema_version", result.get("schema_version"), "agent-learning.cli.v1"),
+            ("status", result.get("status"), "passed"),
+            ("output_roundtrip", result == saved, True),
+            ("summary.optimization_passed", summary.get("optimization_passed"), True),
+            ("summary.evaluation_passed", summary.get("evaluation_passed"), True),
+            (
+                "optimization.history.best.patch",
+                sorted(str(key) for key in best_patch),
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS,
+            ),
+            ("selected_matrix.status", selected_matrix.get("status"), "passed"),
+            ("report_matrix.status", report_matrix.get("status"), "passed"),
+        ):
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 0.98:
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=">=0.98",
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=">=1.0",
+                observed=summary.get("evaluation_score"),
+            )
+        for field in ("total_evaluations", "total_iterations", "candidate_lineage_count"):
+            if _int_or_zero(summary.get(field)) < 2:
+                append_error(
+                    optimization_errors,
+                    field=f"summary.{field}",
+                    expected=">=2",
+                    observed=summary.get(field),
+                )
+        if list(selected_matrix.get("frameworks") or []) != (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+        ):
+            append_error(
+                optimization_errors,
+                field="selected_matrix.frameworks",
+                expected=V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS,
+                observed=list(selected_matrix.get("frameworks") or []),
+            )
+        if list(report_matrix.get("frameworks") or []) != (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+        ):
+            append_error(
+                optimization_errors,
+                field="report_matrix.frameworks",
+                expected=V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS,
+                observed=list(report_matrix.get("frameworks") or []),
+            )
+        for field in ("external_target_count", "requires_external_service_count"):
+            if _int_or_zero(selected_summary.get(field)) != 0:
+                append_error(
+                    optimization_errors,
+                    field=f"selected_matrix.summary.{field}",
+                    expected=0,
+                    observed=selected_summary.get(field),
+                )
+
+        for metric in V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS:
+            if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"optimization.history.best.metrics.{metric}",
+                    expected=">=1.0",
+                    observed=best_metrics.get(metric),
+                )
+
+        for field, observed, expected in (
+            (
+                "framework_adapter_matrix_proof.kind",
+                proof.get("kind"),
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND,
+            ),
+            ("framework_adapter_matrix_proof.status", proof.get("status"), "passed"),
+            ("framework_adapter_matrix_proof.passed", proof.get("passed"), True),
+            (
+                "framework_adapter_matrix_proof.assurance_level",
+                proof.get("assurance_level"),
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL,
+            ),
+            (
+                "framework_adapter_matrix_proof.requires_external_service",
+                proof.get("requires_external_service"),
+                False,
+            ),
+            (
+                "framework_adapter_matrix_proof.failed_check_ids",
+                list(proof.get("failed_check_ids") or []),
+                [],
+            ),
+            (
+                "framework_adapter_matrix_proof.warning_check_ids",
+                list(proof.get("warning_check_ids") or []),
+                [],
+            ),
+        ):
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_proof_checks = missing_values(
+            passed_check_ids,
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS,
+        )
+        extra_proof_checks = sorted(
+            set(passed_check_ids)
+            - set(V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS)
+        )
+        if missing_proof_checks or extra_proof_checks:
+            append_error(
+                proof_errors,
+                field="framework_adapter_matrix_proof.passed_check_ids",
+                expected=V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS,
+                observed=passed_check_ids,
+            )
+
+        if selected_forbidden_keys:
+            append_error(
+                security_errors,
+                field="selected_matrix.forbidden_external_keys",
+                expected=[],
+                observed=selected_forbidden_keys,
+            )
+        if evidence.get("serialized_secret_absent") is not True:
+            append_error(
+                security_errors,
+                field="security.serialized_secret_absent",
+                expected=True,
+                observed=False,
+            )
+
+    if not missing_files:
+        doc_path = root / research_doc
+        doc_text = doc_path.read_text(encoding="utf-8") if doc_path.exists() else ""
+        documented_urls = [
+            url
+            for url in V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS
+            if url in doc_text
+        ]
+        evidence["source_urls"] = {
+            "research_doc": research_doc,
+            "documented_urls": documented_urls,
+        }
+        missing_doc_urls = missing_values(
+            documented_urls,
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS,
+        )
+        if missing_doc_urls:
+            append_error(
+                source_errors,
+                path=research_doc,
+                field="source_urls",
+                expected=V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS,
+                observed=documented_urls,
+            )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES),
+        "required_frameworks": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+        ),
+        "required_env": V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV,
+        "required_layers": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS
+        ),
+        "required_search_paths": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+        ),
+        "required_metrics": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
+        ),
+        "required_proof_kind": (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+        ),
+        "required_proof_assurance_level": (
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_proof_checks": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+        ),
+        "required_source_urls": list(
+            V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS
+        ),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
+        "source_errors": source_errors,
+        "evidence": evidence,
+    }
+
+
 def _release_framework_adapter_io_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_FRAMEWORK_ADAPTER_IO_FILES)
     execution_errors: list[dict[str, Any]] = []
@@ -21270,6 +21929,7 @@ def _release_environment_10x_robustness_status(
     retrieval_hook: Mapping[str, Any],
     evaluation_hook: Mapping[str, Any],
     framework_http_transport: Mapping[str, Any],
+    framework_adapter_matrix_optimization: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -21397,6 +22057,139 @@ def _release_environment_10x_robustness_status(
             "frameworks": provider_frameworks,
             "modalities": provider_summary.get("modalities") or [],
             "transports": provider_summary.get("transports") or [],
+        },
+    )
+
+    matrix_optimization_evidence = _as_mapping(
+        framework_adapter_matrix_optimization.get("evidence")
+    )
+    matrix_optimization_metrics = _as_mapping(
+        matrix_optimization_evidence.get("best_metrics")
+    )
+    matrix_optimization_proof = _as_mapping(
+        matrix_optimization_evidence.get("proof")
+    )
+    matrix_optimization_summary = _as_mapping(
+        matrix_optimization_evidence.get("selected_matrix_summary")
+    )
+    append_axis(
+        "framework_matrix_optimization",
+        source_check="framework_adapter_matrix_optimization_readiness",
+        passed=(
+            empty_buckets(
+                framework_adapter_matrix_optimization,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "proof_errors",
+                    "metric_errors",
+                    "security_errors",
+                    "source_errors",
+                ),
+            )
+            and matrix_optimization_evidence.get("result_status") == "passed"
+            and matrix_optimization_evidence.get("output_roundtrip") is True
+            and contains_all(
+                matrix_optimization_evidence.get("frameworks") or [],
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS,
+            )
+            and matrix_optimization_evidence.get("selected_patch_keys")
+            == V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+            and _float_or_zero(
+                matrix_optimization_evidence.get("optimization_score")
+            )
+            >= 0.98
+            and _float_or_zero(
+                matrix_optimization_evidence.get("evaluation_score")
+            )
+            >= 1.0
+            and _int_or_zero(matrix_optimization_evidence.get("candidate_count"))
+            >= 2
+            and _int_or_zero(matrix_optimization_evidence.get("weak_framework_count"))
+            < _int_or_zero(
+                matrix_optimization_evidence.get("verified_framework_count")
+            )
+            and _int_or_zero(
+                matrix_optimization_summary.get("external_target_count")
+            )
+            == 0
+            and _int_or_zero(
+                matrix_optimization_summary.get("requires_external_service_count")
+            )
+            == 0
+            and matrix_optimization_proof.get("kind")
+            == V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+            and matrix_optimization_proof.get("status") == "passed"
+            and matrix_optimization_proof.get("assurance_level")
+            == V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+            and not matrix_optimization_proof.get("failed_check_ids")
+            and not matrix_optimization_proof.get("warning_check_ids")
+            and contains_all(
+                matrix_optimization_proof.get("passed_check_ids") or [],
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS,
+            )
+            and metrics_at_floor(
+                matrix_optimization_metrics,
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS,
+            )
+            and matrix_optimization_evidence.get("serialized_secret_absent") is True
+        ),
+        expected={
+            "frameworks": V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS,
+            "selected_patch_keys": (
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+            ),
+            "candidate_count": ">=2",
+            "weak_framework_count": "< verified_framework_count",
+            "optimization_score": ">=0.98",
+            "evaluation_score": ">=1.0",
+            "external_target_count": 0,
+            "requires_external_service_count": 0,
+            "proof_kind": V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND,
+            "proof_assurance_level": (
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+            ),
+            "proof_checks": (
+                V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+            ),
+            "metrics": V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+            "serialized_secret_absent": True,
+        },
+        evidence={
+            "result_status": matrix_optimization_evidence.get("result_status"),
+            "output_roundtrip": matrix_optimization_evidence.get(
+                "output_roundtrip"
+            ),
+            "frameworks": matrix_optimization_evidence.get("frameworks") or [],
+            "selected_patch_keys": matrix_optimization_evidence.get(
+                "selected_patch_keys"
+            )
+            or [],
+            "candidate_count": matrix_optimization_evidence.get("candidate_count"),
+            "weak_framework_count": matrix_optimization_evidence.get(
+                "weak_framework_count"
+            ),
+            "verified_framework_count": matrix_optimization_evidence.get(
+                "verified_framework_count"
+            ),
+            "optimization_score": matrix_optimization_evidence.get(
+                "optimization_score"
+            ),
+            "evaluation_score": matrix_optimization_evidence.get(
+                "evaluation_score"
+            ),
+            "selected_matrix_summary": dict(matrix_optimization_summary),
+            "proof": dict(matrix_optimization_proof),
+            "best_metrics": {
+                metric: matrix_optimization_metrics.get(metric)
+                for metric in V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
+            },
+            "serialized_secret_absent": matrix_optimization_evidence.get(
+                "serialized_secret_absent"
+            ),
         },
     )
 
@@ -30850,6 +31643,16 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS",
+    "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_FILES",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL",

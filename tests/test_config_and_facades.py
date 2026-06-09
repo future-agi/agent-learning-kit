@@ -15502,6 +15502,39 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
+    assert payload["required_framework_adapter_matrix_optimization_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES
+    )
+    assert payload["required_framework_adapter_matrix_optimization_frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert payload["required_framework_adapter_matrix_optimization_env"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV
+    )
+    assert payload["required_framework_adapter_matrix_optimization_layers"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS
+    )
+    assert payload["required_framework_adapter_matrix_optimization_search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["required_framework_adapter_matrix_optimization_metrics"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
+    )
+    assert payload["required_framework_adapter_matrix_optimization_proof_kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+    )
+    assert (
+        payload[
+            "required_framework_adapter_matrix_optimization_proof_assurance_level"
+        ]
+        == trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_framework_adapter_matrix_optimization_proof_checks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+    )
+    assert payload["required_framework_adapter_matrix_optimization_source_urls"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS
+    )
     assert payload["required_agent_integration_files"] == (
         trinity.V1_AGENT_INTEGRATION_FILES
     )
@@ -16085,6 +16118,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_openenv_adapter_readiness",
         "framework_trace_export_readiness",
         "framework_http_transport_readiness",
+        "framework_adapter_matrix_optimization_readiness",
         "framework_optimizer_readiness",
         "workspace_import_certification_readiness",
         "multi_agent_room_probe_readiness",
@@ -17677,6 +17711,144 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_manifest["agent_type"] == "scripted"
     assert realtime_manifest["frameworks"] == ["livekit"]
     assert realtime_manifest["missing_environment_types"] == []
+    matrix_optimization = checks[
+        "framework_adapter_matrix_optimization_readiness"
+    ]["evidence"]
+    assert matrix_optimization["required_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES
+    )
+    assert matrix_optimization["required_frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert matrix_optimization["required_env"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV
+    )
+    assert matrix_optimization["required_layers"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS
+    )
+    assert matrix_optimization["required_search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+    )
+    assert matrix_optimization["required_metrics"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
+    )
+    assert matrix_optimization["required_proof_kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+    )
+    assert matrix_optimization["required_proof_assurance_level"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert matrix_optimization["required_proof_checks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+    )
+    assert matrix_optimization["required_source_urls"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS
+    )
+    assert matrix_optimization["missing_files"] == []
+    assert matrix_optimization["execution_errors"] == []
+    assert matrix_optimization["manifest_errors"] == []
+    assert matrix_optimization["optimization_errors"] == []
+    assert matrix_optimization["proof_errors"] == []
+    assert matrix_optimization["metric_errors"] == []
+    assert matrix_optimization["security_errors"] == []
+    assert matrix_optimization["source_errors"] == []
+    matrix_optimization_evidence = matrix_optimization["evidence"]
+    matrix_optimization_manifest = matrix_optimization_evidence["manifest"]
+    assert matrix_optimization_manifest["version"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert matrix_optimization_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_MATRIX_OPT_KEY"
+    ]
+    assert matrix_optimization_manifest["target_layers"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS
+    )
+    assert matrix_optimization_manifest["search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
+    )
+    assert matrix_optimization_manifest["candidate_count"] == 2
+    assert matrix_optimization_manifest["weak_framework_count"] < (
+        matrix_optimization_manifest["verified_framework_count"]
+    )
+    verified_matrix_summary = matrix_optimization_manifest[
+        "verified_matrix_summary"
+    ]
+    assert verified_matrix_summary["external_target_count"] == 0
+    assert verified_matrix_summary["requires_external_service_count"] == 0
+    assert verified_matrix_summary["frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert matrix_optimization_manifest["quality_gate"]["required_frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert matrix_optimization_manifest["quality_gate"]["required_transports"] == [
+        "in_process"
+    ]
+    assert matrix_optimization_evidence["result_kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert matrix_optimization_evidence["schema_version"] == "agent-learning.cli.v1"
+    assert matrix_optimization_evidence["result_status"] == "passed"
+    assert matrix_optimization_evidence["output_roundtrip"] is True
+    assert matrix_optimization_evidence["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_MATRIX_OPT_KEY"
+    ]
+    assert matrix_optimization_evidence["optimization_passed"] is True
+    assert matrix_optimization_evidence["evaluation_passed"] is True
+    assert matrix_optimization_evidence["optimization_score"] >= 0.98
+    assert matrix_optimization_evidence["evaluation_score"] == pytest.approx(1.0)
+    assert matrix_optimization_evidence["candidate_count"] == 2
+    assert matrix_optimization_evidence["candidate_lineage_count"] == 2
+    assert matrix_optimization_evidence["total_evaluations"] == 2
+    assert matrix_optimization_evidence["total_iterations"] == 2
+    assert matrix_optimization_evidence["selected_patch_keys"] == [
+        "simulation.environments"
+    ]
+    assert matrix_optimization_evidence["frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert matrix_optimization_evidence["selected_matrix_status"] == "passed"
+    selected_matrix_summary = matrix_optimization_evidence[
+        "selected_matrix_summary"
+    ]
+    assert selected_matrix_summary["contract_count"] == len(
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert selected_matrix_summary["external_target_count"] == 0
+    assert selected_matrix_summary["requires_external_service_count"] == 0
+    assert selected_matrix_summary["local_executable_fixture_count"] == len(
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert matrix_optimization_evidence["report_matrix_status"] == "passed"
+    assert matrix_optimization_evidence["report_matrix_frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    for metric in trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS:
+        assert matrix_optimization_evidence["best_metrics"][metric] == (
+            pytest.approx(1.0)
+        )
+    proof = matrix_optimization_evidence["proof"]
+    assert proof["kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+    )
+    assert proof["status"] == "passed"
+    assert proof["passed"] is True
+    assert proof["assurance_level"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert proof["frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert proof["passed_check_ids"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+    )
+    assert matrix_optimization_evidence["serialized_secret_absent"] is True
+    assert matrix_optimization_evidence[
+        "selected_matrix_forbidden_external_keys"
+    ] == []
     agent_integration = checks["agent_integration_readiness"]["evidence"]
     assert agent_integration["required_files"] == trinity.V1_AGENT_INTEGRATION_FILES
     assert agent_integration["required_providers"] == (
@@ -18465,6 +18637,48 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert {"text", "voice", "cua"} <= set(matrix_axis["modalities"])
     assert matrix_axis["transports"] == ["in_process"]
+    matrix_optimization_axis = environment_10x_axes["framework_matrix_optimization"]
+    assert matrix_optimization_axis["source_check"] == (
+        "framework_adapter_matrix_optimization_readiness"
+    )
+    matrix_optimization_axis_evidence = matrix_optimization_axis["evidence"]
+    assert matrix_optimization_axis_evidence["result_status"] == "passed"
+    assert matrix_optimization_axis_evidence["output_roundtrip"] is True
+    assert matrix_optimization_axis_evidence["frameworks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
+    )
+    assert matrix_optimization_axis_evidence["selected_patch_keys"] == [
+        "simulation.environments"
+    ]
+    assert matrix_optimization_axis_evidence["candidate_count"] == 2
+    assert matrix_optimization_axis_evidence["weak_framework_count"] < (
+        matrix_optimization_axis_evidence["verified_framework_count"]
+    )
+    assert matrix_optimization_axis_evidence["optimization_score"] >= 0.98
+    assert matrix_optimization_axis_evidence["evaluation_score"] == pytest.approx(1.0)
+    matrix_optimization_axis_summary = matrix_optimization_axis_evidence[
+        "selected_matrix_summary"
+    ]
+    assert matrix_optimization_axis_summary["external_target_count"] == 0
+    assert matrix_optimization_axis_summary["requires_external_service_count"] == 0
+    matrix_optimization_axis_proof = matrix_optimization_axis_evidence["proof"]
+    assert matrix_optimization_axis_proof["kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
+    )
+    assert matrix_optimization_axis_proof["status"] == "passed"
+    assert matrix_optimization_axis_proof["assurance_level"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert matrix_optimization_axis_proof["failed_check_ids"] == []
+    assert matrix_optimization_axis_proof["warning_check_ids"] == []
+    assert set(matrix_optimization_axis_proof["passed_check_ids"]) == set(
+        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
+    )
+    for metric in trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS:
+        assert matrix_optimization_axis_evidence["best_metrics"][metric] == (
+            pytest.approx(1.0)
+        )
+    assert matrix_optimization_axis_evidence["serialized_secret_absent"] is True
     http_transport_axis = environment_10x_axes["local_http_framework_transport"]
     assert http_transport_axis["source_check"] == "framework_http_transport_readiness"
     http_transport_axis_evidence = http_transport_axis["evidence"]
