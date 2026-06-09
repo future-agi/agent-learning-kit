@@ -28,9 +28,9 @@ V1 is releasable when a user can:
 10. Prove the Agent Learning framework/environment layer is the primary
    robustness surface by keeping at least ten independent local evidence axes
    green across replay, simulation, evals, optimizer recovery, adapters,
-   protocols, browser/CUA, realtime, memory, multi-agent, red-team, and
-   regression workflows. OpenEnv and Gymnasium are compatibility inputs, not
-   the product center.
+   protocols, browser/CUA, realtime, memory, retrieval hooks, multi-agent,
+   red-team, and regression workflows. OpenEnv and Gymnasium are compatibility
+   inputs, not the product center.
 
 ## Milestones
 
@@ -53,7 +53,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
+| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -439,6 +439,15 @@ Current checkpoint:
   auth candidates, attach native workflow-hook proof, prove secret redaction plus
   `workflow_hooks`/`refund_workflow` runtime state, and count as the
   `authenticated_workflow_hooks` axis in `environment_10x_robustness`.
+- Retrieval hook readiness is now an executable release-check gate:
+  `examples/sdk_retrieval_hook_optimization.py` must run a local authenticated
+  HTTP retrieval/RAG hook, select the verified authenticated hook over stale
+  static or missing-auth candidates, attach native retrieval-hook proof, prove
+  redacted auth, current-document citations, `retrieval_memory_trace` state
+  trace, and passing retrieval metrics, and count as the
+  `authenticated_retrieval_hooks` axis in `environment_10x_robustness`.
+  OpenEnv/Gymnasium compatibility remains compatibility coverage only; this is
+  the Agent Learning-native local RAG/retrieval optimization proof.
 - Framework adapter trinity suite readiness is now an executable release-check
   gate: `examples/sdk_framework_adapter_trinity_suite.py` must pass the local
   run+redteam suite with the same promoted adapter contract, and
@@ -466,11 +475,11 @@ Current checkpoint:
   requires at least ten independent axes to pass across the Agent Learning
   replay contract, framework simulation, local evals, optimizer recovery,
   adapter promotion, protocol routing, browser/CUA, realtime, memory,
-  multi-agent coordination, world orchestration, workspace import certification,
-  red-team suite coverage, and regression replay. Workspace import certification
-  is counted as a native proof-backed axis with report/action/regression
-  visibility for arbitrary repository/framework import surfaces; OpenEnv/
-  Gymnasium-shaped traces are compatibility inputs inside that bar.
+  multi-agent coordination, authenticated retrieval hooks, world orchestration,
+  workspace import certification, red-team suite coverage, and regression
+  replay. Workspace import certification and authenticated retrieval hooks are
+  counted as native proof-backed axes; OpenEnv/Gymnasium-shaped traces are
+  compatibility inputs inside that bar.
 
 Acceptance gates:
 
@@ -550,6 +559,11 @@ Next implementation focus:
   useful, but authenticated workflow-hook optimization must remain our own local
   proof surface with redacted auth, state updates, candidate lineage, and replay
   evidence before adding third-party workflow providers.
+- Keep retrieval hooks on the Agent Learning-native bar: OpenEnv compatibility
+  is useful, but authenticated retrieval/RAG hook optimization must remain our
+  own local proof surface with redacted auth, current-document citations, state
+  trace, native proof, and the `authenticated_retrieval_hooks` 10x axis before
+  adding third-party retrieval providers.
 
 ### M7: Release Packaging And Proof
 

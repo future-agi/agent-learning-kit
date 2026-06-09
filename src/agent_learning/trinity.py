@@ -1726,6 +1726,7 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
+    "examples/sdk_retrieval_hook_optimization.py",
     "examples/sdk_workflow_hook_optimization.py",
     "examples/sdk_workspace_import_certification_optimization.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
@@ -1746,6 +1747,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "world_orchestration_replay",
     "workspace_import_certification",
     "authenticated_workflow_hooks",
+    "authenticated_retrieval_hooks",
     "redteam_pen_test_suite",
     "regression_promotion_replay",
 ]
@@ -2878,6 +2880,46 @@ V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS = [
 ]
 
 V1_WORKFLOW_HOOK_SELECTED_PROFILE = "verified_authenticated_workflow_hook"
+
+V1_RETRIEVAL_HOOK_FILES = [
+    "examples/sdk_retrieval_hook_optimization.py",
+]
+
+V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES = ["retrieval_hook"]
+
+V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS = [
+    "retrieval_hooks",
+    "retrieval_memory",
+]
+
+V1_RETRIEVAL_HOOK_REQUIRED_METRICS = [
+    "tool_selection_accuracy",
+    "tool_outcome",
+    "retrieval_context_quality",
+    "retrieval_memory_attribution",
+    "source_grounding",
+    "secret_leakage",
+]
+
+V1_RETRIEVAL_HOOK_PROOF_KIND = (
+    "agent-learning.optimization.retrieval-hook-proof.v1"
+)
+
+V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL = (
+    "l3_authenticated_retrieval_hook_verified"
+)
+
+V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS = [
+    "retrieval_hook_source_manifest_contract_closed",
+    "local_authenticated_retrieval_hook_selected",
+    "retrieval_hook_execution_state_closed",
+    "retrieval_hook_auth_redaction_closed",
+    "retrieval_hook_metric_evidence_closed",
+    "retrieval_hook_patch_surface_present",
+    "retrieval_hook_candidate_lineage_gate_passed",
+]
+
+V1_RETRIEVAL_HOOK_SELECTED_PROFILE = "verified_authenticated_retrieval_hook"
 
 V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS = [
     {
@@ -4022,6 +4064,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=workflow_hook,
     )
+    retrieval_hook = _release_retrieval_hook_status(root)
+    _append_release_check(
+        checks,
+        check_id="retrieval_hook_readiness",
+        passed=(
+            not retrieval_hook["missing_files"]
+            and not retrieval_hook["execution_errors"]
+            and not retrieval_hook["manifest_errors"]
+            and not retrieval_hook["optimization_errors"]
+            and not retrieval_hook["proof_errors"]
+            and not retrieval_hook["runtime_errors"]
+            and not retrieval_hook["metric_errors"]
+            and not retrieval_hook["security_errors"]
+        ),
+        milestone="M6",
+        evidence=retrieval_hook,
+    )
     framework_adapter_trinity_suite = _release_framework_adapter_trinity_suite_status(root)
     _append_release_check(
         checks,
@@ -4081,6 +4140,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         orchestration_stack_probe=orchestration_stack_probe,
         workspace_import_certification=workspace_import_certification,
         workflow_hook=workflow_hook,
+        retrieval_hook=retrieval_hook,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -4505,6 +4565,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS
         ),
         "required_workflow_hook_selected_profile": V1_WORKFLOW_HOOK_SELECTED_PROFILE,
+        "required_retrieval_hook_files": list(V1_RETRIEVAL_HOOK_FILES),
+        "required_retrieval_hook_environment_types": list(
+            V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_retrieval_hook_state_keys": list(
+            V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
+        ),
+        "required_retrieval_hook_metrics": list(V1_RETRIEVAL_HOOK_REQUIRED_METRICS),
+        "required_retrieval_hook_proof_kind": V1_RETRIEVAL_HOOK_PROOF_KIND,
+        "required_retrieval_hook_proof_assurance_level": (
+            V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_retrieval_hook_proof_checks": list(
+            V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS
+        ),
+        "required_retrieval_hook_selected_profile": (
+            V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+        ),
         "required_agent_integration_files": list(V1_AGENT_INTEGRATION_FILES),
         "required_agent_integration_providers": list(
             V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
@@ -19760,6 +19838,7 @@ def _release_environment_10x_robustness_status(
     orchestration_stack_probe: Mapping[str, Any],
     workspace_import_certification: Mapping[str, Any],
     workflow_hook: Mapping[str, Any],
+    retrieval_hook: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -20779,6 +20858,126 @@ def _release_environment_10x_robustness_status(
             ),
             "trace": dict(workflow_hook_trace),
             "serialized_secret_absent": workflow_hook_runtime.get(
+                "serialized_secret_absent"
+            ),
+        },
+    )
+
+    retrieval_hook_examples = _as_mapping(
+        retrieval_hook.get("evidence")
+    ).get("examples")
+    retrieval_hook_example = _as_mapping(
+        _as_mapping(retrieval_hook_examples).get(
+            "examples/sdk_retrieval_hook_optimization.py"
+        )
+    )
+    retrieval_hook_proof = _as_mapping(retrieval_hook_example.get("proof"))
+    retrieval_hook_runtime = _as_mapping(retrieval_hook_example.get("runtime"))
+    retrieval_hook_optimization = _as_mapping(
+        retrieval_hook_example.get("optimization")
+    )
+    retrieval_hook_metrics = _as_mapping(retrieval_hook_proof.get("selected_metrics"))
+    retrieval_hook_trace = _as_mapping(retrieval_hook_runtime.get("trace"))
+    retrieval_hook_trace_auth = _as_mapping(retrieval_hook_trace.get("auth"))
+    retrieval_memory = _as_mapping(retrieval_hook_runtime.get("retrieval_memory"))
+    append_axis(
+        "authenticated_retrieval_hooks",
+        source_check="retrieval_hook_readiness",
+        passed=(
+            empty_buckets(
+                retrieval_hook,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "proof_errors",
+                    "runtime_errors",
+                    "metric_errors",
+                    "security_errors",
+                ),
+            )
+            and retrieval_hook_proof.get("kind") == V1_RETRIEVAL_HOOK_PROOF_KIND
+            and retrieval_hook_proof.get("status") == "passed"
+            and retrieval_hook_proof.get("passed") is True
+            and retrieval_hook_proof.get("assurance_level")
+            == V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
+            and retrieval_hook_proof.get("requires_external_service") is False
+            and retrieval_hook_proof.get("selected_profile")
+            == V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+            and contains_all(
+                retrieval_hook_proof.get("selected_environment_types") or [],
+                V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES,
+            )
+            and contains_all(
+                retrieval_hook_proof.get("selected_state_keys") or [],
+                V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS,
+            )
+            and contains_all(
+                retrieval_hook_proof.get("passed_check_ids") or [],
+                V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS,
+            )
+            and metrics_at_floor(
+                retrieval_hook_metrics,
+                V1_RETRIEVAL_HOOK_REQUIRED_METRICS,
+            )
+            and retrieval_hook_trace.get("success") is True
+            and _int_or_zero(retrieval_hook_trace.get("status_code")) == 200
+            and retrieval_hook_trace_auth.get("redacted") is True
+            and retrieval_hook_runtime.get("serialized_secret_absent") is True
+            and "doc_refund_2026"
+            in set(_as_list(retrieval_memory.get("current_document_ids")))
+            and "doc_refund_2026"
+            in set(_as_list(retrieval_memory.get("fresh_citation_doc_ids")))
+            and "doc_refund_2025"
+            not in set(_as_list(retrieval_memory.get("document_ids")))
+            and retrieval_hook_optimization.get("optimization_passed") is True
+            and retrieval_hook_optimization.get("evaluation_passed") is True
+        ),
+        expected={
+            "proof_kind": V1_RETRIEVAL_HOOK_PROOF_KIND,
+            "proof_status": "passed",
+            "proof_passed": True,
+            "assurance_level": V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL,
+            "requires_external_service": False,
+            "selected_profile": V1_RETRIEVAL_HOOK_SELECTED_PROFILE,
+            "environment_types": V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES,
+            "state_keys": V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS,
+            "proof_checks": V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS,
+            "metrics": V1_RETRIEVAL_HOOK_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+            "trace_status_code": 200,
+            "trace_auth_redacted": True,
+            "serialized_secret_absent": True,
+            "current_document": "doc_refund_2026",
+            "forbidden_document": "doc_refund_2025",
+        },
+        evidence={
+            "proof_kind": retrieval_hook_proof.get("kind"),
+            "proof_status": retrieval_hook_proof.get("status"),
+            "proof_passed": retrieval_hook_proof.get("passed"),
+            "proof_assurance_level": retrieval_hook_proof.get("assurance_level"),
+            "requires_external_service": retrieval_hook_proof.get(
+                "requires_external_service"
+            ),
+            "selected_profile": retrieval_hook_proof.get("selected_profile"),
+            "selected_environment_types": (
+                retrieval_hook_proof.get("selected_environment_types") or []
+            ),
+            "selected_state_keys": (
+                retrieval_hook_proof.get("selected_state_keys") or []
+            ),
+            "selected_metrics": {
+                metric: retrieval_hook_metrics.get(metric)
+                for metric in V1_RETRIEVAL_HOOK_REQUIRED_METRICS
+            },
+            "passed_check_ids": retrieval_hook_proof.get("passed_check_ids") or [],
+            "retrieval_summary": _as_mapping(
+                retrieval_hook_runtime.get("retrieval_summary")
+            ),
+            "retrieval_memory": dict(retrieval_memory),
+            "trace": dict(retrieval_hook_trace),
+            "serialized_secret_absent": retrieval_hook_runtime.get(
                 "serialized_secret_absent"
             ),
         },
@@ -23476,6 +23675,659 @@ def _release_workflow_hook_status(root: Path) -> dict[str, Any]:
         "required_assurance_level": V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL,
         "required_proof_checks": list(V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS),
         "selected_profile": V1_WORKFLOW_HOOK_SELECTED_PROFILE,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "runtime_errors": runtime_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_retrieval_hook_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_RETRIEVAL_HOOK_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        return sorted({str(item) for item in required} - {str(item) for item in observed})
+
+    if not missing_files:
+        from . import config as agent_config
+
+        path = "examples/sdk_retrieval_hook_optimization.py"
+        env_name = "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+        endpoint_env = "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_ENDPOINT"
+        env_value = "release-check-retrieval-hook-key"
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {name: os.environ.get(name) for name in config_env_names}
+        previous_config = agent_config.current_config()
+        previous_env = os.environ.get(env_name)
+        previous_endpoint = os.environ.get(endpoint_env)
+        try:
+            example_path = root / path
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_retrieval_hook",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            os.environ[env_name] = env_value
+            os.environ.pop(endpoint_env, None)
+            manifest = module.build_manifest(
+                endpoint="http://127.0.0.1:1/retrieval/query"
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-retrieval-hook-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "retrieval-hook.json"
+                result = module.run(output_path)
+                serialized = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized)
+            example_evidence: dict[str, Any] = {}
+            evidence["examples"][path] = example_evidence
+
+            target = _as_mapping(_as_mapping(manifest.get("optimization")).get("target"))
+            metadata = _as_mapping(target.get("metadata"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = [
+                item
+                for item in _as_list(search_space.get("simulation.environments"))
+                if isinstance(item, Sequence) and not isinstance(item, (str, bytes))
+            ]
+            candidate_profiles: list[str] = []
+            candidate_environment_types: list[list[str]] = []
+            for candidate in candidates:
+                envs = [_as_mapping(item) for item in candidate if isinstance(item, Mapping)]
+                candidate_environment_types.append(
+                    [str(environment.get("type") or "") for environment in envs]
+                )
+                profile = ""
+                if envs:
+                    data = _as_mapping(envs[0].get("data"))
+                    profile = str(
+                        _as_mapping(data.get("metadata")).get("candidate_profile")
+                        or ""
+                    )
+                if profile:
+                    candidate_profiles.append(profile)
+
+            optimization = _as_mapping(result.get("optimization"))
+            summary = _as_mapping(result.get("summary"))
+            best_config = _as_mapping(optimization.get("best_config"))
+            best_simulation = _as_mapping(best_config.get("simulation"))
+            best_envs = [
+                _as_mapping(item)
+                for item in _as_list(best_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            best_env = _as_mapping(best_envs[0]) if best_envs else {}
+            best_data = _as_mapping(best_env.get("data"))
+            best_auth = _as_mapping(best_data.get("auth"))
+            selected_profile = str(
+                _as_mapping(best_data.get("metadata")).get("candidate_profile") or ""
+            )
+            histories = [
+                _as_mapping(item)
+                for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history = max(
+                histories,
+                key=lambda item: _float_or_zero(item.get("score")),
+                default={},
+            )
+            best_patch = _as_mapping(
+                best_history.get("candidate_patch") or best_history.get("patch")
+            )
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            case = _as_mapping(
+                next(
+                    (
+                        item
+                        for item in _as_list(
+                            _as_mapping(best_history.get("report")).get("results")
+                        )
+                        if isinstance(item, Mapping)
+                    ),
+                    {},
+                )
+            )
+            state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+            retrieval_state = _as_mapping(state.get("retrieval_memory"))
+            documents = [
+                _as_mapping(item)
+                for item in _as_list(retrieval_state.get("documents"))
+                if isinstance(item, Mapping)
+            ]
+            document_ids = [str(document.get("id") or "") for document in documents]
+            current_document_ids = [
+                str(document.get("id") or "")
+                for document in documents
+                if document.get("current") is True
+            ]
+            stale_document_ids = [
+                str(document.get("id") or "")
+                for document in documents
+                if document.get("current") is False
+            ]
+            queries = [
+                _as_mapping(item)
+                for item in _as_list(retrieval_state.get("queries"))
+                if isinstance(item, Mapping)
+            ]
+            query = _as_mapping(queries[0]) if queries else {}
+            ranked_documents = [
+                _as_mapping(item)
+                for item in _as_list(query.get("ranked_documents"))
+                if isinstance(item, Mapping)
+            ]
+            first_rank = _as_mapping(ranked_documents[0]) if ranked_documents else {}
+            citations = [
+                _as_mapping(item)
+                for item in _as_list(retrieval_state.get("citations"))
+                if isinstance(item, Mapping)
+            ]
+            citation_doc_ids = sorted(
+                {
+                    str(doc_id)
+                    for citation in citations
+                    for doc_id in _as_list(citation.get("doc_ids"))
+                }
+            )
+            fresh_citation_doc_ids = sorted(
+                {
+                    str(doc_id)
+                    for citation in citations
+                    if citation.get("freshness_checked") is True
+                    for doc_id in _as_list(citation.get("doc_ids"))
+                }
+            )
+            hook_state = _as_mapping(state.get("retrieval_hooks"))
+            hook_summary = _as_mapping(hook_state.get("summary"))
+            trace = _as_mapping(hook_state.get("last_call"))
+            trace_auth = _as_mapping(trace.get("auth"))
+            proof = _as_mapping(result.get("retrieval_hook_proof"))
+            proof_evidence = _as_mapping(proof.get("evidence"))
+            selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+            check_ids = [
+                str(_as_mapping(check).get("id"))
+                for check in _as_list(proof.get("checks"))
+                if _as_mapping(check).get("id")
+            ]
+            passed_check_ids = [
+                str(_as_mapping(check).get("id"))
+                for check in _as_list(proof.get("checks"))
+                if _as_mapping(check).get("passed") is True
+                and _as_mapping(check).get("id")
+            ]
+
+            example_evidence["manifest"] = {
+                "version": manifest.get("version"),
+                "required_env": list(manifest.get("required_env") or []),
+                "task_kind": metadata.get("task_kind"),
+                "cookbook": metadata.get("cookbook"),
+                "layers": list(target.get("layers") or []),
+                "candidate_search_paths": list(metadata.get("candidate_search_paths") or []),
+                "candidate_count": len(candidates),
+                "candidate_profiles": candidate_profiles,
+                "candidate_environment_types": candidate_environment_types,
+            }
+            example_evidence["optimization"] = {
+                "kind": result.get("kind"),
+                "status": result.get("status"),
+                "schema_version": result.get("schema_version"),
+                "output_roundtrip": result == saved,
+                "optimization_passed": summary.get("optimization_passed"),
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "threshold": summary.get("threshold"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "best_environment_types": [
+                    str(environment.get("type") or "") for environment in best_envs
+                ],
+                "selected_profile": selected_profile,
+                "best_patch_keys": sorted(str(path) for path in best_patch),
+                "best_metrics": {
+                    metric: best_metrics.get(metric)
+                    for metric in V1_RETRIEVAL_HOOK_REQUIRED_METRICS
+                },
+            }
+            example_evidence["runtime"] = {
+                "state_keys": sorted(str(key) for key in state),
+                "retrieval_summary": dict(hook_summary),
+                "retrieval_memory": {
+                    "document_ids": document_ids,
+                    "current_document_ids": current_document_ids,
+                    "stale_document_ids": stale_document_ids,
+                    "query_documents": list(query.get("documents") or []),
+                    "first_ranked_document": dict(first_rank),
+                    "citation_doc_ids": citation_doc_ids,
+                    "fresh_citation_doc_ids": fresh_citation_doc_ids,
+                    "require_current": retrieval_state.get("require_current"),
+                },
+                "trace": {
+                    "tool": trace.get("tool"),
+                    "status_code": trace.get("status_code"),
+                    "success": trace.get("success"),
+                    "retrieved_doc_ids": list(trace.get("retrieved_doc_ids") or []),
+                    "auth": dict(trace_auth),
+                },
+                "serialized_secret_absent": env_value not in serialized,
+            }
+            example_evidence["proof"] = {
+                "kind": proof.get("kind"),
+                "status": proof.get("status"),
+                "passed": proof.get("passed"),
+                "assurance_level": proof.get("assurance_level"),
+                "requires_external_service": proof.get("requires_external_service"),
+                "failed_check_ids": list(proof.get("failed_check_ids") or []),
+                "warning_check_ids": list(proof.get("warning_check_ids") or []),
+                "check_ids": check_ids,
+                "passed_check_ids": passed_check_ids,
+                "selected_environment_types": list(
+                    proof_evidence.get("selected_environment_types") or []
+                ),
+                "selected_state_keys": list(
+                    proof_evidence.get("selected_state_keys") or []
+                ),
+                "selected_profile": proof_evidence.get("selected_profile"),
+                "selected_metrics": {
+                    metric: selected_metrics.get(metric)
+                    for metric in V1_RETRIEVAL_HOOK_REQUIRED_METRICS
+                },
+                "summary": {
+                    "retrieval_hook_proof_status": summary.get(
+                        "retrieval_hook_proof_status"
+                    ),
+                    "retrieval_hook_proof_passed": summary.get(
+                        "retrieval_hook_proof_passed"
+                    ),
+                    "retrieval_hook_proof_failed_check_count": summary.get(
+                        "retrieval_hook_proof_failed_check_count"
+                    ),
+                },
+            }
+
+            manifest_expectations = {
+                "manifest.version": (
+                    manifest.get("version"),
+                    "agent-learning.optimization.v1",
+                ),
+                "manifest.required_env": (manifest.get("required_env") or [], [env_name]),
+                "manifest.optimization.target.metadata.task_kind": (
+                    metadata.get("task_kind"),
+                    "retrieval_hook",
+                ),
+                "manifest.optimization.target.metadata.cookbook": (
+                    metadata.get("cookbook"),
+                    "sdk-retrieval-hook-optimization",
+                ),
+            }
+            for field, (observed, expected) in manifest_expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_layers = missing_values(
+                target.get("layers") or [],
+                ["retrieval", "retriever", "security", "integration", "evaluator"],
+            )
+            if missing_layers:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.layers",
+                    expected=[
+                        "retrieval",
+                        "retriever",
+                        "security",
+                        "integration",
+                        "evaluator",
+                    ],
+                    observed=target.get("layers") or [],
+                )
+            if "simulation.environments" not in set(
+                metadata.get("candidate_search_paths") or []
+            ):
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.metadata.candidate_search_paths",
+                    expected=["simulation.environments"],
+                    observed=metadata.get("candidate_search_paths") or [],
+                )
+            if len(candidates) < 3:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.search_space.simulation.environments",
+                    expected=">=3",
+                    observed=len(candidates),
+                )
+            for profile in (
+                "stale_static_retrieval_memory",
+                "http_retrieval_hook_missing_auth",
+                V1_RETRIEVAL_HOOK_SELECTED_PROFILE,
+            ):
+                if profile not in candidate_profiles:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field="manifest.retrieval_hook_candidate_profiles",
+                        expected=profile,
+                        observed=candidate_profiles,
+                    )
+
+            optimization_expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.optimization.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "summary.optimization_passed": (
+                    summary.get("optimization_passed"),
+                    True,
+                ),
+                "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+                "best_environment_type": (best_env.get("type"), "retrieval_hook"),
+                "best_candidate_profile": (
+                    selected_profile,
+                    V1_RETRIEVAL_HOOK_SELECTED_PROFILE,
+                ),
+                "best_environment.auth.type": (best_auth.get("type"), "bearer"),
+                "best_environment.auth.token_env": (best_auth.get("token_env"), env_name),
+            }
+            for field, (observed, expected) in optimization_expectations.items():
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < _float_or_zero(
+                summary.get("threshold")
+            ):
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.optimization_score",
+                    expected=f">={summary.get('threshold')}",
+                    observed=summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.evaluation_score",
+                    expected=">=1.0",
+                    observed=summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.candidate_lineage_count",
+                    expected=">=3",
+                    observed=summary.get("candidate_lineage_count"),
+                )
+            if "simulation.environments" not in set(best_patch):
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="best_history.patch",
+                    expected=["simulation.environments"],
+                    observed=sorted(str(item) for item in best_patch),
+                )
+
+            runtime_expectations = {
+                "retrieval_hooks.summary.call_count": (
+                    hook_summary.get("call_count"),
+                    1,
+                ),
+                "retrieval_hooks.summary.success_count": (
+                    hook_summary.get("success_count"),
+                    1,
+                ),
+                "retrieval_hooks.summary.retrieved_document_count": (
+                    hook_summary.get("retrieved_document_count"),
+                    1,
+                ),
+                "retrieval_memory.documents": (document_ids, ["doc_refund_2026"]),
+                "retrieval_memory.current_document_ids": (
+                    current_document_ids,
+                    ["doc_refund_2026"],
+                ),
+                "retrieval_memory.query.documents": (
+                    query.get("documents") or [],
+                    ["doc_refund_2026"],
+                ),
+                "retrieval_memory.first_ranked_document.id": (
+                    first_rank.get("id"),
+                    "doc_refund_2026",
+                ),
+                "retrieval_memory.first_ranked_document.rank": (
+                    first_rank.get("rank"),
+                    1,
+                ),
+                "retrieval_memory.citation_doc_ids": (
+                    citation_doc_ids,
+                    ["doc_refund_2026"],
+                ),
+                "retrieval_memory.fresh_citation_doc_ids": (
+                    fresh_citation_doc_ids,
+                    ["doc_refund_2026"],
+                ),
+                "retrieval_hooks.last_call.tool": (
+                    trace.get("tool"),
+                    "retrieve_documents",
+                ),
+                "retrieval_hooks.last_call.status_code": (trace.get("status_code"), 200),
+                "retrieval_hooks.last_call.success": (trace.get("success"), True),
+                "retrieval_hooks.last_call.auth.redacted": (
+                    trace_auth.get("redacted"),
+                    True,
+                ),
+                "retrieval_hooks.last_call.auth.token_env": (
+                    trace_auth.get("token_env"),
+                    env_name,
+                ),
+                "retrieval_hooks.last_call.retrieved_doc_ids": (
+                    trace.get("retrieved_doc_ids") or [],
+                    ["doc_refund_2026"],
+                ),
+            }
+            for field, (observed, expected) in runtime_expectations.items():
+                if observed != expected:
+                    append_error(
+                        runtime_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if stale_document_ids:
+                append_error(
+                    runtime_errors,
+                    path=path,
+                    field="retrieval_memory.stale_document_ids",
+                    expected=[],
+                    observed=stale_document_ids,
+                )
+            missing_state_keys = missing_values(
+                state,
+                V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    runtime_errors,
+                    path=path,
+                    field="report.results.metadata.environment_state",
+                    expected=V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS,
+                    observed=sorted(str(key) for key in state),
+                )
+
+            proof_expectations = {
+                "retrieval_hook_proof.kind": (
+                    proof.get("kind"),
+                    V1_RETRIEVAL_HOOK_PROOF_KIND,
+                ),
+                "retrieval_hook_proof.status": (proof.get("status"), "passed"),
+                "retrieval_hook_proof.passed": (proof.get("passed"), True),
+                "retrieval_hook_proof.assurance_level": (
+                    proof.get("assurance_level"),
+                    V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL,
+                ),
+                "retrieval_hook_proof.requires_external_service": (
+                    proof.get("requires_external_service"),
+                    False,
+                ),
+                "retrieval_hook_proof.failed_check_ids": (
+                    proof.get("failed_check_ids") or [],
+                    [],
+                ),
+                "retrieval_hook_proof.warning_check_ids": (
+                    proof.get("warning_check_ids") or [],
+                    [],
+                ),
+                "summary.retrieval_hook_proof_status": (
+                    summary.get("retrieval_hook_proof_status"),
+                    "passed",
+                ),
+                "summary.retrieval_hook_proof_passed": (
+                    summary.get("retrieval_hook_proof_passed"),
+                    True,
+                ),
+                "summary.retrieval_hook_proof_failed_check_count": (
+                    summary.get("retrieval_hook_proof_failed_check_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in proof_expectations.items():
+                if observed != expected:
+                    append_error(
+                        proof_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_proof_checks = missing_values(
+                passed_check_ids,
+                V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS,
+            )
+            if missing_proof_checks:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="retrieval_hook_proof.passed_check_ids",
+                    expected=V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS,
+                    observed=passed_check_ids,
+                )
+
+            for metric in V1_RETRIEVAL_HOOK_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=f"best_history.metrics.{metric}",
+                        expected=">=1.0",
+                        observed=best_metrics.get(metric),
+                    )
+                if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=(
+                            "retrieval_hook_proof.evidence."
+                            f"selected_metrics.{metric}"
+                        ),
+                        expected=">=1.0",
+                        observed=selected_metrics.get(metric),
+                    )
+
+            if env_value in serialized:
+                append_error(
+                    security_errors,
+                    path=path,
+                    field="serialized_result",
+                    expected=f"{env_name} value absent",
+                    observed=f"{env_name} value present",
+                )
+        except Exception as exc:
+            execution_errors.append({"path": path, "error": str(exc)})
+            evidence["examples"].setdefault(path, {})
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_env is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_env
+            if previous_endpoint is None:
+                os.environ.pop(endpoint_env, None)
+            else:
+                os.environ[endpoint_env] = previous_endpoint
+
+    return {
+        "required_files": list(V1_RETRIEVAL_HOOK_FILES),
+        "required_environment_types": list(V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES),
+        "required_state_keys": list(V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS),
+        "required_metrics": list(V1_RETRIEVAL_HOOK_REQUIRED_METRICS),
+        "required_proof_kind": V1_RETRIEVAL_HOOK_PROOF_KIND,
+        "required_assurance_level": V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL,
+        "required_proof_checks": list(V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS),
+        "selected_profile": V1_RETRIEVAL_HOOK_SELECTED_PROFILE,
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "manifest_errors": manifest_errors,

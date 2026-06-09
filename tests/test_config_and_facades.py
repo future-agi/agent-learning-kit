@@ -386,6 +386,10 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.optimize_workflow_hooks is not None
     assert optimize.build_retrieval_hook_optimization_manifest is not None
     assert optimize.optimize_retrieval_hooks is not None
+    assert optimize.with_retrieval_hook_proof is not None
+    assert optimize.AGENT_LEARNING_RETRIEVAL_HOOK_PROOF_KIND == (
+        "agent-learning.optimization.retrieval-hook-proof.v1"
+    )
     assert optimize.build_evaluation_hook_optimization_manifest is not None
     assert optimize.optimize_evaluation_hooks is not None
     assert optimize.optimize_evaluation_hook_probe is not None
@@ -15674,6 +15678,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workflow_hook_selected_profile"] == (
         trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
     )
+    assert payload["required_retrieval_hook_files"] == (
+        trinity.V1_RETRIEVAL_HOOK_FILES
+    )
+    assert payload["required_retrieval_hook_environment_types"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_retrieval_hook_state_keys"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_retrieval_hook_metrics"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_METRICS
+    )
+    assert payload["required_retrieval_hook_proof_kind"] == (
+        trinity.V1_RETRIEVAL_HOOK_PROOF_KIND
+    )
+    assert payload["required_retrieval_hook_proof_assurance_level"] == (
+        trinity.V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_retrieval_hook_proof_checks"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert payload["required_retrieval_hook_selected_profile"] == (
+        trinity.V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+    )
     assert payload["required_framework_adapter_probe_files"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES
     )
@@ -16014,6 +16042,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "memory_layer_probe_readiness",
         "stateful_framework_adapter_readiness",
         "workflow_hook_readiness",
+        "retrieval_hook_readiness",
         "framework_adapter_trinity_suite_readiness",
         "orchestration_stack_probe_readiness",
         "trinity_stack_probe_readiness",
@@ -18210,6 +18239,45 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(trinity.V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS) <= set(
         workflow_axis["passed_check_ids"]
     )
+    assert environment_10x_axes["authenticated_retrieval_hooks"][
+        "source_check"
+    ] == "retrieval_hook_readiness"
+    retrieval_axis = environment_10x_axes["authenticated_retrieval_hooks"]["evidence"]
+    assert retrieval_axis["proof_passed"] is True
+    assert retrieval_axis["proof_kind"] == trinity.V1_RETRIEVAL_HOOK_PROOF_KIND
+    assert retrieval_axis["proof_assurance_level"] == (
+        trinity.V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert retrieval_axis["requires_external_service"] is False
+    assert retrieval_axis["selected_profile"] == (
+        trinity.V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+    )
+    assert retrieval_axis["selected_environment_types"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(retrieval_axis["selected_state_keys"]) == set(
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
+    )
+    for metric in trinity.V1_RETRIEVAL_HOOK_REQUIRED_METRICS:
+        assert retrieval_axis["selected_metrics"][metric] == pytest.approx(1.0)
+    assert retrieval_axis["retrieval_summary"]["call_count"] == 1
+    assert retrieval_axis["retrieval_summary"]["success_count"] == 1
+    assert retrieval_axis["retrieval_summary"]["retrieved_document_count"] == 1
+    assert retrieval_axis["retrieval_memory"]["document_ids"] == ["doc_refund_2026"]
+    assert retrieval_axis["retrieval_memory"]["current_document_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert retrieval_axis["retrieval_memory"]["stale_document_ids"] == []
+    assert retrieval_axis["retrieval_memory"]["fresh_citation_doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert retrieval_axis["trace"]["status_code"] == 200
+    assert retrieval_axis["trace"]["success"] is True
+    assert retrieval_axis["trace"]["auth"]["redacted"] is True
+    assert retrieval_axis["serialized_secret_absent"] is True
+    assert set(trinity.V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS) <= set(
+        retrieval_axis["passed_check_ids"]
+    )
     redteam_axis = environment_10x_axes["redteam_pen_test_suite"]["evidence"]
     assert redteam_axis["suite"]["status"] == "passed"
     assert {"run", "redteam"} <= set(redteam_axis["suite"]["child_commands"])
@@ -19803,6 +19871,126 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_trace["auth"]["redacted"] is True
     assert workflow_trace["auth"]["token_env"] == "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"
     assert workflow_runtime["serialized_secret_absent"] is True
+
+    retrieval_hook = checks["retrieval_hook_readiness"]["evidence"]
+    assert retrieval_hook["required_files"] == trinity.V1_RETRIEVAL_HOOK_FILES
+    assert retrieval_hook["required_environment_types"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert retrieval_hook["required_state_keys"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert retrieval_hook["required_metrics"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_METRICS
+    )
+    assert retrieval_hook["required_proof_kind"] == (
+        trinity.V1_RETRIEVAL_HOOK_PROOF_KIND
+    )
+    assert retrieval_hook["required_assurance_level"] == (
+        trinity.V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert retrieval_hook["required_proof_checks"] == (
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert retrieval_hook["selected_profile"] == (
+        trinity.V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+    )
+    assert retrieval_hook["missing_files"] == []
+    assert retrieval_hook["execution_errors"] == []
+    assert retrieval_hook["manifest_errors"] == []
+    assert retrieval_hook["optimization_errors"] == []
+    assert retrieval_hook["proof_errors"] == []
+    assert retrieval_hook["runtime_errors"] == []
+    assert retrieval_hook["metric_errors"] == []
+    assert retrieval_hook["security_errors"] == []
+    retrieval_example = retrieval_hook["evidence"]["examples"][
+        "examples/sdk_retrieval_hook_optimization.py"
+    ]
+    retrieval_manifest = retrieval_example["manifest"]
+    assert retrieval_manifest["version"] == "agent-learning.optimization.v1"
+    assert retrieval_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+    ]
+    assert retrieval_manifest["task_kind"] == "retrieval_hook"
+    assert retrieval_manifest["candidate_search_paths"] == ["simulation.environments"]
+    assert retrieval_manifest["candidate_count"] == 3
+    assert retrieval_manifest["candidate_profiles"] == [
+        "stale_static_retrieval_memory",
+        "http_retrieval_hook_missing_auth",
+        "verified_authenticated_retrieval_hook",
+    ]
+    retrieval_optimization = retrieval_example["optimization"]
+    assert retrieval_optimization["status"] == "passed"
+    assert retrieval_optimization["output_roundtrip"] is True
+    assert retrieval_optimization["optimization_passed"] is True
+    assert retrieval_optimization["evaluation_passed"] is True
+    assert (
+        retrieval_optimization["optimization_score"]
+        >= retrieval_optimization["threshold"]
+    )
+    assert retrieval_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert retrieval_optimization["candidate_lineage_count"] >= 3
+    assert retrieval_optimization["best_environment_types"] == ["retrieval_hook"]
+    assert retrieval_optimization["selected_profile"] == (
+        trinity.V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+    )
+    assert retrieval_optimization["best_patch_keys"] == ["simulation.environments"]
+    for metric in trinity.V1_RETRIEVAL_HOOK_REQUIRED_METRICS:
+        assert retrieval_optimization["best_metrics"][metric] == pytest.approx(1.0)
+    retrieval_proof = retrieval_example["proof"]
+    assert retrieval_proof["kind"] == trinity.V1_RETRIEVAL_HOOK_PROOF_KIND
+    assert retrieval_proof["status"] == "passed"
+    assert retrieval_proof["passed"] is True
+    assert retrieval_proof["assurance_level"] == (
+        trinity.V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert retrieval_proof["requires_external_service"] is False
+    assert retrieval_proof["failed_check_ids"] == []
+    assert retrieval_proof["warning_check_ids"] == []
+    assert set(retrieval_proof["passed_check_ids"]) >= set(
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert retrieval_proof["selected_environment_types"] == ["retrieval_hook"]
+    assert set(retrieval_proof["selected_state_keys"]) == set(
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert retrieval_proof["selected_profile"] == (
+        trinity.V1_RETRIEVAL_HOOK_SELECTED_PROFILE
+    )
+    for metric in trinity.V1_RETRIEVAL_HOOK_REQUIRED_METRICS:
+        assert retrieval_proof["selected_metrics"][metric] == pytest.approx(1.0)
+    assert retrieval_proof["summary"] == {
+        "retrieval_hook_proof_status": "passed",
+        "retrieval_hook_proof_passed": True,
+        "retrieval_hook_proof_failed_check_count": 0,
+    }
+    retrieval_runtime = retrieval_example["runtime"]
+    assert set(retrieval_runtime["state_keys"]) == set(
+        trinity.V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert retrieval_runtime["retrieval_summary"]["call_count"] == 1
+    assert retrieval_runtime["retrieval_summary"]["success_count"] == 1
+    assert retrieval_runtime["retrieval_summary"]["retrieved_document_count"] == 1
+    retrieval_memory = retrieval_runtime["retrieval_memory"]
+    assert retrieval_memory["document_ids"] == ["doc_refund_2026"]
+    assert retrieval_memory["current_document_ids"] == ["doc_refund_2026"]
+    assert retrieval_memory["stale_document_ids"] == []
+    assert retrieval_memory["query_documents"] == ["doc_refund_2026"]
+    assert retrieval_memory["first_ranked_document"]["id"] == "doc_refund_2026"
+    assert retrieval_memory["first_ranked_document"]["rank"] == 1
+    assert retrieval_memory["citation_doc_ids"] == ["doc_refund_2026"]
+    assert retrieval_memory["fresh_citation_doc_ids"] == ["doc_refund_2026"]
+    assert retrieval_memory["require_current"] is True
+    retrieval_trace = retrieval_runtime["trace"]
+    assert retrieval_trace["tool"] == "retrieve_documents"
+    assert retrieval_trace["status_code"] == 200
+    assert retrieval_trace["success"] is True
+    assert retrieval_trace["retrieved_doc_ids"] == ["doc_refund_2026"]
+    assert retrieval_trace["auth"]["redacted"] is True
+    assert retrieval_trace["auth"]["token_env"] == (
+        "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+    )
+    assert retrieval_runtime["serialized_secret_absent"] is True
 
     stateful_adapter = checks["stateful_framework_adapter_readiness"]["evidence"]
     assert stateful_adapter["required_files"] == (
@@ -21981,6 +22169,12 @@ def test_sdk_retrieval_hook_optimization_example_runs(monkeypatch, tmp_path):
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= result["summary"]["threshold"]
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["retrieval_hook_proof_status"] == "passed"
+    assert result["summary"]["retrieval_hook_proof_passed"] is True
+    assert result["summary"]["retrieval_hook_proof_assurance_level"] == (
+        "l3_authenticated_retrieval_hook_verified"
+    )
+    assert result["summary"]["retrieval_hook_proof_failed_check_count"] == 0
 
     best_history = max(
         result["optimization"]["history"],
@@ -22030,6 +22224,61 @@ def test_sdk_retrieval_hook_optimization_example_runs(monkeypatch, tmp_path):
         "cite_sources",
         "retrieval_memory_status",
     ]
+    proof = result["retrieval_hook_proof"]
+    assert saved["retrieval_hook_proof"] == proof
+    assert result["optimization"]["retrieval_hook_proof"] == proof
+    assert proof["kind"] == "agent-learning.optimization.retrieval-hook-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["passed"] is True
+    assert proof["requires_external_service"] is False
+    assert proof["candidate_profile"] == "verified_authenticated_retrieval_hook"
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert set(proof["passed_check_ids"]) >= {
+        "retrieval_hook_source_manifest_contract_closed",
+        "local_authenticated_retrieval_hook_selected",
+        "retrieval_hook_execution_state_closed",
+        "retrieval_hook_auth_redaction_closed",
+        "retrieval_hook_metric_evidence_closed",
+        "retrieval_hook_patch_surface_present",
+        "retrieval_hook_candidate_lineage_gate_passed",
+    }
+    proof_evidence = proof["evidence"]
+    assert proof_evidence["selected_environment_types"] == ["retrieval_hook"]
+    assert proof_evidence["selected_profile"] == (
+        "verified_authenticated_retrieval_hook"
+    )
+    assert set(proof_evidence["selected_state_keys"]) == {
+        "retrieval_hooks",
+        "retrieval_memory",
+    }
+    assert proof_evidence["retrieval_summary"]["call_count"] == 1
+    assert proof_evidence["retrieval_summary"]["success_count"] == 1
+    assert proof_evidence["retrieval_summary"]["retrieved_document_count"] == 1
+    assert proof_evidence["retrieval_memory"]["document_ids"] == ["doc_refund_2026"]
+    assert proof_evidence["retrieval_memory"]["current_document_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert proof_evidence["retrieval_memory"]["stale_document_ids"] == []
+    assert proof_evidence["retrieval_memory"]["fresh_citation_doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    assert proof_evidence["selected_trace"]["auth"]["redacted"] is True
+    assert proof_evidence["selected_trace"]["auth"]["token_env"] == (
+        "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+    )
+    assert proof_evidence["selected_trace"]["retrieved_doc_ids"] == [
+        "doc_refund_2026"
+    ]
+    for metric in (
+        "tool_selection_accuracy",
+        "tool_outcome",
+        "retrieval_context_quality",
+        "retrieval_memory_attribution",
+        "source_grounding",
+        "secret_leakage",
+    ):
+        assert proof_evidence["selected_metrics"][metric] == pytest.approx(1.0)
 
 
 def test_sdk_evaluation_hook_optimization_example_runs(monkeypatch, tmp_path):

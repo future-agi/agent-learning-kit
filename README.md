@@ -103,14 +103,15 @@ external input shapes. Agent Learning
 environment robustness is
 also executable: release-check aggregates local replay, framework, eval,
 optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
-workflow-hook, red-team, orchestration, and regression proof outputs and requires
-at least ten independent axes to pass. OpenEnv and Gymnasium are compatibility
-inputs, not the product center. Regression artifact readiness runs the local
-baseline, compare, report, promote-to-regression, and replay lifecycle so
-optimized or red-team evidence can become replayable CI artifacts. Optimizer governance readiness
-executes local governed optimizer-society search and verifies candidate lineage,
-role credit, top-ranked selection, rollback, locality, dependency audit, and
-optimizer trace metrics. Optimizer portfolio readiness makes backend selection
+workflow-hook, retrieval-hook, red-team, orchestration, and regression proof
+outputs and requires at least ten independent axes to pass. OpenEnv and
+Gymnasium are compatibility inputs, not the product center. Regression artifact
+readiness runs the local baseline, compare, report, promote-to-regression, and
+replay lifecycle so optimized or red-team evidence can become replayable CI
+artifacts. Optimizer governance readiness executes local governed
+optimizer-society search and verifies candidate lineage, role credit, top-ranked
+selection, rollback, locality, dependency audit, and optimizer trace metrics.
+Optimizer portfolio readiness makes backend selection
 executable too: release-check verifies AgentOptimizer can select, prove, and
 locally audit an optimization backend portfolio without external optimizer
 services. Evaluation hook probe readiness executes a localhost
@@ -1199,6 +1200,12 @@ AgentOptimizer. SDK entry points are
 `optimize.build_retrieval_hook_optimization_manifest()`, and
 `optimize.optimize_retrieval_hooks()`; generated artifacts work with
 `agent-learn report`, `agent-learn actions`, and `agent-learn action-run`.
+`agent-learn release-check` gates this path as `retrieval_hook_readiness`: the
+SDK cookbook must run a local authenticated retrieval hook, select
+`verified_authenticated_retrieval_hook`, attach native retrieval-hook proof,
+prove redacted auth, current-document citations, `retrieval_memory_trace` state
+trace, and passing retrieval metrics, and feed the
+`authenticated_retrieval_hooks` axis in `environment_10x_robustness`.
 
 For task-specific external judges, evaluation hooks POST normalized task/run
 evidence to real HTTP evaluator endpoints with bearer/API-key env auth and
@@ -1890,9 +1897,9 @@ it requires the current release artifact to prove at least ten axes across the
 Agent Learning replay contract, framework simulation, local evals, optimizer
 recovery, adapter promotion, protocol routing, browser/CUA, realtime voice,
 memory lineage, multi-agent coordination, world orchestration, workspace import
-certification, red-team suite coverage, and regression promotion/replay.
-Workspace import certification is counted as a native proof-backed axis for
-arbitrary repository and framework import surfaces; OpenEnv/Gymnasium-shaped
+certification, authenticated retrieval hooks, red-team suite coverage, and
+regression promotion/replay. Workspace import certification and authenticated
+retrieval hooks are counted as native proof-backed axes; OpenEnv/Gymnasium-shaped
 traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
@@ -2150,6 +2157,15 @@ currentness/freshness flags, citations, status/latency traces, and redacted
 request metadata. The optimizer searches complete retrieval environment bundles
 so it can reject stale static context and missing auth before selecting the
 verified authenticated hook.
+`agent-learn release-check` gates this Agent Learning-native path as
+`retrieval_hook_readiness`: the SDK example must run a local authenticated
+retrieval/RAG hook, select `verified_authenticated_retrieval_hook` over stale
+static or missing-auth candidates, attach native retrieval-hook proof, prove
+redacted auth, current-document citations, `retrieval_memory_trace` state
+trace, and passing retrieval metrics, and count as the
+`authenticated_retrieval_hooks` axis in `environment_10x_robustness`. OpenEnv
+compatibility remains compatibility coverage only; retrieval hooks are the
+executable local RAG/retrieval optimization proof surface.
 
 The `sdk_evaluation_hook_optimization.py` example adds authenticated external
 evaluator hooks. Agent-report configs can declare `evaluation_hooks` that POST

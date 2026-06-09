@@ -28,6 +28,9 @@ AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
 AGENT_LEARNING_WORKFLOW_HOOK_PROOF_KIND = (
     "agent-learning.optimization.workflow-hook-proof.v1"
 )
+AGENT_LEARNING_RETRIEVAL_HOOK_PROOF_KIND = (
+    "agent-learning.optimization.retrieval-hook-proof.v1"
+)
 AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
     "agent-learning.optimization.framework-certification-proof.v1"
 )
@@ -403,6 +406,7 @@ def optimize_manifest_file(
     payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
     payload = with_workflow_hook_proof(payload)
+    payload = with_retrieval_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
     payload = with_workspace_import_certification_proof(payload)
@@ -440,6 +444,7 @@ def optimize_manifest(
     payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
     payload = with_workflow_hook_proof(payload)
+    payload = with_retrieval_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
     payload = with_workspace_import_certification_proof(payload)
@@ -508,6 +513,34 @@ def with_workflow_hook_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
         proof["failed_check_ids"]
     )
     summary["workflow_hook_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_retrieval_hook_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for authenticated retrieval-hook optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_retrieval_hook_optimization(result, optimization):
+        return result
+
+    proof = _retrieval_hook_proof(result, optimization)
+    result["retrieval_hook_proof"] = proof
+    optimization["retrieval_hook_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["retrieval_hook_proof_status"] = proof["status"]
+    summary["retrieval_hook_proof_passed"] = proof["passed"]
+    summary["retrieval_hook_proof_assurance_level"] = proof["assurance_level"]
+    summary["retrieval_hook_proof_check_count"] = proof["check_count"]
+    summary["retrieval_hook_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["retrieval_hook_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -4806,6 +4839,419 @@ def _workflow_hook_proof(
                     "tool_selection_accuracy",
                     "tool_argument_schema",
                     "workflow_trace_coverage",
+                    "secret_leakage",
+                    "task_completion",
+                    "trajectory_score",
+                )
+                if key in selected_metrics
+            },
+            "patch_paths": patch_paths,
+            "candidate_lineage_count": len(histories),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "passed_check_ids": [str(check["id"]) for check in checks if check["passed"]],
+        "checks": checks,
+    }
+
+
+def _retrieval_hook_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_manifest = _source_manifest_with_optimization(optimization)
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(
+        source_manifest.get("optimization")
+    ) or _plain_mapping(optimization.get("manifest_optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    target_metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    source_name = str(source_manifest.get("name") or "")
+    eval_config = _plain_mapping(
+        _plain_mapping(_plain_mapping(source_manifest.get("evaluation")).get("agent_report"))
+        .get("config")
+    )
+    required_tools = {str(tool) for tool in _plain_list(eval_config.get("required_tools"))}
+    expected_doc_ids = [
+        str(item)
+        for item in _plain_list(eval_config.get("expected_retrieval_doc_ids"))
+    ]
+    forbidden_doc_ids = [
+        str(item)
+        for item in _plain_list(eval_config.get("forbidden_retrieval_doc_ids"))
+    ]
+    source_task_kind = _scope_key(target_metadata.get("task_kind"))
+    if not source_task_kind and "retrieval_hook" in _scope_key(source_name):
+        source_task_kind = "retrieval_hook"
+    manifest_search_space = _plain_mapping(source_optimization.get("search_space"))
+    search_paths = [
+        str(path)
+        for path in _plain_list(
+            manifest_search_space.get("paths")
+            or _plain_mapping(optimization.get("manifest_optimization")).get("search_paths")
+            or _plain_mapping(payload.get("summary")).get("search_paths")
+        )
+        if path is not None
+    ]
+    target_layers = {_scope_key(layer) for layer in _plain_list(target.get("layers"))}
+    required_env = [str(item) for item in _plain_list(source_manifest.get("required_env"))]
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [str(environment.get("type") or "") for environment in environments]
+    retrieval_env = _world_hook_environment(environments, "retrieval_hook")
+    retrieval_data = _plain_mapping(retrieval_env.get("data"))
+    env_metadata = _plain_mapping(retrieval_data.get("metadata"))
+    selected_profile = str(env_metadata.get("candidate_profile") or "")
+    hook_auth = _plain_mapping(retrieval_data.get("auth"))
+    endpoint = str(retrieval_data.get("endpoint") or "")
+    endpoint_parts = urlparse(endpoint)
+    endpoint_host = endpoint_parts.hostname or ""
+    local_endpoint = endpoint_parts.scheme in {"http", "https"} and endpoint_host in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }
+    hook_name = str(retrieval_data.get("tool_name") or "retrieve_documents")
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(
+        selected_history.get("candidate_patch") or selected_history.get("patch")
+    )
+    patch_paths = sorted(str(path) for path in selected_patch)
+    selected_score = _as_float(selected_history.get("score"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold"))
+    histories = [
+        _plain_mapping(item)
+        for item in _plain_list(optimization.get("history"))
+        if _plain_mapping(item)
+    ]
+
+    report_state = _selected_report_environment_state(selected_history)
+    retrieval_memory = _plain_mapping(report_state.get("retrieval_memory"))
+    retrieval_hooks = _plain_mapping(report_state.get("retrieval_hooks"))
+    hook_summary = _plain_mapping(retrieval_hooks.get("summary"))
+    trace = _plain_mapping(
+        retrieval_hooks.get("last_call")
+        or next(
+            (
+                _plain_mapping(item)
+                for item in _plain_list(retrieval_hooks.get("calls"))
+                if _plain_mapping(item)
+            ),
+            {},
+        )
+    )
+    trace_auth = _plain_mapping(trace.get("auth"))
+    trace_header_names = {
+        str(name)
+        for name in [
+            *_plain_list(trace_auth.get("header_names")),
+            *_plain_list(trace.get("request_header_names")),
+        ]
+    }
+    forbidden_trace_keys = sorted(
+        _present_nested_keys(trace, {"api_key", "secret", "token"})
+    )
+    documents = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval_memory.get("documents"))
+        if _plain_mapping(item)
+    ]
+    document_ids = [str(document.get("id") or "") for document in documents]
+    current_document_ids = [
+        str(document.get("id") or "")
+        for document in documents
+        if document.get("current") is True
+    ]
+    stale_document_ids = [
+        str(document.get("id") or "")
+        for document in documents
+        if document.get("current") is False
+    ]
+    citations = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval_memory.get("citations"))
+        if _plain_mapping(item)
+    ]
+    citation_doc_ids = {
+        str(doc_id)
+        for citation in citations
+        for doc_id in _plain_list(citation.get("doc_ids"))
+    }
+    fresh_citation_doc_ids = {
+        str(doc_id)
+        for citation in citations
+        if citation.get("freshness_checked") is True
+        for doc_id in _plain_list(citation.get("doc_ids"))
+    }
+    queries = [
+        _plain_mapping(item)
+        for item in _plain_list(retrieval_memory.get("queries"))
+        if _plain_mapping(item)
+    ]
+    first_query = _plain_mapping(queries[0]) if queries else {}
+    ranked_documents = [
+        _plain_mapping(item)
+        for item in _plain_list(first_query.get("ranked_documents"))
+        if _plain_mapping(item)
+    ]
+    first_rank = _plain_mapping(ranked_documents[0]) if ranked_documents else {}
+    required_metrics = (
+        "tool_selection_accuracy",
+        "tool_outcome",
+        "retrieval_context_quality",
+        "retrieval_memory_attribution",
+        "source_grounding",
+        "secret_leakage",
+    )
+
+    checks = [
+        _proof_check(
+            "retrieval_hook_source_manifest_contract_closed",
+            passed=(
+                source_manifest.get("version") == "agent-learning.optimization.v1"
+                and source_task_kind == "retrieval_hook"
+                and hook_name in required_tools
+                and {"read_document", "cite_sources", "retrieval_memory_status"}
+                <= required_tools
+                and "simulation.environments" in set(search_paths)
+                and "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY" in set(required_env)
+                and (
+                    not target_layers
+                    or {"retrieval", "retriever", "security", "integration", "evaluator"}
+                    <= target_layers
+                )
+                and "doc_refund_2026" in set(expected_doc_ids)
+                and "doc_refund_2025" in set(forbidden_doc_ids)
+                and eval_config.get("require_current_retrieval") is True
+            ),
+            required=True,
+            reason=(
+                "source manifest declares the retrieval-hook task, required "
+                "secret env, environment search path, current-doc expectations, "
+                "and retrieval/security layers"
+            ),
+            evidence={
+                "version": source_manifest.get("version"),
+                "name": source_name,
+                "task_kind": source_task_kind,
+                "cookbook": target_metadata.get("cookbook"),
+                "required_env": required_env,
+                "required_tools": sorted(required_tools),
+                "search_paths": search_paths,
+                "target_layers": sorted(target_layers),
+                "expected_retrieval_doc_ids": expected_doc_ids,
+                "forbidden_retrieval_doc_ids": forbidden_doc_ids,
+                "require_current_retrieval": eval_config.get(
+                    "require_current_retrieval"
+                ),
+            },
+        ),
+        _proof_check(
+            "local_authenticated_retrieval_hook_selected",
+            passed=(
+                _scope_key(retrieval_env.get("type")) == "retrieval_hook"
+                and selected_profile == "verified_authenticated_retrieval_hook"
+                and local_endpoint
+                and retrieval_data.get("require_current") is True
+                and _as_int(retrieval_data.get("top_k")) == 1
+                and hook_auth.get("type") == "bearer"
+                and hook_auth.get("token_env")
+                == "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+                and not _contains_nested_keys(hook_auth, {"api_key", "secret", "token"})
+            ),
+            required=True,
+            reason=(
+                "selected candidate uses the verified local authenticated "
+                "retrieval hook and references auth by environment variable"
+            ),
+            evidence={
+                "environment_types": environment_types,
+                "selected_profile": selected_profile,
+                "hook_name": hook_name,
+                "endpoint_host": endpoint_parts.netloc,
+                "local_endpoint": local_endpoint,
+                "top_k": retrieval_data.get("top_k"),
+                "require_current": retrieval_data.get("require_current"),
+                "auth_type": hook_auth.get("type"),
+                "auth_token_env": hook_auth.get("token_env"),
+            },
+        ),
+        _proof_check(
+            "retrieval_hook_execution_state_closed",
+            passed=(
+                _as_int(hook_summary.get("call_count")) >= 1
+                and _as_int(hook_summary.get("success_count")) >= 1
+                and _as_int(hook_summary.get("retrieved_document_count")) >= 1
+                and trace.get("tool") == hook_name
+                and _as_int(trace.get("status_code")) == 200
+                and trace.get("success") is True
+                and "doc_refund_2026" in set(trace.get("retrieved_doc_ids") or [])
+                and "doc_refund_2026" in set(document_ids)
+                and "doc_refund_2026" in set(current_document_ids)
+                and "doc_refund_2025" not in set(document_ids)
+                and "doc_refund_2025" not in set(stale_document_ids)
+                and retrieval_memory.get("require_current") is True
+                and first_query.get("include_stale") is False
+                and first_rank.get("id") == "doc_refund_2026"
+                and _as_int(first_rank.get("rank")) == 1
+                and "doc_refund_2026" in citation_doc_ids
+                and "doc_refund_2026" in fresh_citation_doc_ids
+            ),
+            required=True,
+            reason=(
+                "selected report state records current ranked retrieval, "
+                "fresh citations, and successful retrieval-hook trace"
+            ),
+            evidence={
+                "hook_summary": copy.deepcopy(hook_summary),
+                "document_ids": document_ids,
+                "current_document_ids": current_document_ids,
+                "stale_document_ids": stale_document_ids,
+                "first_query": copy.deepcopy(first_query),
+                "citation_doc_ids": sorted(citation_doc_ids),
+                "fresh_citation_doc_ids": sorted(fresh_citation_doc_ids),
+                "trace_status_code": trace.get("status_code"),
+                "trace_success": trace.get("success"),
+                "trace_tool": trace.get("tool"),
+                "trace_retrieved_doc_ids": trace.get("retrieved_doc_ids") or [],
+            },
+        ),
+        _proof_check(
+            "retrieval_hook_auth_redaction_closed",
+            passed=(
+                trace_auth.get("enabled") is True
+                and trace_auth.get("redacted") is True
+                and trace_auth.get("token_env")
+                == "AGENT_LEARNING_SDK_RETRIEVAL_HOOK_KEY"
+                and "Authorization" in trace_header_names
+                and not forbidden_trace_keys
+            ),
+            required=True,
+            reason=(
+                "retrieval hook trace proves auth was sent while serializing "
+                "only redacted/token-env metadata"
+            ),
+            evidence={
+                "trace_auth": copy.deepcopy(trace_auth),
+                "header_names": sorted(trace_header_names),
+                "forbidden_trace_keys": forbidden_trace_keys,
+            },
+        ),
+        _proof_check(
+            "retrieval_hook_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(metric)) >= 1.0
+                for metric in required_metrics
+            ),
+            required=True,
+            reason=(
+                "selected candidate closes retrieval, grounding, tool, and "
+                "secret-leakage metrics"
+            ),
+            evidence={metric: selected_metrics.get(metric) for metric in required_metrics},
+        ),
+        _proof_check(
+            "retrieval_hook_patch_surface_present",
+            passed="simulation.environments" in set(patch_paths),
+            required=True,
+            reason="optimizer selected the retrieval-hook environment patch surface",
+            evidence={"patch_paths": patch_paths},
+        ),
+        _proof_check(
+            "retrieval_hook_candidate_lineage_gate_passed",
+            passed=(
+                len(histories) >= 3
+                and selected_score >= max(threshold, 0.95)
+                and bool(selected_history.get("candidate_id"))
+            ),
+            required=True,
+            reason=(
+                "optimizer evaluated multiple candidates and selected a "
+                "candidate above the release threshold"
+            ),
+            evidence={
+                "history_count": len(histories),
+                "selected_candidate_id": selected_history.get("candidate_id"),
+                "selected_score": selected_history.get("score"),
+                "threshold": threshold,
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_RETRIEVAL_HOOK_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_authenticated_retrieval_hook_verified"
+            if passed
+            else "retrieval_hook_proof_failed"
+        ),
+        "task_kind": source_task_kind,
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "candidate_profile": selected_profile,
+        "requires_external_service": not local_endpoint,
+        "evidence": {
+            "selected_environment_types": environment_types,
+            "selected_profile": selected_profile,
+            "selected_hook": {
+                "name": hook_name,
+                "endpoint_host": endpoint_parts.netloc,
+                "local_endpoint": local_endpoint,
+                "top_k": retrieval_data.get("top_k"),
+                "require_current": retrieval_data.get("require_current"),
+                "auth": {
+                    "type": hook_auth.get("type"),
+                    "token_env": hook_auth.get("token_env"),
+                },
+            },
+            "selected_state_keys": sorted(str(key) for key in report_state),
+            "retrieval_summary": copy.deepcopy(hook_summary),
+            "retrieval_memory": {
+                "document_ids": document_ids,
+                "current_document_ids": current_document_ids,
+                "stale_document_ids": stale_document_ids,
+                "citation_doc_ids": sorted(citation_doc_ids),
+                "fresh_citation_doc_ids": sorted(fresh_citation_doc_ids),
+                "first_ranked_document": copy.deepcopy(first_rank),
+                "require_current": retrieval_memory.get("require_current"),
+            },
+            "selected_trace": {
+                "tool": trace.get("tool"),
+                "status_code": trace.get("status_code"),
+                "success": trace.get("success"),
+                "retrieved_doc_ids": trace.get("retrieved_doc_ids") or [],
+                "auth": copy.deepcopy(trace_auth),
+            },
+            "selected_metrics": {
+                key: selected_metrics.get(key)
+                for key in (
+                    "tool_selection_accuracy",
+                    "tool_argument_schema",
+                    "tool_outcome",
+                    "retrieval_context_quality",
+                    "retrieval_memory_attribution",
+                    "source_grounding",
                     "secret_leakage",
                     "task_completion",
                     "trajectory_score",
@@ -31393,6 +31839,51 @@ def _is_workflow_hook_optimization(
     )
 
 
+def _is_retrieval_hook_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    del payload
+
+    source_manifest = _source_manifest_with_optimization(optimization)
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(
+        source_manifest.get("optimization")
+    ) or _plain_mapping(optimization.get("manifest_optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) == "retrieval_hook":
+        return True
+
+    if _scope_key(metadata.get("cookbook")) in {
+        "retrieval_hook",
+        "retrieval_hook_optimization",
+        "retrieval_hook_optimization_cookbook",
+        "sdk_retrieval_hook_optimization",
+    }:
+        return True
+
+    if "build_retrieval_hook_optimization_manifest" in _scope_key(
+        metadata.get("source")
+    ):
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    return any(
+        _scope_key(environment.get("type")) == "retrieval_hook"
+        for environment in environments
+    )
+
+
 def _is_framework_adapter_matrix_optimization(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -32067,6 +32558,7 @@ __all__ = [
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROOF_KIND",
     "AGENT_LEARNING_ORCHESTRATION_STACK_PROBE_PROOF_KIND",
     "AGENT_LEARNING_REALTIME_STACK_PROBE_PROOF_KIND",
+    "AGENT_LEARNING_RETRIEVAL_HOOK_PROOF_KIND",
     "AGENT_LEARNING_TRINITY_STACK_PROBE_PROOF_KIND",
     "AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_ATTACK_EVOLUTION_PROOF_KIND",
@@ -32224,6 +32716,7 @@ __all__ = [
     "with_orchestration_stack_proof",
     "with_redteam_campaign_proof",
     "with_redteam_attack_evolution_proof",
+    "with_retrieval_hook_proof",
     "with_retrospective_harness_proof",
     "with_workflow_hook_proof",
     "with_workspace_import_certification_proof",
