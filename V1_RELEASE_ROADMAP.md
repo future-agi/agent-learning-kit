@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `harness_diagnosis_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_optimizer_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_optimizer_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -241,6 +241,12 @@ Current checkpoint:
   the expected best adapter/world/framework/memory/multi-agent/certification/
   import-repair candidates, preserve candidate lineage, pass required optimizer
   metrics, and emit native optimizer proofs where available.
+- Framework adapter probe readiness is now an executable release-check gate:
+  the raw probe, discovery, probe-optimization, auto-discovery optimization,
+  explicit promotion, auto-discovery promotion, one-call promotion, and one-call
+  run SDK cookbooks must run locally, select `execute_task(dict)`, pass native
+  probe proofs, preserve proof/discovery metadata in promoted manifests, and
+  close framework runtime, adapter-contract, trace, and tool metrics.
 - Protocol adapter readiness is now an executable release-check gate:
   `examples/sdk_framework_adapter_mcp_tool_session.py` and
   `examples/sdk_framework_adapter_a2a_protocol_trace.py` must run locally,
@@ -294,6 +300,10 @@ Next implementation focus:
   world/framework/memory stacks, multi-agent framework handoffs, framework
   certification, and framework import repair before V1 claims prompt-agnostic
   optimization.
+- Keep the adapter-probe gate as the BYO-framework entry bar: unknown local
+  framework objects should be discoverable, optimizable, promotable, and
+  evaluable without external services before adding live framework-specific
+  shortcuts.
 - Extend that target through framework adapters: local framework/provider
   outputs that return OpenEnv/Gymnasium-style reset, step, state, reward/done,
   sandbox, or failure-injection traces must normalize into evaluator-visible

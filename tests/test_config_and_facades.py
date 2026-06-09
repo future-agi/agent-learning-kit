@@ -15178,6 +15178,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_optimizer_contracts"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_CONTRACTS
     )
+    assert payload["required_framework_adapter_probe_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES
+    )
+    assert payload["required_framework_adapter_probe_contracts"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+    )
     assert payload["required_protocol_adapter_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES
     )
@@ -15230,6 +15236,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_contract_readiness",
         "openenv_optimizer_readiness",
         "framework_optimizer_readiness",
+        "framework_adapter_probe_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "stateful_framework_adapter_readiness",
@@ -15778,6 +15785,108 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_import_quality": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    adapter_probe = checks["framework_adapter_probe_readiness"]["evidence"]
+    assert adapter_probe["required_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES
+    )
+    assert adapter_probe["required_contracts"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+    )
+    assert adapter_probe["missing_files"] == []
+    assert adapter_probe["execution_errors"] == []
+    assert adapter_probe["contract_errors"] == []
+    assert adapter_probe["metric_errors"] == []
+    assert adapter_probe["manifest_errors"] == []
+    adapter_probes = {item["surface"]: item for item in adapter_probe["probes"]}
+
+    raw_probe = adapter_probes["raw_probe"]
+    assert raw_probe["result_kind"] == "agent-learning.framework-adapter-probe.v1"
+    assert raw_probe["result_status"] == "passed"
+    assert raw_probe["output_roundtrip"] is True
+    assert raw_probe["runtime_trace_count"] == 1
+    assert raw_probe["tool_call_count"] == 1
+    assert raw_probe["contract"] == {
+        "framework": "custom_refund_orchestrator",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+        "requires_external_service": False,
+    }
+
+    discovery_probe = adapter_probes["discovery"]
+    assert discovery_probe["result_kind"] == (
+        "agent-learning.framework-adapter-discovery.v1"
+    )
+    assert discovery_probe["result_status"] == "passed"
+    assert discovery_probe["top_method"] == "execute_task"
+    assert discovery_probe["top_input_mode"] == "dict"
+    assert discovery_probe["candidate_count"] >= 1
+
+    probe_optimization = adapter_probes["probe_optimization"]
+    assert probe_optimization["result_kind"] == "agent-learning.optimization.v1"
+    assert probe_optimization["result_status"] == "passed"
+    assert probe_optimization["adapter_candidate_source"] == "explicit"
+    assert probe_optimization["discovery_used"] is False
+    assert probe_optimization["probe_proof_status"] == "passed"
+    assert probe_optimization["probe_proof_failed_check_ids"] == []
+    assert probe_optimization["optimization_score"] == pytest.approx(1.0)
+    assert probe_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert probe_optimization["best_adapter"] == {
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+        "allow_external_target": False,
+    }
+
+    auto_discovery = adapter_probes["auto_discovery_optimization"]
+    assert auto_discovery["adapter_candidate_source"] == "discovery"
+    assert auto_discovery["discovery_used"] is True
+    assert auto_discovery["discovery_status"] == "passed"
+    assert auto_discovery["discovery_candidate_count"] >= 1
+    assert auto_discovery["probe_proof_status"] == "passed"
+    assert auto_discovery["probe_proof_failed_check_ids"] == []
+    assert auto_discovery["best_adapter"]["method"] == "execute_task"
+    assert auto_discovery["best_adapter"]["input_mode"] == "dict"
+
+    for surface in (
+        "probe_promotion",
+        "auto_discovery_promotion",
+        "one_call_promotion",
+        "one_call_run",
+    ):
+        promoted = adapter_probes[surface]
+        assert promoted["result_kind"] == "agent-learning.run.v1"
+        assert promoted["result_status"] == "passed"
+        assert promoted["manifest_present"] is True
+        assert promoted["manifest_agent"] == {
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "trace_runtime": True,
+        }
+        assert promoted["manifest_metadata"][
+            "promoted_from_framework_adapter_probe"
+        ] is True
+        assert promoted["manifest_metadata"]["probe_proof_status"] == "passed"
+        assert promoted["metric_averages"] == {
+            "framework_adapter_contract_quality": pytest.approx(1.0),
+            "framework_runtime_contract": pytest.approx(1.0),
+            "framework_trace_coverage": pytest.approx(1.0),
+            "tool_selection_accuracy": pytest.approx(1.0),
+        }
+    assert adapter_probes["probe_promotion"]["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] in (None, False)
+    for surface in (
+        "auto_discovery_promotion",
+        "one_call_promotion",
+        "one_call_run",
+    ):
+        promoted = adapter_probes[surface]
+        assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True
+        assert promoted["manifest_metadata"]["framework_adapter_discovery_status"] == (
+            "passed"
+        )
     protocol_adapter = checks["protocol_adapter_readiness"]["evidence"]
     assert protocol_adapter["required_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES

@@ -387,6 +387,14 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_adapter_workflow_trace.py",
     "examples/sdk_framework_adapter_orchestration_trace.py",
     "examples/sdk_framework_adapter_lifecycle_trace.py",
+    "examples/sdk_framework_adapter_probe.py",
+    "examples/sdk_framework_adapter_discovery.py",
+    "examples/sdk_framework_adapter_probe_optimization.py",
+    "examples/sdk_framework_adapter_auto_discovery_optimization.py",
+    "examples/sdk_framework_adapter_probe_promotion.py",
+    "examples/sdk_framework_adapter_auto_discovery_promotion.py",
+    "examples/sdk_framework_adapter_one_call_promotion.py",
+    "examples/sdk_framework_adapter_one_call_run.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -728,6 +736,131 @@ V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
         "required_metrics": {
             "framework_import_coverage": 1.0,
             "framework_import_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+]
+
+V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
+    "examples/sdk_framework_adapter_probe.py",
+    "examples/sdk_framework_adapter_discovery.py",
+    "examples/sdk_framework_adapter_probe_optimization.py",
+    "examples/sdk_framework_adapter_auto_discovery_optimization.py",
+    "examples/sdk_framework_adapter_probe_promotion.py",
+    "examples/sdk_framework_adapter_auto_discovery_promotion.py",
+    "examples/sdk_framework_adapter_one_call_promotion.py",
+    "examples/sdk_framework_adapter_one_call_run.py",
+    "internal-docs/framework-adapter-probe-readiness-research.md",
+]
+
+V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
+    {
+        "surface": "raw_probe",
+        "path": "examples/sdk_framework_adapter_probe.py",
+        "kind": "agent-learning.framework-adapter-probe.v1",
+        "expected_framework": "custom_refund_orchestrator",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "min_runtime_trace_count": 1,
+        "min_tool_call_count": 1,
+    },
+    {
+        "surface": "discovery",
+        "path": "examples/sdk_framework_adapter_discovery.py",
+        "kind": "agent-learning.framework-adapter-discovery.v1",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "min_candidate_count": 1,
+    },
+    {
+        "surface": "probe_optimization",
+        "path": "examples/sdk_framework_adapter_probe_optimization.py",
+        "kind": "agent-learning.optimization.v1",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "expected_candidate_source": "explicit",
+        "require_probe_proof": True,
+        "require_discovery": False,
+        "min_optimization_score": 1.0,
+        "min_evaluation_score": 1.0,
+    },
+    {
+        "surface": "auto_discovery_optimization",
+        "path": "examples/sdk_framework_adapter_auto_discovery_optimization.py",
+        "kind": "agent-learning.optimization.v1",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "expected_candidate_source": "discovery",
+        "require_probe_proof": True,
+        "require_discovery": True,
+        "min_optimization_score": 1.0,
+        "min_evaluation_score": 1.0,
+    },
+    {
+        "surface": "probe_promotion",
+        "path": "examples/sdk_framework_adapter_probe_promotion.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "custom_refund_orchestrator",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": False,
+        "min_metrics": {
+            "framework_adapter_contract_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "auto_discovery_promotion",
+        "path": "examples/sdk_framework_adapter_auto_discovery_promotion.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "custom_refund_orchestrator",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_contract_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "one_call_promotion",
+        "path": "examples/sdk_framework_adapter_one_call_promotion.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "custom_refund_orchestrator",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_contract_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "one_call_run",
+        "path": "examples/sdk_framework_adapter_one_call_run.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "custom_refund_orchestrator",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_contract_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
             "tool_selection_accuracy": 1.0,
         },
     },
@@ -1512,6 +1645,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_optimizer,
     )
+    framework_adapter_probe = _release_framework_adapter_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_probe_readiness",
+        passed=(
+            not framework_adapter_probe["missing_files"]
+            and not framework_adapter_probe["execution_errors"]
+            and not framework_adapter_probe["contract_errors"]
+            and not framework_adapter_probe["metric_errors"]
+            and not framework_adapter_probe["manifest_errors"]
+        ),
+        milestone="M6",
+        evidence=framework_adapter_probe,
+    )
     protocol_adapter = _release_protocol_adapter_status(root)
     _append_release_check(
         checks,
@@ -1679,6 +1826,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_optimizer_files": list(V1_FRAMEWORK_OPTIMIZER_FILES),
         "required_framework_optimizer_contracts": copy.deepcopy(
             V1_FRAMEWORK_OPTIMIZER_CONTRACTS
+        ),
+        "required_framework_adapter_probe_files": list(
+            V1_FRAMEWORK_ADAPTER_PROBE_FILES
+        ),
+        "required_framework_adapter_probe_contracts": copy.deepcopy(
+            V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
         ),
         "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
         "required_protocol_adapter_contracts": copy.deepcopy(
@@ -4208,6 +4361,429 @@ def _append_framework_optimizer_minimum_error(
     )
 
 
+def _release_framework_adapter_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_FRAMEWORK_ADAPTER_PROBE_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    contract_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    probes: list[dict[str, Any]] = []
+
+    if not missing_files:
+        for contract in V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS:
+            surface = str(contract["surface"])
+            relative_path = str(contract["path"])
+            example_path = root / relative_path
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"agent_learning_release_framework_adapter_probe_{surface}",
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                with tempfile.TemporaryDirectory(
+                    prefix=f"agent-learning-{surface}-"
+                ) as tmpdir:
+                    output_path = Path(tmpdir) / f"{surface}.json"
+                    result = module.run(output_path)
+                    saved = json.loads(output_path.read_text(encoding="utf-8"))
+                    manifest_path = output_path.with_suffix(".manifest.json")
+                    manifest = (
+                        json.loads(manifest_path.read_text(encoding="utf-8"))
+                        if manifest_path.exists()
+                        else {}
+                    )
+            except Exception as exc:
+                execution_errors.append(
+                    {"surface": surface, "path": relative_path, "error": str(exc)}
+                )
+                continue
+
+            record = _framework_adapter_probe_record(
+                result,
+                saved=saved,
+                manifest=manifest,
+                contract=contract,
+            )
+            record["surface"] = surface
+            record["path"] = relative_path
+            probes.append(record)
+            _append_framework_adapter_probe_errors(
+                contract_errors,
+                metric_errors,
+                manifest_errors,
+                surface=surface,
+                path=relative_path,
+                result=result,
+                saved=saved,
+                manifest=manifest,
+                contract=contract,
+                record=record,
+            )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_ADAPTER_PROBE_FILES),
+        "required_contracts": copy.deepcopy(V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "contract_errors": contract_errors,
+        "metric_errors": metric_errors,
+        "manifest_errors": manifest_errors,
+        "probes": probes,
+    }
+
+
+def _framework_adapter_probe_record(
+    result: Mapping[str, Any],
+    *,
+    saved: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _as_mapping(result.get("summary"))
+    optimization = _as_mapping(result.get("optimization"))
+    best_config = _as_mapping(optimization.get("best_config"))
+    best_adapter = _as_mapping(best_config.get("adapter"))
+    proof = _as_mapping(result.get("framework_adapter_probe_proof")) or _as_mapping(
+        optimization.get("framework_adapter_probe_proof")
+    )
+    discovery = _as_mapping(result.get("framework_adapter_discovery")) or _as_mapping(
+        optimization.get("framework_adapter_discovery")
+    )
+    discovery_summary = _as_mapping(discovery.get("summary"))
+    adapter_candidates = [
+        item
+        for item in _as_list(result.get("adapter_candidates"))
+        if isinstance(item, Mapping)
+    ]
+    top_candidate = _as_mapping(adapter_candidates[0]) if adapter_candidates else {}
+    contract_payload = _as_mapping(result.get("contract"))
+    manifest_agent = _as_mapping(manifest.get("agent"))
+    manifest_metadata = _as_mapping(manifest.get("metadata"))
+    manifest_agent_metadata = _as_mapping(manifest_agent.get("metadata"))
+    metric_averages = _as_mapping(summary.get("metric_averages"))
+    expected_metrics = _as_mapping(contract.get("min_metrics"))
+    manifest_discovery_used = manifest_metadata.get("framework_adapter_discovery_used")
+    if manifest_discovery_used is None:
+        manifest_discovery_used = manifest_agent_metadata.get(
+            "framework_adapter_discovery_used"
+        )
+    manifest_discovery_status = manifest_metadata.get(
+        "framework_adapter_discovery_status"
+    ) or _as_mapping(manifest_agent_metadata.get("framework_adapter_discovery")).get(
+        "status"
+    )
+    discovery_used = summary.get("framework_adapter_discovery_used")
+    if discovery_used is None:
+        discovery_used = manifest_discovery_used
+
+    return {
+        "result_kind": result.get("kind"),
+        "result_status": result.get("status"),
+        "output_roundtrip": result == saved,
+        "runtime_trace_count": summary.get("runtime_trace_count"),
+        "tool_call_count": summary.get("tool_call_count"),
+        "top_method": summary.get("top_method") or top_candidate.get("method"),
+        "top_input_mode": (
+            summary.get("top_input_mode") or top_candidate.get("input_mode")
+        ),
+        "candidate_count": (
+            summary.get("adapter_candidate_count")
+            or summary.get("candidate_count")
+            or len(adapter_candidates)
+        ),
+        "adapter_candidate_source": summary.get("adapter_candidate_source"),
+        "discovery_used": discovery_used,
+        "discovery_status": (
+            summary.get("framework_adapter_discovery_status")
+            or discovery.get("status")
+            or manifest_discovery_status
+        ),
+        "discovery_candidate_count": (
+            discovery_summary.get("adapter_candidate_count")
+            or discovery_summary.get("candidate_count")
+            or len(_as_list(discovery.get("adapter_candidates")))
+        ),
+        "probe_proof_status": proof.get("status"),
+        "probe_proof_failed_check_ids": list(proof.get("failed_check_ids") or []),
+        "probe_proof_passed": summary.get("framework_adapter_probe_proof_passed"),
+        "optimization_score": summary.get("optimization_score"),
+        "evaluation_score": summary.get("evaluation_score"),
+        "best_adapter": {
+            "method": best_adapter.get("method"),
+            "input_mode": best_adapter.get("input_mode"),
+            "trace_runtime": best_adapter.get("trace_runtime"),
+            "allow_external_target": best_adapter.get("allow_external_target"),
+        },
+        "contract": {
+            "framework": contract_payload.get("framework"),
+            "method": contract_payload.get("method"),
+            "input_mode": contract_payload.get("input_mode"),
+            "trace_runtime": contract_payload.get("trace_runtime"),
+            "requires_external_service": contract_payload.get(
+                "requires_external_service"
+            ),
+        },
+        "manifest_present": bool(manifest),
+        "manifest_agent": {
+            "framework": manifest_agent.get("framework"),
+            "method": manifest_agent.get("method"),
+            "input_mode": manifest_agent.get("input_mode"),
+            "trace_runtime": manifest_agent.get("trace_runtime"),
+        },
+        "manifest_metadata": {
+            "promoted_from_framework_adapter_probe": manifest_metadata.get(
+                "promoted_from_framework_adapter_probe"
+            )
+            or manifest_agent_metadata.get("promoted_from_framework_adapter_probe"),
+            "framework_adapter_discovery_used": manifest_metadata.get(
+                "framework_adapter_discovery_used"
+            )
+            or manifest_agent_metadata.get("framework_adapter_discovery_used"),
+            "framework_adapter_discovery_status": manifest_metadata.get(
+                "framework_adapter_discovery_status"
+            )
+            or manifest_discovery_status,
+            "adapter_candidate_source": manifest_agent_metadata.get(
+                "adapter_candidate_source"
+            ),
+            "probe_proof_status": _as_mapping(
+                manifest_agent_metadata.get("framework_adapter_probe_proof")
+            ).get("status"),
+        },
+        "metric_averages": {
+            str(metric): metric_averages.get(metric) for metric in expected_metrics
+        },
+    }
+
+
+def _append_framework_adapter_probe_errors(
+    contract_errors: list[dict[str, Any]],
+    metric_errors: list[dict[str, Any]],
+    manifest_errors: list[dict[str, Any]],
+    *,
+    surface: str,
+    path: str,
+    result: Mapping[str, Any],
+    saved: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> None:
+    expected_kind = str(contract.get("kind") or "")
+    if result.get("kind") != expected_kind:
+        contract_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "kind",
+                "expected": expected_kind,
+                "observed": result.get("kind"),
+            }
+        )
+    if result.get("status") != "passed":
+        contract_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "status",
+                "expected": "passed",
+                "observed": result.get("status"),
+            }
+        )
+    if result != saved:
+        contract_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "output_roundtrip",
+                "expected": True,
+                "observed": False,
+            }
+        )
+
+    for field in ("method", "input_mode", "framework"):
+        expected = contract.get(f"expected_{field}")
+        if expected is None:
+            continue
+        observed = _framework_adapter_probe_observed_field(record, field)
+        if observed != expected:
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": field,
+                    "expected": expected,
+                    "observed": observed,
+                }
+            )
+
+    for summary_field, contract_field in (
+        ("runtime_trace_count", "min_runtime_trace_count"),
+        ("tool_call_count", "min_tool_call_count"),
+        ("candidate_count", "min_candidate_count"),
+    ):
+        minimum = contract.get(contract_field)
+        if minimum is None:
+            continue
+        observed = record.get(summary_field)
+        if _float_or_zero(observed) < float(minimum):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"summary.{summary_field}",
+                    "expected": f">={minimum}",
+                    "observed": observed,
+                }
+            )
+
+    expected_source = contract.get("expected_candidate_source")
+    if expected_source and record.get("adapter_candidate_source") != expected_source:
+        contract_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "summary.adapter_candidate_source",
+                "expected": expected_source,
+                "observed": record.get("adapter_candidate_source"),
+            }
+        )
+
+    if contract.get("require_discovery") is True:
+        if record.get("discovery_used") is not True or record.get("discovery_status") != "passed":
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "framework_adapter_discovery",
+                    "expected": {"used": True, "status": "passed"},
+                    "observed": {
+                        "used": record.get("discovery_used"),
+                        "status": record.get("discovery_status"),
+                    },
+                }
+            )
+    elif contract.get("require_discovery") is False and record.get("discovery_used") is True:
+        contract_errors.append(
+            {
+                "surface": surface,
+                "path": path,
+                "field": "framework_adapter_discovery_used",
+                "expected": False,
+                "observed": True,
+            }
+        )
+
+    if contract.get("require_probe_proof"):
+        if (
+            record.get("probe_proof_status") != "passed"
+            or record.get("probe_proof_failed_check_ids")
+        ):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "framework_adapter_probe_proof",
+                    "expected": {"status": "passed", "failed_check_ids": []},
+                    "observed": {
+                        "status": record.get("probe_proof_status"),
+                        "failed_check_ids": record.get(
+                            "probe_proof_failed_check_ids"
+                        ),
+                    },
+                }
+            )
+
+    for field in ("optimization_score", "evaluation_score"):
+        minimum = contract.get(f"min_{field}")
+        if minimum is None:
+            continue
+        observed = record.get(field)
+        if _float_or_zero(observed) < float(minimum):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"summary.{field}",
+                    "expected": f">={minimum}",
+                    "observed": observed,
+                }
+            )
+
+    if contract.get("require_manifest"):
+        if not manifest:
+            manifest_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "manifest",
+                    "expected": "present",
+                    "observed": None,
+                }
+            )
+        if record.get("manifest_metadata", {}).get(
+            "promoted_from_framework_adapter_probe"
+        ) is not True:
+            manifest_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "manifest.metadata.promoted_from_framework_adapter_probe",
+                    "expected": True,
+                    "observed": record.get("manifest_metadata", {}).get(
+                        "promoted_from_framework_adapter_probe"
+                    ),
+                }
+            )
+        if record.get("manifest_metadata", {}).get("probe_proof_status") != "passed":
+            manifest_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "manifest.agent.metadata.framework_adapter_probe_proof.status",
+                    "expected": "passed",
+                    "observed": record.get("manifest_metadata", {}).get(
+                        "probe_proof_status"
+                    ),
+                }
+            )
+
+    for metric, minimum in _as_mapping(contract.get("min_metrics")).items():
+        observed = _as_mapping(record.get("metric_averages")).get(metric)
+        if _float_or_zero(observed) < float(minimum):
+            metric_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": f"summary.metric_averages.{metric}",
+                    "expected": f">={minimum}",
+                    "observed": observed,
+                }
+            )
+
+
+def _framework_adapter_probe_observed_field(
+    record: Mapping[str, Any],
+    field: str,
+) -> Any:
+    for source_key in (
+        "best_adapter",
+        "manifest_agent",
+        "contract",
+    ):
+        source = _as_mapping(record.get(source_key))
+        if source.get(field) is not None:
+            return source.get(field)
+    if field == "method":
+        return record.get("top_method")
+    if field == "input_mode":
+        return record.get("top_input_mode")
+    return None
+
+
 def _release_protocol_adapter_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_PROTOCOL_ADAPTER_FILES)
     adapter_errors: list[dict[str, Any]] = []
@@ -5326,6 +5902,8 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
     "V1_BROWSER_REALTIME_ADAPTER_CONTRACTS",
     "V1_BROWSER_REALTIME_ADAPTER_FILES",
+    "V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS",
+    "V1_FRAMEWORK_ADAPTER_PROBE_FILES",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",

@@ -79,10 +79,13 @@ validates representative text, voice, CUA, realtime, browser/CUA, memory,
 workflow, orchestration, lifecycle, protocol, and OpenEnv framework manifests.
 It also runs framework optimizer readiness for custom adapters, social-memory
 synthesis, world/framework/memory stacks, multi-agent framework handoffs,
-framework certification, and framework import repair. The composed
-trinity-stack probe readiness gate proves that the selected orchestration stack
-agent can pass a localhost task evaluator and promote into one run manifest with
-world, framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
+framework certification, and framework import repair. Adapter probe readiness
+exercises raw probe, discovery, optimization, auto-discovery, promotion, and
+one-call run cookbooks so BYO framework objects can become evaluated run
+manifests locally. The composed trinity-stack probe readiness gate proves that
+the selected orchestration stack agent can pass a localhost task evaluator and
+promote into one run manifest with world, framework, retrieval, memory,
+multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -617,6 +620,14 @@ one call before you run the manifest. It can start from a live object/factory
 or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_one_call_promotion.py` for the full local
 target-to-evaluated-run flow.
+
+`agent-learn release-check` now gates this BYO adapter path as
+`framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
+probe optimization, auto-discovery optimization, explicit promotion,
+auto-discovery promotion, one-call promotion, and one-call run cookbooks. It
+requires `execute_task(dict)` selection, passing probe proofs, discovery
+metadata where expected, promoted manifest proof metadata, and evaluated
+framework runtime, adapter-contract, framework-trace, and tool metrics.
 
 If you want the SDK to execute the promoted manifest immediately, call async
 `optimize.run_framework_adapter_from_local_adapter(...)`; it returns the normal
