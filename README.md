@@ -994,6 +994,13 @@ result = optimize.optimize_task(
 )
 ```
 
+`agent-learn release-check` gates this SDK path as
+`task_world_optimizer_readiness`: `examples/sdk_task_world_optimization.py`
+must run locally, start with no world transitions, search both agent tool calls
+and world-contract transitions, select `apply_world_transition` plus
+`approve_refund`, and finish with terminal world status `success` and
+`refund.status=approved`.
+
 For component-diagnosed architecture/config repair, pass failed report text or
 metric evidence to `optimize.build_component_optimization_manifest()`. The SDK
 maps failure evidence to component diagnoses, filters the search space to

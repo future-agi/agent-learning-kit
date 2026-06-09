@@ -15120,6 +15120,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_task_artifact_evaluation_suite_min_assertions"] == (
         trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
     )
+    assert payload["required_task_world_optimizer_files"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_FILES
+    )
+    assert payload["required_task_world_optimizer_search_paths"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["required_task_world_optimizer_layers"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_task_world_optimizer_metrics"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert payload["required_task_world_optimizer_environment_types"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_task_world_optimizer_tools"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS
+    )
+    assert payload["required_task_world_optimizer_transitions"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert payload["required_task_world_optimizer_final_state"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE
+    )
+    assert payload["required_task_world_optimizer_source_urls"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
+    )
     assert payload["required_evaluation_hook_probe_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES
     )
@@ -15583,6 +15610,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "v1_examples_present",
         "local_sim_eval_examples_present",
         "task_artifact_evaluation_readiness",
+        "task_world_optimizer_readiness",
         "evaluation_hook_probe_readiness",
         "native_optimizer_evidence_components",
         "optimizer_governance_readiness",
@@ -15705,6 +15733,134 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert artifact_eval_suite["failed_assertion_count"] == 0
     assert artifact_eval_suite["passed_case_count"] == 1
     assert artifact_eval_suite["failed_case_count"] == 0
+    task_world_optimizer = checks["task_world_optimizer_readiness"]["evidence"]
+    assert task_world_optimizer["required_files"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_FILES
+    )
+    assert task_world_optimizer["required_search_paths"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert task_world_optimizer["required_layers"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert task_world_optimizer["required_metrics"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert task_world_optimizer["required_environment_types"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert task_world_optimizer["required_tools"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS
+    )
+    assert task_world_optimizer["required_transitions"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert task_world_optimizer["required_final_state"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE
+    )
+    assert task_world_optimizer["required_source_urls"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
+    )
+    assert task_world_optimizer["missing_files"] == []
+    assert task_world_optimizer["execution_errors"] == []
+    assert task_world_optimizer["manifest_errors"] == []
+    assert task_world_optimizer["optimization_errors"] == []
+    assert task_world_optimizer["metric_errors"] == []
+    assert task_world_optimizer["world_errors"] == []
+    task_world_evidence = task_world_optimizer["evidence"]
+    task_world_manifest = task_world_evidence["manifest"]
+    assert task_world_manifest["version"] == "agent-learning.optimization.v1"
+    assert task_world_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY"
+    ]
+    assert set(task_world_manifest["search_paths"]) >= set(
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert task_world_manifest["target_layers"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert task_world_manifest["auto_execute_tools"] is True
+    assert task_world_manifest["environment_types"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert task_world_manifest["base_world_transition_count"] == 0
+    assert task_world_manifest["required_tools"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS
+    )
+    assert set(task_world_manifest["available_tools"]) >= {
+        "apply_world_transition",
+        "world_contract_status",
+    }
+    assert set(task_world_manifest["required_world_contract"]) >= {
+        "refund",
+        "success_condition",
+        "transition",
+        "world_contract",
+    }
+    assert task_world_manifest["required_transitions"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert task_world_manifest["terminal_status"] == "success"
+    assert task_world_manifest["expected_state"]["refund"]["status"] == "approved"
+    assert task_world_manifest["metric_weights"] == {
+        "world_contract_quality": pytest.approx(8.0),
+        "world_contract_coverage": pytest.approx(3.0),
+        "tool_selection_accuracy": pytest.approx(4.0),
+        "task_completion": pytest.approx(1.0),
+    }
+    task_world_optimization = task_world_evidence["optimization"]
+    assert task_world_optimization["kind"] == "agent-learning.optimization.v1"
+    assert task_world_optimization["schema_version"] == "agent-learning.cli.v1"
+    assert task_world_optimization["status"] == "passed"
+    assert task_world_optimization["output_roundtrip"] is True
+    assert task_world_optimization["optimization_passed"] is True
+    assert task_world_optimization["evaluation_passed"] is True
+    assert task_world_optimization["optimization_score"] >= 0.95
+    assert task_world_optimization["evaluation_score"] >= 0.95
+    assert task_world_optimization["total_evaluations"] >= 4
+    assert task_world_optimization["total_iterations"] >= 4
+    assert task_world_optimization["candidate_lineage_count"] >= 4
+    assert set(task_world_optimization["selected_patch_paths"]) >= set(
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert task_world_optimization["selected_tools"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS
+    )
+    assert task_world_optimization["selected_transitions"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert task_world_optimization["selected_environment_types"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert task_world_optimization["best_history_score"] >= 0.95
+    assert task_world_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        task_world_optimization["optimizer_governance_failed_check_count"] == 0
+    )
+    task_world_metrics = task_world_evidence["metrics"]
+    assert task_world_metrics["summary_metric_averages"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+    }
+    assert task_world_metrics["selected_metrics"][
+        "world_contract_quality"
+    ] == pytest.approx(1.0)
+    assert task_world_metrics["selected_metrics"][
+        "world_contract_coverage"
+    ] == pytest.approx(1.0)
+    assert task_world_metrics["selected_metrics"][
+        "tool_selection_accuracy"
+    ] == pytest.approx(1.0)
+    task_world = task_world_evidence["world"]
+    assert task_world["artifact_count"] >= 1
+    assert task_world["terminal_status"] == "success"
+    assert task_world["completed_required_transition_count"] >= 1
+    assert task_world["invariant_violation_count"] == 0
+    assert task_world["transition_log_count"] >= 1
+    assert task_world["final_state"]["refund"]["status"] == "approved"
+    assert task_world["transition_ids"] == (
+        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES

@@ -350,6 +350,54 @@ V1_TASK_ARTIFACT_EVALUATION_METRICS = [
 
 V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS = 8
 
+V1_TASK_WORLD_OPTIMIZER_FILES = [
+    "examples/sdk_task_world_optimization.py",
+    "internal-docs/task-world-optimizer-readiness-research.md",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
+    "agent",
+    "agent.responses.0.tool_calls",
+    "simulation.environments.0.data.transitions",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS = [
+    "planner",
+    "tools",
+    "world",
+    "environment",
+    "evaluator",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS = [
+    "world_contract_quality",
+    "world_contract_coverage",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES = [
+    "world_contract",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS = [
+    "apply_world_transition",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS = [
+    "approve_refund",
+]
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE = {
+    "refund.status": "approved",
+}
+
+V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS = [
+    "https://arxiv.org/abs/2406.12045",
+    "https://arxiv.org/abs/2408.04682",
+    "https://arxiv.org/abs/2308.03688",
+]
+
 V1_EVALUATION_HOOK_PROBE_FILES = [
     "examples/sdk_evaluation_hook_probe_optimization.py",
     "internal-docs/evaluation-hook-probe-research.md",
@@ -2411,6 +2459,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M2",
         evidence=task_artifact_evaluation,
     )
+    task_world_optimizer = _release_task_world_optimizer_status(root)
+    _append_release_check(
+        checks,
+        check_id="task_world_optimizer_readiness",
+        passed=(
+            not task_world_optimizer["missing_files"]
+            and not task_world_optimizer["execution_errors"]
+            and not task_world_optimizer["manifest_errors"]
+            and not task_world_optimizer["optimization_errors"]
+            and not task_world_optimizer["metric_errors"]
+            and not task_world_optimizer["world_errors"]
+        ),
+        milestone="M2",
+        evidence=task_world_optimizer,
+    )
     evaluation_hook_probe = _release_evaluation_hook_probe_status(root)
     _append_release_check(
         checks,
@@ -2939,6 +3002,33 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_task_artifact_evaluation_suite_min_assertions": (
             V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+        ),
+        "required_task_world_optimizer_files": list(
+            V1_TASK_WORLD_OPTIMIZER_FILES
+        ),
+        "required_task_world_optimizer_search_paths": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "required_task_world_optimizer_layers": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_task_world_optimizer_metrics": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_task_world_optimizer_environment_types": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_task_world_optimizer_tools": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS
+        ),
+        "required_task_world_optimizer_transitions": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+        ),
+        "required_task_world_optimizer_final_state": dict(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE
+        ),
+        "required_task_world_optimizer_source_urls": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
         ),
         "required_evaluation_hook_probe_files": list(
             V1_EVALUATION_HOOK_PROBE_FILES
@@ -4094,6 +4184,602 @@ def _release_task_artifact_evaluation_status(root: Path) -> dict[str, Any]:
         "artifact_errors": artifact_errors,
         "metric_errors": metric_errors,
         "suite_errors": suite_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_task_world_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_TASK_WORLD_OPTIMIZER_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    world_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def nested_value(value: Mapping[str, Any], path: str) -> Any:
+        current: Any = value
+        for part in path.split("."):
+            if not isinstance(current, Mapping):
+                return None
+            current = current.get(part)
+        return current
+
+    def world_contract_artifacts(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+        artifacts: list[dict[str, Any]] = []
+        for case in _as_list(report.get("results")):
+            for artifact in _as_list(_as_mapping(case).get("artifacts")):
+                artifact_map = _as_mapping(artifact)
+                data = _as_mapping(artifact_map.get("data"))
+                metadata = _as_mapping(artifact_map.get("metadata"))
+                if data.get("kind") == "world_contract" or (
+                    metadata.get("kind") == "world_contract"
+                ):
+                    artifacts.append(data)
+        return artifacts
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_task_world_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_task_world_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = "release-check-task-world-key"
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-task-world-optimizer-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-task-world-optimization.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_config = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_config.get("target"))
+        search_space = _as_mapping(target.get("search_space"))
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            _as_mapping(environment)
+            for environment in _as_list(simulation.get("environments"))
+        ]
+        environment_types = [
+            str(environment.get("type"))
+            for environment in environments
+            if environment.get("type")
+        ]
+        world_environment = next(
+            (
+                environment
+                for environment in environments
+                if environment.get("type") == "world_contract"
+            ),
+            {},
+        )
+        base_world_data = _as_mapping(world_environment.get("data"))
+        evaluation_config = _as_mapping(
+            _as_mapping(manifest.get("evaluation")).get("agent_report")
+        )
+        evaluation_config = _as_mapping(evaluation_config.get("config"))
+        world_quality = _as_mapping(
+            evaluation_config.get("world_contract_quality")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_layers": list(target.get("layers") or []),
+            "search_paths": sorted(str(path) for path in search_space),
+            "auto_execute_tools": simulation.get("auto_execute_tools"),
+            "environment_types": environment_types,
+            "base_world_transition_count": len(
+                _as_list(base_world_data.get("transitions"))
+            ),
+            "required_tools": list(evaluation_config.get("required_tools") or []),
+            "available_tools": list(
+                evaluation_config.get("available_tools") or []
+            ),
+            "required_world_contract": list(
+                evaluation_config.get("required_world_contract") or []
+            ),
+            "required_transitions": list(
+                world_quality.get("required_transitions") or []
+            ),
+            "terminal_status": world_quality.get("terminal_status"),
+            "expected_state": _as_mapping(world_quality.get("expected_state")),
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY"],
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS,
+            ),
+            "simulation.auto_execute_tools": (
+                simulation.get("auto_execute_tools"),
+                True,
+            ),
+            "world_contract.base_transitions": (
+                _as_list(base_world_data.get("transitions")),
+                [],
+            ),
+            "world_contract_quality.terminal_status": (
+                world_quality.get("terminal_status"),
+                "success",
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+
+        missing_search_paths = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS) - set(search_space)
+        )
+        if missing_search_paths:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+                observed=sorted(search_space),
+            )
+        missing_environment_types = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES)
+            - set(environment_types)
+        )
+        if missing_environment_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments.type",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=environment_types,
+            )
+        missing_tools = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS)
+            - set(evaluation_config.get("required_tools") or [])
+        )
+        if missing_tools:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.required_tools",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS,
+                observed=evaluation_config.get("required_tools") or [],
+            )
+        missing_transitions = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS)
+            - set(world_quality.get("required_transitions") or [])
+        )
+        if missing_transitions:
+            append_error(
+                manifest_errors,
+                field="world_contract_quality.required_transitions",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS,
+                observed=world_quality.get("required_transitions") or [],
+            )
+        for metric in V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS:
+            if _float_or_zero(metric_weights.get(metric)) <= 0.0:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.metric_weights.{metric}",
+                    expected=">0",
+                    observed=metric_weights.get(metric),
+                )
+        expected_state = _as_mapping(world_quality.get("expected_state"))
+        for state_path, expected in (
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE.items()
+        ):
+            observed = nested_value(expected_state, state_path)
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=f"world_contract_quality.expected_state.{state_path}",
+                    expected=expected,
+                    observed=observed,
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(best_simulation.get("environments"))
+        ]
+        best_world_environment = next(
+            (
+                environment
+                for environment in best_environments
+                if environment.get("type") == "world_contract"
+            ),
+            {},
+        )
+        best_world_data = _as_mapping(best_world_environment.get("data"))
+        best_world_transitions = [
+            _as_mapping(transition)
+            for transition in _as_list(best_world_data.get("transitions"))
+        ]
+        responses = _as_list(best_agent.get("responses"))
+        first_response = _as_mapping(responses[0]) if responses else {}
+        tool_calls = [
+            _as_mapping(tool_call)
+            for tool_call in _as_list(first_response.get("tool_calls"))
+        ]
+        selected_tools = sorted(
+            {
+                str(tool_call.get("name"))
+                for tool_call in tool_calls
+                if tool_call.get("name")
+            }
+        )
+        selected_transitions = sorted(
+            {
+                str(transition.get("id") or transition.get("action"))
+                for transition in best_world_transitions
+                if transition.get("id") or transition.get("action")
+            }
+        )
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        best_history = max(
+            histories,
+            key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            default={},
+        )
+        best_history = _as_mapping(best_history)
+        best_patch = _as_mapping(best_history.get("patch"))
+        selected_metrics = _as_mapping(best_history.get("metrics"))
+        summary_metrics = _as_mapping(summary.get("metric_averages"))
+        artifacts = world_contract_artifacts(_as_mapping(best_history.get("report")))
+        terminal_world = next(
+            (
+                artifact
+                for artifact in artifacts
+                if _as_mapping(artifact.get("summary")).get("terminal_status")
+                == "success"
+            ),
+            artifacts[-1] if artifacts else {},
+        )
+        terminal_summary = _as_mapping(terminal_world.get("summary"))
+        terminal_state = _as_mapping(terminal_world.get("state"))
+        transition_log = _as_list(terminal_world.get("transition_log"))
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "selected_patch_paths": sorted(str(path) for path in best_patch),
+            "selected_tools": selected_tools,
+            "selected_transitions": selected_transitions,
+            "selected_environment_types": [
+                str(environment.get("type"))
+                for environment in best_environments
+                if environment.get("type")
+            ],
+            "best_history_score": best_history.get("score"),
+            "optimizer_governance_status": summary.get(
+                "optimizer_governance_status"
+            ),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["metrics"] = {
+            "summary_metric_averages": {
+                metric: summary_metrics.get(metric)
+                for metric in V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+            },
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+        evidence["world"] = {
+            "artifact_count": len(artifacts),
+            "terminal_status": terminal_summary.get("terminal_status"),
+            "completed_required_transition_count": terminal_summary.get(
+                "completed_required_transition_count"
+            ),
+            "invariant_violation_count": terminal_summary.get(
+                "invariant_violation_count"
+            ),
+            "transition_log_count": len(transition_log),
+            "final_state": terminal_state,
+            "transition_ids": sorted(
+                str(_as_mapping(item).get("id"))
+                for item in transition_log
+                if _as_mapping(item).get("id")
+            ),
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        score_expectations = {
+            "summary.optimization_score": summary.get("optimization_score"),
+            "summary.evaluation_score": summary.get("evaluation_score"),
+            "best_history.score": best_history.get("score"),
+        }
+        for field, observed in score_expectations.items():
+            if _float_or_zero(observed) < 0.95:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=0.95",
+                    observed=observed,
+                )
+        count_expectations = {
+            "summary.total_evaluations": summary.get("total_evaluations"),
+            "summary.total_iterations": summary.get("total_iterations"),
+            "summary.candidate_lineage_count": summary.get(
+                "candidate_lineage_count"
+            ),
+        }
+        for field, observed in count_expectations.items():
+            if _int_or_zero(observed) < 4:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=4",
+                    observed=observed,
+                )
+        missing_patch_paths = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS) - set(best_patch)
+        )
+        if missing_patch_paths:
+            append_error(
+                optimization_errors,
+                field="best_history.patch",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+                observed=sorted(best_patch),
+            )
+        missing_selected_tools = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS) - set(selected_tools)
+        )
+        if missing_selected_tools:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.agent.responses.0.tool_calls.name",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS,
+                observed=selected_tools,
+            )
+        missing_selected_transitions = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS)
+            - set(selected_transitions)
+        )
+        if missing_selected_transitions:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.simulation.environments.0.data.transitions",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS,
+                observed=selected_transitions,
+            )
+        for metric in V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS:
+            observed = summary_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"summary.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        for metric in (
+            "world_contract_quality",
+            "world_contract_coverage",
+            "tool_selection_accuracy",
+        ):
+            observed = selected_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"best_history.metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        world_expectations = {
+            "world_contract.summary.terminal_status": (
+                terminal_summary.get("terminal_status"),
+                "success",
+            ),
+            "world_contract.summary.invariant_violation_count": (
+                terminal_summary.get("invariant_violation_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in world_expectations.items():
+            if observed != expected:
+                append_error(
+                    world_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(
+            terminal_summary.get("completed_required_transition_count")
+        ) < 1:
+            append_error(
+                world_errors,
+                field="world_contract.summary.completed_required_transition_count",
+                expected=">=1",
+                observed=terminal_summary.get(
+                    "completed_required_transition_count"
+                ),
+            )
+        missing_logged_transitions = sorted(
+            set(V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS)
+            - {
+                str(_as_mapping(item).get("id"))
+                for item in transition_log
+                if _as_mapping(item).get("id")
+            }
+        )
+        if missing_logged_transitions:
+            append_error(
+                world_errors,
+                field="world_contract.transition_log",
+                expected=V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS,
+                observed=[
+                    _as_mapping(item).get("id")
+                    for item in transition_log
+                    if _as_mapping(item).get("id")
+                ],
+            )
+        for state_path, expected in (
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE.items()
+        ):
+            observed = nested_value(terminal_state, state_path)
+            if observed != expected:
+                append_error(
+                    world_errors,
+                    field=f"world_contract.state.{state_path}",
+                    expected=expected,
+                    observed=observed,
+                )
+
+    return {
+        "required_files": list(V1_TASK_WORLD_OPTIMIZER_FILES),
+        "required_search_paths": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "required_layers": list(V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS),
+        "required_metrics": list(V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS),
+        "required_environment_types": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_tools": list(V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS),
+        "required_transitions": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+        ),
+        "required_final_state": dict(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE
+        ),
+        "required_source_urls": list(
+            V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
+        ),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "world_errors": world_errors,
         "evidence": evidence,
     }
 
@@ -17394,6 +18080,15 @@ __all__ = [
     "V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS",
     "V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS",
     "V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS",
+    "V1_TASK_WORLD_OPTIMIZER_FILES",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS",
+    "V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS",
     "V1_AGENT_CONTROL_PLANE_FILES",
     "V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES",
     "V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS",
