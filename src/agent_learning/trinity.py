@@ -1163,6 +1163,27 @@ V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS = [
     "framework_import",
 ]
 
+V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND = (
+    "agent-learning.optimization.workspace-import-certification-proof.v1"
+)
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL = (
+    "l3_native_workspace_import_certified"
+)
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS = [
+    "workspace_import_source_manifest_contract_closed",
+    "native_no_external_workspace_import_dependency",
+    "workspace_import_environment_bundle_present",
+    "workspace_import_report_state_closed",
+    "workspace_run_summary_closed",
+    "framework_import_summary_closed",
+    "framework_readiness_import_layer_closed",
+    "workspace_import_metric_evidence_closed",
+    "workspace_import_patch_surface_present",
+    "workspace_import_candidate_lineage_gate_passed",
+]
+
 V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS = {
     "examples/sdk_workspace_import_certification_optimization.py": {
         "env_name": "AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY",
@@ -3673,6 +3694,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not workspace_import_certification["certification_errors"]
             and not workspace_import_certification["readiness_errors"]
             and not workspace_import_certification["component_errors"]
+            and not workspace_import_certification["proof_errors"]
             and not workspace_import_certification["metric_errors"]
             and not workspace_import_certification["security_errors"]
         ),
@@ -4356,6 +4378,15 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_workspace_import_certification_components": list(
             V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+        ),
+        "required_workspace_import_certification_proof_kind": (
+            V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
+        ),
+        "required_workspace_import_certification_proof_assurance_level": (
+            V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_workspace_import_certification_proof_checks": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
         ),
         "required_workspace_import_certification_contracts": {
             path: dict(contract)
@@ -14731,6 +14762,7 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
     certification_errors: list[dict[str, Any]] = []
     readiness_errors: list[dict[str, Any]] = []
     component_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
     metric_errors: list[dict[str, Any]] = []
     security_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {"examples": {}}
@@ -15642,6 +15674,258 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
                 observed=list(framework_summary.get("observed_frameworks") or []),
             )
 
+    def validate_proof(
+        path: str,
+        result: Mapping[str, Any],
+        state: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_history = selected_history(optimization)
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environment_types = [
+            str(_as_mapping(item).get("type"))
+            for item in _as_list(best_simulation.get("environments"))
+            if isinstance(item, Mapping)
+        ]
+        proof = _as_mapping(result.get("workspace_import_certification_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        proof_checks = [
+            _as_mapping(check)
+            for check in _as_list(proof.get("checks"))
+            if isinstance(check, Mapping)
+        ]
+        check_ids = [str(check.get("id")) for check in proof_checks if check.get("id")]
+        passing_check_ids = [
+            str(check.get("id"))
+            for check in proof_checks
+            if check.get("id") and check.get("passed") is True
+        ]
+        passed_check_ids = [
+            str(item) for item in _as_list(proof.get("passed_check_ids"))
+        ]
+        selected_environment_types = [
+            str(item)
+            for item in _as_list(proof_evidence.get("selected_environment_types"))
+        ]
+        selected_state_keys = sorted(
+            str(item) for item in _as_list(proof_evidence.get("selected_state_keys"))
+        )
+        selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        selected_frameworks = [
+            str(item) for item in _as_list(proof_evidence.get("selected_frameworks"))
+        ]
+        framework_import = _as_mapping(state.get("framework_import_manifest"))
+        import_summary = _as_mapping(framework_import.get("summary"))
+        observed_frameworks = [
+            str(item) for item in _as_list(import_summary.get("observed_frameworks"))
+        ]
+        expected_state_keys = sorted(str(key) for key in contract["required_state_keys"])
+        proof_summary = {
+            "workspace_import_certification_proof_status": summary.get(
+                "workspace_import_certification_proof_status"
+            ),
+            "workspace_import_certification_proof_passed": summary.get(
+                "workspace_import_certification_proof_passed"
+            ),
+            "workspace_import_certification_proof_failed_check_count": summary.get(
+                "workspace_import_certification_proof_failed_check_count"
+            ),
+        }
+        example_evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "failed_check_ids": list(proof.get("failed_check_ids") or []),
+            "warning_check_ids": list(proof.get("warning_check_ids") or []),
+            "check_ids": check_ids,
+            "passing_check_ids": passing_check_ids,
+            "passed_check_ids": passed_check_ids,
+            "selected_environment_types": selected_environment_types,
+            "selected_state_keys": selected_state_keys,
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+            },
+            "selected_frameworks": selected_frameworks,
+            "summary": proof_summary,
+        }
+        proof_expectations = {
+            "workspace_import_certification_proof.kind": (
+                proof.get("kind"),
+                V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND,
+            ),
+            "workspace_import_certification_proof.status": (
+                proof.get("status"),
+                "passed",
+            ),
+            "workspace_import_certification_proof.passed": (
+                proof.get("passed"),
+                True,
+            ),
+            "workspace_import_certification_proof.assurance_level": (
+                proof.get("assurance_level"),
+                V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL,
+            ),
+            "workspace_import_certification_proof.requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "workspace_import_certification_proof.failed_check_ids": (
+                proof.get("failed_check_ids") or [],
+                [],
+            ),
+            "workspace_import_certification_proof.warning_check_ids": (
+                proof.get("warning_check_ids") or [],
+                [],
+            ),
+            "summary.workspace_import_certification_proof_status": (
+                proof_summary["workspace_import_certification_proof_status"],
+                "passed",
+            ),
+            "summary.workspace_import_certification_proof_passed": (
+                proof_summary["workspace_import_certification_proof_passed"],
+                True,
+            ),
+            "summary.workspace_import_certification_proof_failed_check_count": (
+                proof_summary[
+                    "workspace_import_certification_proof_failed_check_count"
+                ],
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field, observed in (
+            ("workspace_import_certification_proof.checks", check_ids),
+            (
+                "workspace_import_certification_proof.checks.passed",
+                passing_check_ids,
+            ),
+            (
+                "workspace_import_certification_proof.passed_check_ids",
+                passed_check_ids,
+            ),
+        ):
+            missing_checks = missing_values(
+                observed,
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS,
+            )
+            if missing_checks:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=field,
+                    expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS,
+                    observed=observed,
+                )
+        alignment_expectations = {
+            "workspace_import_certification_proof.evidence.selected_environment_types": (
+                selected_environment_types,
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+            ),
+            (
+                "workspace_import_certification_proof.evidence."
+                "selected_environment_types.best_config"
+            ): (
+                selected_environment_types,
+                best_environment_types,
+            ),
+            "workspace_import_certification_proof.evidence.selected_state_keys": (
+                selected_state_keys,
+                expected_state_keys,
+            ),
+        }
+        for field, (observed, expected) in alignment_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_metric_names = missing_values(
+            selected_metrics,
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS,
+        )
+        if missing_metric_names:
+            append_error(
+                proof_errors,
+                path=path,
+                field="workspace_import_certification_proof.evidence.selected_metrics",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS,
+                observed=sorted(str(metric) for metric in selected_metrics),
+            )
+        for metric, minimum in _as_mapping(contract.get("metric_floors")).items():
+            metric_name = str(metric)
+            floor = _float_or_zero(minimum)
+            if _float_or_zero(selected_metrics.get(metric_name)) < floor:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=(
+                        "workspace_import_certification_proof.evidence."
+                        f"selected_metrics.{metric_name}"
+                    ),
+                    expected=f">={floor}",
+                    observed=selected_metrics.get(metric_name),
+                )
+            if selected_metrics.get(metric_name) != best_metrics.get(metric_name):
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=(
+                        "workspace_import_certification_proof.evidence."
+                        f"selected_metrics.{metric_name}.best_history"
+                    ),
+                    expected=best_metrics.get(metric_name),
+                    observed=selected_metrics.get(metric_name),
+                )
+        missing_required_frameworks = missing_values(
+            selected_frameworks,
+            contract["required_frameworks"],
+        )
+        if missing_required_frameworks:
+            append_error(
+                proof_errors,
+                path=path,
+                field=(
+                    "workspace_import_certification_proof.evidence."
+                    "selected_frameworks"
+                ),
+                expected=contract["required_frameworks"],
+                observed=selected_frameworks,
+            )
+        missing_observed_frameworks = missing_values(
+            selected_frameworks,
+            observed_frameworks,
+        )
+        if missing_observed_frameworks:
+            append_error(
+                proof_errors,
+                path=path,
+                field=(
+                    "workspace_import_certification_proof.evidence."
+                    "selected_frameworks.certification_bundle"
+                ),
+                expected=observed_frameworks,
+                observed=selected_frameworks,
+            )
+
     if not missing_files:
         from . import config as agent_config
 
@@ -15727,6 +16011,13 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
                     contract,
                     example_evidence,
                 )
+                validate_proof(
+                    path,
+                    result,
+                    state,
+                    contract,
+                    example_evidence,
+                )
                 serialized = json.dumps(
                     {
                         "manifest": manifest,
@@ -15770,6 +16061,13 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
         "required_components": list(
             V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
         ),
+        "required_proof_kind": V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND,
+        "required_assurance_level": (
+            V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_proof_checks": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+        ),
         "required_contracts": {
             path: dict(contract)
             for path, contract in V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.items()
@@ -15781,6 +16079,7 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
         "certification_errors": certification_errors,
         "readiness_errors": readiness_errors,
         "component_errors": component_errors,
+        "proof_errors": proof_errors,
         "metric_errors": metric_errors,
         "security_errors": security_errors,
         "evidence": evidence,
@@ -26431,9 +26730,12 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_FILES",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS",
     "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS",
     "V1_BROWSER_REALTIME_ADAPTER_CONTRACTS",
     "V1_BROWSER_REALTIME_ADAPTER_FILES",

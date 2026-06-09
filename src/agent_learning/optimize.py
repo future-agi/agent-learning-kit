@@ -5,6 +5,7 @@ import copy
 import importlib
 import importlib.util
 import inspect
+import json
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlparse
@@ -26,6 +27,9 @@ AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
 )
 AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
     "agent-learning.optimization.framework-certification-proof.v1"
+)
+AGENT_LEARNING_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND = (
+    "agent-learning.optimization.workspace-import-certification-proof.v1"
 )
 AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND = (
     "agent-learning.optimization.framework-adapter-matrix-proof.v1"
@@ -397,6 +401,7 @@ def optimize_manifest_file(
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
+    payload = with_workspace_import_certification_proof(payload)
     payload = with_retrospective_harness_proof(payload)
     payload = with_optimizer_portfolio_proof(payload)
     payload = with_memory_lineage_proof(payload)
@@ -432,6 +437,7 @@ def optimize_manifest(
     payload = with_world_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
+    payload = with_workspace_import_certification_proof(payload)
     payload = with_retrospective_harness_proof(payload)
     payload = with_optimizer_portfolio_proof(payload)
     payload = with_memory_lineage_proof(payload)
@@ -615,6 +621,40 @@ def with_framework_adapter_matrix_proof(payload: Mapping[str, Any]) -> dict[str,
         proof["failed_check_ids"]
     )
     summary["framework_adapter_matrix_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_workspace_import_certification_proof(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Attach a native proof contract for workspace-import certification."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_workspace_import_certification_optimization(result, optimization):
+        return result
+
+    proof = _workspace_import_certification_proof(result, optimization)
+    result["workspace_import_certification_proof"] = proof
+    optimization["workspace_import_certification_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["workspace_import_certification_proof_status"] = proof["status"]
+    summary["workspace_import_certification_proof_passed"] = proof["passed"]
+    summary["workspace_import_certification_proof_assurance_level"] = proof[
+        "assurance_level"
+    ]
+    summary["workspace_import_certification_proof_check_count"] = proof[
+        "check_count"
+    ]
+    summary["workspace_import_certification_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["workspace_import_certification_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -5113,6 +5153,409 @@ def _framework_certification_proof(
         "passed_check_count": sum(1 for check in checks if check["passed"]),
         "failed_check_ids": failed,
         "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _workspace_import_certification_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [_scope_key(env.get("type")) for env in environments]
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(selected_history.get("patch"))
+    patch_paths = sorted(str(path) for path in selected_patch)
+    report_state = _selected_report_environment_state(selected_history)
+    workspace_state = _plain_mapping(report_state.get("workspace_run_manifest"))
+    import_state = _plain_mapping(report_state.get("framework_import_manifest"))
+    workspace_summary = _plain_mapping(workspace_state.get("summary"))
+    import_summary = _plain_mapping(import_state.get("summary"))
+
+    readiness = _plain_mapping(payload.get("framework_readiness"))
+    readiness_layers = [
+        _plain_mapping(item)
+        for item in _plain_list(readiness.get("layers"))
+        if _plain_mapping(item)
+    ]
+    verified_import_layer = next(
+        (
+            layer
+            for layer in readiness_layers
+            if _scope_key(layer.get("layer")) == "import"
+            and layer.get("verified") is True
+        ),
+        {},
+    )
+    import_layer = _plain_mapping(readiness.get("import"))
+
+    source_manifest = _source_manifest_with_optimization(optimization)
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    source_target = _plain_mapping(source_optimization.get("target"))
+    source_target_metadata = _plain_mapping(source_target.get("metadata"))
+    source_search_space = _plain_mapping(source_target.get("search_space"))
+    source_evaluation = _plain_mapping(source_manifest.get("evaluation"))
+    source_agent_report = _plain_mapping(source_evaluation.get("agent_report"))
+    source_eval_config = _plain_mapping(source_agent_report.get("config"))
+    workspace_quality = _plain_mapping(source_eval_config.get("workspace_run_quality"))
+    import_quality = _plain_mapping(
+        source_eval_config.get("framework_import_quality")
+    )
+    source_threshold = (
+        _as_float(source_optimization.get("threshold"))
+        or _as_float(source_manifest.get("threshold"))
+        or _as_float(source_agent_report.get("threshold"))
+    )
+
+    required_environment_types = {"workspace_run_manifest", "framework_import"}
+    required_metric_thresholds = {
+        "workspace_run_coverage": 1.0,
+        "workspace_run_quality": 1.0,
+        "framework_import_coverage": 1.0,
+        "framework_import_quality": 1.0,
+        "tool_selection_accuracy": 1.0,
+    }
+    selected_metric_evidence = {
+        key: selected_metrics.get(key) for key in required_metric_thresholds
+    }
+    required_frameworks = _unique_strings(import_quality.get("required_frameworks"))
+    required_sources = _unique_strings(import_quality.get("required_sources"))
+    required_signals = _unique_strings(import_quality.get("required_signals"))
+    required_export_types = _unique_strings(
+        import_quality.get("required_export_types")
+    )
+    frameworks = _unique_strings(
+        [
+            *_plain_list(readiness.get("frameworks")),
+            *_plain_list(import_summary.get("observed_frameworks")),
+            *required_frameworks,
+        ]
+    )
+    observed_source_ids = _unique_strings(
+        (
+            _plain_mapping(source).get("id")
+            or _plain_mapping(source).get("name")
+            for source in _plain_list(import_state.get("sources"))
+        )
+    )
+    import_flag_evidence = {
+        key: import_summary.get(key)
+        for key in (
+            "has_target",
+            "has_adapter",
+            "has_observability",
+            "has_artifacts",
+        )
+        if key in import_summary
+    }
+    missing_import_evidence = {
+        key: _plain_list(import_summary.get(key))
+        for key in (
+            "missing_required_frameworks",
+            "missing_required_sources",
+            "missing_required_signals",
+            "missing_required_export_types",
+        )
+    }
+
+    summary = _plain_mapping(payload.get("summary"))
+    selected_candidate_id = str(
+        optimization.get("best_candidate_id")
+        or summary.get("best_candidate_id")
+        or ""
+    )
+    score_threshold = (
+        _as_float(summary.get("threshold"))
+        or source_threshold
+        or _as_float(source_agent_report.get("threshold"))
+        or 0.9
+    )
+    selected_score = _as_float(selected_history.get("score"))
+    score_delta = _as_float(summary.get("candidate_lineage_selected_score_delta"))
+    candidate_lineage_count = _as_int(summary.get("candidate_lineage_count"))
+    task_kind = _scope_key(source_target_metadata.get("task_kind"))
+    cookbook = _scope_key(source_target_metadata.get("cookbook"))
+
+    forbidden_keys = {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+    checks = [
+        _proof_check(
+            "workspace_import_source_manifest_contract_closed",
+            passed=(
+                task_kind == "workspace_import_certification"
+                or cookbook
+                in {
+                    "workspace_import_certification",
+                    "workspace_import_certification_optimization",
+                    "sdk_workspace_import_certification",
+                }
+            )
+            and "simulation.environments" in source_search_space
+            and source_threshold > 0.0
+            and _as_int(workspace_quality.get("min_command_count")) >= 4
+            and _as_int(workspace_quality.get("max_failed_commands")) == 0
+            and _as_int(workspace_quality.get("max_secret_leaks")) == 0
+            and import_quality.get("require_target") is True
+            and import_quality.get("require_adapter") is True
+            and import_quality.get("require_observability") is True
+            and import_quality.get("require_artifacts") is True,
+            required=True,
+            reason=(
+                "source manifest declares a workspace-import certification "
+                "target, search surface, and evaluation contract"
+            ),
+            evidence={
+                "task_kind": task_kind,
+                "cookbook": cookbook,
+                "search_paths": sorted(str(path) for path in source_search_space),
+                "source_threshold": source_threshold,
+                "workspace_run_quality": copy.deepcopy(workspace_quality),
+                "framework_import_quality": copy.deepcopy(import_quality),
+            },
+        ),
+        _proof_check(
+            "native_no_external_workspace_import_dependency",
+            passed=not _contains_nested_keys(best_config, forbidden_keys),
+            required=True,
+            reason=(
+                "selected workspace-import candidate is local and has no "
+                "endpoint/auth/key/secret/token dependency"
+            ),
+            evidence={
+                "forbidden_keys_present": sorted(
+                    _present_nested_keys(best_config, forbidden_keys)
+                ),
+            },
+        ),
+        _proof_check(
+            "workspace_import_environment_bundle_present",
+            passed=required_environment_types.issubset(set(environment_types)),
+            required=True,
+            reason=(
+                "selected candidate carries both the workspace run manifest and "
+                "framework import manifest environments"
+            ),
+            evidence={
+                "required_environment_types": sorted(required_environment_types),
+                "environment_types": environment_types,
+            },
+        ),
+        _proof_check(
+            "workspace_import_report_state_closed",
+            passed=workspace_state.get("kind") == "workspace_run_manifest"
+            and import_state.get("kind") == "framework_import_manifest",
+            required=True,
+            reason=(
+                "selected report environment state contains the executable "
+                "workspace run and framework import artifacts"
+            ),
+            evidence={
+                "state_keys": sorted(str(key) for key in report_state),
+                "workspace_kind": workspace_state.get("kind"),
+                "framework_import_kind": import_state.get("kind"),
+            },
+        ),
+        _proof_check(
+            "workspace_run_summary_closed",
+            passed=_as_int(workspace_summary.get("command_count")) >= 4
+            and _as_int(workspace_summary.get("failed_command_count")) == 0
+            and _as_int(workspace_summary.get("optimization_count")) >= 1
+            and _as_int(workspace_summary.get("simulation_count")) >= 1
+            and _as_int(workspace_summary.get("eval_count")) >= 1
+            and _as_int(workspace_summary.get("secret_leak_count")) == 0
+            and not _plain_list(
+                workspace_summary.get("missing_required_evidence")
+            ),
+            required=True,
+            reason=(
+                "workspace execution evidence closes commands, simulation, eval, "
+                "optimization, and secret-leak requirements"
+            ),
+            evidence={
+                "command_count": workspace_summary.get("command_count"),
+                "failed_command_count": workspace_summary.get(
+                    "failed_command_count"
+                ),
+                "optimization_count": workspace_summary.get("optimization_count"),
+                "simulation_count": workspace_summary.get("simulation_count"),
+                "eval_count": workspace_summary.get("eval_count"),
+                "secret_leak_count": workspace_summary.get("secret_leak_count"),
+                "missing_required_evidence": _plain_list(
+                    workspace_summary.get("missing_required_evidence")
+                ),
+            },
+        ),
+        _proof_check(
+            "framework_import_summary_closed",
+            passed=_as_int(import_summary.get("source_count")) >= 3
+            and _as_int(import_summary.get("passed_source_count")) >= 3
+            and _as_int(import_summary.get("failed_source_count")) == 0
+            and not any(missing_import_evidence.values())
+            and all(value is True for value in import_flag_evidence.values()),
+            required=True,
+            reason=(
+                "framework import evidence closes required sources, frameworks, "
+                "signals, export types, and target/adapter/observability/artifact "
+                "presence"
+            ),
+            evidence={
+                "source_count": import_summary.get("source_count"),
+                "passed_source_count": import_summary.get("passed_source_count"),
+                "failed_source_count": import_summary.get("failed_source_count"),
+                "required_frameworks": required_frameworks,
+                "required_sources": required_sources,
+                "required_signals": required_signals,
+                "required_export_types": required_export_types,
+                "observed_frameworks": _plain_list(
+                    import_summary.get("observed_frameworks")
+                ),
+                "observed_export_types": _plain_list(
+                    import_summary.get("observed_export_types")
+                ),
+                "observed_source_ids": observed_source_ids,
+                "missing_required_evidence": copy.deepcopy(
+                    missing_import_evidence
+                ),
+                "presence_flags": import_flag_evidence,
+            },
+        ),
+        _proof_check(
+            "framework_readiness_import_layer_closed",
+            passed=str(readiness.get("status") or "") == "ready"
+            and "import"
+            in {
+                _scope_key(layer)
+                for layer in _plain_list(readiness.get("present_layers"))
+            }
+            and not _plain_list(readiness.get("weak_layers"))
+            and not _plain_list(readiness.get("weak_metrics"))
+            and str(verified_import_layer.get("status") or "") == "ready"
+            and verified_import_layer.get("verified") is True
+            and verified_import_layer.get("state_key")
+            == "framework_import_manifest",
+            required=True,
+            reason=(
+                "framework readiness card is ready, import layer is verified, "
+                "and no weak layers or weak metrics remain"
+            ),
+            evidence={
+                "status": readiness.get("status"),
+                "present_layers": readiness.get("present_layers"),
+                "weak_layers": readiness.get("weak_layers"),
+                "weak_metrics": readiness.get("weak_metrics"),
+                "import": copy.deepcopy(import_layer),
+                "verified_import_layer": copy.deepcopy(verified_import_layer),
+            },
+        ),
+        _proof_check(
+            "workspace_import_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(key)) >= threshold
+                for key, threshold in required_metric_thresholds.items()
+            ),
+            required=True,
+            reason=(
+                "selected report closes workspace-run, framework-import, and "
+                "tool-selection metrics at full coverage/quality"
+            ),
+            evidence=selected_metric_evidence,
+        ),
+        _proof_check(
+            "workspace_import_patch_surface_present",
+            passed=any(
+                path == "simulation.environments"
+                or path.startswith("simulation.environments.")
+                for path in patch_paths
+            ),
+            required=True,
+            reason=(
+                "selected optimization patch updates the workspace/import "
+                "environment bundle rather than a prompt-only surface"
+            ),
+            evidence={"selected_patch_paths": patch_paths},
+        ),
+        _proof_check(
+            "workspace_import_candidate_lineage_gate_passed",
+            passed=bool(selected_candidate_id)
+            and selected_score >= score_threshold
+            and candidate_lineage_count >= 2,
+            required=True,
+            reason=(
+                "selected workspace-import candidate is lineaged and meets the "
+                "configured optimization threshold"
+            ),
+            evidence={
+                "selected_candidate_id": selected_candidate_id,
+                "selected_score": selected_score,
+                "score_threshold": score_threshold,
+                "candidate_lineage_count": candidate_lineage_count,
+                "candidate_lineage_selected_score_delta": score_delta,
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed_check_ids = [check["id"] for check in checks if check["passed"]]
+    state_keys = sorted(str(key) for key in report_state)
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_native_workspace_import_certified"
+            if passed
+            else "workspace_import_certification_proof_failed"
+        ),
+        "selected_candidate_id": selected_candidate_id or None,
+        "frameworks": frameworks,
+        "environment_types": environment_types,
+        "requires_external_service": False,
+        "evidence": {
+            "selected_environment_types": environment_types,
+            "selected_state_keys": state_keys,
+            "selected_frameworks": frameworks,
+            "source_manifest": {
+                "task_kind": task_kind,
+                "cookbook": cookbook,
+                "target_layers": _plain_list(source_target.get("layers")),
+                "search_paths": sorted(str(path) for path in source_search_space),
+                "threshold": source_threshold,
+                "workspace_run_quality": copy.deepcopy(workspace_quality),
+                "framework_import_quality": copy.deepcopy(import_quality),
+            },
+            "workspace_summary": copy.deepcopy(workspace_summary),
+            "framework_import_summary": copy.deepcopy(import_summary),
+            "framework_readiness": {
+                "status": readiness.get("status"),
+                "present_layers": readiness.get("present_layers"),
+                "weak_layers": readiness.get("weak_layers"),
+                "weak_metrics": readiness.get("weak_metrics"),
+                "import": copy.deepcopy(import_layer),
+                "verified_import_layer": copy.deepcopy(verified_import_layer),
+            },
+            "selected_metrics": selected_metric_evidence,
+            "selected_patch_paths": patch_paths,
+            "candidate_lineage": {
+                "selected_score": selected_score,
+                "score_threshold": score_threshold,
+                "candidate_lineage_count": candidate_lineage_count,
+                "candidate_lineage_selected_score_delta": score_delta,
+            },
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "passed_check_ids": passed_check_ids,
         "checks": checks,
     }
 
@@ -30502,6 +30945,60 @@ def _is_framework_certification_optimization(
     }.issubset(state_keys)
 
 
+def _source_manifest_with_optimization(
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_manifest = _plain_mapping(optimization.get("source_manifest"))
+    if _plain_mapping(source_manifest.get("optimization")):
+        return source_manifest
+
+    source_manifest_path = str(optimization.get("source_manifest_path") or "")
+    if not source_manifest_path:
+        return source_manifest
+
+    try:
+        loaded = json.loads(
+            Path(source_manifest_path).expanduser().read_text(encoding="utf-8")
+        )
+    except (OSError, TypeError, ValueError):
+        return source_manifest
+
+    loaded_manifest = _plain_mapping(loaded)
+    if not loaded_manifest:
+        return source_manifest
+    return {**source_manifest, **loaded_manifest}
+
+
+def _is_workspace_import_certification_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    del payload
+
+    source_manifest = _source_manifest_with_optimization(optimization)
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) == "workspace_import_certification":
+        return True
+
+    if _scope_key(metadata.get("cookbook")) in {
+        "workspace_import_certification",
+        "workspace_import_certification_optimization",
+        "sdk_workspace_import_certification",
+    }:
+        return True
+
+    return (
+        "build_workspace_import_certification_optimization_manifest"
+        in _scope_key(metadata.get("source"))
+    )
+
+
 def _is_framework_adapter_matrix_optimization(
     payload: Mapping[str, Any],
     optimization: Mapping[str, Any],
@@ -31181,6 +31678,7 @@ __all__ = [
     "AGENT_LEARNING_REDTEAM_ATTACK_EVOLUTION_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND",
     "AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND",
+    "AGENT_LEARNING_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
     "diagnose_text",
@@ -31332,5 +31830,6 @@ __all__ = [
     "with_redteam_campaign_proof",
     "with_redteam_attack_evolution_proof",
     "with_retrospective_harness_proof",
+    "with_workspace_import_certification_proof",
     "with_world_hook_proof",
 ]

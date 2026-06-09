@@ -1990,9 +1990,9 @@ actions`, and `agent-learn action-run` follow-ups from the saved artifact.
 `agent-learn release-check` gates this path as
 `workspace_import_certification_readiness`: the optimizer must select the
 verified workspace/import bundle, keep the workflow local-only, close workspace
-and framework import metrics, preserve certification/component evidence, and keep
-secret/security buckets empty before arbitrary project import claims count as
-V1-ready.
+and framework import metrics, preserve certification/component evidence, emit the
+native workspace-import certification proof, and keep secret/security buckets
+empty before arbitrary project import claims count as V1-ready.
 
 `optimize.build_redteam_readiness_certification_optimization_manifest()` and
 `examples/sdk_redteam_readiness_certification_optimization.py` add the next

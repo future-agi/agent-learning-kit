@@ -15631,6 +15631,16 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workspace_import_certification_components"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
     )
+    assert payload["required_workspace_import_certification_proof_kind"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
+    )
+    assert (
+        payload["required_workspace_import_certification_proof_assurance_level"]
+        == trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_workspace_import_certification_proof_checks"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+    )
     assert payload["required_workspace_import_certification_contracts"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
     )
@@ -18258,6 +18268,15 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workspace_certification_evidence["required_components"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
     )
+    assert workspace_certification_evidence["required_proof_kind"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
+    )
+    assert workspace_certification_evidence["required_assurance_level"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert workspace_certification_evidence["required_proof_checks"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+    )
     assert workspace_certification_evidence["required_contracts"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
     )
@@ -18269,6 +18288,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workspace_certification_evidence["certification_errors"] == []
     assert workspace_certification_evidence["readiness_errors"] == []
     assert workspace_certification_evidence["component_errors"] == []
+    assert workspace_certification_evidence["proof_errors"] == []
     assert workspace_certification_evidence["security_errors"] == []
     workspace_contract = trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS[
         "examples/sdk_workspace_import_certification_optimization.py"
@@ -18329,6 +18349,45 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workspace_result["forbidden_external_keys"] == []
     for metric in trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS:
         assert workspace_result["best_metrics"][metric] == pytest.approx(1.0)
+    workspace_proof = workspace_example["proof"]
+    assert workspace_proof["kind"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
+    )
+    assert workspace_proof["status"] == "passed"
+    assert workspace_proof["passed"] is True
+    assert workspace_proof["assurance_level"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert workspace_proof["requires_external_service"] is False
+    assert workspace_proof["failed_check_ids"] == []
+    assert workspace_proof["warning_check_ids"] == []
+    assert set(workspace_proof["check_ids"]) >= set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+    )
+    assert set(workspace_proof["passing_check_ids"]) >= set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+    )
+    assert set(workspace_proof["passed_check_ids"]) >= set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+    )
+    assert workspace_proof["selected_environment_types"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert workspace_proof["selected_state_keys"] == sorted(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert workspace_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+    }
+    assert set(workspace_proof["selected_frameworks"]) >= set(
+        workspace_contract["required_frameworks"]
+    )
+    assert workspace_proof["summary"] == {
+        "workspace_import_certification_proof_status": "passed",
+        "workspace_import_certification_proof_passed": True,
+        "workspace_import_certification_proof_failed_check_count": 0,
+    }
     selected_bundle = workspace_example["certification_bundle"]
     assert selected_bundle["workspace_kind"] == "workspace_run_manifest"
     assert selected_bundle["framework_import_kind"] == "framework_import_manifest"
