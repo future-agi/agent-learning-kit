@@ -15253,6 +15253,24 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_optimizer_governance_checks"] == (
         trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
     )
+    assert payload["required_agent_control_plane_files"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_FILES
+    )
+    assert payload["required_agent_control_plane_environment_types"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_agent_control_plane_metrics"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
+    )
+    assert payload["required_agent_trust_boundary_flags"] == (
+        trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
+    )
+    assert payload["required_agent_control_plane_flags"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS
+    )
+    assert payload["required_agent_control_plane_events"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
+    )
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == {
         "single_public_boundary",
@@ -15270,6 +15288,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "ui_action_report_readiness",
         "regression_artifact_readiness",
         "harness_diagnosis_readiness",
+        "agent_control_plane_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
         "openenv_optimizer_readiness",
@@ -15612,6 +15631,135 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert diagnosis_evidence["proof_status"] == "passed"
     assert diagnosis_evidence["proof_failed_check_ids"] == []
     assert diagnosis_evidence["proof_warning_check_ids"] == []
+    agent_control_plane = checks["agent_control_plane_readiness"]["evidence"]
+    assert agent_control_plane["required_files"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_FILES
+    )
+    assert agent_control_plane["required_environment_types"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert agent_control_plane["required_metrics"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
+    )
+    assert agent_control_plane["required_trust_boundary_flags"] == (
+        trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
+    )
+    assert agent_control_plane["required_control_plane_flags"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS
+    )
+    assert agent_control_plane["required_events"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
+    )
+    assert agent_control_plane["missing_files"] == []
+    assert agent_control_plane["execution_errors"] == []
+    assert agent_control_plane["manifest_errors"] == []
+    assert agent_control_plane["optimization_errors"] == []
+    assert agent_control_plane["simulation_errors"] == []
+    assert agent_control_plane["metric_errors"] == []
+    assert agent_control_plane["control_errors"] == []
+    control_evidence = agent_control_plane["evidence"]
+    assert control_evidence["optimization_manifest"] == {
+        "version": "agent-learning.optimization.v1",
+        "required_env": ["AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY"],
+        "target_layers": ["security", "policy", "autonomy", "evaluator"],
+        "search_paths": ["simulation.environments"],
+        "candidate_count": 2,
+        "hardened_environment_types": (
+            trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "trust_required_control_count": 11,
+        "control_required_control_count": 11,
+    }
+    assert control_evidence["simulation_manifest"] == {
+        "version": "agent-learning.run.v1",
+        "required_env": [
+            "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_SIMULATION_KEY"
+        ],
+        "environment_types": (
+            trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "min_turns": 5,
+        "max_turns": 5,
+        "auto_execute_tools": True,
+        "generated_manifest_roundtrip": True,
+        "trust_required_control_count": 11,
+        "control_required_control_count": 11,
+    }
+    control_optimization = control_evidence["optimization"]
+    assert control_optimization["kind"] == "agent-learning.optimization.v1"
+    assert control_optimization["status"] == "passed"
+    assert control_optimization["output_roundtrip"] is True
+    assert control_optimization["optimization_score"] >= 0.98
+    assert control_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert control_optimization["candidate_lineage_count"] == 2
+    assert control_optimization["candidate_lineage_content_addressed_count"] == 2
+    assert control_optimization["candidate_lineage_selected_score_delta"] >= 0.0
+    assert control_optimization["optimizer_governance_status"] == "passed"
+    assert control_optimization["optimizer_governance_passed"] is True
+    assert control_optimization["optimizer_governance_check_count"] == 11
+    assert control_optimization["best_environment_types"] == (
+        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert control_optimization["best_history"]["patch_keys"] == [
+        "simulation.environments"
+    ]
+    assert control_optimization["best_history"]["metrics"] == {
+        "agent_trust_boundary_coverage": pytest.approx(1.0),
+        "agent_trust_boundary_quality": pytest.approx(1.0),
+        "agent_control_plane_coverage": pytest.approx(1.0),
+        "agent_control_plane_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    assert control_optimization["governance"]["status"] == "passed"
+    assert control_optimization["governance"]["passed"] is True
+    assert control_optimization["governance"]["failed_check_ids"] == []
+    control_simulation = control_evidence["simulation"]
+    assert control_simulation["kind"] == "agent-learning.run.v1"
+    assert control_simulation["status"] == "passed"
+    assert control_simulation["output_roundtrip"] is True
+    assert control_simulation["evaluation_passed"] is True
+    assert control_simulation["evaluation_score"] >= 0.98
+    assert control_simulation["metric_averages"] == {
+        "agent_trust_boundary_coverage": pytest.approx(1.0),
+        "agent_trust_boundary_quality": pytest.approx(1.0),
+        "agent_control_plane_coverage": pytest.approx(1.0),
+        "agent_control_plane_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    assert set(trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS) <= set(
+        control_simulation["event_names"]
+    )
+    assert control_simulation["artifact_count"] >= 20
+    for state_summary in (
+        control_optimization["state_summary"],
+        control_simulation["state_summary"],
+    ):
+        assert set(state_summary["state_keys"]) == {
+            "agent_control_plane",
+            "agent_trust_boundary_model",
+        }
+        trust_summary = state_summary["trust_boundary"]
+        assert trust_summary["control_count"] == 11
+        assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+        assert trust_summary["high_risk_unmitigated_count"] == 0
+        assert trust_summary["gaps"] == []
+        assert trust_summary["evidence_count"] >= 20
+        for flag in trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS:
+            assert trust_summary[flag] is True
+        runtime_summary = state_summary["control_plane"]
+        assert runtime_summary["control_count"] == 11
+        assert runtime_summary["required_control_rate"] == pytest.approx(1.0)
+        assert runtime_summary["approval_required_action_count"] >= 2
+        assert runtime_summary["blocked_action_count"] >= 1
+        assert runtime_summary["rolled_back_action_count"] >= 1
+        assert runtime_summary["contained_incident_count"] >= 1
+        assert runtime_summary["within_budget_count"] >= 3
+        assert runtime_summary["exceeded_budget_count"] == 0
+        assert runtime_summary["high_risk_uncontained_count"] == 0
+        assert runtime_summary["gaps"] == []
+        assert runtime_summary["evidence_count"] >= 15
+        for flag in trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS:
+            assert runtime_summary[flag] is True
     assert checks["framework_provider_examples_present"]["evidence"]["missing"] == []
     framework_provider = checks["framework_provider_contract_readiness"]["evidence"]
     assert framework_provider["required_frameworks"] == (

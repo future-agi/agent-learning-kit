@@ -87,12 +87,15 @@ report, promote-to-regression, and replay lifecycle so optimized or red-team
 evidence can become replayable CI artifacts. Optimizer governance readiness
 executes local governed optimizer-society search and verifies candidate lineage,
 role credit, top-ranked selection, rollback, locality, dependency audit, and
-optimizer trace metrics. Adapter probe readiness exercises raw probe, discovery,
-optimization, auto-discovery, promotion, and one-call run cookbooks so BYO
-framework objects can become evaluated run manifests locally. The composed
-trinity-stack probe readiness gate proves that the selected orchestration stack
-agent can pass a localhost task evaluator and promote into one run manifest with
-world, framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
+optimizer trace metrics. Agent control-plane readiness executes local optimizer
+and simulation cookbooks for autonomous-agent trust boundaries, approval gates,
+budgets, rollback, kill switches, containment, drift detection, and audit
+evidence. Adapter probe readiness exercises raw probe, discovery, optimization,
+auto-discovery, promotion, and one-call run cookbooks so BYO framework objects
+can become evaluated run manifests locally. The composed trinity-stack probe
+readiness gate proves that the selected orchestration stack agent can pass a
+localhost task evaluator and promote into one run manifest with world,
+framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -2051,6 +2054,11 @@ For direct, non-optimizer simulation,
 `examples/sdk_agent_control_plane_simulation.py` run the hardened trust-boundary
 plus runtime control-plane evidence as a normal `agent-learning.run.v1`
 artifact.
+`agent-learn release-check` gates both paths as
+`agent_control_plane_readiness`: the optimizer must select the hardened
+trust-boundary/control-plane bundle, the direct simulation must emit report
+state, events, and artifacts, and both must close trust-boundary/control-plane
+coverage, quality, and tool-selection metrics.
 
 The `browser_cua_optimization.json` example optimizes a browser/computer-use
 red-team harness. It verifies selector-drift recovery, refreshed screenshots,

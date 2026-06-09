@@ -46,7 +46,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
-| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness` |
+| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
 | M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
@@ -204,6 +204,10 @@ Current checkpoint:
 - Provider integration fixtures use UI-safe credential-slot references instead
   of key-like labels such as `*_API_KEY`; actual real-key execution remains
   declared through env requirements and explicit live-target runs.
+- Agent control-plane readiness is now executable: release-check runs the SDK
+  optimizer and direct simulation cookbooks, verifies trust-boundary controls,
+  runtime control-plane controls, report events/artifacts, optimizer governance,
+  output roundtrips, and 1.0 control-plane/trust-boundary metrics.
 
 Acceptance gates:
 
@@ -214,6 +218,10 @@ Acceptance gates:
   promotion, and downloads.
 - Harness diagnosis cards expose layer attribution, repair operators, rollout
   plans, and reproducible follow-up commands for failed or weak harness layers.
+- Autonomous-agent runtime control planes expose identity, permissions,
+  sandboxing, approval, audit, memory isolation, egress, allowlist, data
+  boundary, secret handling, budgets, rollback, kill-switch, circuit-breaker,
+  containment, rate-limit, risk-scoring, and drift-detection evidence.
 - Artifacts are safe to send to Future AGI for observability/evals/simulation UI
   without leaking local keys.
 

@@ -1398,6 +1398,71 @@ V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
     "metric_evidence_present",
 ]
 
+V1_AGENT_CONTROL_PLANE_FILES = [
+    "examples/sdk_agent_control_plane_optimization.py",
+    "examples/sdk_agent_control_plane_simulation.py",
+    "examples/agent_control_plane_optimization.json",
+    "internal-docs/agent-control-plane-readiness-research.md",
+]
+
+V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES = [
+    "agent_trust_boundary",
+    "agent_control_plane",
+]
+
+V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS = [
+    "agent_trust_boundary_coverage",
+    "agent_trust_boundary_quality",
+    "agent_control_plane_coverage",
+    "agent_control_plane_quality",
+    "tool_selection_accuracy",
+]
+
+V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS = [
+    "has_identity",
+    "has_permissions",
+    "has_sandbox",
+    "has_audit",
+    "has_canaries",
+    "has_human_approval",
+    "has_memory_isolation",
+    "has_network_egress_controls",
+    "has_tool_allowlist",
+    "has_data_boundary",
+    "has_secret_handling",
+]
+
+V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS = [
+    "has_action_policy",
+    "has_approval_gates",
+    "has_audit",
+    "has_budgets",
+    "has_circuit_breakers",
+    "has_containment",
+    "has_drift_detection",
+    "has_kill_switch",
+    "has_rate_limits",
+    "has_risk_scoring",
+    "has_rollback",
+]
+
+V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS = [
+    "agent_trust_boundary_ready",
+    "agent_trust_boundary_status",
+    "agent_trust_gaps_listed",
+    "agent_trust_assets_listed",
+    "agent_trust_tools_listed",
+    "agent_trust_surfaces_listed",
+    "agent_trust_control_inspected",
+    "agent_control_plane_ready",
+    "agent_control_plane_status",
+    "agent_control_gaps_listed",
+    "agent_control_actions_listed",
+    "agent_control_action_inspected",
+    "agent_control_budgets_listed",
+    "agent_control_incidents_listed",
+]
+
 
 def consolidation_metadata() -> dict[str, Any]:
     """Return the stable public consolidation boundary for the unified SDK."""
@@ -1718,6 +1783,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M5",
         evidence=harness_diagnosis,
     )
+    agent_control_plane = _release_agent_control_plane_status(root)
+    _append_release_check(
+        checks,
+        check_id="agent_control_plane_readiness",
+        passed=(
+            not agent_control_plane["missing_files"]
+            and not agent_control_plane["execution_errors"]
+            and not agent_control_plane["manifest_errors"]
+            and not agent_control_plane["optimization_errors"]
+            and not agent_control_plane["simulation_errors"]
+            and not agent_control_plane["metric_errors"]
+            and not agent_control_plane["control_errors"]
+        ),
+        milestone="M5",
+        evidence=agent_control_plane,
+    )
     missing_framework_provider = _missing_relative_paths(
         root,
         V1_FRAMEWORK_PROVIDER_EXAMPLES,
@@ -1973,6 +2054,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_optimizer_governance_checks": list(
             V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
+        ),
+        "required_agent_control_plane_files": list(V1_AGENT_CONTROL_PLANE_FILES),
+        "required_agent_control_plane_environment_types": list(
+            V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_agent_control_plane_metrics": list(
+            V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
+        ),
+        "required_agent_trust_boundary_flags": list(
+            V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
+        ),
+        "required_agent_control_plane_flags": list(
+            V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS
+        ),
+        "required_agent_control_plane_events": list(
+            V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
         ),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_framework_provider_frameworks": list(
@@ -4212,6 +4309,743 @@ def _release_harness_diagnosis_status(root: Path) -> dict[str, Any]:
         "rollout_errors": rollout_errors,
         "proof_errors": proof_errors,
         "secret_marker_findings": secret_marker_findings,
+    }
+
+
+def _release_agent_control_plane_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_AGENT_CONTROL_PLANE_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    simulation_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    control_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        errors: list[dict[str, Any]],
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        errors.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def load_module(path: Path, name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def summarize_state(state: Mapping[str, Any]) -> dict[str, Any]:
+        trust_summary = _as_mapping(
+            _as_mapping(state.get("agent_trust_boundary_model")).get("summary")
+        )
+        control_summary = _as_mapping(
+            _as_mapping(state.get("agent_control_plane")).get("summary")
+        )
+        return {
+            "state_keys": sorted(str(key) for key in state),
+            "trust_boundary": {
+                "control_count": trust_summary.get("control_count"),
+                "required_control_rate": trust_summary.get(
+                    "required_control_rate"
+                ),
+                "high_risk_unmitigated_count": trust_summary.get(
+                    "high_risk_unmitigated_count"
+                ),
+                "gaps": list(trust_summary.get("gaps") or []),
+                "evidence_count": trust_summary.get("evidence_count"),
+                **{
+                    flag: trust_summary.get(flag)
+                    for flag in V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
+                },
+            },
+            "control_plane": {
+                "control_count": control_summary.get("control_count"),
+                "required_control_rate": control_summary.get(
+                    "required_control_rate"
+                ),
+                "exceeded_budget_count": control_summary.get(
+                    "exceeded_budget_count"
+                ),
+                "high_risk_uncontained_count": control_summary.get(
+                    "high_risk_uncontained_count"
+                ),
+                "approval_required_action_count": control_summary.get(
+                    "approval_required_action_count"
+                ),
+                "blocked_action_count": control_summary.get("blocked_action_count"),
+                "rolled_back_action_count": control_summary.get(
+                    "rolled_back_action_count"
+                ),
+                "contained_incident_count": control_summary.get(
+                    "contained_incident_count"
+                ),
+                "within_budget_count": control_summary.get("within_budget_count"),
+                "gaps": list(control_summary.get("gaps") or []),
+                "evidence_count": control_summary.get("evidence_count"),
+                **{
+                    flag: control_summary.get(flag)
+                    for flag in V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS
+                },
+            },
+        }
+
+    def validate_state(
+        summary: Mapping[str, Any],
+        *,
+        path: str,
+        prefix: str,
+    ) -> None:
+        state_keys = set(_as_list(summary.get("state_keys")))
+        if state_keys != {
+            "agent_control_plane",
+            "agent_trust_boundary_model",
+        }:
+            append_error(
+                control_errors,
+                path,
+                f"{prefix}.state_keys",
+                ["agent_control_plane", "agent_trust_boundary_model"],
+                sorted(state_keys),
+            )
+        trust_summary = _as_mapping(summary.get("trust_boundary"))
+        control_summary = _as_mapping(summary.get("control_plane"))
+        trust_minima = {
+            "control_count": 11,
+            "required_control_rate": 1.0,
+            "evidence_count": 20,
+        }
+        for field, expected in trust_minima.items():
+            observed = trust_summary.get(field)
+            if _float_or_zero(observed) < float(expected):
+                append_error(
+                    control_errors,
+                    path,
+                    f"{prefix}.trust_boundary.{field}",
+                    f">={expected}",
+                    observed,
+                )
+        if _int_or_zero(trust_summary.get("high_risk_unmitigated_count")) != 0:
+            append_error(
+                control_errors,
+                path,
+                f"{prefix}.trust_boundary.high_risk_unmitigated_count",
+                0,
+                trust_summary.get("high_risk_unmitigated_count"),
+            )
+        if trust_summary.get("gaps"):
+            append_error(
+                control_errors,
+                path,
+                f"{prefix}.trust_boundary.gaps",
+                [],
+                trust_summary.get("gaps"),
+            )
+        for flag in V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS:
+            if trust_summary.get(flag) is not True:
+                append_error(
+                    control_errors,
+                    path,
+                    f"{prefix}.trust_boundary.{flag}",
+                    True,
+                    trust_summary.get(flag),
+                )
+
+        control_minima = {
+            "control_count": 11,
+            "required_control_rate": 1.0,
+            "approval_required_action_count": 2,
+            "blocked_action_count": 1,
+            "rolled_back_action_count": 1,
+            "contained_incident_count": 1,
+            "within_budget_count": 3,
+            "evidence_count": 15,
+        }
+        for field, expected in control_minima.items():
+            observed = control_summary.get(field)
+            if _float_or_zero(observed) < float(expected):
+                append_error(
+                    control_errors,
+                    path,
+                    f"{prefix}.control_plane.{field}",
+                    f">={expected}",
+                    observed,
+                )
+        for field in ("exceeded_budget_count", "high_risk_uncontained_count"):
+            if _int_or_zero(control_summary.get(field)) != 0:
+                append_error(
+                    control_errors,
+                    path,
+                    f"{prefix}.control_plane.{field}",
+                    0,
+                    control_summary.get(field),
+                )
+        if control_summary.get("gaps"):
+            append_error(
+                control_errors,
+                path,
+                f"{prefix}.control_plane.gaps",
+                [],
+                control_summary.get("gaps"),
+            )
+        for flag in V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS:
+            if control_summary.get(flag) is not True:
+                append_error(
+                    control_errors,
+                    path,
+                    f"{prefix}.control_plane.{flag}",
+                    True,
+                    control_summary.get(flag),
+                )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        optimization_env = "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_EXAMPLE_KEY"
+        simulation_env = "AGENT_LEARNING_SDK_AGENT_CONTROL_PLANE_SIMULATION_KEY"
+        previous_example_env = {
+            optimization_env: os.environ.get(optimization_env),
+            simulation_env: os.environ.get(simulation_env),
+        }
+        try:
+            optimization_path = root / "examples/sdk_agent_control_plane_optimization.py"
+            simulation_path = root / "examples/sdk_agent_control_plane_simulation.py"
+            optimization_module = load_module(
+                optimization_path,
+                "agent_learning_release_agent_control_plane_optimization",
+            )
+            simulation_module = load_module(
+                simulation_path,
+                "agent_learning_release_agent_control_plane_simulation",
+            )
+            os.environ[optimization_env] = "release-check-agent-control-plane-key"
+            os.environ[simulation_env] = (
+                "release-check-agent-control-plane-simulation-key"
+            )
+            optimization_manifest = optimization_module.build_manifest()
+            simulation_manifest = simulation_module.build_manifest()
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-agent-control-plane-"
+            ) as tmpdir:
+                output_root = Path(tmpdir)
+                optimization_output = output_root / "optimization.json"
+                simulation_output = output_root / "simulation.json"
+                optimization_result = optimization_module.run(optimization_output)
+                simulation_result = simulation_module.run(simulation_output)
+                optimization_saved = json.loads(
+                    optimization_output.read_text(encoding="utf-8")
+                )
+                simulation_saved = json.loads(
+                    simulation_output.read_text(encoding="utf-8")
+                )
+                generated_simulation_manifest = json.loads(
+                    simulation_output.with_suffix(".manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_agent_control_plane_optimization.py",
+                    "error": str(exc),
+                }
+            )
+            optimization_manifest = {}
+            simulation_manifest = {}
+            generated_simulation_manifest = {}
+            optimization_result = {}
+            simulation_result = {}
+            optimization_saved = {}
+            simulation_saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            for name, value in previous_example_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        if optimization_manifest:
+            optimization = _as_mapping(optimization_manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = _as_list(search_space.get("simulation.environments"))
+            hardened_candidate = _as_list(candidates[1]) if len(candidates) > 1 else []
+            config = _as_mapping(
+                _as_mapping(
+                    _as_mapping(optimization_manifest.get("evaluation")).get(
+                        "agent_report"
+                    )
+                ).get("config")
+            )
+            evidence["optimization_manifest"] = {
+                "version": optimization_manifest.get("version"),
+                "required_env": list(optimization_manifest.get("required_env") or []),
+                "target_layers": list(target.get("layers") or []),
+                "search_paths": sorted(str(path) for path in search_space),
+                "candidate_count": len(candidates),
+                "hardened_environment_types": [
+                    str(_as_mapping(item).get("type")) for item in hardened_candidate
+                ],
+                "trust_required_control_count": len(
+                    _as_list(
+                        _as_mapping(config.get("agent_trust_boundary_quality")).get(
+                            "required_controls"
+                        )
+                    )
+                ),
+                "control_required_control_count": len(
+                    _as_list(
+                        _as_mapping(config.get("agent_control_plane_quality")).get(
+                            "required_controls"
+                        )
+                    )
+                ),
+            }
+            manifest_expectations = {
+                "version": "agent-learning.optimization.v1",
+                "required_env": [optimization_env],
+                "optimization.target.search_space": ["simulation.environments"],
+                "optimization.target.layers": [
+                    "security",
+                    "policy",
+                    "autonomy",
+                    "evaluator",
+                ],
+                "optimization.target.candidate_count": 2,
+                "optimization.target.hardened_environment_types": (
+                    V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+                ),
+                "evaluation.agent_report.config.agent_trust_boundary_quality.required_controls": 11,
+                "evaluation.agent_report.config.agent_control_plane_quality.required_controls": 11,
+            }
+            observed_manifest = {
+                "version": optimization_manifest.get("version"),
+                "required_env": optimization_manifest.get("required_env"),
+                "optimization.target.search_space": sorted(str(path) for path in search_space),
+                "optimization.target.layers": list(target.get("layers") or []),
+                "optimization.target.candidate_count": len(candidates),
+                "optimization.target.hardened_environment_types": [
+                    str(_as_mapping(item).get("type")) for item in hardened_candidate
+                ],
+                "evaluation.agent_report.config.agent_trust_boundary_quality.required_controls": evidence[
+                    "optimization_manifest"
+                ]["trust_required_control_count"],
+                "evaluation.agent_report.config.agent_control_plane_quality.required_controls": evidence[
+                    "optimization_manifest"
+                ]["control_required_control_count"],
+            }
+            for field, expected in manifest_expectations.items():
+                if observed_manifest[field] != expected:
+                    append_error(
+                        manifest_errors,
+                        "examples/sdk_agent_control_plane_optimization.py",
+                        field,
+                        expected,
+                        observed_manifest[field],
+                    )
+
+        if simulation_manifest:
+            simulation = _as_mapping(simulation_manifest.get("simulation"))
+            environments = [
+                item
+                for item in _as_list(simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            config = _as_mapping(
+                _as_mapping(
+                    _as_mapping(simulation_manifest.get("evaluation")).get(
+                        "agent_report"
+                    )
+                ).get("config")
+            )
+            evidence["simulation_manifest"] = {
+                "version": simulation_manifest.get("version"),
+                "required_env": list(simulation_manifest.get("required_env") or []),
+                "environment_types": [
+                    str(_as_mapping(item).get("type")) for item in environments
+                ],
+                "min_turns": simulation.get("min_turns"),
+                "max_turns": simulation.get("max_turns"),
+                "auto_execute_tools": simulation.get("auto_execute_tools"),
+                "generated_manifest_roundtrip": (
+                    simulation_manifest == generated_simulation_manifest
+                ),
+                "trust_required_control_count": len(
+                    _as_list(
+                        _as_mapping(config.get("agent_trust_boundary_quality")).get(
+                            "required_controls"
+                        )
+                    )
+                ),
+                "control_required_control_count": len(
+                    _as_list(
+                        _as_mapping(config.get("agent_control_plane_quality")).get(
+                            "required_controls"
+                        )
+                    )
+                ),
+            }
+            simulation_manifest_expectations = {
+                "version": "agent-learning.run.v1",
+                "required_env": [simulation_env],
+                "simulation.environments.type": (
+                    V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+                ),
+                "simulation.min_turns": 5,
+                "simulation.max_turns": 5,
+                "simulation.auto_execute_tools": True,
+                "generated_manifest_roundtrip": True,
+                "evaluation.agent_report.config.agent_trust_boundary_quality.required_controls": 11,
+                "evaluation.agent_report.config.agent_control_plane_quality.required_controls": 11,
+            }
+            observed_simulation_manifest = {
+                "version": simulation_manifest.get("version"),
+                "required_env": simulation_manifest.get("required_env"),
+                "simulation.environments.type": evidence["simulation_manifest"][
+                    "environment_types"
+                ],
+                "simulation.min_turns": simulation.get("min_turns"),
+                "simulation.max_turns": simulation.get("max_turns"),
+                "simulation.auto_execute_tools": simulation.get("auto_execute_tools"),
+                "generated_manifest_roundtrip": evidence["simulation_manifest"][
+                    "generated_manifest_roundtrip"
+                ],
+                "evaluation.agent_report.config.agent_trust_boundary_quality.required_controls": evidence[
+                    "simulation_manifest"
+                ]["trust_required_control_count"],
+                "evaluation.agent_report.config.agent_control_plane_quality.required_controls": evidence[
+                    "simulation_manifest"
+                ]["control_required_control_count"],
+            }
+            for field, expected in simulation_manifest_expectations.items():
+                if observed_simulation_manifest[field] != expected:
+                    append_error(
+                        manifest_errors,
+                        "examples/sdk_agent_control_plane_simulation.py",
+                        field,
+                        expected,
+                        observed_simulation_manifest[field],
+                    )
+
+        if optimization_result:
+            summary = _as_mapping(optimization_result.get("summary"))
+            optimization = _as_mapping(optimization_result.get("optimization"))
+            histories = [
+                item for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history: Mapping[str, Any] = {}
+            best_score = -1.0
+            for history in histories:
+                score = _float_or_zero(history.get("score"))
+                if score > best_score:
+                    best_score = score
+                    best_history = history
+            best_config = _as_mapping(optimization.get("best_config"))
+            best_simulation = _as_mapping(best_config.get("simulation"))
+            best_environments = [
+                item
+                for item in _as_list(best_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            best_environment_types = [
+                str(_as_mapping(item).get("type")) for item in best_environments
+            ]
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            best_patch = _as_mapping(best_history.get("patch"))
+            report_results = [
+                item
+                for item in _as_list(
+                    _as_mapping(best_history.get("report")).get("results")
+                )
+                if isinstance(item, Mapping)
+            ]
+            report_state = _as_mapping(
+                _as_mapping(_as_mapping(report_results[0]).get("metadata")).get(
+                    "environment_state"
+                )
+                if report_results
+                else {}
+            )
+            optimization_state_summary = summarize_state(report_state)
+            governance = _as_mapping(optimization_result.get("optimization_governance"))
+            evidence["optimization"] = {
+                "kind": optimization_result.get("kind"),
+                "status": optimization_result.get("status"),
+                "output_roundtrip": optimization_result == optimization_saved,
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "candidate_lineage_content_addressed_count": summary.get(
+                    "candidate_lineage_content_addressed_count"
+                ),
+                "candidate_lineage_selected_score_delta": summary.get(
+                    "candidate_lineage_selected_score_delta"
+                ),
+                "optimizer_governance_status": summary.get(
+                    "optimizer_governance_status"
+                ),
+                "optimizer_governance_passed": summary.get(
+                    "optimizer_governance_passed"
+                ),
+                "optimizer_governance_check_count": summary.get(
+                    "optimizer_governance_check_count"
+                ),
+                "best_environment_types": best_environment_types,
+                "best_history": {
+                    "score": best_history.get("score"),
+                    "patch_keys": sorted(str(key) for key in best_patch),
+                    "metrics": {
+                        metric: best_metrics.get(metric)
+                        for metric in V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
+                    },
+                },
+                "state_summary": optimization_state_summary,
+                "governance": {
+                    "kind": governance.get("kind"),
+                    "status": governance.get("status"),
+                    "passed": governance.get("passed"),
+                    "failed_check_ids": list(governance.get("failed_check_ids") or []),
+                    "warning_check_ids": list(
+                        governance.get("warning_check_ids") or []
+                    ),
+                },
+            }
+            for field, observed, expected in (
+                (
+                    "kind",
+                    optimization_result.get("kind"),
+                    "agent-learning.optimization.v1",
+                ),
+                ("status", optimization_result.get("status"), "passed"),
+                ("output_roundtrip", optimization_result == optimization_saved, True),
+            ):
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        "examples/sdk_agent_control_plane_optimization.py",
+                        field,
+                        expected,
+                        observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < 0.98:
+                append_error(
+                    optimization_errors,
+                    "examples/sdk_agent_control_plane_optimization.py",
+                    "summary.optimization_score",
+                    ">=0.98",
+                    summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    "examples/sdk_agent_control_plane_optimization.py",
+                    "summary.evaluation_score",
+                    ">=1.0",
+                    summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+                append_error(
+                    optimization_errors,
+                    "examples/sdk_agent_control_plane_optimization.py",
+                    "summary.candidate_lineage_count",
+                    ">=2",
+                    summary.get("candidate_lineage_count"),
+                )
+            if best_environment_types != V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES:
+                append_error(
+                    optimization_errors,
+                    "examples/sdk_agent_control_plane_optimization.py",
+                    "optimization.best_config.simulation.environments.type",
+                    V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES,
+                    best_environment_types,
+                )
+            if set(best_patch) != {"simulation.environments"}:
+                append_error(
+                    optimization_errors,
+                    "examples/sdk_agent_control_plane_optimization.py",
+                    "optimization.history.best.patch",
+                    ["simulation.environments"],
+                    sorted(str(key) for key in best_patch),
+                )
+            if governance.get("status") != "passed" or governance.get(
+                "failed_check_ids"
+            ):
+                append_error(
+                    optimization_errors,
+                    "examples/sdk_agent_control_plane_optimization.py",
+                    "optimization_governance",
+                    "passed with no failed checks",
+                    {
+                        "status": governance.get("status"),
+                        "failed_check_ids": governance.get("failed_check_ids"),
+                    },
+                )
+            for metric in V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        "examples/sdk_agent_control_plane_optimization.py",
+                        f"optimization.history.best.metrics.{metric}",
+                        ">=1.0",
+                        best_metrics.get(metric),
+                    )
+            validate_state(
+                optimization_state_summary,
+                path="examples/sdk_agent_control_plane_optimization.py",
+                prefix="optimization.history.best.report.environment_state",
+            )
+
+        if simulation_result:
+            summary = _as_mapping(simulation_result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report_results = [
+                item
+                for item in _as_list(
+                    _as_mapping(simulation_result.get("report")).get("results")
+                )
+                if isinstance(item, Mapping)
+            ]
+            report_result = _as_mapping(report_results[0]) if report_results else {}
+            report_state = _as_mapping(
+                _as_mapping(report_result.get("metadata")).get("environment_state")
+            )
+            simulation_state_summary = summarize_state(report_state)
+            events = [
+                item for item in _as_list(report_result.get("events"))
+                if isinstance(item, Mapping)
+            ]
+            event_names = sorted(
+                {str(event.get("name")) for event in events if event.get("name")}
+            )
+            artifacts = [
+                item for item in _as_list(report_result.get("artifacts"))
+                if isinstance(item, Mapping)
+            ]
+            evidence["simulation"] = {
+                "kind": simulation_result.get("kind"),
+                "status": simulation_result.get("status"),
+                "output_roundtrip": simulation_result == simulation_saved,
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "metric_averages": {
+                    metric: metric_averages.get(metric)
+                    for metric in V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
+                },
+                "state_summary": simulation_state_summary,
+                "event_names": event_names,
+                "artifact_count": len(artifacts),
+            }
+            for field, observed, expected in (
+                ("kind", simulation_result.get("kind"), "agent-learning.run.v1"),
+                ("status", simulation_result.get("status"), "passed"),
+                ("output_roundtrip", simulation_result == simulation_saved, True),
+                ("summary.evaluation_passed", summary.get("evaluation_passed"), True),
+            ):
+                if observed != expected:
+                    append_error(
+                        simulation_errors,
+                        "examples/sdk_agent_control_plane_simulation.py",
+                        field,
+                        expected,
+                        observed,
+                    )
+            if _float_or_zero(summary.get("evaluation_score")) < 0.98:
+                append_error(
+                    simulation_errors,
+                    "examples/sdk_agent_control_plane_simulation.py",
+                    "summary.evaluation_score",
+                    ">=0.98",
+                    summary.get("evaluation_score"),
+                )
+            for metric in V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS:
+                if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        "examples/sdk_agent_control_plane_simulation.py",
+                        f"summary.metric_averages.{metric}",
+                        ">=1.0",
+                        metric_averages.get(metric),
+                    )
+            missing_events = sorted(
+                set(V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS) - set(event_names)
+            )
+            if missing_events:
+                append_error(
+                    simulation_errors,
+                    "examples/sdk_agent_control_plane_simulation.py",
+                    "report.results.events.name",
+                    V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS,
+                    event_names,
+                )
+            if len(artifacts) < 20:
+                append_error(
+                    simulation_errors,
+                    "examples/sdk_agent_control_plane_simulation.py",
+                    "report.results.artifacts",
+                    ">=20",
+                    len(artifacts),
+                )
+            validate_state(
+                simulation_state_summary,
+                path="examples/sdk_agent_control_plane_simulation.py",
+                prefix="report.results.environment_state",
+            )
+
+    return {
+        "required_files": list(V1_AGENT_CONTROL_PLANE_FILES),
+        "required_environment_types": list(
+            V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_metrics": list(V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS),
+        "required_trust_boundary_flags": list(
+            V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
+        ),
+        "required_control_plane_flags": list(V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS),
+        "required_events": list(V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "simulation_errors": simulation_errors,
+        "metric_errors": metric_errors,
+        "control_errors": control_errors,
+        "evidence": evidence,
     }
 
 
@@ -7398,6 +8232,12 @@ __all__ = [
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
+    "V1_AGENT_CONTROL_PLANE_FILES",
+    "V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS",
+    "V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS",
+    "V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS",
+    "V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS",
     "V1_OPTIMIZER_GOVERNANCE_FILES",
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS",
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS",
