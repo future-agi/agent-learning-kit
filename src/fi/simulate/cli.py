@@ -56,6 +56,7 @@ from fi.simulate import (
     ToolFaultInjectionEnvironment,
     ToolMockEnvironment,
     VoiceEnvironment,
+    WebSocketAgentWrapper,
     WorkflowHookEnvironment,
     WorkspaceRunEnvironment,
     WorldAttackReplayEnvironment,
@@ -780,6 +781,8 @@ def _build_agent_callback(agent: Mapping[str, Any], base_dir: Path) -> Callable[
         "chat_completions",
     }:
         return _build_http_agent_callback(agent, agent_type)
+    if agent_type in {"websocket", "websocket_agent", "ws"}:
+        return _build_websocket_agent_callback(agent)
     raise ManifestError(f"unsupported agent.type: {agent_type}")
 
 
@@ -825,6 +828,26 @@ def _openai_chat_completions_endpoint(base_url: str) -> str:
     if parsed.path.rstrip("/").endswith("/chat/completions"):
         return value
     return f"{value}/chat/completions"
+
+
+def _build_websocket_agent_callback(agent: Mapping[str, Any]) -> Callable[..., Any]:
+    endpoint = _optional_string(agent.get("endpoint") or agent.get("url"))
+    if endpoint is None:
+        raise ManifestError("agent.type=websocket requires agent.endpoint or agent.url")
+
+    wrapper = WebSocketAgentWrapper(
+        endpoint=endpoint,
+        protocol=_optional_string(agent.get("protocol")) or "agent_learning",
+        model=_optional_string(agent.get("model")),
+        api_key=_optional_string(agent.get("api_key")),
+        api_key_env=_optional_string(agent.get("api_key_env")),
+        headers=_optional_mapping(agent.get("headers"), "agent.headers"),
+        timeout=float(agent.get("timeout", 30.0)),
+        include_tools=_optional_bool(agent.get("include_tools"), default=True),
+        system_prompt=_optional_string(agent.get("system_prompt")),
+        metadata=_optional_mapping(agent.get("metadata"), "agent.metadata"),
+    )
+    return wrapper.call
 
 
 def _build_framework_agent_callback(

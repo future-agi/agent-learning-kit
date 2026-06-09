@@ -64,6 +64,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "AnthropicAgentWrapper",
     "HTTPAgentWrapper",
     "OpenAICompatibleHTTPAgentWrapper",
+    "WebSocketAgentWrapper",
     "AdversarialEnvironmentPack",
     "AgentControlPlaneEnvironment",
     "AgentIntegrationEnvironment",
@@ -275,6 +276,7 @@ _SIMULATE_SUBMODULE_ALIASES = {
     "agent.wrappers.http": "fi.simulate.agent.wrappers.http",
     "agent.wrappers.langchain": "fi.simulate.agent.wrappers.langchain",
     "agent.wrappers.openai": "fi.simulate.agent.wrappers.openai",
+    "agent.wrappers.websocket": "fi.simulate.agent.wrappers.websocket",
     "cli": "fi.simulate.cli",
     "environment": "fi.simulate.environment",
     "evaluation": "fi.simulate.evaluation",
@@ -677,6 +679,118 @@ def build_framework_http_transport_run_manifest(
         },
     )
     return manifest
+
+
+def build_framework_websocket_transport_run_manifest(
+    *,
+    name: str = "framework-websocket-transport-run",
+    endpoint: str,
+    framework: str = "livekit",
+    api_key_env: str = "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY",
+    agent: Optional[Mapping[str, Any]] = None,
+    evaluation_config: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+    required_env: Sequence[str] = (),
+    threshold: float = 0.95,
+    simulation_engine: str = "local_text",
+    min_turns: int = 1,
+    max_turns: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    research_sources: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build a runnable manifest for local WebSocket framework transport."""
+
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    if not _is_loopback_websocket_endpoint(endpoint):
+        raise ValueError("endpoint must be a local ws:// loopback URL")
+    if min_turns < 1:
+        raise ValueError("min_turns must be >= 1")
+    max_turns_value = int(max_turns if max_turns is not None else min_turns)
+    if max_turns_value < min_turns:
+        raise ValueError("max_turns must be >= min_turns")
+
+    framework_key = _framework_key(framework)
+    agent_config = (
+        copy.deepcopy(dict(agent))
+        if agent is not None
+        else _framework_websocket_transport_agent(
+            endpoint=endpoint,
+            framework=framework_key,
+            api_key_env=api_key_env,
+        )
+    )
+    env_required = [api_key_env] if api_key_env else []
+    config = copy.deepcopy(
+        dict(
+            evaluation_config
+            or _framework_websocket_transport_evaluation_config(framework_key)
+        )
+    )
+    return build_task_run_manifest(
+        name=name,
+        agent=agent_config,
+        task_description=(
+            "Verify an authenticated local WebSocket framework transport with "
+            "native Agent Learning protocol payloads, framework runtime "
+            "evidence, trace artifacts, events, and tool routing."
+        ),
+        expected_result=(
+            "Framework WebSocket transport verified: refund approved, no "
+            "secrets exposed, framework runtime state preserved, framework "
+            "trace artifact preserved, and framework_websocket_status verified."
+        ),
+        scenario=(
+            copy.deepcopy(dict(scenario))
+            if scenario is not None
+            else _default_framework_websocket_transport_scenario(
+                name,
+                framework_key,
+            )
+        ),
+        environments=[
+            _framework_websocket_transport_status_environment(framework_key)
+        ],
+        required_env=_unique_strings([*required_env, *env_required]),
+        available_tools=["framework_websocket_status"],
+        required_tools=["framework_websocket_status"],
+        success_criteria=[
+            "loopback WebSocket endpoint completes an authenticated handshake",
+            "framework runtime state is preserved from the protocol response",
+            "framework trace artifact and events survive the WebSocket boundary",
+            "framework_websocket_status tool routing executes locally",
+        ],
+        evaluation_config=config,
+        threshold=threshold,
+        simulation_engine=simulation_engine,
+        min_turns=min_turns,
+        max_turns=max_turns_value,
+        auto_execute_tools=True,
+        metadata={
+            "source": (
+                "agent_learning.simulate."
+                "build_framework_websocket_transport_run_manifest"
+            ),
+            "cookbook": "framework-websocket-transport",
+            "task_kind": "framework_websocket_transport",
+            "framework": framework_key,
+            "transport": "websocket",
+            "requires_external_service": False,
+            "research_sources": _unique_research_sources(
+                [
+                    *_framework_websocket_transport_research_sources(),
+                    *[dict(item) for item in research_sources],
+                ]
+            ),
+            "original_synthesis": (
+                "Realtime framework transport simulation should preserve "
+                "runtime and trace semantics across a local WebSocket "
+                "handshake, redacted auth boundary, replayable JSON frame, "
+                "and evaluator-visible tool/artifact signals."
+            ),
+            **copy.deepcopy(dict(metadata or {})),
+        },
+    )
 
 
 def build_workflow_hook_run_manifest(
@@ -4014,6 +4128,30 @@ def _framework_http_transport_agent(
     }
 
 
+def _framework_websocket_transport_agent(
+    *,
+    endpoint: str,
+    framework: str,
+    api_key_env: str,
+) -> dict[str, Any]:
+    return {
+        "type": "websocket",
+        "endpoint": str(endpoint),
+        "protocol": "agent_learning",
+        "model": "agent-learning-local-framework-websocket-transport",
+        "api_key_env": str(api_key_env),
+        "include_tools": True,
+        "timeout": 5.0,
+        "metadata": {
+            "candidate_profile": "local_framework_websocket_transport",
+            "framework": str(framework),
+            "transport": "websocket",
+            "framework_transport": "websocket",
+            "requires_external_service": False,
+        },
+    }
+
+
 def _framework_http_transport_status_environment(framework: str) -> dict[str, Any]:
     return {
         "type": "tool_mock",
@@ -4046,6 +4184,52 @@ def _framework_http_transport_status_environment(framework: str) -> dict[str, An
                             "framework_http_status": {
                                 "framework": str(framework),
                                 "transport": "http",
+                                "status": "verified",
+                                "auth_redacted": True,
+                                "tool_evidence": True,
+                            }
+                        },
+                    },
+                }
+            }
+        },
+    }
+
+
+def _framework_websocket_transport_status_environment(
+    framework: str,
+) -> dict[str, Any]:
+    return {
+        "type": "tool_mock",
+        "data": {
+            "tools": {
+                "framework_websocket_status": {
+                    "schema": {
+                        "description": (
+                            "Record local WebSocket framework transport "
+                            "verification without exposing bearer tokens."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "framework": {"type": "string"},
+                                "transport": {"type": "string"},
+                                "status": {"type": "string"},
+                            },
+                        },
+                    },
+                    "response": {
+                        "content": "framework WebSocket transport status verified",
+                        "result": {
+                            "framework": str(framework),
+                            "transport": "websocket",
+                            "status": "verified",
+                            "auth_redacted": True,
+                        },
+                        "state_updates": {
+                            "framework_websocket_status": {
+                                "framework": str(framework),
+                                "transport": "websocket",
                                 "status": "verified",
                                 "auth_redacted": True,
                                 "tool_evidence": True,
@@ -4143,6 +4327,92 @@ def _framework_http_transport_evaluation_config(framework: str) -> dict[str, Any
     }
 
 
+def _framework_websocket_transport_evaluation_config(framework: str) -> dict[str, Any]:
+    return {
+        "task_description": (
+            "Verify a local WebSocket framework transport with redacted auth, "
+            "framework runtime state, trace artifacts, events, and tool routing."
+        ),
+        "expected_result": (
+            "Framework WebSocket transport verified: refund approved, no "
+            "secrets exposed, framework runtime state preserved, framework "
+            "trace artifact preserved, and framework_websocket_status verified."
+        ),
+        "available_tools": ["framework_websocket_status"],
+        "required_tools": ["framework_websocket_status"],
+        "success_criteria": [
+            "refund approved",
+            "no secrets exposed",
+            "framework_websocket_status verified",
+            "framework runtime state preserved",
+            "framework trace artifact preserved",
+        ],
+        "allow_extra_tool_arguments": True,
+        "required_framework_trace": [
+            "framework_trace",
+            "span",
+            "model",
+            "tool",
+            "state",
+            "latency",
+            "websocket",
+            "transport",
+        ],
+        "framework_runtime_contract": {
+            "framework": str(framework),
+            "method": "websocket",
+            "input_mode": "json_frame",
+            "call_style": "request_response",
+            "required_tools": ["framework_websocket_status"],
+            "required_state_keys": [
+                "framework_websocket_transport",
+                "framework_runtime",
+                "framework_trace",
+            ],
+            "required_metadata_keys": ["framework_websocket_transport"],
+            "required_event_types": [
+                "framework_websocket_transport",
+                "framework_trace",
+            ],
+            "required_artifact_types": ["trace"],
+            "required_signals": ["websocket", "transport", "tool", "state"],
+            "max_error_count": 0,
+        },
+        "framework_trace_quality": {
+            "framework": str(framework),
+            "min_span_count": 3,
+            "min_model_span_count": 1,
+            "min_tool_span_count": 1,
+            "min_state_span_count": 1,
+            "min_latency_span_count": 2,
+            "min_tool_count": 1,
+            "max_error_count": 0,
+            "required_signals": [
+                "model",
+                "tool",
+                "state",
+                "latency",
+                "websocket",
+                "transport",
+            ],
+            "required_tools": ["framework_websocket_status"],
+            "required_spans": [
+                "local websocket framework request",
+                f"{framework} realtime dispatch",
+                "tool call framework_websocket_status",
+            ],
+        },
+        "metric_weights": {
+            "tool_selection_accuracy": 4.0,
+            "task_completion": 2.0,
+            "final_response_quality": 2.0,
+            "framework_runtime_contract": 5.0,
+            "framework_trace_coverage": 4.0,
+            "framework_trace_quality": 4.0,
+        },
+    }
+
+
 def _framework_http_transport_research_sources() -> list[dict[str, Any]]:
     return [
         {
@@ -4168,6 +4438,35 @@ def _framework_http_transport_research_sources() -> list[dict[str, Any]]:
             "year": 2026,
             "url": "https://arxiv.org/abs/2604.04820",
             "used_for": "protocol-normalized local HTTP agent transport contracts",
+        },
+    ]
+
+
+def _framework_websocket_transport_research_sources() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "The WebSocket Protocol",
+            "year": 2011,
+            "url": "https://www.rfc-editor.org/rfc/rfc6455",
+            "used_for": "local handshake and JSON-frame transport contract",
+        },
+        {
+            "title": "W3C Trace Context",
+            "year": 2021,
+            "url": "https://www.w3.org/TR/trace-context/",
+            "used_for": "portable cross-boundary trace context evidence",
+        },
+        {
+            "title": "OpenTelemetry Semantic Conventions",
+            "year": 2026,
+            "url": "https://opentelemetry.io/docs/specs/semconv/",
+            "used_for": "transport-normalized trace signals and attributes",
+        },
+        {
+            "title": "CapSeal: Capability-Sealed Secret Mediation for Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2604.16762",
+            "used_for": "bearer-token separation and redacted auth traces",
         },
     ]
 
@@ -4198,10 +4497,42 @@ def _default_framework_http_transport_scenario(
     }
 
 
+def _default_framework_websocket_transport_scenario(
+    name: str,
+    framework: str,
+) -> dict[str, Any]:
+    return {
+        "name": str(name),
+        "dataset": [
+            {
+                "persona": {
+                    "name": "Maya",
+                    "role": "realtime-framework-platform-owner",
+                },
+                "situation": (
+                    f"Maya needs a {framework} realtime agent replayed through "
+                    "a local authenticated WebSocket transport before promoting "
+                    "the adapter beyond in-process simulation."
+                ),
+                "outcome": (
+                    "The refund is approved with framework runtime, trace, "
+                    "tool, handshake, frame, and redacted-auth evidence."
+                ),
+            }
+        ],
+    }
+
+
 def _is_loopback_http_endpoint(endpoint: str) -> bool:
     parsed = urlparse(str(endpoint))
     host = (parsed.hostname or "").strip().lower()
     return parsed.scheme == "http" and host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_loopback_websocket_endpoint(endpoint: str) -> bool:
+    parsed = urlparse(str(endpoint))
+    host = (parsed.hostname or "").strip().lower()
+    return parsed.scheme == "ws" and host in {"127.0.0.1", "localhost", "::1"}
 
 
 def _workflow_hook_agent(*, tool_name: str) -> dict[str, Any]:
@@ -9314,6 +9645,7 @@ __all__ = [
     "build_framework_certification_run_manifest",
     "build_framework_adapter_matrix_run_manifest",
     "build_framework_http_transport_run_manifest",
+    "build_framework_websocket_transport_run_manifest",
     "build_harness_trajectory_replay_run_manifest",
     "build_framework_import_run_manifest",
     "build_framework_run_manifest",

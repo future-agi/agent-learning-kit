@@ -3,6 +3,7 @@ from fi.simulate.agent.wrappers.langchain import LangChainAgentWrapper
 from fi.simulate.agent.wrappers.gemini import GeminiAgentWrapper
 from fi.simulate.agent.wrappers.anthropic import AnthropicAgentWrapper
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.websocket import WebSocketAgentWrapper
 
 OpenAICompatibleHTTPAgentWrapper = HTTPAgentWrapper
 
@@ -13,4 +14,5 @@ __all__ = [
     "AnthropicAgentWrapper",
     "HTTPAgentWrapper",
     "OpenAICompatibleHTTPAgentWrapper",
+    "WebSocketAgentWrapper",
 ]

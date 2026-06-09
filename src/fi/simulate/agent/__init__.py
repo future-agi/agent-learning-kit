@@ -37,6 +37,7 @@ from .wrappers import (
     AnthropicAgentWrapper,
     HTTPAgentWrapper,
     OpenAICompatibleHTTPAgentWrapper,
+    WebSocketAgentWrapper,
 )
 
 __all__ = [
@@ -87,4 +88,5 @@ __all__ = [
     "AnthropicAgentWrapper",
     "HTTPAgentWrapper",
     "OpenAICompatibleHTTPAgentWrapper",
+    "WebSocketAgentWrapper",
 ]

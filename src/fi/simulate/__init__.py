@@ -46,6 +46,7 @@ from .agent import (
     AnthropicAgentWrapper,
     HTTPAgentWrapper,
     OpenAICompatibleHTTPAgentWrapper,
+    WebSocketAgentWrapper,
 )
 from .environment import (
     AdversarialEnvironmentPack,
@@ -281,6 +282,7 @@ __all__ = [
     "AnthropicAgentWrapper",
     "HTTPAgentWrapper",
     "OpenAICompatibleHTTPAgentWrapper",
+    "WebSocketAgentWrapper",
     "AdversarialEnvironmentPack",
     "AgentControlPlaneEnvironment",
     "AgentIntegrationEnvironment",

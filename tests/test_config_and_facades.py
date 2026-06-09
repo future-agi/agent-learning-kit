@@ -138,6 +138,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.OpenAICompatibleHTTPAgentWrapper is (
         fi_simulate.OpenAICompatibleHTTPAgentWrapper
     )
+    assert simulate.WebSocketAgentWrapper is fi_simulate.WebSocketAgentWrapper
     contract = simulate.framework_adapter_contract(
         "langgraph",
         target="framework_shims.py:build_langgraph_agent",
@@ -200,6 +201,7 @@ def test_facades_expose_unified_agent_learning_modules():
     assert simulate.build_evaluation_hook_run_manifest is not None
     assert simulate.build_framework_run_manifest is not None
     assert simulate.build_framework_http_transport_run_manifest is not None
+    assert simulate.build_framework_websocket_transport_run_manifest is not None
     assert simulate.build_multi_framework_suite_manifest is not None
     assert simulate.build_realtime_run_manifest is not None
     assert simulate.build_browser_cua_run_manifest is not None
@@ -11557,6 +11559,83 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
     }
 
 
+def test_sdk_framework_adapter_websocket_transport_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    from agent_learning import trinity
+
+    key = "real-local-sdk-framework-websocket-transport-key"
+    monkeypatch.setenv("AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY", key)
+    monkeypatch.delenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_ENDPOINT",
+        raising=False,
+    )
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_framework_adapter_websocket_transport.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_websocket_transport",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest("ws://127.0.0.1:8768/agent-learning/framework")
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
+    ]
+    assert manifest["agent"]["type"] == "websocket"
+    assert manifest["agent"]["protocol"] == "agent_learning"
+    assert manifest["agent"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
+    )
+    assert manifest["agent"]["metadata"]["framework"] == "livekit"
+    assert manifest["agent"]["metadata"]["transport"] == "websocket"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    assert config["required_tools"] == ["framework_websocket_status"]
+    assert config["framework_runtime_contract"]["method"] == "websocket"
+    assert config["framework_runtime_contract"]["input_mode"] == "json_frame"
+    assert {"websocket", "transport"} <= set(
+        config["framework_trace_quality"]["required_signals"]
+    )
+
+    output_path = tmp_path / "sdk-framework-adapter-websocket-transport.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["evaluation_passed"] is True
+    assert result["summary"]["evaluation_score"] >= 0.95
+    for metric in trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_METRICS:
+        assert result["summary"]["metric_averages"][metric] == pytest.approx(1.0)
+    serialized = json.dumps(result, sort_keys=True, default=str)
+    assert key not in serialized
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    transport = state["framework_websocket_transport"]
+    assert transport["kind"] == "agent-learning.framework-websocket-transport.v1"
+    assert transport["framework"] == "livekit"
+    assert transport["transport"] == "websocket"
+    assert transport["status_code"] == 101
+    assert transport["success"] is True
+    assert transport["requires_external_service"] is False
+    assert transport["auth"]["redacted"] is True
+    assert transport["handshake"]["accepted"] is True
+    assert transport["frame"]["encoding"] == "json"
+    external_trace = state["external_agent_trace"]
+    assert external_trace["kind"] == "external_agent_websocket_trace"
+    assert external_trace["success"] is True
+    assert external_trace["request_tool_count"] == 1
+    assert external_trace["response_tool_call_count"] == 1
+    assert state["framework_websocket_status"]["status"] == "verified"
+    assert state["framework_trace"]["summary"]["span_count"] == 3
+
+
 def test_sdk_retrospective_harness_optimization_example_runs(
     monkeypatch,
     tmp_path,
@@ -15688,6 +15767,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_http_transport_source_urls"] == (
         trinity.V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS
     )
+    assert payload["required_framework_websocket_transport_files"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FILES
+    )
+    assert payload["required_framework_websocket_transport_framework"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK
+    )
+    assert payload["required_framework_websocket_transport_tools"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TOOLS
+    )
+    assert payload["required_framework_websocket_transport_state_keys"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_framework_websocket_transport_events"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_EVENTS
+    )
+    assert payload["required_framework_websocket_transport_artifact_kinds"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+    )
+    assert payload["required_framework_websocket_transport_metrics"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_METRICS
+    )
+    assert payload["required_framework_websocket_transport_trace_signals"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TRACE_SIGNALS
+    )
+    assert payload["required_framework_websocket_transport_source_urls"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS
+    )
     assert payload["required_environment_10x_robustness_files"] == (
         trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
     )
@@ -16118,6 +16224,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_openenv_adapter_readiness",
         "framework_trace_export_readiness",
         "framework_http_transport_readiness",
+        "framework_websocket_transport_readiness",
         "framework_adapter_matrix_optimization_readiness",
         "framework_optimizer_readiness",
         "workspace_import_certification_readiness",
@@ -18593,6 +18700,181 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert http_transport_evidence["security"]["serialized_secret_absent"] is True
     assert http_transport_evidence["security"]["transport_auth_redacted"] is True
     assert http_transport_evidence["security"]["external_auth_redacted"] is True
+    framework_websocket_transport = checks[
+        "framework_websocket_transport_readiness"
+    ]["evidence"]
+    assert framework_websocket_transport["required_files"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FILES
+    )
+    assert framework_websocket_transport["required_framework"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK
+    )
+    assert framework_websocket_transport["required_tools"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TOOLS
+    )
+    assert framework_websocket_transport["required_state_keys"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_STATE_KEYS
+    )
+    assert framework_websocket_transport["required_events"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_EVENTS
+    )
+    assert framework_websocket_transport["required_artifact_kinds"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+    )
+    assert framework_websocket_transport["required_metrics"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_METRICS
+    )
+    assert framework_websocket_transport["required_trace_signals"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TRACE_SIGNALS
+    )
+    assert framework_websocket_transport["required_source_urls"] == (
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS
+    )
+    assert framework_websocket_transport["missing_files"] == []
+    assert framework_websocket_transport["execution_errors"] == []
+    assert framework_websocket_transport["manifest_errors"] == []
+    assert framework_websocket_transport["runtime_errors"] == []
+    assert framework_websocket_transport["metric_errors"] == []
+    assert framework_websocket_transport["security_errors"] == []
+    assert framework_websocket_transport["source_errors"] == []
+    websocket_transport_evidence = framework_websocket_transport["evidence"]
+    assert websocket_transport_evidence["result_kind"] == "agent-learning.run.v1"
+    assert websocket_transport_evidence["result_status"] == "passed"
+    assert websocket_transport_evidence["output_roundtrip"] is True
+    assert websocket_transport_evidence["evaluation_passed"] is True
+    assert websocket_transport_evidence["evaluation_score"] >= 0.95
+    assert websocket_transport_evidence["manifest_version"] == (
+        "agent-learning.run.v1"
+    )
+    assert websocket_transport_evidence["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
+    ]
+    assert websocket_transport_evidence["manifest_agent"] == {
+        "type": "websocket",
+        "protocol": "agent_learning",
+        "api_key_env": "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY",
+        "include_tools": True,
+        "endpoint_host_local": True,
+        "framework": "livekit",
+        "transport": "websocket",
+        "requires_external_service": False,
+    }
+    assert websocket_transport_evidence["required_tools"] == [
+        "framework_websocket_status"
+    ]
+    assert set(websocket_transport_evidence["required_framework_trace"]) >= set(
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TRACE_SIGNALS
+    )
+    websocket_runtime_contract = websocket_transport_evidence["runtime_contract"]
+    assert websocket_runtime_contract["framework"] == "livekit"
+    assert websocket_runtime_contract["method"] == "websocket"
+    assert websocket_runtime_contract["input_mode"] == "json_frame"
+    assert websocket_runtime_contract["call_style"] == "request_response"
+    assert websocket_runtime_contract["required_tools"] == [
+        "framework_websocket_status"
+    ]
+    assert websocket_runtime_contract["required_state_keys"] == [
+        "framework_websocket_transport",
+        "framework_runtime",
+        "framework_trace",
+    ]
+    assert websocket_runtime_contract["required_artifact_types"] == ["trace"]
+    assert set(websocket_runtime_contract["required_event_types"]) >= {
+        "framework_websocket_transport",
+        "framework_trace",
+    }
+    websocket_trace_quality = websocket_transport_evidence["trace_quality"]
+    assert websocket_trace_quality["framework"] == "livekit"
+    assert websocket_trace_quality["min_span_count"] == 3
+    assert websocket_trace_quality["min_model_span_count"] == 1
+    assert websocket_trace_quality["min_tool_span_count"] == 1
+    assert websocket_trace_quality["min_state_span_count"] == 1
+    assert websocket_trace_quality["min_latency_span_count"] == 2
+    assert websocket_trace_quality["min_tool_count"] == 1
+    assert websocket_trace_quality["max_error_count"] == 0
+    assert set(websocket_trace_quality["required_signals"]) >= {
+        "websocket",
+        "transport",
+        "model",
+        "tool",
+        "state",
+        "latency",
+    }
+    for metric in trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_METRICS:
+        assert metric in websocket_transport_evidence["metric_weights"]
+        assert websocket_transport_evidence["metric_averages"][metric] == (
+            pytest.approx(1.0)
+        )
+    assert set(trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_STATE_KEYS) <= set(
+        websocket_transport_evidence["state_keys"]
+    )
+    assert set(trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_EVENTS) <= set(
+        websocket_transport_evidence["event_types"]
+    )
+    assert set(
+        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_ARTIFACT_KINDS
+    ) <= set(websocket_transport_evidence["artifact_kinds"])
+    assert websocket_transport_evidence["tool_call_names"] == [
+        "framework_websocket_status"
+    ]
+    websocket_transport = websocket_transport_evidence["transport"]
+    assert websocket_transport["kind"] == (
+        "agent-learning.framework-websocket-transport.v1"
+    )
+    assert websocket_transport["framework"] == "livekit"
+    assert websocket_transport["transport"] == "websocket"
+    assert websocket_transport["protocol"] == "agent_learning"
+    assert websocket_transport["status_code"] == 101
+    assert websocket_transport["success"] is True
+    assert websocket_transport["requires_external_service"] is False
+    assert websocket_transport["endpoint_host_local"] is True
+    assert websocket_transport["handshake"]["accepted"] is True
+    assert websocket_transport["frame"]["encoding"] == "json"
+    assert websocket_transport["auth"]["redacted"] is True
+    assert websocket_transport["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
+    )
+    websocket_external_trace = websocket_transport_evidence["external_trace"]
+    assert websocket_external_trace["kind"] == "external_agent_websocket_trace"
+    assert websocket_external_trace["protocol"] == "agent_learning"
+    assert websocket_external_trace["status_code"] == 101
+    assert websocket_external_trace["success"] is True
+    assert websocket_external_trace["error"] is None
+    assert websocket_external_trace["endpoint_host_local"] is True
+    assert websocket_external_trace["request_tool_count"] == 1
+    assert websocket_external_trace["response_tool_call_count"] == 1
+    assert websocket_external_trace["framework"] == "livekit"
+    assert websocket_external_trace["transport"] == "websocket"
+    assert websocket_external_trace["requires_external_service"] is False
+    assert websocket_external_trace["auth"]["redacted"] is True
+    assert websocket_external_trace["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY"
+    )
+    assert websocket_transport_evidence["status_state"]["status"] == "verified"
+    assert websocket_transport_evidence["status_state"]["auth_redacted"] is True
+    assert websocket_transport_evidence["trace_summary"] == {
+        "span_count": 3,
+        "model_span_count": 1,
+        "tool_span_count": 1,
+        "state_span_count": 1,
+        "latency_span_count": 3,
+        "tool_count": 1,
+        "error_count": 0,
+    }
+    websocket_runtime_output = websocket_transport_evidence["runtime_output"]
+    assert "framework_websocket_transport" in websocket_runtime_output["state_keys"]
+    assert "framework_runtime" in websocket_runtime_output["state_keys"]
+    assert "framework_trace" in websocket_runtime_output["state_keys"]
+    assert websocket_runtime_output["artifact_types"] == ["trace"]
+    assert {"framework_websocket_transport", "framework_trace"} <= set(
+        websocket_runtime_output["event_types"]
+    )
+    assert websocket_runtime_output["tool_names"] == [
+        "framework_websocket_status"
+    ]
+    assert websocket_transport_evidence["security"]["serialized_secret_absent"] is True
+    assert websocket_transport_evidence["security"]["transport_auth_redacted"] is True
+    assert websocket_transport_evidence["security"]["external_auth_redacted"] is True
     environment_10x = checks["environment_10x_robustness"]["evidence"]
     assert environment_10x["required_files"] == (
         trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
@@ -18704,6 +18986,49 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert http_transport_axis_evidence["serialized_secret_absent"] is True
     for metric in trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS:
         assert http_transport_axis_evidence["metric_averages"][metric] == (
+            pytest.approx(1.0)
+        )
+    websocket_transport_axis = environment_10x_axes[
+        "local_websocket_framework_transport"
+    ]
+    assert websocket_transport_axis["source_check"] == (
+        "framework_websocket_transport_readiness"
+    )
+    websocket_transport_axis_evidence = websocket_transport_axis["evidence"]
+    assert websocket_transport_axis_evidence["result_status"] == "passed"
+    assert websocket_transport_axis_evidence["output_roundtrip"] is True
+    assert websocket_transport_axis_evidence["transport"]["framework"] == "livekit"
+    assert websocket_transport_axis_evidence["transport"]["transport"] == (
+        "websocket"
+    )
+    assert websocket_transport_axis_evidence["transport"]["protocol"] == (
+        "agent_learning"
+    )
+    assert websocket_transport_axis_evidence["transport"]["success"] is True
+    assert websocket_transport_axis_evidence["transport"]["status_code"] == 101
+    assert websocket_transport_axis_evidence["transport"][
+        "requires_external_service"
+    ] is False
+    assert websocket_transport_axis_evidence["transport"][
+        "endpoint_host_local"
+    ] is True
+    assert websocket_transport_axis_evidence["transport"]["handshake"][
+        "accepted"
+    ] is True
+    assert websocket_transport_axis_evidence["transport"]["frame"]["encoding"] == (
+        "json"
+    )
+    assert websocket_transport_axis_evidence["transport"]["auth"]["redacted"] is True
+    assert websocket_transport_axis_evidence["external_trace"]["success"] is True
+    assert websocket_transport_axis_evidence["external_trace"][
+        "request_tool_count"
+    ] == 1
+    assert websocket_transport_axis_evidence["external_trace"][
+        "response_tool_call_count"
+    ] == 1
+    assert websocket_transport_axis_evidence["serialized_secret_absent"] is True
+    for metric in trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_METRICS:
+        assert websocket_transport_axis_evidence["metric_averages"][metric] == (
             pytest.approx(1.0)
         )
     runtime_axis = environment_10x_axes["environment_replay_contract"]["evidence"]

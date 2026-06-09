@@ -800,6 +800,18 @@ release-check` runs this cookbook as `framework_http_transport_readiness` and
 adds it to the 10x robustness bar as `local_http_framework_transport`; hosted
 agents still belong on the external-agent adapter path.
 
+Local WebSocket framework transports prove the realtime sibling path.
+`simulate.build_framework_websocket_transport_run_manifest(...)` builds a
+loopback-only `agent.type=websocket` manifest using the same Agent Learning
+protocol, bearer auth from
+`AGENT_LEARNING_SDK_FRAMEWORK_WEBSOCKET_TRANSPORT_KEY`, accepted handshake and
+JSON-frame evidence, framework runtime state, framework trace events/artifacts,
+and `framework_websocket_status` tool evidence. See
+`examples/sdk_framework_adapter_websocket_transport.py`. `agent-learn
+release-check` runs this cookbook as `framework_websocket_transport_readiness`
+and adds it to the 10x robustness bar as
+`local_websocket_framework_transport`.
+
 A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs
 carrying agent cards, JSON-RPC `SendMessage` records, messages, tasks, task
 status updates, task artifact updates, or protocol artifacts become
@@ -1916,12 +1928,13 @@ gate.
 bar as `environment_10x_robustness`. That check does not rely on wording alone:
 it requires the current release artifact to prove at least ten axes across the
 Agent Learning replay contract, framework simulation, local HTTP framework
-transport, framework matrix optimization, local evals, optimizer recovery,
-adapter promotion, protocol routing, browser/CUA, realtime voice, memory
-lineage, multi-agent coordination, world orchestration, workspace import
-certification, authenticated evaluation, workflow, and retrieval hooks, red-team
-suite coverage, and regression promotion/replay. Workspace import
-certification, local HTTP framework transport, framework matrix optimization,
+transport, local WebSocket framework transport, framework matrix optimization,
+local evals, optimizer recovery, adapter promotion, protocol routing,
+browser/CUA, realtime voice, memory lineage, multi-agent coordination, world
+orchestration, workspace import certification, authenticated evaluation,
+workflow, and retrieval hooks, red-team suite coverage, and regression
+promotion/replay. Workspace import certification, local HTTP framework
+transport, local WebSocket framework transport, framework matrix optimization,
 and authenticated hooks are counted as native proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
