@@ -689,6 +689,44 @@ V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS = [
     "tool_argument_schema",
 ]
 
+V1_EVALUATION_HOOK_FILES = [
+    "examples/sdk_evaluation_hook_optimization.py",
+]
+
+V1_EVALUATION_HOOK_PROOF_KIND = (
+    "agent-learning.optimization.evaluation-hook-proof.v1"
+)
+
+V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL = (
+    "l3_authenticated_evaluation_hook_verified"
+)
+
+V1_EVALUATION_HOOK_SELECTED_PROFILE = (
+    "policy_grounded_external_eval_candidate"
+)
+
+V1_EVALUATION_HOOK_REJECTED_PROFILES = [
+    "generic_candidate_without_eval_alignment",
+    "policy_grounded_secret_leaking_candidate",
+]
+
+V1_EVALUATION_HOOK_REQUIRED_METRICS = [
+    "external_task_quality",
+    "secret_leakage",
+    "task_completion",
+]
+
+V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS = [
+    "evaluation_hook_source_manifest_contract_closed",
+    "local_authenticated_evaluation_hook_scored",
+    "evaluation_hook_auth_redaction_closed",
+    "evaluation_hook_selected_agent_closed",
+    "evaluation_hook_rejected_candidate_lineage_closed",
+    "evaluation_hook_metric_evidence_closed",
+    "evaluation_hook_patch_surface_present",
+    "evaluation_hook_candidate_lineage_gate_passed",
+]
+
 V1_REDTEAM_EXAMPLES = [
     "examples/redteam_manifest.json",
     "examples/long_horizon_redteam_manifest.json",
@@ -1725,6 +1763,7 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
 ]
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
+    "examples/sdk_evaluation_hook_optimization.py",
     "examples/sdk_openenv_environment_optimization.py",
     "examples/sdk_retrieval_hook_optimization.py",
     "examples/sdk_workflow_hook_optimization.py",
@@ -1746,6 +1785,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "multi_agent_coordination",
     "world_orchestration_replay",
     "workspace_import_certification",
+    "authenticated_evaluation_hooks",
     "authenticated_workflow_hooks",
     "authenticated_retrieval_hooks",
     "redteam_pen_test_suite",
@@ -3525,6 +3565,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M2",
         evidence=evaluation_hook_probe,
     )
+    evaluation_hook = _release_evaluation_hook_status(root)
+    _append_release_check(
+        checks,
+        check_id="evaluation_hook_readiness",
+        passed=(
+            not evaluation_hook["missing_files"]
+            and not evaluation_hook["execution_errors"]
+            and not evaluation_hook["manifest_errors"]
+            and not evaluation_hook["optimization_errors"]
+            and not evaluation_hook["proof_errors"]
+            and not evaluation_hook["metric_errors"]
+            and not evaluation_hook["security_errors"]
+        ),
+        milestone="M2",
+        evidence=evaluation_hook,
+    )
     component_status = _release_evidence_component_status()
     missing_components = component_status["missing"]
     _append_release_check(
@@ -4141,6 +4197,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         workspace_import_certification=workspace_import_certification,
         workflow_hook=workflow_hook,
         retrieval_hook=retrieval_hook,
+        evaluation_hook=evaluation_hook,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -4329,6 +4386,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_evaluation_hook_probe_run_metrics": list(
             V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_evaluation_hook_files": list(V1_EVALUATION_HOOK_FILES),
+        "required_evaluation_hook_proof_kind": V1_EVALUATION_HOOK_PROOF_KIND,
+        "required_evaluation_hook_proof_assurance_level": (
+            V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_evaluation_hook_selected_profile": (
+            V1_EVALUATION_HOOK_SELECTED_PROFILE
+        ),
+        "required_evaluation_hook_rejected_profiles": list(
+            V1_EVALUATION_HOOK_REJECTED_PROFILES
+        ),
+        "required_evaluation_hook_metrics": list(V1_EVALUATION_HOOK_REQUIRED_METRICS),
+        "required_evaluation_hook_proof_checks": list(
+            V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS
         ),
         "required_redteam_examples": list(V1_REDTEAM_EXAMPLES),
         "required_redteam_research_corpus_file": V1_REDTEAM_RESEARCH_CORPUS_FILE,
@@ -8308,6 +8380,551 @@ def _release_evaluation_hook_probe_status(root: Path) -> dict[str, Any]:
         "metric_errors": metric_errors,
         "runtime_errors": runtime_errors,
         "errors": errors,
+        "evidence": evidence,
+    }
+
+
+def _release_evaluation_hook_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_EVALUATION_HOOK_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        return sorted({str(item) for item in required} - {str(item) for item in observed})
+
+    if not missing_files:
+        from . import config as agent_config
+
+        path = "examples/sdk_evaluation_hook_optimization.py"
+        env_name = "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+        endpoint_env = "AGENT_LEARNING_SDK_EVALUATION_HOOK_ENDPOINT"
+        env_value = "release-check-evaluation-hook-key"
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {name: os.environ.get(name) for name in config_env_names}
+        previous_config = agent_config.current_config()
+        previous_env = os.environ.get(env_name)
+        previous_endpoint = os.environ.get(endpoint_env)
+        try:
+            example_path = root / path
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_evaluation_hook",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            os.environ[env_name] = env_value
+            os.environ.pop(endpoint_env, None)
+            manifest = module.build_manifest(endpoint="http://127.0.0.1:1/eval/task")
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-evaluation-hook-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "evaluation-hook.json"
+                result = module.run(output_path)
+                serialized = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized)
+            example_evidence: dict[str, Any] = {}
+            evidence["examples"][path] = example_evidence
+
+            target = _as_mapping(_as_mapping(manifest.get("optimization")).get("target"))
+            metadata = _as_mapping(target.get("metadata"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = [
+                _as_mapping(item)
+                for item in _as_list(search_space.get("agent"))
+                if isinstance(item, Mapping)
+            ]
+            candidate_profiles = [
+                str(_as_mapping(candidate.get("metadata")).get("candidate_profile") or "")
+                for candidate in candidates
+            ]
+            evaluation_config = _as_mapping(
+                _as_mapping(
+                    _as_mapping(manifest.get("evaluation")).get("agent_report")
+                ).get("config")
+            )
+            hooks = [
+                _as_mapping(item)
+                for item in _as_list(evaluation_config.get("evaluation_hooks"))
+                if isinstance(item, Mapping)
+            ]
+            hook = _as_mapping(hooks[0]) if hooks else {}
+            hook_auth = _as_mapping(hook.get("auth"))
+
+            optimization = _as_mapping(result.get("optimization"))
+            summary = _as_mapping(result.get("summary"))
+            best_config = _as_mapping(optimization.get("best_config"))
+            best_agent = _as_mapping(best_config.get("agent"))
+            best_profile = str(
+                _as_mapping(best_agent.get("metadata")).get("candidate_profile") or ""
+            )
+            histories = [
+                _as_mapping(item)
+                for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history = max(
+                histories,
+                key=lambda item: _float_or_zero(item.get("score")),
+                default={},
+            )
+            best_patch = _as_mapping(
+                best_history.get("candidate_patch") or best_history.get("patch")
+            )
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            proof = _as_mapping(result.get("evaluation_hook_proof"))
+            proof_evidence = _as_mapping(proof.get("evidence"))
+            selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+            selected_metric = _as_mapping(proof_evidence.get("selected_metric"))
+            selected_trace = _as_mapping(proof_evidence.get("selected_trace"))
+            selected_trace_auth = _as_mapping(selected_trace.get("auth"))
+            history_profiles = _as_mapping(proof_evidence.get("history_profiles"))
+            passed_check_ids = [
+                str(item) for item in _as_list(proof.get("passed_check_ids"))
+            ]
+
+            example_evidence["manifest"] = {
+                "version": manifest.get("version"),
+                "required_env": list(manifest.get("required_env") or []),
+                "task_kind": metadata.get("task_kind"),
+                "cookbook": metadata.get("cookbook"),
+                "layers": list(target.get("layers") or []),
+                "candidate_search_paths": list(metadata.get("candidate_search_paths") or []),
+                "candidate_count": len(candidates),
+                "candidate_profiles": candidate_profiles,
+                "evaluation_hook_count": len(hooks),
+                "metric_name": hook.get("metric_name") or hook.get("name"),
+                "auth": dict(hook_auth),
+            }
+            example_evidence["optimization"] = {
+                "kind": result.get("kind"),
+                "status": result.get("status"),
+                "schema_version": result.get("schema_version"),
+                "output_roundtrip": result == saved,
+                "optimization_passed": summary.get("optimization_passed"),
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "threshold": summary.get("threshold"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "selected_profile": best_profile,
+                "best_patch_keys": sorted(str(path) for path in best_patch),
+                "best_metrics": {
+                    metric: best_metrics.get(metric)
+                    for metric in V1_EVALUATION_HOOK_REQUIRED_METRICS
+                },
+                "history_profiles": copy.deepcopy(history_profiles),
+            }
+            example_evidence["proof"] = {
+                "kind": proof.get("kind"),
+                "status": proof.get("status"),
+                "passed": proof.get("passed"),
+                "assurance_level": proof.get("assurance_level"),
+                "requires_external_service": proof.get("requires_external_service"),
+                "failed_check_ids": list(proof.get("failed_check_ids") or []),
+                "warning_check_ids": list(proof.get("warning_check_ids") or []),
+                "passed_check_ids": passed_check_ids,
+                "selected_profile": proof.get("candidate_profile"),
+                "selected_metrics": {
+                    metric: selected_metrics.get(metric)
+                    for metric in V1_EVALUATION_HOOK_REQUIRED_METRICS
+                },
+                "selected_metric": dict(selected_metric),
+                "trace": dict(selected_trace),
+                "summary": {
+                    "evaluation_hook_proof_status": summary.get(
+                        "evaluation_hook_proof_status"
+                    ),
+                    "evaluation_hook_proof_passed": summary.get(
+                        "evaluation_hook_proof_passed"
+                    ),
+                    "evaluation_hook_proof_failed_check_count": summary.get(
+                        "evaluation_hook_proof_failed_check_count"
+                    ),
+                },
+            }
+            example_evidence["security"] = {
+                "serialized_secret_absent": env_value not in serialized,
+                "trace_auth_redacted": selected_trace_auth.get("redacted"),
+                "trace_auth_token_env": selected_trace_auth.get("token_env"),
+            }
+
+            manifest_expectations = {
+                "manifest.version": (
+                    manifest.get("version"),
+                    "agent-learning.optimization.v1",
+                ),
+                "manifest.required_env": (manifest.get("required_env") or [], [env_name]),
+                "manifest.optimization.target.metadata.task_kind": (
+                    metadata.get("task_kind"),
+                    "evaluation_hook",
+                ),
+                "manifest.optimization.target.metadata.cookbook": (
+                    metadata.get("cookbook"),
+                    "sdk-evaluation-hook-optimization",
+                ),
+                "evaluation_hooks.0.metric_name": (
+                    hook.get("metric_name") or hook.get("name"),
+                    "external_task_quality",
+                ),
+                "evaluation_hooks.0.auth.type": (hook_auth.get("type"), "bearer"),
+                "evaluation_hooks.0.auth.token_env": (
+                    hook_auth.get("token_env"),
+                    env_name,
+                ),
+            }
+            for field, (observed, expected) in manifest_expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_layers = missing_values(
+                target.get("layers") or [],
+                ["evaluator", "harness", "security", "integration", "planner"],
+            )
+            if missing_layers:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.layers",
+                    expected=["evaluator", "harness", "security", "integration", "planner"],
+                    observed=target.get("layers") or [],
+                )
+            if "agent" not in set(metadata.get("candidate_search_paths") or []):
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.metadata.candidate_search_paths",
+                    expected=["agent"],
+                    observed=metadata.get("candidate_search_paths") or [],
+                )
+            if len(candidates) < 3:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.search_space.agent",
+                    expected=">=3",
+                    observed=len(candidates),
+                )
+            required_profiles = [
+                *V1_EVALUATION_HOOK_REJECTED_PROFILES,
+                V1_EVALUATION_HOOK_SELECTED_PROFILE,
+            ]
+            for profile in required_profiles:
+                if profile not in candidate_profiles:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field="manifest.evaluation_hook_candidate_profiles",
+                        expected=profile,
+                        observed=candidate_profiles,
+                    )
+
+            optimization_expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.optimization.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "summary.optimization_passed": (
+                    summary.get("optimization_passed"),
+                    True,
+                ),
+                "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+                "best_candidate_profile": (
+                    best_profile,
+                    V1_EVALUATION_HOOK_SELECTED_PROFILE,
+                ),
+            }
+            for field, (observed, expected) in optimization_expectations.items():
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < _float_or_zero(
+                summary.get("threshold")
+            ):
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.optimization_score",
+                    expected=f">={summary.get('threshold')}",
+                    observed=summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.evaluation_score",
+                    expected=">=1.0",
+                    observed=summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.candidate_lineage_count",
+                    expected=">=3",
+                    observed=summary.get("candidate_lineage_count"),
+                )
+            if "agent" not in set(best_patch):
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="best_history.patch",
+                    expected=["agent"],
+                    observed=sorted(str(item) for item in best_patch),
+                )
+            for profile in required_profiles:
+                if profile not in history_profiles:
+                    append_error(
+                        optimization_errors,
+                        path=path,
+                        field="optimization.history.profiles",
+                        expected=profile,
+                        observed=sorted(str(item) for item in history_profiles),
+                    )
+            selected_history = _as_mapping(
+                history_profiles.get(V1_EVALUATION_HOOK_SELECTED_PROFILE)
+            )
+            for profile in V1_EVALUATION_HOOK_REJECTED_PROFILES:
+                rejected_history = _as_mapping(history_profiles.get(profile))
+                if selected_history and rejected_history and not (
+                    _float_or_zero(selected_history.get("score"))
+                    > _float_or_zero(rejected_history.get("score"))
+                ):
+                    append_error(
+                        optimization_errors,
+                        path=path,
+                        field=f"optimization.history.{profile}.score",
+                        expected="< selected profile score",
+                        observed=rejected_history.get("score"),
+                    )
+
+            proof_expectations = {
+                "evaluation_hook_proof.kind": (
+                    proof.get("kind"),
+                    V1_EVALUATION_HOOK_PROOF_KIND,
+                ),
+                "evaluation_hook_proof.status": (proof.get("status"), "passed"),
+                "evaluation_hook_proof.passed": (proof.get("passed"), True),
+                "evaluation_hook_proof.assurance_level": (
+                    proof.get("assurance_level"),
+                    V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL,
+                ),
+                "evaluation_hook_proof.requires_external_service": (
+                    proof.get("requires_external_service"),
+                    False,
+                ),
+                "evaluation_hook_proof.failed_check_ids": (
+                    proof.get("failed_check_ids") or [],
+                    [],
+                ),
+                "evaluation_hook_proof.warning_check_ids": (
+                    proof.get("warning_check_ids") or [],
+                    [],
+                ),
+                "summary.evaluation_hook_proof_status": (
+                    summary.get("evaluation_hook_proof_status"),
+                    "passed",
+                ),
+                "summary.evaluation_hook_proof_passed": (
+                    summary.get("evaluation_hook_proof_passed"),
+                    True,
+                ),
+                "summary.evaluation_hook_proof_failed_check_count": (
+                    summary.get("evaluation_hook_proof_failed_check_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in proof_expectations.items():
+                if observed != expected:
+                    append_error(
+                        proof_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_proof_checks = missing_values(
+                passed_check_ids,
+                V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS,
+            )
+            if missing_proof_checks:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="evaluation_hook_proof.passed_check_ids",
+                    expected=V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS,
+                    observed=passed_check_ids,
+                )
+            if selected_metric.get("verdict") != "accepted":
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="evaluation_hook_proof.selected_metric.verdict",
+                    expected="accepted",
+                    observed=selected_metric.get("verdict"),
+                )
+            if selected_metric.get("secret_leak_detected") is not False:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="evaluation_hook_proof.selected_metric.secret_leak_detected",
+                    expected=False,
+                    observed=selected_metric.get("secret_leak_detected"),
+                )
+            if selected_trace.get("success") is not True:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="evaluation_hook_proof.trace.success",
+                    expected=True,
+                    observed=selected_trace.get("success"),
+                )
+            if _int_or_zero(selected_trace.get("status_code")) != 200:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="evaluation_hook_proof.trace.status_code",
+                    expected=200,
+                    observed=selected_trace.get("status_code"),
+                )
+            if selected_trace_auth.get("redacted") is not True:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="evaluation_hook_proof.trace.auth.redacted",
+                    expected=True,
+                    observed=selected_trace_auth.get("redacted"),
+                )
+
+            for metric in V1_EVALUATION_HOOK_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=f"best_history.metrics.{metric}",
+                        expected=">=1.0",
+                        observed=best_metrics.get(metric),
+                    )
+                if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=f"evaluation_hook_proof.evidence.selected_metrics.{metric}",
+                        expected=">=1.0",
+                        observed=selected_metrics.get(metric),
+                    )
+            generic = _as_mapping(
+                history_profiles.get("generic_candidate_without_eval_alignment")
+            )
+            generic_metrics = _as_mapping(generic.get("metrics"))
+            if _float_or_zero(generic_metrics.get("external_task_quality")) >= 1.0:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field="generic_candidate_without_eval_alignment.external_task_quality",
+                    expected="<1.0",
+                    observed=generic_metrics.get("external_task_quality"),
+                )
+            leaky = _as_mapping(
+                history_profiles.get("policy_grounded_secret_leaking_candidate")
+            )
+            leaky_metrics = _as_mapping(leaky.get("metrics"))
+            if _float_or_zero(leaky_metrics.get("secret_leakage")) >= 1.0:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field="policy_grounded_secret_leaking_candidate.secret_leakage",
+                    expected="<1.0",
+                    observed=leaky_metrics.get("secret_leakage"),
+                )
+
+            if env_value in serialized:
+                append_error(
+                    security_errors,
+                    path=path,
+                    field="serialized_result",
+                    expected=f"{env_name} value absent",
+                    observed=f"{env_name} value present",
+                )
+        except Exception as exc:
+            execution_errors.append({"path": path, "error": str(exc)})
+            evidence["examples"].setdefault(path, {})
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_env is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_env
+            if previous_endpoint is None:
+                os.environ.pop(endpoint_env, None)
+            else:
+                os.environ[endpoint_env] = previous_endpoint
+
+    return {
+        "required_files": list(V1_EVALUATION_HOOK_FILES),
+        "required_proof_kind": V1_EVALUATION_HOOK_PROOF_KIND,
+        "required_assurance_level": V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL,
+        "selected_profile": V1_EVALUATION_HOOK_SELECTED_PROFILE,
+        "rejected_profiles": list(V1_EVALUATION_HOOK_REJECTED_PROFILES),
+        "required_metrics": list(V1_EVALUATION_HOOK_REQUIRED_METRICS),
+        "required_proof_checks": list(V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
         "evidence": evidence,
     }
 
@@ -19839,6 +20456,7 @@ def _release_environment_10x_robustness_status(
     workspace_import_certification: Mapping[str, Any],
     workflow_hook: Mapping[str, Any],
     retrieval_hook: Mapping[str, Any],
+    evaluation_hook: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -20072,6 +20690,117 @@ def _release_environment_10x_robustness_status(
         evidence={
             "optimizer_metrics": dict(optimizer_metrics),
             "adapter_metrics": dict(adapter_metrics),
+        },
+    )
+
+    evaluation_hook_examples = _as_mapping(
+        evaluation_hook.get("evidence")
+    ).get("examples")
+    evaluation_hook_example = _as_mapping(
+        _as_mapping(evaluation_hook_examples).get(
+            "examples/sdk_evaluation_hook_optimization.py"
+        )
+    )
+    evaluation_hook_proof = _as_mapping(evaluation_hook_example.get("proof"))
+    evaluation_hook_optimization = _as_mapping(
+        evaluation_hook_example.get("optimization")
+    )
+    evaluation_hook_security = _as_mapping(evaluation_hook_example.get("security"))
+    evaluation_hook_metrics = _as_mapping(
+        evaluation_hook_proof.get("selected_metrics")
+    )
+    evaluation_hook_trace = _as_mapping(evaluation_hook_proof.get("trace"))
+    evaluation_hook_trace_auth = _as_mapping(evaluation_hook_trace.get("auth"))
+    evaluation_hook_selected_metric = _as_mapping(
+        evaluation_hook_proof.get("selected_metric")
+    )
+    evaluation_hook_history_profiles = _as_mapping(
+        evaluation_hook_optimization.get("history_profiles")
+    )
+    append_axis(
+        "authenticated_evaluation_hooks",
+        source_check="evaluation_hook_readiness",
+        passed=(
+            empty_buckets(
+                evaluation_hook,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "proof_errors",
+                    "metric_errors",
+                    "security_errors",
+                ),
+            )
+            and evaluation_hook_proof.get("kind") == V1_EVALUATION_HOOK_PROOF_KIND
+            and evaluation_hook_proof.get("status") == "passed"
+            and evaluation_hook_proof.get("passed") is True
+            and evaluation_hook_proof.get("assurance_level")
+            == V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
+            and evaluation_hook_proof.get("requires_external_service") is False
+            and evaluation_hook_proof.get("selected_profile")
+            == V1_EVALUATION_HOOK_SELECTED_PROFILE
+            and contains_all(
+                evaluation_hook_proof.get("passed_check_ids") or [],
+                V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS,
+            )
+            and metrics_at_floor(
+                evaluation_hook_metrics,
+                V1_EVALUATION_HOOK_REQUIRED_METRICS,
+            )
+            and evaluation_hook_trace.get("success") is True
+            and _int_or_zero(evaluation_hook_trace.get("status_code")) == 200
+            and evaluation_hook_trace_auth.get("redacted") is True
+            and evaluation_hook_security.get("serialized_secret_absent") is True
+            and evaluation_hook_selected_metric.get("verdict") == "accepted"
+            and evaluation_hook_selected_metric.get("secret_leak_detected") is False
+            and contains_all(
+                evaluation_hook_history_profiles,
+                [
+                    *V1_EVALUATION_HOOK_REJECTED_PROFILES,
+                    V1_EVALUATION_HOOK_SELECTED_PROFILE,
+                ],
+            )
+            and evaluation_hook_optimization.get("optimization_passed") is True
+            and evaluation_hook_optimization.get("evaluation_passed") is True
+        ),
+        expected={
+            "proof_kind": V1_EVALUATION_HOOK_PROOF_KIND,
+            "proof_status": "passed",
+            "proof_passed": True,
+            "assurance_level": V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL,
+            "requires_external_service": False,
+            "selected_profile": V1_EVALUATION_HOOK_SELECTED_PROFILE,
+            "rejected_profiles": V1_EVALUATION_HOOK_REJECTED_PROFILES,
+            "proof_checks": V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS,
+            "metrics": V1_EVALUATION_HOOK_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+            "trace_status_code": 200,
+            "trace_auth_redacted": True,
+            "serialized_secret_absent": True,
+            "selected_metric_verdict": "accepted",
+        },
+        evidence={
+            "proof_kind": evaluation_hook_proof.get("kind"),
+            "proof_status": evaluation_hook_proof.get("status"),
+            "proof_passed": evaluation_hook_proof.get("passed"),
+            "proof_assurance_level": evaluation_hook_proof.get("assurance_level"),
+            "requires_external_service": evaluation_hook_proof.get(
+                "requires_external_service"
+            ),
+            "selected_profile": evaluation_hook_proof.get("selected_profile"),
+            "selected_metrics": {
+                metric: evaluation_hook_metrics.get(metric)
+                for metric in V1_EVALUATION_HOOK_REQUIRED_METRICS
+            },
+            "passed_check_ids": evaluation_hook_proof.get("passed_check_ids") or [],
+            "selected_metric": dict(evaluation_hook_selected_metric),
+            "trace": dict(evaluation_hook_trace),
+            "history_profiles": copy.deepcopy(evaluation_hook_history_profiles),
+            "serialized_secret_absent": evaluation_hook_security.get(
+                "serialized_secret_absent"
+            ),
         },
     )
 
@@ -29169,6 +29898,19 @@ __all__ = [
     "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS",
     "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS",
     "V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE",
+    "V1_EVALUATION_HOOK_FILES",
+    "V1_EVALUATION_HOOK_PROBE_FILES",
+    "V1_EVALUATION_HOOK_PROBE_PROOF_KIND",
+    "V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE",
+    "V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS",
+    "V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE",
+    "V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS",
+    "V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL",
+    "V1_EVALUATION_HOOK_PROOF_KIND",
+    "V1_EVALUATION_HOOK_REJECTED_PROFILES",
+    "V1_EVALUATION_HOOK_REQUIRED_METRICS",
+    "V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS",
+    "V1_EVALUATION_HOOK_SELECTED_PROFILE",
     "V1_REQUIRED_CLI_COMMANDS",
     "V1_REQUIRED_DOCS",
     "V1_REQUIRED_EVIDENCE_COMPONENTS",

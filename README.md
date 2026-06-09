@@ -1218,6 +1218,12 @@ candidates against the live external metric; SDK entry points are
 `simulate.build_evaluation_hook_run_manifest()`,
 `optimize.build_evaluation_hook_optimization_manifest()`, and
 `optimize.optimize_evaluation_hooks()`.
+`agent-learn release-check` gates this direct path as
+`evaluation_hook_readiness`: the optimizer must run a local authenticated
+evaluator hook, select `policy_grounded_external_eval_candidate` over generic
+and secret-leaking candidates, attach native L3 evaluation-hook proof, prove
+redacted auth plus no serialized secret, and feed the
+`authenticated_evaluation_hooks` axis in `environment_10x_robustness`.
 Before using a live evaluator, use `evals.run_evaluation_hook_probe()` or
 `optimize.optimize_evaluation_hook_probe()` with a localhost hook to verify the
 task-specific metric, redacted `evaluation_hook_trace`, normalized task
@@ -2173,7 +2179,15 @@ normalized case evidence to a real evaluator endpoint, accept returned
 `metrics` or a top-level `score`, and attach redacted endpoint/auth/status/
 latency metadata to each metric. The optimizer searches agent candidates while
 keeping the evaluator fixed as an executable metric source, and the same hook
-is available from `agent-learn eval-task --eval-hook`.
+is available from `agent-learn eval-task --eval-hook`. `agent-learn
+release-check` gates this direct path as `evaluation_hook_readiness`: the SDK
+example must select the policy-grounded candidate over generic and
+secret-leaking candidates, attach native L3 evaluation-hook proof, prove
+redacted auth plus no serialized secret, and count as the
+`authenticated_evaluation_hooks` axis in `environment_10x_robustness`.
+OpenEnv compatibility remains compatibility coverage only; authenticated
+evaluation hooks are an Agent Learning-native judge/metric optimization proof
+surface.
 
 The `multi_agent_framework_handoff_optimization.json` example optimizes
 captured multi-agent framework transcripts across OpenAI Agents, AutoGen,

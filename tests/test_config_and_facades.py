@@ -392,6 +392,10 @@ def test_facades_expose_unified_agent_learning_modules():
     )
     assert optimize.build_evaluation_hook_optimization_manifest is not None
     assert optimize.optimize_evaluation_hooks is not None
+    assert optimize.with_evaluation_hook_proof is not None
+    assert optimize.AGENT_LEARNING_EVALUATION_HOOK_PROOF_KIND == (
+        "agent-learning.optimization.evaluation-hook-proof.v1"
+    )
     assert optimize.optimize_evaluation_hook_probe is not None
     assert optimize.score_evaluation_hook_probe_result is not None
     assert optimize.build_evaluation_hook_run_manifest_from_probe_optimization is not None
@@ -15346,6 +15350,27 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_evaluation_hook_probe_run_metrics"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
     )
+    assert payload["required_evaluation_hook_files"] == (
+        trinity.V1_EVALUATION_HOOK_FILES
+    )
+    assert payload["required_evaluation_hook_proof_kind"] == (
+        trinity.V1_EVALUATION_HOOK_PROOF_KIND
+    )
+    assert payload["required_evaluation_hook_proof_assurance_level"] == (
+        trinity.V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_evaluation_hook_selected_profile"] == (
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+    )
+    assert payload["required_evaluation_hook_rejected_profiles"] == (
+        trinity.V1_EVALUATION_HOOK_REJECTED_PROFILES
+    )
+    assert payload["required_evaluation_hook_metrics"] == (
+        trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS
+    )
+    assert payload["required_evaluation_hook_proof_checks"] == (
+        trinity.V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS
+    )
     assert payload["required_redteam_examples"] == trinity.V1_REDTEAM_EXAMPLES
     assert payload["required_redteam_research_corpus_file"] == (
         trinity.V1_REDTEAM_RESEARCH_CORPUS_FILE
@@ -16008,6 +16033,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "task_evaluation_synthesis_readiness",
         "task_world_optimizer_readiness",
         "evaluation_hook_probe_readiness",
+        "evaluation_hook_readiness",
         "native_optimizer_evidence_components",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
@@ -16494,6 +16520,151 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert evaluation_hook_run["evaluation_hook_status_codes"] == [200]
     assert evaluation_hook_run["evaluation_hook_endpoint_host_count"] >= 1
     assert evaluation_hook_run["evaluation_hook_endpoint_hosts_local"] is True
+
+    direct_hook = checks["evaluation_hook_readiness"]["evidence"]
+    assert direct_hook["required_files"] == trinity.V1_EVALUATION_HOOK_FILES
+    assert direct_hook["required_proof_kind"] == trinity.V1_EVALUATION_HOOK_PROOF_KIND
+    assert direct_hook["required_assurance_level"] == (
+        trinity.V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert direct_hook["selected_profile"] == trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+    assert direct_hook["rejected_profiles"] == (
+        trinity.V1_EVALUATION_HOOK_REJECTED_PROFILES
+    )
+    assert direct_hook["required_metrics"] == trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS
+    assert direct_hook["required_proof_checks"] == (
+        trinity.V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert direct_hook["missing_files"] == []
+    assert direct_hook["execution_errors"] == []
+    assert direct_hook["manifest_errors"] == []
+    assert direct_hook["optimization_errors"] == []
+    assert direct_hook["proof_errors"] == []
+    assert direct_hook["metric_errors"] == []
+    assert direct_hook["security_errors"] == []
+    direct_hook_example = direct_hook["evidence"]["examples"][
+        "examples/sdk_evaluation_hook_optimization.py"
+    ]
+    direct_hook_manifest = direct_hook_example["manifest"]
+    assert direct_hook_manifest["version"] == "agent-learning.optimization.v1"
+    assert direct_hook_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+    ]
+    assert direct_hook_manifest["task_kind"] == "evaluation_hook"
+    assert direct_hook_manifest["cookbook"] == "sdk-evaluation-hook-optimization"
+    assert direct_hook_manifest["candidate_search_paths"] == ["agent"]
+    assert direct_hook_manifest["candidate_count"] == 3
+    assert direct_hook_manifest["candidate_profiles"] == [
+        "generic_candidate_without_eval_alignment",
+        "policy_grounded_secret_leaking_candidate",
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE,
+    ]
+    assert direct_hook_manifest["auth"] == {
+        "type": "bearer",
+        "token_env": "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY",
+    }
+    assert direct_hook_manifest["metric_name"] == "external_task_quality"
+    assert direct_hook_manifest["evaluation_hook_count"] == 1
+    assert direct_hook_manifest["layers"] == [
+        "evaluator",
+        "harness",
+        "security",
+        "integration",
+        "planner",
+    ]
+
+    direct_hook_optimization = direct_hook_example["optimization"]
+    assert direct_hook_optimization["kind"] == "agent-learning.optimization.v1"
+    assert direct_hook_optimization["schema_version"] == "agent-learning.cli.v1"
+    assert direct_hook_optimization["status"] == "passed"
+    assert direct_hook_optimization["output_roundtrip"] is True
+    assert direct_hook_optimization["optimization_passed"] is True
+    assert direct_hook_optimization["evaluation_passed"] is True
+    assert direct_hook_optimization["optimization_score"] >= (
+        direct_hook_optimization["threshold"]
+    )
+    assert direct_hook_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert direct_hook_optimization["candidate_lineage_count"] >= 3
+    assert direct_hook_optimization["selected_profile"] == (
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+    )
+    assert direct_hook_optimization["best_patch_keys"] == ["agent"]
+    assert direct_hook_optimization["best_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS
+    }
+    direct_hook_history = direct_hook_optimization["history_profiles"]
+    assert set(direct_hook_history) >= {
+        *trinity.V1_EVALUATION_HOOK_REJECTED_PROFILES,
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE,
+    }
+    direct_hook_selected = direct_hook_history[
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+    ]
+    direct_hook_generic = direct_hook_history[
+        "generic_candidate_without_eval_alignment"
+    ]
+    direct_hook_secret_leak = direct_hook_history[
+        "policy_grounded_secret_leaking_candidate"
+    ]
+    assert direct_hook_selected["score"] > direct_hook_generic["score"]
+    assert direct_hook_selected["score"] > direct_hook_secret_leak["score"]
+    assert direct_hook_generic["metrics"]["external_task_quality"] < 1.0
+    assert direct_hook_secret_leak["metrics"]["secret_leakage"] < 1.0
+
+    direct_hook_proof = direct_hook_example["proof"]
+    assert direct_hook_proof["kind"] == trinity.V1_EVALUATION_HOOK_PROOF_KIND
+    assert direct_hook_proof["status"] == "passed"
+    assert direct_hook_proof["passed"] is True
+    assert direct_hook_proof["assurance_level"] == (
+        trinity.V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert direct_hook_proof["requires_external_service"] is False
+    assert direct_hook_proof["selected_profile"] == (
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+    )
+    assert direct_hook_proof["failed_check_ids"] == []
+    assert direct_hook_proof["warning_check_ids"] == []
+    assert set(trinity.V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS) <= set(
+        direct_hook_proof["passed_check_ids"]
+    )
+    assert direct_hook_proof["summary"] == {
+        "evaluation_hook_proof_status": "passed",
+        "evaluation_hook_proof_passed": True,
+        "evaluation_hook_proof_failed_check_count": 0,
+    }
+    direct_hook_metric = direct_hook_proof["selected_metric"]
+    assert direct_hook_metric["name"] == "external_task_quality"
+    assert direct_hook_metric["verdict"] == "accepted"
+    assert direct_hook_metric["score"] == pytest.approx(1.0)
+    assert direct_hook_metric["secret_leak_detected"] is False
+    assert direct_hook_metric["missing_terms"] == []
+    assert set(direct_hook_metric["matched_terms"]) >= {
+        "current policy",
+        "allows approval",
+        "support limits",
+        "source grounded",
+        "no customer secret",
+    }
+    assert direct_hook_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS
+    }
+    direct_hook_trace = direct_hook_proof["trace"]
+    assert direct_hook_trace["kind"] == "evaluation_hook_trace"
+    assert direct_hook_trace["method"] == "POST"
+    assert direct_hook_trace["status_code"] == 200
+    assert direct_hook_trace["success"] is True
+    assert direct_hook_trace["auth"]["redacted"] is True
+    assert direct_hook_trace["auth"]["token_env"] == (
+        "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+    )
+    direct_hook_security = direct_hook_example["security"]
+    assert direct_hook_security["serialized_secret_absent"] is True
+    assert direct_hook_security["trace_auth_redacted"] is True
+    assert direct_hook_security["trace_auth_token_env"] == (
+        "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+    )
     assert checks["redteam_core_examples_present"]["evidence"]["missing"] == []
     redteam_research = checks["redteam_research_coverage"]["evidence"]
     assert redteam_research["missing_files"] == []
@@ -18119,6 +18290,48 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         assert eval_axis["optimizer_metrics"][metric] == pytest.approx(1.0)
     for metric in trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS:
         assert eval_axis["adapter_metrics"][metric] == pytest.approx(1.0)
+    assert environment_10x_axes["authenticated_evaluation_hooks"][
+        "source_check"
+    ] == "evaluation_hook_readiness"
+    evaluation_axis = environment_10x_axes["authenticated_evaluation_hooks"]["evidence"]
+    assert evaluation_axis["proof_passed"] is True
+    assert evaluation_axis["proof_kind"] == trinity.V1_EVALUATION_HOOK_PROOF_KIND
+    assert evaluation_axis["proof_assurance_level"] == (
+        trinity.V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert evaluation_axis["requires_external_service"] is False
+    assert evaluation_axis["selected_profile"] == (
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+    )
+    assert evaluation_axis["serialized_secret_absent"] is True
+    assert evaluation_axis["trace"]["status_code"] == 200
+    assert evaluation_axis["trace"]["success"] is True
+    assert evaluation_axis["trace"]["auth"]["redacted"] is True
+    assert evaluation_axis["selected_metric"]["verdict"] == "accepted"
+    assert evaluation_axis["selected_metric"]["secret_leak_detected"] is False
+    for metric in trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS:
+        assert evaluation_axis["selected_metrics"][metric] == pytest.approx(1.0)
+    assert set(trinity.V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS) <= set(
+        evaluation_axis["passed_check_ids"]
+    )
+    assert set(evaluation_axis["history_profiles"]) >= {
+        *trinity.V1_EVALUATION_HOOK_REJECTED_PROFILES,
+        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE,
+    }
+    assert (
+        evaluation_axis["history_profiles"][
+            trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
+        ]["score"]
+        > evaluation_axis["history_profiles"][
+            "generic_candidate_without_eval_alignment"
+        ]["score"]
+    )
+    assert (
+        evaluation_axis["history_profiles"][
+            "policy_grounded_secret_leaking_candidate"
+        ]["metrics"]["secret_leakage"]
+        < 1.0
+    )
     optimizer_axis = environment_10x_axes["adaptive_optimizer_recovery"]["evidence"]
     assert optimizer_axis["best_candidate_profile"] == "verified_openenv_replay"
     assert optimizer_axis["candidate_lineage_count"] >= 3
@@ -21840,9 +22053,12 @@ def test_evaluation_hook_manifest_builds_research_backed_agent_candidates():
     } <= {source["url"] for source in sources}
 
     candidates = manifest["optimization"]["target"]["search_space"]["agent"]
-    assert len(candidates) == 2
+    assert len(candidates) == 3
     assert candidates[0]["metadata"]["candidate_profile"] == (
         "generic_candidate_without_eval_alignment"
+    )
+    assert candidates[1]["metadata"]["candidate_profile"] == (
+        "policy_grounded_secret_leaking_candidate"
     )
     assert candidates[-1]["metadata"]["candidate_profile"] == (
         "policy_grounded_external_eval_candidate"
@@ -22308,6 +22524,19 @@ def test_sdk_evaluation_hook_optimization_example_runs(monkeypatch, tmp_path):
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= result["summary"]["threshold"]
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["candidate_lineage_count"] >= 3
+    assert result["summary"]["evaluation_hook_proof_status"] == "passed"
+    assert result["summary"]["evaluation_hook_proof_passed"] is True
+    assert result["summary"]["evaluation_hook_proof_assurance_level"] == (
+        "l3_authenticated_evaluation_hook_verified"
+    )
+    assert result["summary"]["evaluation_hook_proof_failed_check_count"] == 0
+    assert saved["evaluation_hook_proof"] == result["evaluation_hook_proof"]
+    assert (
+        saved["optimization"]["evaluation_hook_proof"]
+        == result["optimization"]["evaluation_hook_proof"]
+        == result["evaluation_hook_proof"]
+    )
 
     best_history = max(
         result["optimization"]["history"],
@@ -22333,6 +22562,64 @@ def test_sdk_evaluation_hook_optimization_example_runs(monkeypatch, tmp_path):
     assert trace["auth"]["redacted"] is True
     assert trace["auth"]["token_env"] == "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
     assert key not in json.dumps(trace, sort_keys=True, default=str)
+
+    proof = result["evaluation_hook_proof"]
+    assert proof["kind"] == "agent-learning.optimization.evaluation-hook-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["passed"] is True
+    assert proof["assurance_level"] == "l3_authenticated_evaluation_hook_verified"
+    assert proof["task_kind"] == "evaluation_hook"
+    assert proof["candidate_profile"] == "policy_grounded_external_eval_candidate"
+    assert proof["requires_external_service"] is False
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert set(proof["passed_check_ids"]) >= {
+        "evaluation_hook_source_manifest_contract_closed",
+        "local_authenticated_evaluation_hook_scored",
+        "evaluation_hook_auth_redaction_closed",
+        "evaluation_hook_selected_agent_closed",
+        "evaluation_hook_rejected_candidate_lineage_closed",
+        "evaluation_hook_metric_evidence_closed",
+        "evaluation_hook_patch_surface_present",
+        "evaluation_hook_candidate_lineage_gate_passed",
+    }
+    proof_evidence = proof["evidence"]
+    assert proof_evidence["candidate_lineage_count"] >= 3
+    assert proof_evidence["selected_profile"] == (
+        "policy_grounded_external_eval_candidate"
+    )
+    assert proof_evidence["selected_metric"]["name"] == "external_task_quality"
+    assert proof_evidence["selected_metric"]["verdict"] == "accepted"
+    assert proof_evidence["selected_metric"]["secret_leak_detected"] is False
+    assert proof_evidence["selected_metric"]["missing_terms"] == []
+    assert set(proof_evidence["selected_metric"]["matched_terms"]) >= {
+        "current policy",
+        "allows approval",
+        "support limits",
+        "source grounded",
+        "no customer secret",
+    }
+    assert proof_evidence["selected_trace"]["status_code"] == 200
+    assert proof_evidence["selected_trace"]["success"] is True
+    assert proof_evidence["selected_trace"]["auth"]["redacted"] is True
+    assert proof_evidence["selected_trace"]["auth"]["token_env"] == (
+        "AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY"
+    )
+    for metric in ("external_task_quality", "secret_leakage", "task_completion"):
+        assert proof_evidence["selected_metrics"][metric] == pytest.approx(1.0)
+    history_profiles = proof_evidence["history_profiles"]
+    assert set(history_profiles) >= {
+        "generic_candidate_without_eval_alignment",
+        "policy_grounded_secret_leaking_candidate",
+        "policy_grounded_external_eval_candidate",
+    }
+    selected_profile = history_profiles["policy_grounded_external_eval_candidate"]
+    weak_profile = history_profiles["generic_candidate_without_eval_alignment"]
+    leaky_profile = history_profiles["policy_grounded_secret_leaking_candidate"]
+    assert selected_profile["score"] > weak_profile["score"]
+    assert selected_profile["score"] > leaky_profile["score"]
+    assert weak_profile["metrics"]["external_task_quality"] < 1.0
+    assert leaky_profile["metrics"]["secret_leakage"] < 1.0
 
 
 def test_cli_eval_task_supports_authenticated_evaluation_hook(

@@ -49,7 +49,7 @@ evidence in `agent-learning.release-proof.v1`.
 | --- | --- | --- |
 | M0 | One public SDK boundary | `single_public_boundary`, `typescript_sdk_consolidation_boundary` |
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
-| M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `task_artifact_evaluation_readiness`, `task_evaluation_synthesis_readiness`, `task_world_optimizer_readiness`, `evaluation_hook_probe_readiness` |
+| M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `task_artifact_evaluation_readiness`, `task_evaluation_synthesis_readiness`, `task_world_optimizer_readiness`, `evaluation_hook_probe_readiness`, `evaluation_hook_readiness` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
@@ -132,6 +132,12 @@ Current checkpoint:
   `agent-learning.run.v1`, execute the promoted run, and close
   `external_task_quality`, source-grounding, secret-leakage, task-completion,
   and tool-schema metrics without external evaluator credentials.
+- Direct evaluation hook readiness is now an executable release-check gate:
+  `examples/sdk_evaluation_hook_optimization.py` must run a local authenticated
+  evaluator hook, select the policy-grounded candidate over generic and
+  secret-leaking candidates, attach native L3 evaluation-hook proof, prove
+  redacted auth plus no serialized secret, and close external-task,
+  task-completion, and secret-leakage metrics.
 
 Acceptance gates:
 
@@ -439,6 +445,13 @@ Current checkpoint:
   auth candidates, attach native workflow-hook proof, prove secret redaction plus
   `workflow_hooks`/`refund_workflow` runtime state, and count as the
   `authenticated_workflow_hooks` axis in `environment_10x_robustness`.
+- Evaluation hook readiness now also feeds the Agent Learning-native 10x bar:
+  `examples/sdk_evaluation_hook_optimization.py` must count as the
+  `authenticated_evaluation_hooks` axis by proving local authenticated evaluator
+  scoring, redacted auth, selected policy-grounded agent lineage, rejected weak
+  and secret-leaking candidates, native L3 proof checks, and no serialized
+  secret. OpenEnv/Gymnasium compatibility remains compatibility coverage only;
+  this is the Agent Learning-native evaluator optimization proof.
 - Retrieval hook readiness is now an executable release-check gate:
   `examples/sdk_retrieval_hook_optimization.py` must run a local authenticated
   HTTP retrieval/RAG hook, select the verified authenticated hook over stale
@@ -475,10 +488,10 @@ Current checkpoint:
   requires at least ten independent axes to pass across the Agent Learning
   replay contract, framework simulation, local evals, optimizer recovery,
   adapter promotion, protocol routing, browser/CUA, realtime, memory,
-  multi-agent coordination, authenticated retrieval hooks, world orchestration,
-  workspace import certification, red-team suite coverage, and regression
-  replay. Workspace import certification and authenticated retrieval hooks are
-  counted as native proof-backed axes; OpenEnv/Gymnasium-shaped traces are
+  multi-agent coordination, authenticated evaluation/workflow/retrieval hooks,
+  world orchestration, workspace import certification, red-team suite coverage,
+  and regression replay. Workspace import certification and authenticated hooks
+  are counted as native proof-backed axes; OpenEnv/Gymnasium-shaped traces are
   compatibility inputs inside that bar.
 
 Acceptance gates:
@@ -555,6 +568,12 @@ Next implementation focus:
   full runtime-contract evidence, including report/action, regression
   promotion, and replay proof surfaces, before expanding to additional
   framework control planes.
+- Keep evaluation hooks on the Agent Learning-native bar: OpenEnv compatibility
+  is useful, but authenticated evaluator-hook optimization must remain our own
+  local proof surface with redacted auth, candidate lineage, rejected
+  secret-leaking candidates, native proof, and the
+  `authenticated_evaluation_hooks` 10x axis before adding third-party evaluator
+  providers.
 - Keep workflow hooks on the Agent Learning-native bar: OpenEnv compatibility is
   useful, but authenticated workflow-hook optimization must remain our own local
   proof surface with redacted auth, state updates, candidate lineage, and replay
