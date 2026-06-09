@@ -64,6 +64,13 @@ Keep memory support local-first:
   `stateful_framework_adapter_readiness`; the gate requires local `ainvoke(dict)`
   selection, memory/retrieval/lineage state, memory events, artifacts, and
   passing memory lineage plus retrieval attribution metrics.
+- `agent-learn release-check` also runs
+  `examples/sdk_memory_layer_probe_optimization.py` as
+  `memory_layer_probe_readiness`; the gate requires current document selection,
+  native memory-layer probe proof, promotion to `agent-learning.run.v1`,
+  retrieval attribution, read/write/recall operations, tenant isolation, audit,
+  retention/deletion/redaction, canary evidence, no blocking gaps, and passing
+  run metrics.
 - Require current-document citations, freshness checks, source attribution,
   audited read/write/recall operations, tenant isolation, audit, retention,
   deletion, redaction, canaries, observability, and artifacts before a probe is

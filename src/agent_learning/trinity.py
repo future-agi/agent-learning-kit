@@ -678,6 +678,59 @@ V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS = [
     "tool_delta",
 ]
 
+V1_MEMORY_LAYER_PROBE_FILES = [
+    "examples/sdk_memory_layer_probe_optimization.py",
+    "examples/sdk_memory_optimization.py",
+    "internal-docs/memory-layer-probe-research.md",
+]
+
+V1_MEMORY_LAYER_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.memory-layer-probe-proof.v1"
+)
+
+V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID = "doc_refund_2026"
+
+V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID = "doc_refund_2025"
+
+V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
+    "retrieval_memory",
+    "agent_memory_lineage",
+]
+
+V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS = [
+    "read",
+    "write",
+    "recall",
+]
+
+V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS = [
+    "memory_layer_probe_pass_rate",
+    "memory_layer_probe_local_contract_quality",
+    "memory_layer_probe_retrieval_grounding",
+    "memory_layer_probe_lineage_quality",
+    "memory_layer_probe_governance_quality",
+    "memory_layer_probe_finding_quality",
+    "memory_layer_probe_score",
+]
+
+V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS = [
+    "agent_memory_lineage_coverage",
+    "agent_memory_lineage_quality",
+    "retrieval_memory_attribution",
+    "retrieval_context_quality",
+    "memory_integrity",
+]
+
+V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS = [
+    "retrieve_documents",
+    "read_document",
+    "cite_sources",
+    "write_memory",
+    "retrieval_memory_status",
+    "agent_memory_lineage_status",
+    "list_memory_lineage_operations",
+]
+
 V1_OPENENV_OPTIMIZER_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
     "internal-docs/openenv-environment-adapter-research.md",
@@ -2117,6 +2170,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=realtime_stack_probe,
     )
+    memory_layer_probe = _release_memory_layer_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="memory_layer_probe_readiness",
+        passed=(
+            not memory_layer_probe["missing_files"]
+            and not memory_layer_probe["optimization_errors"]
+            and not memory_layer_probe["proof_errors"]
+            and not memory_layer_probe["manifest_errors"]
+            and not memory_layer_probe["metric_errors"]
+            and not memory_layer_probe["runtime_errors"]
+            and not memory_layer_probe["errors"]
+        ),
+        milestone="M6",
+        evidence=memory_layer_probe,
+    )
     stateful_framework_adapter = _release_stateful_framework_adapter_status(root)
     _append_release_check(
         checks,
@@ -2382,6 +2451,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_realtime_stack_probe_streaming_signals": list(
             V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
         ),
+        "required_memory_layer_probe_files": list(V1_MEMORY_LAYER_PROBE_FILES),
+        "required_memory_layer_probe_proof_kind": V1_MEMORY_LAYER_PROBE_PROOF_KIND,
+        "required_memory_layer_probe_doc_id": V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+        "forbidden_memory_layer_probe_doc_id": V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID,
+        "required_memory_layer_probe_environment_types": list(
+            V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_memory_layer_probe_operations": list(
+            V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS
+        ),
+        "required_memory_layer_probe_metrics": list(
+            V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
+        ),
+        "required_memory_layer_probe_run_metrics": list(
+            V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_memory_layer_probe_tools": list(V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS),
         "required_stateful_framework_adapter_files": list(
             V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
         ),
@@ -9235,6 +9321,746 @@ def _release_realtime_stack_probe_status(root: Path) -> dict[str, Any]:
         "required_streaming_signals": list(
             V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
         ),
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "manifest_errors": manifest_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
+
+
+def _release_memory_layer_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_MEMORY_LAYER_PROBE_FILES)
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    result: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    run_result: dict[str, Any] = {}
+    if not missing_files:
+        example_path = root / "examples/sdk_memory_layer_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_memory_layer_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            from agent_learning import optimize, simulate
+
+            memory_example = module._memory_example()
+            result = module.build_probe_optimization()
+            manifest = optimize.build_memory_run_manifest_from_probe_optimization(
+                result,
+                name="release-memory-layer-probe-readiness",
+                evaluation_config=memory_example.evaluation_config(),
+                metadata={"release_check": "memory_layer_probe_readiness"},
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-memory-layer-probe-"
+            ) as tmpdir:
+                manifest_path = simulate.write_manifest_file(
+                    manifest,
+                    Path(tmpdir) / "memory-layer-probe-run.json",
+                )
+                run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_memory = _as_mapping(best_config.get("memory"))
+        best_retrieval = _as_mapping(best_memory.get("retrieval_memory"))
+        best_lineage = _as_mapping(best_memory.get("agent_memory_lineage"))
+        best_documents = [
+            doc for doc in _as_list(best_retrieval.get("documents")) if isinstance(doc, Mapping)
+        ]
+        best_doc = _as_mapping(best_documents[0]) if best_documents else {}
+        best_operations = [
+            op for op in _as_list(best_lineage.get("operations")) if isinstance(op, Mapping)
+        ]
+        proof = _as_mapping(result.get("memory_layer_probe_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        selected_summary = _as_mapping(proof_evidence.get("selected_report_summary"))
+        contract = _as_mapping(proof_evidence.get("memory_layer_contract"))
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        history_documents: dict[str, dict[str, Any]] = {}
+        for history in histories:
+            candidate = _as_mapping(history.get("candidate_config"))
+            candidate_memory = _as_mapping(candidate.get("memory"))
+            candidate_retrieval = _as_mapping(candidate_memory.get("retrieval_memory"))
+            candidate_docs = [
+                doc
+                for doc in _as_list(candidate_retrieval.get("documents"))
+                if isinstance(doc, Mapping)
+            ]
+            doc = _as_mapping(candidate_docs[0]) if candidate_docs else {}
+            doc_id = str(doc.get("id") or "")
+            if doc_id:
+                history_documents[doc_id] = {
+                    "score": history.get("score"),
+                    "metrics": {
+                        metric: _as_mapping(history.get("metrics")).get(metric)
+                        for metric in V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
+                    },
+                }
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "candidate_lineage_selected_score_delta": summary.get(
+                "candidate_lineage_selected_score_delta"
+            ),
+            "best_document_id": best_doc.get("id"),
+            "best_document_current": best_doc.get("current"),
+            "best_required_operations": sorted(
+                {str(op.get("operation") or "") for op in best_operations}
+            ),
+            "history_documents": history_documents,
+            "optimizer_governance_status": summary.get("optimizer_governance_status"),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "failed_check_ids": proof.get("failed_check_ids") or [],
+            "warning_check_ids": proof.get("warning_check_ids") or [],
+            "check_count": proof.get("check_count"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "contract_runtime": contract.get("runtime"),
+            "contract_local_executable_fixture": contract.get(
+                "local_executable_fixture"
+            ),
+            "contract_requires_external_service": contract.get(
+                "requires_external_service"
+            ),
+            "contract_operations": contract.get("operations") or [],
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
+            },
+            "selected_summary": {
+                "retrieval_citation_count": selected_summary.get(
+                    "retrieval_citation_count"
+                ),
+                "retrieval_citations_current": selected_summary.get(
+                    "retrieval_citations_current"
+                ),
+                "retrieval_current_document_count": selected_summary.get(
+                    "retrieval_current_document_count"
+                ),
+                "retrieval_freshness_checked_count": selected_summary.get(
+                    "retrieval_freshness_checked_count"
+                ),
+                "memory_operation_count": selected_summary.get(
+                    "memory_operation_count"
+                ),
+                "memory_audited_operation_count": selected_summary.get(
+                    "memory_audited_operation_count"
+                ),
+                "memory_operation_types": selected_summary.get(
+                    "memory_operation_types"
+                )
+                or [],
+                "memory_record_count": selected_summary.get("memory_record_count"),
+                "memory_store_count": selected_summary.get("memory_store_count"),
+                "blocking_gap_count": selected_summary.get("blocking_gap_count"),
+                "policy_violation_count": selected_summary.get(
+                    "policy_violation_count"
+                ),
+                "isolation_violation_count": selected_summary.get(
+                    "isolation_violation_count"
+                ),
+                "retention_violation_count": selected_summary.get(
+                    "retention_violation_count"
+                ),
+                "open_poisoning_count": selected_summary.get("open_poisoning_count"),
+                "has_artifacts": selected_summary.get("has_artifacts"),
+                "has_audit": selected_summary.get("has_audit"),
+                "has_canaries": selected_summary.get("has_canaries"),
+                "has_deletion_policy": selected_summary.get("has_deletion_policy"),
+                "has_observability": selected_summary.get("has_observability"),
+                "has_redaction": selected_summary.get("has_redaction"),
+                "has_retention_policy": selected_summary.get("has_retention_policy"),
+                "has_source_attribution": selected_summary.get(
+                    "has_source_attribution"
+                ),
+                "has_tenant_isolation": selected_summary.get(
+                    "has_tenant_isolation"
+                ),
+            },
+        }
+
+        optimization_expectations = {
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "summary.optimization_passed": (summary.get("optimization_passed"), True),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "best_config.memory.retrieval_memory.documents.0.id": (
+                best_doc.get("id"),
+                V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+            ),
+            "best_config.memory.retrieval_memory.documents.0.current": (
+                best_doc.get("current"),
+                True,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=1.0,
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=1.0,
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 2:
+            append_error(
+                optimization_errors,
+                field="summary.total_evaluations",
+                expected=">=2",
+                observed=summary.get("total_evaluations"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_count",
+                expected=">=2",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _float_or_zero(
+            summary.get("candidate_lineage_selected_score_delta")
+        ) < 0.9:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_selected_score_delta",
+                expected=">=0.9",
+                observed=summary.get("candidate_lineage_selected_score_delta"),
+            )
+        missing_best_operations = missing_values(
+            [op.get("operation") for op in best_operations],
+            V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+        )
+        if missing_best_operations:
+            append_error(
+                optimization_errors,
+                field="best_config.memory.agent_memory_lineage.operations.operation",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+                observed=sorted({str(op.get("operation") or "") for op in best_operations}),
+            )
+        if V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID not in history_documents:
+            append_error(
+                optimization_errors,
+                field="optimization.history.documents",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+                observed=sorted(history_documents),
+            )
+        if V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID not in history_documents:
+            append_error(
+                optimization_errors,
+                field="optimization.history.documents",
+                expected=V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID,
+                observed=sorted(history_documents),
+            )
+        current_history = history_documents.get(V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID, {})
+        stale_history = history_documents.get(V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID, {})
+        if current_history and stale_history and not (
+            _float_or_zero(current_history.get("score"))
+            > _float_or_zero(stale_history.get("score"))
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.history.score_delta",
+                expected="current document score > stale document score",
+                observed={
+                    "current": current_history.get("score"),
+                    "stale": stale_history.get("score"),
+                },
+            )
+
+        proof_expectations = {
+            "kind": (proof.get("kind"), V1_MEMORY_LAYER_PROBE_PROOF_KIND),
+            "status": (proof.get("status"), "passed"),
+            "passed": (proof.get("passed"), True),
+            "assurance_level": (
+                proof.get("assurance_level"),
+                "l2_native_memory_layer_probe_verified",
+            ),
+            "failed_check_ids": (proof.get("failed_check_ids") or [], []),
+            "requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "contract.runtime": (contract.get("runtime"), "in_process"),
+            "contract.local_executable_fixture": (
+                contract.get("local_executable_fixture"),
+                True,
+            ),
+            "contract.requires_external_service": (
+                contract.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.retrieval_citations_current": (
+                selected_summary.get("retrieval_citations_current"),
+                True,
+            ),
+            "selected_summary.blocking_gap_count": (
+                selected_summary.get("blocking_gap_count"),
+                0,
+            ),
+            "selected_summary.policy_violation_count": (
+                selected_summary.get("policy_violation_count"),
+                0,
+            ),
+            "selected_summary.isolation_violation_count": (
+                selected_summary.get("isolation_violation_count"),
+                0,
+            ),
+            "selected_summary.retention_violation_count": (
+                selected_summary.get("retention_violation_count"),
+                0,
+            ),
+            "selected_summary.open_poisoning_count": (
+                selected_summary.get("open_poisoning_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(proof.get("check_count")) < 8:
+            append_error(
+                proof_errors,
+                field="check_count",
+                expected=">=8",
+                observed=proof.get("check_count"),
+            )
+        missing_contract_operations = missing_values(
+            contract.get("operations"),
+            V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+        )
+        if missing_contract_operations:
+            append_error(
+                proof_errors,
+                field="contract.operations",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+                observed=contract.get("operations"),
+            )
+        missing_summary_operations = missing_values(
+            selected_summary.get("memory_operation_types"),
+            V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+        )
+        if missing_summary_operations:
+            append_error(
+                proof_errors,
+                field="selected_summary.memory_operation_types",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+                observed=selected_summary.get("memory_operation_types"),
+            )
+        if _int_or_zero(selected_summary.get("retrieval_citation_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.retrieval_citation_count",
+                expected=">=1",
+                observed=selected_summary.get("retrieval_citation_count"),
+            )
+        if _int_or_zero(selected_summary.get("retrieval_current_document_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.retrieval_current_document_count",
+                expected=">=1",
+                observed=selected_summary.get("retrieval_current_document_count"),
+            )
+        if _int_or_zero(selected_summary.get("retrieval_freshness_checked_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.retrieval_freshness_checked_count",
+                expected=">=1",
+                observed=selected_summary.get("retrieval_freshness_checked_count"),
+            )
+        if _int_or_zero(selected_summary.get("memory_operation_count")) < 3:
+            append_error(
+                proof_errors,
+                field="selected_summary.memory_operation_count",
+                expected=">=3",
+                observed=selected_summary.get("memory_operation_count"),
+            )
+        for flag in (
+            "has_artifacts",
+            "has_audit",
+            "has_canaries",
+            "has_deletion_policy",
+            "has_observability",
+            "has_redaction",
+            "has_retention_policy",
+            "has_source_attribution",
+            "has_tenant_isolation",
+        ):
+            if selected_summary.get(flag) is not True:
+                append_error(
+                    proof_errors,
+                    field=f"selected_summary.{flag}",
+                    expected=True,
+                    observed=selected_summary.get(flag),
+                )
+        for metric in V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS:
+            if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"proof.selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=selected_metrics.get(metric),
+                )
+
+    if manifest:
+        metadata = _as_mapping(manifest.get("metadata"))
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            env for env in _as_list(simulation.get("environments")) if isinstance(env, Mapping)
+        ]
+        env_types = [str(env.get("type") or "") for env in environments]
+        retrieval_env = next(
+            (
+                _as_mapping(env.get("data"))
+                for env in environments
+                if str(env.get("type") or "") == "retrieval_memory"
+            ),
+            {},
+        )
+        retrieval_docs = [
+            doc for doc in _as_list(retrieval_env.get("documents")) if isinstance(doc, Mapping)
+        ]
+        retrieval_doc = _as_mapping(retrieval_docs[0]) if retrieval_docs else {}
+        evaluation_config = _as_mapping(
+            _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+                "config"
+            )
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "promoted_from_memory_layer_probe": metadata.get(
+                "promoted_from_memory_layer_probe"
+            ),
+            "memory_layer_probe_proof_status": metadata.get(
+                "memory_layer_probe_proof_status"
+            ),
+            "environment_types": env_types,
+            "retrieval_document_id": retrieval_doc.get("id"),
+            "retrieval_document_current": retrieval_doc.get("current"),
+            "expected_retrieval_doc_ids": evaluation_config.get(
+                "expected_retrieval_doc_ids"
+            )
+            or [],
+            "forbidden_retrieval_doc_ids": evaluation_config.get(
+                "forbidden_retrieval_doc_ids"
+            )
+            or [],
+            "required_tools": evaluation_config.get("required_tools") or [],
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.run.v1"),
+            "required_env": (manifest.get("required_env") or [], []),
+            "metadata.promoted_from_memory_layer_probe": (
+                metadata.get("promoted_from_memory_layer_probe"),
+                True,
+            ),
+            "metadata.memory_layer_probe_proof_status": (
+                metadata.get("memory_layer_probe_proof_status"),
+                "passed",
+            ),
+            "retrieval_memory.documents.0.id": (
+                retrieval_doc.get("id"),
+                V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+            ),
+            "retrieval_memory.documents.0.current": (
+                retrieval_doc.get("current"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_env_types = missing_values(
+            env_types,
+            V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_env_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+                observed=env_types,
+            )
+        missing_expected_docs = missing_values(
+            evaluation_config.get("expected_retrieval_doc_ids"),
+            [V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID],
+        )
+        if missing_expected_docs:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.expected_retrieval_doc_ids",
+                expected=[V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID],
+                observed=evaluation_config.get("expected_retrieval_doc_ids"),
+            )
+        missing_forbidden_docs = missing_values(
+            evaluation_config.get("forbidden_retrieval_doc_ids"),
+            [V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID],
+        )
+        if missing_forbidden_docs:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.forbidden_retrieval_doc_ids",
+                expected=[V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID],
+                observed=evaluation_config.get("forbidden_retrieval_doc_ids"),
+            )
+        missing_manifest_tools = missing_values(
+            evaluation_config.get("required_tools"),
+            V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS,
+        )
+        if missing_manifest_tools:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.required_tools",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS,
+                observed=evaluation_config.get("required_tools"),
+            )
+        missing_run_metric_weights = missing_values(
+            metric_weights,
+            V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS,
+        )
+        if missing_run_metric_weights:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS,
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+
+    if run_result:
+        run_summary = _as_mapping(run_result.get("summary"))
+        run_metrics = _as_mapping(run_summary.get("metric_averages"))
+        report = _as_mapping(run_result.get("report"))
+        cases = [case for case in _as_list(report.get("results")) if isinstance(case, Mapping)]
+        case = _as_mapping(cases[0]) if cases else {}
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        retrieval_state = _as_mapping(state.get("retrieval_memory"))
+        lineage_state = _as_mapping(state.get("agent_memory_lineage"))
+        citations = [
+            citation
+            for citation in _as_list(retrieval_state.get("citations"))
+            if isinstance(citation, Mapping)
+        ]
+        citation_doc_ids = [
+            str(doc_id)
+            for citation in citations
+            for doc_id in _as_list(citation.get("doc_ids"))
+        ]
+        documents = [
+            doc for doc in _as_list(retrieval_state.get("documents")) if isinstance(doc, Mapping)
+        ]
+        document_ids = [str(_as_mapping(doc).get("id") or "") for doc in documents]
+        lineage_summary = _as_mapping(lineage_state.get("summary"))
+        evidence["run"] = {
+            "kind": run_result.get("kind"),
+            "status": run_result.get("status"),
+            "evaluation_passed": run_summary.get("evaluation_passed"),
+            "evaluation_score": run_summary.get("evaluation_score"),
+            "metrics": {
+                metric: run_metrics.get(metric)
+                for metric in V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS
+            },
+            "retrieval_citation_doc_ids": citation_doc_ids,
+            "retrieval_document_ids": document_ids,
+            "lineage_blocking_gap_count": lineage_summary.get("blocking_gap_count"),
+            "lineage_operation_types": lineage_summary.get("operation_types") or [],
+            "lineage_policy_violation_count": lineage_summary.get(
+                "policy_violation_count"
+            ),
+            "lineage_isolation_violation_count": lineage_summary.get(
+                "isolation_violation_count"
+            ),
+            "lineage_open_poisoning_count": lineage_summary.get(
+                "open_poisoning_count"
+            ),
+            "lineage_missing_required_evidence": lineage_summary.get(
+                "missing_required_evidence"
+            )
+            or [],
+            "state_keys": sorted(str(key) for key in state),
+        }
+        runtime_expectations = {
+            "kind": (run_result.get("kind"), "agent-learning.run.v1"),
+            "status": (run_result.get("status"), "passed"),
+            "summary.evaluation_passed": (run_summary.get("evaluation_passed"), True),
+            "agent_memory_lineage.summary.blocking_gap_count": (
+                lineage_summary.get("blocking_gap_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.policy_violation_count": (
+                lineage_summary.get("policy_violation_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.isolation_violation_count": (
+                lineage_summary.get("isolation_violation_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.open_poisoning_count": (
+                lineage_summary.get("open_poisoning_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(run_summary.get("evaluation_score")) < 0.98:
+            append_error(
+                runtime_errors,
+                field="summary.evaluation_score",
+                expected=">=0.98",
+                observed=run_summary.get("evaluation_score"),
+            )
+        if V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID not in citation_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.citations.doc_ids",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+                observed=citation_doc_ids,
+            )
+        if V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID in document_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.documents.id",
+                expected=f"not {V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID}",
+                observed=document_ids,
+            )
+        missing_runtime_operations = missing_values(
+            lineage_summary.get("operation_types"),
+            V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+        )
+        if missing_runtime_operations:
+            append_error(
+                runtime_errors,
+                field="agent_memory_lineage.summary.operation_types",
+                expected=V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS,
+                observed=lineage_summary.get("operation_types"),
+            )
+        if lineage_summary.get("missing_required_evidence"):
+            append_error(
+                runtime_errors,
+                field="agent_memory_lineage.summary.missing_required_evidence",
+                expected=[],
+                observed=lineage_summary.get("missing_required_evidence"),
+            )
+        for metric in V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS:
+            if _float_or_zero(run_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"run.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=run_metrics.get(metric),
+                )
+
+    return {
+        "required_files": list(V1_MEMORY_LAYER_PROBE_FILES),
+        "required_proof_kind": V1_MEMORY_LAYER_PROBE_PROOF_KIND,
+        "required_doc_id": V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+        "forbidden_doc_id": V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID,
+        "required_environment_types": list(
+            V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_operations": list(V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS),
+        "required_metrics": list(V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS),
+        "required_run_metrics": list(V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS),
+        "required_tools": list(V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS),
         "missing_files": missing_files,
         "optimization_errors": optimization_errors,
         "proof_errors": proof_errors,

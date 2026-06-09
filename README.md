@@ -1077,6 +1077,12 @@ tenant isolation, audit, retention/deletion/redaction, canaries, and artifacts.
 selected candidate into the normal `agent-learning.run.v1` memory simulation
 path. See `examples/sdk_memory_layer_probe_optimization.py` for an end-to-end
 probe, promotion, and evaluated run cookbook.
+`agent-learn release-check` gates this path as
+`memory_layer_probe_readiness`: the optimizer must select current
+`doc_refund_2026` retrieval evidence over stale `doc_refund_2025`, pass native
+memory-layer probe proof checks, promote to `agent-learning.run.v1`, and close
+retrieval attribution, read/write/recall lineage, governance, canary, no-gap,
+and run metrics.
 Memory optimization artifacts also emit
 `agent-learning.optimization.memory-lineage-proof.v1`, a native proof derived
 from the selected candidate and selected report. It checks that the selected

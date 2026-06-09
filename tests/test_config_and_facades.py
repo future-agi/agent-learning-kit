@@ -15247,6 +15247,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_realtime_stack_probe_streaming_signals"] == (
         trinity.V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
     )
+    assert payload["required_memory_layer_probe_files"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_FILES
+    )
+    assert payload["required_memory_layer_probe_proof_kind"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_PROOF_KIND
+    )
+    assert payload["required_memory_layer_probe_doc_id"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    )
+    assert payload["forbidden_memory_layer_probe_doc_id"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID
+    )
+    assert payload["required_memory_layer_probe_environment_types"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_memory_layer_probe_operations"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS
+    )
+    assert payload["required_memory_layer_probe_metrics"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
+    )
+    assert payload["required_memory_layer_probe_run_metrics"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_memory_layer_probe_tools"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS
+    )
     assert payload["required_stateful_framework_adapter_files"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
     )
@@ -15377,6 +15404,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "realtime_stack_probe_readiness",
+        "memory_layer_probe_readiness",
         "stateful_framework_adapter_readiness",
         "framework_adapter_trinity_suite_readiness",
         "trinity_stack_probe_readiness",
@@ -16830,6 +16858,176 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_run["streaming_error_count"] == 0
     assert realtime_run["streaming_dropped_event_count"] == 0
     assert set(realtime_run["state_keys"]) == {"streaming_trace", "voice"}
+    memory_layer_probe = checks["memory_layer_probe_readiness"]["evidence"]
+    assert memory_layer_probe["required_files"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_FILES
+    )
+    assert memory_layer_probe["required_proof_kind"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_PROOF_KIND
+    )
+    assert memory_layer_probe["required_doc_id"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    )
+    assert memory_layer_probe["forbidden_doc_id"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID
+    )
+    assert memory_layer_probe["required_environment_types"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert memory_layer_probe["required_operations"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS
+    )
+    assert memory_layer_probe["required_metrics"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
+    )
+    assert memory_layer_probe["required_run_metrics"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert memory_layer_probe["required_tools"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS
+    )
+    assert memory_layer_probe["missing_files"] == []
+    assert memory_layer_probe["optimization_errors"] == []
+    assert memory_layer_probe["proof_errors"] == []
+    assert memory_layer_probe["manifest_errors"] == []
+    assert memory_layer_probe["metric_errors"] == []
+    assert memory_layer_probe["runtime_errors"] == []
+    assert memory_layer_probe["errors"] == []
+    memory_layer_evidence = memory_layer_probe["evidence"]
+    memory_optimization = memory_layer_evidence["optimization"]
+    assert memory_optimization["kind"] == "agent-learning.optimization.v1"
+    assert memory_optimization["status"] == "passed"
+    assert memory_optimization["optimization_passed"] is True
+    assert memory_optimization["evaluation_passed"] is True
+    assert memory_optimization["optimization_score"] == pytest.approx(1.0)
+    assert memory_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert memory_optimization["total_evaluations"] >= 2
+    assert memory_optimization["total_iterations"] >= 2
+    assert memory_optimization["candidate_lineage_count"] >= 2
+    assert memory_optimization["candidate_lineage_selected_score_delta"] >= 0.9
+    assert memory_optimization["best_document_id"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    )
+    assert memory_optimization["best_document_current"] is True
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS) <= set(
+        memory_optimization["best_required_operations"]
+    )
+    assert memory_optimization["optimizer_governance_status"] == "passed"
+    assert memory_optimization["optimizer_governance_failed_check_count"] == 0
+    assert set(memory_optimization["history_documents"]) == {
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID,
+        trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID,
+    }
+    assert memory_optimization["history_documents"][
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    ]["score"] == pytest.approx(1.0)
+    assert memory_optimization["history_documents"][
+        trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID
+    ]["score"] < memory_optimization["history_documents"][
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    ]["score"]
+
+    memory_proof = memory_layer_evidence["proof"]
+    assert memory_proof["kind"] == trinity.V1_MEMORY_LAYER_PROBE_PROOF_KIND
+    assert memory_proof["status"] == "passed"
+    assert memory_proof["passed"] is True
+    assert memory_proof["assurance_level"] == (
+        "l2_native_memory_layer_probe_verified"
+    )
+    assert memory_proof["failed_check_ids"] == []
+    assert memory_proof["warning_check_ids"] == []
+    assert memory_proof["check_count"] >= 8
+    assert memory_proof["requires_external_service"] is False
+    assert memory_proof["contract_runtime"] == "in_process"
+    assert memory_proof["contract_local_executable_fixture"] is True
+    assert memory_proof["contract_requires_external_service"] is False
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS) <= set(
+        memory_proof["contract_operations"]
+    )
+    assert memory_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
+    }
+    memory_selected_summary = memory_proof["selected_summary"]
+    assert memory_selected_summary["retrieval_citation_count"] >= 1
+    assert memory_selected_summary["retrieval_citations_current"] is True
+    assert memory_selected_summary["retrieval_current_document_count"] >= 1
+    assert memory_selected_summary["retrieval_freshness_checked_count"] >= 1
+    assert memory_selected_summary["memory_operation_count"] >= 3
+    assert memory_selected_summary["memory_audited_operation_count"] >= 3
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS) <= set(
+        memory_selected_summary["memory_operation_types"]
+    )
+    assert memory_selected_summary["memory_record_count"] >= 1
+    assert memory_selected_summary["memory_store_count"] >= 1
+    assert memory_selected_summary["blocking_gap_count"] == 0
+    assert memory_selected_summary["policy_violation_count"] == 0
+    assert memory_selected_summary["isolation_violation_count"] == 0
+    assert memory_selected_summary["retention_violation_count"] == 0
+    assert memory_selected_summary["open_poisoning_count"] == 0
+    for flag in (
+        "has_artifacts",
+        "has_audit",
+        "has_canaries",
+        "has_deletion_policy",
+        "has_observability",
+        "has_redaction",
+        "has_retention_policy",
+        "has_source_attribution",
+        "has_tenant_isolation",
+    ):
+        assert memory_selected_summary[flag] is True
+
+    memory_manifest = memory_layer_evidence["manifest"]
+    assert memory_manifest["version"] == "agent-learning.run.v1"
+    assert memory_manifest["required_env"] == []
+    assert memory_manifest["promoted_from_memory_layer_probe"] is True
+    assert memory_manifest["memory_layer_probe_proof_status"] == "passed"
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES) <= set(
+        memory_manifest["environment_types"]
+    )
+    assert memory_manifest["retrieval_document_id"] == (
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    )
+    assert memory_manifest["retrieval_document_current"] is True
+    assert memory_manifest["expected_retrieval_doc_ids"] == [
+        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
+    ]
+    assert memory_manifest["forbidden_retrieval_doc_ids"] == [
+        trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID
+    ]
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS) <= set(
+        memory_manifest["required_tools"]
+    )
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS) <= set(
+        memory_manifest["metric_weights"]
+    )
+    memory_run = memory_layer_evidence["run"]
+    assert memory_run["kind"] == "agent-learning.run.v1"
+    assert memory_run["status"] == "passed"
+    assert memory_run["evaluation_passed"] is True
+    assert memory_run["evaluation_score"] >= 0.98
+    assert memory_run["metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS
+    }
+    assert trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID in (
+        memory_run["retrieval_citation_doc_ids"]
+    )
+    assert trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID not in (
+        memory_run["retrieval_document_ids"]
+    )
+    assert memory_run["lineage_blocking_gap_count"] == 0
+    assert set(trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS) <= set(
+        memory_run["lineage_operation_types"]
+    )
+    assert memory_run["lineage_policy_violation_count"] == 0
+    assert memory_run["lineage_isolation_violation_count"] == 0
+    assert memory_run["lineage_open_poisoning_count"] == 0
+    assert memory_run["lineage_missing_required_evidence"] == []
+    assert {"agent_memory_lineage", "retrieval_memory"} <= set(
+        memory_run["state_keys"]
+    )
     stateful_adapter = checks["stateful_framework_adapter_readiness"]["evidence"]
     assert stateful_adapter["required_files"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
