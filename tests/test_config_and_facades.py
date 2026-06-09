@@ -15590,6 +15590,36 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_task_world_optimizer_source_urls"] == (
         trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
     )
+    assert payload["required_generic_target_optimizer_files"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_FILES
+    )
+    assert payload["required_generic_target_optimizer_search_paths"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["forbidden_generic_target_optimizer_search_paths"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert payload["required_generic_target_optimizer_layers"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_generic_target_optimizer_metrics"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert payload["required_generic_target_optimizer_environment_types"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_generic_target_optimizer_transitions"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert payload["required_generic_target_optimizer_final_state"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE
+    )
+    assert payload["required_generic_target_optimizer_source"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert payload["required_generic_target_optimizer_task_kind"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -16442,6 +16472,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "evaluation_hook_probe_readiness",
         "evaluation_hook_readiness",
         "native_optimizer_evidence_components",
+        "generic_target_optimizer_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -16805,6 +16836,147 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert task_world["final_state"]["refund"]["status"] == "approved"
     assert task_world["transition_ids"] == (
         trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+
+    generic_target_optimizer = checks["generic_target_optimizer_readiness"][
+        "evidence"
+    ]
+    assert generic_target_optimizer["required_files"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_FILES
+    )
+    assert generic_target_optimizer["required_search_paths"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert generic_target_optimizer["forbidden_search_paths"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert generic_target_optimizer["required_layers"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert generic_target_optimizer["required_metrics"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert generic_target_optimizer["required_environment_types"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert generic_target_optimizer["required_transitions"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert generic_target_optimizer["required_final_state"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE
+    )
+    assert generic_target_optimizer["required_source"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert generic_target_optimizer["required_task_kind"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert generic_target_optimizer["missing_files"] == []
+    assert generic_target_optimizer["execution_errors"] == []
+    assert generic_target_optimizer["manifest_errors"] == []
+    assert generic_target_optimizer["optimization_errors"] == []
+    assert generic_target_optimizer["metric_errors"] == []
+    assert generic_target_optimizer["world_errors"] == []
+    generic_target_evidence = generic_target_optimizer["evidence"]
+    generic_target_manifest = generic_target_evidence["manifest"]
+    assert generic_target_manifest["version"] == "agent-learning.optimization.v1"
+    assert generic_target_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert generic_target_manifest["target_source"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert generic_target_manifest["target_task_kind"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert generic_target_manifest["target_layers"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert generic_target_manifest["search_paths"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert generic_target_manifest["forbidden_search_paths_present"] == []
+    assert generic_target_manifest["candidate_count"] == 2
+    assert generic_target_manifest["auto_execute_tools"] is True
+    assert generic_target_manifest["environment_types"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert generic_target_manifest["agent_type"] == "scripted"
+    assert generic_target_manifest["base_agent_type"] == "scripted"
+    assert generic_target_manifest["base_world_transition_count"] == 0
+    assert generic_target_manifest["optimized_surface"] == (
+        "world_contract_transition"
+    )
+    assert generic_target_manifest["required_tools"] == [
+        "apply_world_transition"
+    ]
+    assert set(generic_target_manifest["required_world_contract"]) >= {
+        "refund",
+        "success_condition",
+        "transition",
+        "world_contract",
+    }
+    assert generic_target_manifest["required_transitions"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert generic_target_manifest["terminal_status"] == "success"
+    assert generic_target_manifest["expected_state"]["refund"]["status"] == (
+        "approved"
+    )
+    assert generic_target_manifest["metric_weights"] == {
+        "world_contract_quality": pytest.approx(8.0),
+        "world_contract_coverage": pytest.approx(3.0),
+        "tool_selection_accuracy": pytest.approx(4.0),
+        "task_completion": pytest.approx(1.0),
+    }
+    generic_target_optimization = generic_target_evidence["optimization"]
+    assert generic_target_optimization["kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert generic_target_optimization["schema_version"] == (
+        "agent-learning.cli.v1"
+    )
+    assert generic_target_optimization["status"] == "passed"
+    assert generic_target_optimization["output_roundtrip"] is True
+    assert generic_target_optimization["optimization_passed"] is True
+    assert generic_target_optimization["evaluation_passed"] is True
+    assert generic_target_optimization["optimization_score"] >= 0.95
+    assert generic_target_optimization["evaluation_score"] >= 0.95
+    assert generic_target_optimization["total_evaluations"] >= 2
+    assert generic_target_optimization["total_iterations"] >= 2
+    assert generic_target_optimization["candidate_lineage_count"] >= 2
+    assert generic_target_optimization["selected_patch_paths"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert generic_target_optimization["forbidden_patch_paths_present"] == []
+    assert generic_target_optimization["agent_unchanged"] is True
+    assert generic_target_optimization["selected_tools"] == [
+        "apply_world_transition"
+    ]
+    assert generic_target_optimization["selected_transitions"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
+    )
+    assert generic_target_optimization["selected_environment_types"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert generic_target_optimization["best_history_score"] >= 0.95
+    assert generic_target_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        generic_target_optimization["optimizer_governance_failed_check_count"] == 0
+    )
+    generic_target_metrics = generic_target_evidence["metrics"]
+    assert generic_target_metrics["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_METRICS
+    }
+    generic_target_world = generic_target_evidence["world"]
+    assert generic_target_world["terminal_status"] == "success"
+    assert generic_target_world["completed_required_transition_count"] >= 1
+    assert generic_target_world["invariant_violation_count"] == 0
+    assert generic_target_world["transition_log_count"] >= 1
+    assert generic_target_world["final_state"]["refund"]["status"] == "approved"
+    assert generic_target_world["transition_ids"] == (
+        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
     )
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
@@ -22406,6 +22578,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "world_contract_quality": pytest.approx(1.0),
     }
     milestones = {milestone["id"]: milestone for milestone in payload["milestones"]}
+    assert "generic_target_optimizer_readiness" in milestones["M3"]["check_ids"]
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]

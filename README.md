@@ -1084,6 +1084,11 @@ result = optimize.optimize_target(
 )
 ```
 
+See `examples/sdk_target_optimization.py`. `agent-learn release-check` runs this
+cookbook as `generic_target_optimizer_readiness` and verifies that the optimizer
+patches only `simulation.environments.0.data.transitions`, not any implicit
+`agent` or prompt path.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can
