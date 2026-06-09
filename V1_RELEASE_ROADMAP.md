@@ -371,9 +371,11 @@ Current checkpoint:
   gate: `examples/sdk_workspace_import_certification_optimization.py` must run
   locally, select the verified workspace plus framework-import bundle, prove
   local-only execution, close workspace/import metrics and component evidence,
-  emit the native workspace-import certification proof, and keep secret/security
-  buckets empty before arbitrary project/framework import surfaces count as
-  simulation and optimization targets.
+  emit the native workspace-import certification proof, render the
+  `workspace_import_certification` report/action surface, expose report,
+  rerun, and export action-run evidence, promote and replay a local regression,
+  and keep secret/security buckets empty before arbitrary project/framework
+  import surfaces count as simulation and optimization targets.
 - Multi-agent room probe readiness is now an executable release-check gate:
   `examples/sdk_multi_agent_room_probe_optimization.py` must select a local
   planner/retriever/critic room, close role boundaries, handoff contracts,
@@ -457,9 +459,9 @@ Current checkpoint:
   adapter promotion, protocol routing, browser/CUA, realtime, memory,
   multi-agent coordination, world orchestration, workspace import certification,
   red-team suite coverage, and regression replay. Workspace import certification
-  is counted as a native proof-backed axis for arbitrary repository/framework
-  import surfaces; OpenEnv/Gymnasium-shaped traces are compatibility inputs
-  inside that bar.
+  is counted as a native proof-backed axis with report/action/regression
+  visibility for arbitrary repository/framework import surfaces; OpenEnv/
+  Gymnasium-shaped traces are compatibility inputs inside that bar.
 
 Acceptance gates:
 

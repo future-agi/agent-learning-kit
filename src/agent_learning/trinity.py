@@ -1184,6 +1184,19 @@ V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS = [
     "workspace_import_candidate_lineage_gate_passed",
 ]
 
+V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS = [
+    "report_workspace_import_certification",
+    "promote_workspace_import_certification_regression",
+    "rerun_workspace_import_certification_optimization",
+    "export_workspace_import_certification_proof",
+    "export_workspace_import_certification_bundle",
+    "export_workspace_import_certification_replay_lock",
+]
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND = (
+    "workspace_import_certification_optimization"
+)
+
 V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS = {
     "examples/sdk_workspace_import_certification_optimization.py": {
         "env_name": "AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY",
@@ -3697,6 +3710,10 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not workspace_import_certification["readiness_errors"]
             and not workspace_import_certification["component_errors"]
             and not workspace_import_certification["proof_errors"]
+            and not workspace_import_certification["report_errors"]
+            and not workspace_import_certification["action_errors"]
+            and not workspace_import_certification["promotion_errors"]
+            and not workspace_import_certification["replay_errors"]
             and not workspace_import_certification["metric_errors"]
             and not workspace_import_certification["security_errors"]
         ),
@@ -4390,6 +4407,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_workspace_import_certification_proof_checks": list(
             V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
+        ),
+        "required_workspace_import_certification_actions": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS
+        ),
+        "required_workspace_import_certification_promotion_kind": (
+            V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND
         ),
         "required_workspace_import_certification_contracts": {
             path: dict(contract)
@@ -14766,6 +14789,10 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
     readiness_errors: list[dict[str, Any]] = []
     component_errors: list[dict[str, Any]] = []
     proof_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
+    promotion_errors: list[dict[str, Any]] = []
+    replay_errors: list[dict[str, Any]] = []
     metric_errors: list[dict[str, Any]] = []
     security_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {"examples": {}}
@@ -15929,8 +15956,351 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
                 observed=selected_frameworks,
             )
 
+    def validate_report(
+        path: str,
+        report: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        report_summary = _as_mapping(report.get("summary"))
+        report_payload = _as_mapping(report.get("report"))
+        card = _as_mapping(report_payload.get("workspace_import_certification"))
+        artifacts = _as_mapping(card.get("artifacts"))
+        replay_lock = _as_mapping(artifacts.get("replay_lock"))
+        action_ids = sorted(
+            str(_as_mapping(action).get("id"))
+            for action in _as_list(card.get("actions"))
+            if _as_mapping(action).get("id")
+        )
+        sections = [str(section) for section in _as_list(report_summary.get("sections"))]
+        example_evidence["report"] = {
+            "sections": sections,
+            "kind": card.get("kind"),
+            "status": card.get("status"),
+            "local_only": card.get("local_only"),
+            "requires_external_service": card.get("requires_external_service"),
+            "assurance_level": card.get("assurance_level"),
+            "failed_check_ids": list(card.get("failed_check_ids") or []),
+            "action_ids": action_ids,
+            "replay_lock_local_only": replay_lock.get("local_only"),
+            "replay_lock_requires_external_service": replay_lock.get(
+                "requires_external_service"
+            ),
+        }
+        report_expectations = {
+            "report.sections.workspace_import_certification": (
+                "workspace_import_certification" in set(sections),
+                True,
+            ),
+            "report.workspace_import_certification.kind": (
+                card.get("kind"),
+                "workspace_import_certification_evidence",
+            ),
+            "report.workspace_import_certification.status": (
+                card.get("status"),
+                "verified",
+            ),
+            "report.workspace_import_certification.local_only": (
+                card.get("local_only"),
+                True,
+            ),
+            "report.workspace_import_certification.requires_external_service": (
+                card.get("requires_external_service"),
+                False,
+            ),
+            "report.workspace_import_certification.assurance_level": (
+                card.get("assurance_level"),
+                V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL,
+            ),
+            "report.workspace_import_certification.failed_check_ids": (
+                card.get("failed_check_ids") or [],
+                [],
+            ),
+            "report.workspace_import_certification.replay_lock.local_only": (
+                replay_lock.get("local_only"),
+                True,
+            ),
+            (
+                "report.workspace_import_certification.replay_lock."
+                "requires_external_service"
+            ): (
+                replay_lock.get("requires_external_service"),
+                False,
+            ),
+        }
+        for field, (observed, expected) in report_expectations.items():
+            if observed != expected:
+                append_error(
+                    report_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_actions = missing_values(
+            action_ids,
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+        )
+        if missing_actions:
+            append_error(
+                report_errors,
+                path=path,
+                field="report.workspace_import_certification.actions.id",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+                observed=action_ids,
+            )
+
+    def validate_actions(
+        path: str,
+        catalog: Mapping[str, Any],
+        action_run: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        catalog_summary = _as_mapping(catalog.get("summary"))
+        catalog_action_ids = sorted(
+            str(action.get("id"))
+            for action in _as_list(catalog.get("actions"))
+            if _as_mapping(action).get("id")
+        )
+        summary_action_ids = sorted(
+            str(action_id)
+            for action_id in _as_list(catalog_summary.get("action_ids"))
+        )
+        action_ids = sorted(set(catalog_action_ids) | set(summary_action_ids))
+        action_summary = _as_mapping(action_run.get("summary"))
+        example_evidence["actions"] = {
+            "kind": catalog.get("kind"),
+            "status": catalog.get("status"),
+            "action_ids": action_ids,
+            "source_card_paths": list(catalog_summary.get("source_card_paths") or []),
+        }
+        example_evidence["action_run"] = {
+            "kind": action_run.get("kind"),
+            "status": action_run.get("status"),
+            "summary": dict(action_summary),
+            "exit_code": action_run.get("exit_code"),
+        }
+        action_expectations = {
+            "actions.kind": (catalog.get("kind"), "agent-learning.actions.v1"),
+            "actions.status": (catalog.get("status"), "passed"),
+            "action_run.kind": (
+                action_run.get("kind"),
+                "agent-learning.action-run.v1",
+            ),
+            "action_run.status": (action_run.get("status"), "passed"),
+            "action_run.summary.action_id": (
+                action_summary.get("action_id"),
+                "export_workspace_import_certification_bundle",
+            ),
+            "action_run.summary.source_card_path": (
+                action_summary.get("source_card_path"),
+                "workspace_import_certification",
+            ),
+        }
+        for field, (observed, expected) in action_expectations.items():
+            if observed != expected:
+                append_error(
+                    action_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_actions = missing_values(
+            action_ids,
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+        )
+        if missing_actions:
+            append_error(
+                action_errors,
+                path=path,
+                field="actions.actions.id",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+                observed=action_ids,
+            )
+
+    def validate_promotion(
+        path: str,
+        promotion: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(promotion.get("summary"))
+        manifest = _as_mapping(promotion.get("manifest"))
+        metadata = _as_mapping(manifest.get("metadata"))
+        regression = _as_mapping(metadata.get("regression"))
+        replay_lock = _as_mapping(regression.get("replay_lock"))
+        environment_types = [
+            str(item)
+            for item in _as_list(
+                summary.get("environment_types") or regression.get("environment_types")
+            )
+        ]
+        example_evidence["promotion"] = {
+            "status": promotion.get("status"),
+            "promotion_kind": summary.get("promotion_kind"),
+            "source_status": summary.get("source_status"),
+            "promoted_manifest_count": summary.get("promoted_manifest_count"),
+            "requires_external_service": summary.get("requires_external_service"),
+            "workspace_import_certification_proof_status": summary.get(
+                "workspace_import_certification_proof_status"
+            ),
+            "manifest_version": manifest.get("version"),
+            "manifest_promotion_kind": regression.get("promotion_kind"),
+            "replay_lock_local_only": replay_lock.get("local_only"),
+            "replay_lock_requires_external_service": replay_lock.get(
+                "requires_external_service"
+            ),
+            "environment_types": environment_types,
+        }
+        promotion_expectations = {
+            "promotion.status": (promotion.get("status"), "passed"),
+            "promotion.summary.promotion_kind": (
+                summary.get("promotion_kind"),
+                V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND,
+            ),
+            "promotion.summary.source_status": (
+                summary.get("source_status"),
+                "passed",
+            ),
+            "promotion.summary.requires_external_service": (
+                summary.get("requires_external_service"),
+                False,
+            ),
+            "promotion.summary.workspace_import_certification_proof_status": (
+                summary.get("workspace_import_certification_proof_status"),
+                "passed",
+            ),
+            "promotion.manifest.version": (
+                manifest.get("version"),
+                "agent-learning.run.v1",
+            ),
+            "promotion.manifest.metadata.regression.promotion_kind": (
+                regression.get("promotion_kind"),
+                V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND,
+            ),
+            "promotion.manifest.metadata.regression.replay_lock.local_only": (
+                replay_lock.get("local_only"),
+                True,
+            ),
+            (
+                "promotion.manifest.metadata.regression.replay_lock."
+                "requires_external_service"
+            ): (
+                replay_lock.get("requires_external_service"),
+                False,
+            ),
+        }
+        for field, (observed, expected) in promotion_expectations.items():
+            if observed != expected:
+                append_error(
+                    promotion_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_environment_types = missing_values(
+            environment_types,
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                promotion_errors,
+                path=path,
+                field="promotion.environment_types",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+                observed=environment_types,
+            )
+        if _int_or_zero(summary.get("promoted_manifest_count")) < 1:
+            append_error(
+                promotion_errors,
+                path=path,
+                field="promotion.summary.promoted_manifest_count",
+                expected=">=1",
+                observed=summary.get("promoted_manifest_count"),
+            )
+        missing_frameworks = missing_values(
+            summary.get("frameworks") or [],
+            contract["required_frameworks"],
+        )
+        if missing_frameworks:
+            append_error(
+                promotion_errors,
+                path=path,
+                field="promotion.summary.frameworks",
+                expected=contract["required_frameworks"],
+                observed=summary.get("frameworks") or [],
+            )
+
+    def validate_replay(
+        path: str,
+        replay: Mapping[str, Any],
+        promotion: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(replay.get("summary"))
+        replay_manifest = next(
+            (
+                _as_mapping(item)
+                for item in _as_list(_as_mapping(replay.get("replay")).get("manifests"))
+                if isinstance(item, Mapping)
+            ),
+            {},
+        )
+        child_summary = _as_mapping(replay_manifest.get("summary"))
+        metrics = _as_mapping(child_summary.get("metric_averages"))
+        if not metrics:
+            metrics = _as_mapping(_as_mapping(promotion.get("summary")).get("metric_averages"))
+        example_evidence["replay"] = {
+            "status": replay.get("status"),
+            "passed_count": summary.get("passed_count"),
+            "failed_count": summary.get("failed_count"),
+            "replay_pass_rate": summary.get("replay_pass_rate"),
+            "metrics": {
+                metric: metrics.get(metric)
+                for metric in V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+            },
+        }
+        replay_expectations = {
+            "replay.status": (replay.get("status"), "passed"),
+            "replay.summary.failed_count": (summary.get("failed_count"), 0),
+            "replay.summary.replay_pass_rate": (
+                summary.get("replay_pass_rate"),
+                1.0,
+            ),
+        }
+        for field, (observed, expected) in replay_expectations.items():
+            if observed != expected:
+                append_error(
+                    replay_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(summary.get("passed_count")) < 1:
+            append_error(
+                replay_errors,
+                path=path,
+                field="replay.summary.passed_count",
+                expected=">=1",
+                observed=summary.get("passed_count"),
+            )
+        for metric in V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS:
+            if _float_or_zero(metrics.get(metric)) < 1.0:
+                append_error(
+                    replay_errors,
+                    path=path,
+                    field=f"replay.metrics.{metric}",
+                    expected=">=1.0",
+                    observed=metrics.get(metric),
+                )
+
     if not missing_files:
+        from . import actions as agent_actions
         from . import config as agent_config
+        from . import simulate as agent_simulate
 
         config_env_names = (
             "AGENT_LEARNING_API_KEY",
@@ -15959,6 +16329,11 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
             generated_manifest: Mapping[str, Any] = {}
             result: Mapping[str, Any] = {}
             saved: Mapping[str, Any] = {}
+            report: Mapping[str, Any] = {}
+            catalog: Mapping[str, Any] = {}
+            action_run: Mapping[str, Any] = {}
+            promotion: Mapping[str, Any] = {}
+            replay: Mapping[str, Any] = {}
             try:
                 example_path = root / path
                 spec = importlib.util.spec_from_file_location(
@@ -15974,6 +16349,7 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
                 with tempfile.TemporaryDirectory(
                     prefix="agent-learning-workspace-import-certification-"
                 ) as tmpdir:
+                    tmp_root = Path(tmpdir)
                     output_path = Path(tmpdir) / "workspace-import-certification.json"
                     result = module.run(output_path)
                     saved = json.loads(output_path.read_text(encoding="utf-8"))
@@ -15981,6 +16357,49 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
                         output_path.with_suffix(".manifest.json").read_text(
                             encoding="utf-8"
                         )
+                    )
+                    report = agent_simulate.render_report(
+                        result,
+                        source_path=output_path,
+                    )
+                    catalog = agent_actions.action_catalog(
+                        result,
+                        source_path=output_path,
+                    )
+                    action_run = agent_actions.run_action(
+                        result,
+                        "export_workspace_import_certification_bundle",
+                        source_path=output_path,
+                        cwd=tmp_root,
+                        artifact_output_path=(
+                            tmp_root / "workspace-import-certification-bundle.json"
+                        ),
+                    )
+                    promotion = agent_simulate.promote_to_regression(
+                        result,
+                        source_path=output_path,
+                        name=(
+                            "release-workspace-import-certification-regression"
+                        ),
+                        min_level="note",
+                        max_findings=1,
+                        required_env=[env_name],
+                    )
+                    regression_manifest_path = (
+                        tmp_root / "workspace-import-certification-regression.json"
+                    )
+                    regression_manifest_path.write_text(
+                        json.dumps(
+                            promotion.get("manifest"),
+                            indent=2,
+                            sort_keys=True,
+                            default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+                    replay = agent_simulate.replay_manifests(
+                        [regression_manifest_path],
+                        name="release-workspace-import-certification-replay",
                     )
                 example_evidence: dict[str, Any] = {}
                 evidence["examples"][path] = example_evidence
@@ -16021,12 +16440,21 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
                     contract,
                     example_evidence,
                 )
+                validate_report(path, report, contract, example_evidence)
+                validate_actions(path, catalog, action_run, example_evidence)
+                validate_promotion(path, promotion, contract, example_evidence)
+                validate_replay(path, replay, promotion, example_evidence)
                 serialized = json.dumps(
                     {
                         "manifest": manifest,
                         "generated_manifest": generated_manifest,
                         "result": result,
                         "saved": saved,
+                        "report": report,
+                        "catalog": catalog,
+                        "action_run": action_run,
+                        "promotion": promotion,
+                        "replay": replay,
                     },
                     sort_keys=True,
                     default=str,
@@ -16071,6 +16499,8 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
         "required_proof_checks": list(
             V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
         ),
+        "required_actions": list(V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS),
+        "required_promotion_kind": V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND,
         "required_contracts": {
             path: dict(contract)
             for path, contract in V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.items()
@@ -16083,6 +16513,10 @@ def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]
         "readiness_errors": readiness_errors,
         "component_errors": component_errors,
         "proof_errors": proof_errors,
+        "report_errors": report_errors,
+        "action_errors": action_errors,
+        "promotion_errors": promotion_errors,
+        "replay_errors": replay_errors,
         "metric_errors": metric_errors,
         "security_errors": security_errors,
         "evidence": evidence,
@@ -19960,6 +20394,12 @@ def _release_environment_10x_robustness_status(
     workspace_import_bundle = _as_mapping(
         workspace_import_example.get("certification_bundle")
     )
+    workspace_import_report = _as_mapping(workspace_import_example.get("report"))
+    workspace_import_actions = _as_mapping(workspace_import_example.get("actions"))
+    workspace_import_promotion = _as_mapping(
+        workspace_import_example.get("promotion")
+    )
+    workspace_import_replay = _as_mapping(workspace_import_example.get("replay"))
     workspace_summary = _as_mapping(workspace_import_bundle.get("workspace_summary"))
     framework_import_summary = _as_mapping(
         workspace_import_bundle.get("framework_import_summary")
@@ -19989,6 +20429,10 @@ def _release_environment_10x_robustness_status(
                     "readiness_errors",
                     "component_errors",
                     "proof_errors",
+                    "report_errors",
+                    "action_errors",
+                    "promotion_errors",
+                    "replay_errors",
                     "metric_errors",
                     "security_errors",
                 ),
@@ -20025,6 +20469,21 @@ def _release_environment_10x_robustness_status(
                 passed_check_ids,
                 V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS,
             )
+            and "workspace_import_certification"
+            in set(_as_list(workspace_import_report.get("sections")))
+            and contains_all(
+                workspace_import_report.get("action_ids") or [],
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+            )
+            and contains_all(
+                workspace_import_actions.get("action_ids") or [],
+                V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+            )
+            and workspace_import_promotion.get("promotion_kind")
+            == V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND
+            and workspace_import_promotion.get("requires_external_service") is False
+            and _float_or_zero(workspace_import_replay.get("replay_pass_rate")) >= 1.0
+            and _int_or_zero(workspace_import_replay.get("failed_count")) == 0
             and workspace_import_optimization.get("optimization_passed") is True
             and workspace_import_optimization.get("evaluation_passed") is True
         ),
@@ -20047,6 +20506,10 @@ def _release_environment_10x_robustness_status(
             "failed_source_count": 0,
             "secret_leak_count": 0,
             "proof_checks": V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS,
+            "report_sections": ["workspace_import_certification"],
+            "actions": V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS,
+            "promotion_kind": V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND,
+            "replay_pass_rate": 1.0,
             "optimization_passed": True,
             "evaluation_passed": True,
         },
@@ -20106,6 +20569,21 @@ def _release_environment_10x_robustness_status(
                     "missing_required_signals"
                 )
                 or [],
+            },
+            "report_sections": workspace_import_report.get("sections") or [],
+            "action_ids": workspace_import_actions.get("action_ids") or [],
+            "promotion_summary": {
+                "promotion_kind": workspace_import_promotion.get("promotion_kind"),
+                "requires_external_service": workspace_import_promotion.get(
+                    "requires_external_service"
+                ),
+            },
+            "replay_summary": {
+                "replay_pass_rate": workspace_import_replay.get(
+                    "replay_pass_rate"
+                ),
+                "passed_count": workspace_import_replay.get("passed_count"),
+                "failed_count": workspace_import_replay.get("failed_count"),
             },
             "passed_check_ids": passed_check_ids,
         },

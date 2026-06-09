@@ -15641,6 +15641,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workspace_import_certification_proof_checks"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
     )
+    assert payload["required_workspace_import_certification_actions"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS
+    )
+    assert payload["required_workspace_import_certification_promotion_kind"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND
+    )
     assert payload["required_workspace_import_certification_contracts"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
     )
@@ -18133,6 +18139,20 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workspace_axis["workspace_summary"]["secret_leak_count"] == 0
     assert workspace_axis["framework_import_summary"]["failed_source_count"] == 0
     assert workspace_axis["framework_import_summary"]["passed_source_count"] >= 3
+    assert "workspace_import_certification" in workspace_axis["report_sections"]
+    assert set(workspace_axis["action_ids"]) >= {
+        "report_workspace_import_certification",
+        "promote_workspace_import_certification_regression",
+        "rerun_workspace_import_certification_optimization",
+        "export_workspace_import_certification_proof",
+        "export_workspace_import_certification_bundle",
+        "export_workspace_import_certification_replay_lock",
+    }
+    assert workspace_axis["promotion_summary"]["promotion_kind"] == (
+        "workspace_import_certification_optimization"
+    )
+    assert workspace_axis["promotion_summary"]["requires_external_service"] is False
+    assert workspace_axis["replay_summary"]["replay_pass_rate"] == pytest.approx(1.0)
     assert set(trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS) <= set(
         workspace_axis["passed_check_ids"]
     )
@@ -18323,6 +18343,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workspace_certification_evidence["component_errors"] == []
     assert workspace_certification_evidence["proof_errors"] == []
     assert workspace_certification_evidence["security_errors"] == []
+    assert workspace_certification_evidence["report_errors"] == []
+    assert workspace_certification_evidence["action_errors"] == []
+    assert workspace_certification_evidence["promotion_errors"] == []
+    assert workspace_certification_evidence["replay_errors"] == []
     workspace_contract = trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS[
         "examples/sdk_workspace_import_certification_optimization.py"
     ]
@@ -18421,6 +18445,66 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "workspace_import_certification_proof_passed": True,
         "workspace_import_certification_proof_failed_check_count": 0,
     }
+    required_workspace_actions = {
+        "report_workspace_import_certification",
+        "promote_workspace_import_certification_regression",
+        "rerun_workspace_import_certification_optimization",
+        "export_workspace_import_certification_proof",
+        "export_workspace_import_certification_bundle",
+        "export_workspace_import_certification_replay_lock",
+    }
+    workspace_report = workspace_example["report"]
+    assert "workspace_import_certification" in workspace_report["sections"]
+    assert workspace_report["kind"] == "workspace_import_certification_evidence"
+    assert workspace_report["status"] == "verified"
+    assert workspace_report["local_only"] is True
+    assert workspace_report["requires_external_service"] is False
+    assert workspace_report["assurance_level"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
+    )
+    assert workspace_report["failed_check_ids"] == []
+    assert set(workspace_report["action_ids"]) >= required_workspace_actions
+    assert workspace_report["replay_lock_local_only"] is True
+    assert workspace_report["replay_lock_requires_external_service"] is False
+    workspace_actions = workspace_example["actions"]
+    assert workspace_actions["kind"] == "agent-learning.actions.v1"
+    assert workspace_actions["status"] == "passed"
+    assert set(workspace_actions["action_ids"]) >= required_workspace_actions
+    workspace_action_run = workspace_example["action_run"]
+    assert workspace_action_run["kind"] == "agent-learning.action-run.v1"
+    assert workspace_action_run["status"] == "passed"
+    assert workspace_action_run["summary"]["action_id"] == (
+        "export_workspace_import_certification_bundle"
+    )
+    assert workspace_action_run["summary"]["source_card_path"] == (
+        "workspace_import_certification"
+    )
+    workspace_promotion = workspace_example["promotion"]
+    assert workspace_promotion["status"] == "passed"
+    assert workspace_promotion["promotion_kind"] == (
+        "workspace_import_certification_optimization"
+    )
+    assert workspace_promotion["source_status"] == "passed"
+    assert workspace_promotion["promoted_manifest_count"] >= 1
+    assert workspace_promotion["requires_external_service"] is False
+    assert workspace_promotion["workspace_import_certification_proof_status"] == (
+        "passed"
+    )
+    assert workspace_promotion["manifest_version"] == "agent-learning.run.v1"
+    assert workspace_promotion["manifest_promotion_kind"] == (
+        "workspace_import_certification_optimization"
+    )
+    assert workspace_promotion["replay_lock_local_only"] is True
+    assert workspace_promotion["replay_lock_requires_external_service"] is False
+    assert set(workspace_promotion["environment_types"]) >= set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    workspace_replay = workspace_example["replay"]
+    assert workspace_replay["status"] == "passed"
+    assert workspace_replay["passed_count"] >= 1
+    assert workspace_replay["failed_count"] == 0
+    for metric in trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS:
+        assert workspace_replay["metrics"][metric] == pytest.approx(1.0)
     selected_bundle = workspace_example["certification_bundle"]
     assert selected_bundle["workspace_kind"] == "workspace_run_manifest"
     assert selected_bundle["framework_import_kind"] == "framework_import_manifest"

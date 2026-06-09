@@ -92,6 +92,10 @@ framework certification, and framework import repair. Workspace import
 certification readiness makes project/framework import surfaces executable too:
 release-check verifies a local workspace plus framework-import bundle before
 arbitrary project adapters are treated as simulation and optimization targets.
+That certification surface must also render a
+`workspace_import_certification` report/action card, expose report/rerun/export
+actions plus a saved action-run result, and prove local regression promotion and
+replay before the import claim is considered visible to Future AGI.
 Environment replay adapter readiness executes a local framework adapter that
 returns OpenEnv/Gymnasium-style replay evidence and verifies generated
 compatibility gates, normalized state, events, and artifacts as coverage for
@@ -1994,7 +1998,11 @@ actions`, and `agent-learn action-run` follow-ups from the saved artifact.
 verified workspace/import bundle, keep the workflow local-only, close workspace
 and framework import metrics, preserve certification/component evidence, emit the
 native workspace-import certification proof, and keep secret/security buckets
-empty before arbitrary project import claims count as V1-ready.
+empty before arbitrary project import claims count as V1-ready. The same gate
+must make the certification user-visible with a
+`workspace_import_certification` report card, action catalog/action-run evidence,
+and local promotion plus replay of a
+`workspace_import_certification_optimization` regression manifest.
 
 `optimize.build_redteam_readiness_certification_optimization_manifest()` and
 `examples/sdk_redteam_readiness_certification_optimization.py` add the next

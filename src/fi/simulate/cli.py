@@ -112,6 +112,13 @@ _WORLD_HOOK_METRICS = {
     "task_completion",
     "trajectory_score",
 }
+_WORKSPACE_IMPORT_CERTIFICATION_METRICS = {
+    "workspace_run_coverage",
+    "workspace_run_quality",
+    "framework_import_coverage",
+    "framework_import_quality",
+    "tool_selection_accuracy",
+}
 _REDTEAM_CAMPAIGN_METRICS = {
     "adversarial_resilience",
     "red_team_campaign_coverage",
@@ -2584,6 +2591,12 @@ def _report_result(
     world_hooks = _world_hooks_card(source, source_path=source_path)
     if world_hooks is not None:
         report_payload["world_hooks"] = world_hooks
+    workspace_import = _workspace_import_certification_card(
+        source,
+        source_path=source_path,
+    )
+    if workspace_import is not None:
+        report_payload["workspace_import_certification"] = workspace_import
     attack_evolution = _attack_evolution_card(source, source_path=source_path)
     if attack_evolution is not None:
         report_payload["attack_evolution"] = attack_evolution
@@ -3243,6 +3256,354 @@ def _world_hooks_actions(
                 "default_filename": "world-hooks-replay.lock.json",
             }
         )
+    return actions
+
+
+def _workspace_import_certification_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    existing = (
+        report.get("workspace_import_certification")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if isinstance(existing, Mapping):
+        card = copy.deepcopy(dict(existing))
+        card["source_path"] = str(source_path)
+        if "actions" not in card:
+            card["actions"] = _workspace_import_certification_actions(
+                result=result,
+                source_path=source_path,
+                card=card,
+            )
+        return card
+
+    proof = _workspace_import_certification_proof(result)
+    if not proof:
+        return None
+
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    metrics = _workspace_import_certification_metrics(result, proof)
+    workspace_summary = copy.deepcopy(dict(evidence.get("workspace_summary") or {}))
+    import_summary = copy.deepcopy(
+        dict(evidence.get("framework_import_summary") or {})
+    )
+    readiness = copy.deepcopy(dict(evidence.get("framework_readiness") or {}))
+    source_manifest = (
+        evidence.get("source_manifest")
+        if isinstance(evidence.get("source_manifest"), Mapping)
+        else {}
+    )
+    candidate_lineage = copy.deepcopy(dict(evidence.get("candidate_lineage") or {}))
+    failed_check_ids = _unique_strings(proof.get("failed_check_ids"))
+    warning_check_ids = _unique_strings(proof.get("warning_check_ids"))
+    requires_external_service = proof.get("requires_external_service")
+    local_only = requires_external_service is False
+    status = (
+        "verified"
+        if proof.get("status") == "passed" and local_only and not failed_check_ids
+        else "needs_attention"
+    )
+    certification_lock = {
+        "source_path": str(source_path),
+        "local_only": local_only,
+        "requires_external_service": bool(requires_external_service),
+        "assurance_level": proof.get("assurance_level"),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "selected_environment_types": _unique_strings(
+            evidence.get("selected_environment_types")
+        ),
+        "selected_state_keys": _unique_strings(evidence.get("selected_state_keys")),
+        "metric_thresholds": {
+            name: 1.0 for name in sorted(_WORKSPACE_IMPORT_CERTIFICATION_METRICS)
+        },
+        "failed_check_ids": failed_check_ids,
+        "warning_check_ids": warning_check_ids,
+    }
+    certification_bundle = {
+        "workspace_summary": workspace_summary,
+        "framework_import_summary": import_summary,
+        "framework_readiness": readiness,
+        "selected_metrics": copy.deepcopy(metrics),
+    }
+    artifacts = {
+        "proof": copy.deepcopy(dict(proof)),
+        "selected_metrics": copy.deepcopy(metrics),
+        "workspace_summary": workspace_summary,
+        "framework_import_summary": import_summary,
+        "framework_readiness": readiness,
+        "certification_bundle": certification_bundle,
+        "certification_lock": certification_lock,
+        "replay_lock": certification_lock,
+    }
+    card: Dict[str, Any] = {
+        "kind": "workspace_import_certification_evidence",
+        "taxonomy": "native_workspace_import_runtime_certification",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "task_kind": source_manifest.get("task_kind")
+        or "workspace_import_certification",
+        "assurance_level": proof.get("assurance_level"),
+        "local_only": local_only,
+        "requires_external_service": bool(requires_external_service),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "frameworks": _unique_strings(
+            [
+                *(_coerce_list(proof.get("frameworks"))),
+                *(_coerce_list(evidence.get("selected_frameworks"))),
+                *(_coerce_list(import_summary.get("observed_frameworks"))),
+            ]
+        ),
+        "environment_types": _unique_strings(
+            evidence.get("selected_environment_types")
+            or proof.get("environment_types")
+        ),
+        "state_keys": _unique_strings(evidence.get("selected_state_keys")),
+        "check_count": proof.get("check_count"),
+        "passed_check_count": proof.get("passed_check_count"),
+        "failed_check_ids": failed_check_ids,
+        "warning_check_ids": warning_check_ids,
+        "metrics": metrics,
+        "workspace_summary": workspace_summary,
+        "framework_import_summary": import_summary,
+        "framework_readiness": readiness,
+        "selected_patch_paths": _unique_strings(evidence.get("selected_patch_paths")),
+        "candidate_lineage": candidate_lineage,
+        "source_manifest": copy.deepcopy(dict(source_manifest)),
+        "research_sources": _workspace_import_certification_research_sources(result),
+        "artifacts": artifacts,
+    }
+    card["actions"] = _workspace_import_certification_actions(
+        result=result,
+        source_path=source_path,
+        card=card,
+    )
+    return card
+
+
+def _workspace_import_certification_proof(
+    result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    proof = result.get("workspace_import_certification_proof")
+    if isinstance(proof, Mapping):
+        return copy.deepcopy(dict(proof))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        nested = optimization.get("workspace_import_certification_proof")
+        if isinstance(nested, Mapping):
+            return copy.deepcopy(dict(nested))
+    return {}
+
+
+def _workspace_import_certification_metrics(
+    result: Mapping[str, Any],
+    proof: Mapping[str, Any],
+) -> Dict[str, float]:
+    values: Dict[str, float] = {}
+    evidence = proof.get("evidence")
+    if isinstance(evidence, Mapping):
+        selected = evidence.get("selected_metrics")
+        if isinstance(selected, Mapping):
+            values.update(
+                _filtered_float_metrics(
+                    selected,
+                    _WORKSPACE_IMPORT_CERTIFICATION_METRICS,
+                )
+            )
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        selected_history = _best_optimization_history_item(optimization)
+        if isinstance(selected_history, Mapping):
+            history_metrics = selected_history.get("metrics")
+            if isinstance(history_metrics, Mapping):
+                values.update(
+                    _filtered_float_metrics(
+                        history_metrics,
+                        _WORKSPACE_IMPORT_CERTIFICATION_METRICS,
+                    )
+                )
+    values.update(
+        _filtered_float_metrics(
+            _result_metric_averages(result),
+            _WORKSPACE_IMPORT_CERTIFICATION_METRICS,
+        )
+    )
+    return values
+
+
+def _workspace_import_certification_research_sources(
+    result: Mapping[str, Any],
+) -> List[str]:
+    values: List[Any] = []
+    proof = _workspace_import_certification_proof(result)
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    source_manifest = (
+        evidence.get("source_manifest")
+        if isinstance(evidence.get("source_manifest"), Mapping)
+        else {}
+    )
+    values.extend(_coerce_list(source_manifest.get("research_sources")))
+    optimization = result.get("optimization")
+    if isinstance(optimization, Mapping):
+        manifest = optimization.get("source_manifest")
+        if isinstance(manifest, Mapping):
+            metadata = manifest.get("metadata")
+            if isinstance(metadata, Mapping):
+                values.extend(_coerce_list(metadata.get("research_sources")))
+                values.extend(_coerce_list(metadata.get("research_basis")))
+            run_manifest = dict(
+                dict(manifest.get("optimization") or {}).get("target") or {}
+            )
+            target_metadata = run_manifest.get("metadata")
+            if isinstance(target_metadata, Mapping):
+                values.extend(_coerce_list(target_metadata.get("research_sources")))
+                values.extend(_coerce_list(target_metadata.get("research_basis")))
+    return _unique_strings(_research_source_url(value) for value in values)
+
+
+def _workspace_import_certification_actions(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    card: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_workspace_import_certification",
+            "Report Workspace Import Certification",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/workspace-import-certification-report.json",
+                "--markdown",
+                "artifacts/workspace-import-certification-report.md",
+            ],
+        )
+    ]
+    optimization = result.get("optimization")
+    source_manifest_path = None
+    if isinstance(optimization, Mapping):
+        source_manifest_path = optimization.get("source_manifest_path")
+        actions.append(
+            _cli_action(
+                "promote_workspace_import_certification_regression",
+                "Promote Workspace Import Certification Regression",
+                [
+                    "agent-learn",
+                    "promote-to-regression",
+                    str(source_path),
+                    "--output",
+                    "artifacts/workspace-import-certification-promotion.json",
+                    "--manifest",
+                    "artifacts/workspace-import-certification-regression.json",
+                    "--min-level",
+                    "note",
+                    "--max-findings",
+                    "1",
+                ],
+            )
+        )
+        if source_manifest_path:
+            actions.append(
+                _cli_action(
+                    "rerun_workspace_import_certification_optimization",
+                    "Rerun Workspace Import Certification Optimization",
+                    [
+                        "agent-learn",
+                        "optimize",
+                        str(source_manifest_path),
+                        "--output",
+                        "artifacts/workspace-import-certification-optimization.json",
+                        "--junit",
+                        "artifacts/workspace-import-certification-optimization.junit.xml",
+                        "--sarif",
+                        "artifacts/workspace-import-certification-optimization.sarif.json",
+                        "--markdown",
+                        "artifacts/workspace-import-certification-optimization.md",
+                    ],
+                )
+            )
+        else:
+            actions.append(
+                _cli_action(
+                    "rerun_workspace_import_certification_optimization",
+                    "Rerun Workspace Import Certification Optimization",
+                    [
+                        "agent-learn",
+                        "optimize",
+                        "{{manifest_path}}",
+                        "--output",
+                        "artifacts/workspace-import-certification-optimization.json",
+                        "--junit",
+                        "artifacts/workspace-import-certification-optimization.junit.xml",
+                        "--sarif",
+                        "artifacts/workspace-import-certification-optimization.sarif.json",
+                        "--markdown",
+                        "artifacts/workspace-import-certification-optimization.md",
+                    ],
+                    inputs=[
+                        {
+                            "name": "manifest_path",
+                            "label": "Workspace import certification manifest",
+                            "default": (
+                                "manifests/workspace-import-certification-"
+                                "optimization.json"
+                            ),
+                        }
+                    ],
+                )
+            )
+
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    if isinstance(artifacts.get("proof"), Mapping):
+        actions.append(
+            {
+                "id": "export_workspace_import_certification_proof",
+                "label": "Export Workspace Import Certification Proof",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.workspace_import_certification.artifacts.proof"
+                ),
+                "default_filename": "workspace-import-certification-proof.json",
+                "readiness_status": card.get("status"),
+                "target_layers": ["workspace_import", "framework_import"],
+            }
+        )
+    if isinstance(artifacts.get("certification_bundle"), Mapping):
+        actions.append(
+            {
+                "id": "export_workspace_import_certification_bundle",
+                "label": "Export Workspace Import Certification Bundle",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.workspace_import_certification.artifacts.certification_bundle"
+                ),
+                "default_filename": "workspace-import-certification-bundle.json",
+                "readiness_status": card.get("status"),
+                "target_layers": ["workspace_import", "framework_import"],
+            }
+        )
+    if isinstance(artifacts.get("replay_lock"), Mapping):
+        actions.append(
+            {
+                "id": "export_workspace_import_certification_replay_lock",
+                "label": "Export Workspace Import Certification Replay Lock",
+                "kind": "download",
+                "artifact_ref": "report.workspace_import_certification.artifacts.replay_lock",
+                "default_filename": "workspace-import-certification-replay.lock.json",
+                "readiness_status": card.get("status"),
+                "target_layers": ["workspace_import", "framework_import"],
+            }
+        )
+    for action in actions:
+        action.setdefault("readiness_status", card.get("status"))
+        action.setdefault("target_layers", ["workspace_import", "framework_import"])
     return actions
 
 
@@ -5896,6 +6257,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("optimization_replay")
     if _has_world_hooks_card(result, source_path=source_path):
         sections.append("world_hooks")
+    if _has_workspace_import_certification_card(result, source_path=source_path):
+        sections.append("workspace_import_certification")
     if _has_attack_evolution_card(result, source_path=source_path):
         sections.append("attack_evolution")
     if _has_artifact_action_plan_card(result):
@@ -5962,6 +6325,13 @@ def _result_markdown(
         lines.extend(_optimization_replay_markdown(result))
     if "world_hooks" in sections:
         lines.extend(_world_hooks_markdown(result, source_path=source_path))
+    if "workspace_import_certification" in sections:
+        lines.extend(
+            _workspace_import_certification_markdown(
+                result,
+                source_path=source_path,
+            )
+        )
     if "attack_evolution" in sections:
         lines.extend(_attack_evolution_markdown(result, source_path=source_path))
     if "artifact_action_plan" in sections:
@@ -8861,6 +9231,182 @@ def _framework_certification_proof(result: Mapping[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _workspace_import_certification_optimization_regression_manifest(
+    *,
+    source: Mapping[str, Any],
+    source_path: Path,
+    source_name: str,
+    manifest_name: str,
+    required_env: Sequence[Any],
+) -> Optional[Dict[str, Any]]:
+    proof = _workspace_import_certification_proof(source)
+    if not proof:
+        return None
+    if str(proof.get("status") or "") != "passed":
+        return None
+    if proof.get("requires_external_service") is not False:
+        return None
+    if _coerce_list(proof.get("failed_check_ids")):
+        return None
+    manifest = _optimized_manifest_regression_manifest(
+        source=source,
+        source_path=source_path,
+        source_name=source_name,
+        manifest_name=manifest_name,
+        required_env=required_env,
+    )
+    if manifest is None:
+        return None
+    environment_types = set(_workspace_import_selected_environment_types(manifest))
+    if not {"workspace_run_manifest", "framework_import"}.issubset(
+        environment_types
+    ):
+        return None
+    if _framework_external_markers(manifest):
+        return None
+
+    optimization = (
+        source.get("optimization")
+        if isinstance(source.get("optimization"), Mapping)
+        else {}
+    )
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    metric_thresholds = _workspace_import_certification_metric_thresholds()
+    selected_metrics = {
+        str(key): value
+        for key, value in dict(evidence.get("selected_metrics") or {}).items()
+        if key in metric_thresholds and _float_or_none(value) is not None
+    }
+    metadata = manifest.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        manifest["metadata"] = metadata
+    metadata["regression"] = {
+        "promotion_kind": "workspace_import_certification_optimization",
+        "promoted_from": str(source_path),
+        "source_name": source_name,
+        "source_status": source.get("status"),
+        "source_schema_version": source.get("schema_version"),
+        "source_kind": source.get("kind"),
+        "source_score": _persistent_state_source_score(source),
+        "assurance_level": proof.get("assurance_level"),
+        "workspace_import_certification_proof_status": proof.get("status"),
+        "selected_candidate_id": proof.get("selected_candidate_id")
+        or optimization.get("best_candidate_id"),
+        "environment_types": _workspace_import_selected_environment_types(manifest),
+        "state_keys": _unique_strings(
+            evidence.get("selected_state_keys")
+            or ["workspace_run_manifest", "framework_import_manifest"]
+        ),
+        "frameworks": _unique_strings(
+            [
+                *(_coerce_list(proof.get("frameworks"))),
+                *(_coerce_list(evidence.get("selected_frameworks"))),
+            ]
+        ),
+        "metric_averages": selected_metrics,
+        "research_sources": _workspace_import_certification_research_sources(source),
+        "replay_lock": {
+            "local_only": True,
+            "requires_external_service": False,
+            "assurance_level": proof.get("assurance_level"),
+            "selected_candidate_id": proof.get("selected_candidate_id")
+            or optimization.get("best_candidate_id"),
+            "metric_thresholds": metric_thresholds,
+        },
+        "original_synthesis": (
+            "Promote an optimized workspace-import certification proof into a "
+            "local replay gate: freeze the selected workspace run and framework "
+            "import bundle, preserve proof evidence, and fail closed if "
+            "endpoint/auth/key dependencies appear."
+        ),
+    }
+
+    evaluation = manifest.setdefault("evaluation", {})
+    if not isinstance(evaluation, dict):
+        evaluation = {}
+        manifest["evaluation"] = evaluation
+    agent_report = evaluation.setdefault("agent_report", {})
+    if not isinstance(agent_report, dict):
+        agent_report = {}
+        evaluation["agent_report"] = agent_report
+    config = agent_report.setdefault("config", {})
+    if not isinstance(config, dict):
+        config = {}
+        agent_report["config"] = config
+    config_metadata = config.setdefault("metadata", {})
+    if isinstance(config_metadata, dict):
+        config_metadata["promotion_kind"] = (
+            "workspace_import_certification_optimization"
+        )
+        config_metadata["assurance_level"] = proof.get("assurance_level")
+        config_metadata["workspace_import_certification_proof_status"] = proof.get(
+            "status"
+        )
+        config_metadata["selected_candidate_id"] = (
+            proof.get("selected_candidate_id") or optimization.get("best_candidate_id")
+        )
+    if selected_metrics:
+        summary = manifest.setdefault("summary", {})
+        if isinstance(summary, dict):
+            summary["metric_averages"] = selected_metrics
+    return manifest
+
+
+def _workspace_import_certification_metric_thresholds() -> Dict[str, float]:
+    return {
+        name: 1.0 for name in sorted(_WORKSPACE_IMPORT_CERTIFICATION_METRICS)
+    }
+
+
+def _workspace_import_selected_environment_types(
+    manifest: Mapping[str, Any],
+) -> List[str]:
+    return _framework_selected_environment_types(manifest)
+
+
+def _workspace_import_certification_regression_promotion_summary(
+    *,
+    source: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> Dict[str, Any]:
+    proof = _workspace_import_certification_proof(source)
+    evidence = proof.get("evidence") if isinstance(proof.get("evidence"), Mapping) else {}
+    selected_metrics = {
+        str(key): float(value)
+        for key, value in dict(evidence.get("selected_metrics") or {}).items()
+        if key in _WORKSPACE_IMPORT_CERTIFICATION_METRICS
+        and _float_or_none(value) is not None
+    }
+    regression = (
+        dict(dict(manifest.get("metadata") or {}).get("regression") or {})
+        if isinstance(manifest.get("metadata"), Mapping)
+        else {}
+    )
+    replay_lock = (
+        regression.get("replay_lock")
+        if isinstance(regression.get("replay_lock"), Mapping)
+        else {}
+    )
+    return {
+        "workspace_import_certification_proof_status": proof.get("status"),
+        "workspace_import_certification_proof_assurance_level": proof.get(
+            "assurance_level"
+        ),
+        "selected_candidate_id": proof.get("selected_candidate_id"),
+        "requires_external_service": False,
+        "environment_types": _workspace_import_selected_environment_types(manifest),
+        "state_keys": regression.get("state_keys") or [],
+        "frameworks": regression.get("frameworks") or [],
+        "metric_averages": selected_metrics,
+        "research_sources": _workspace_import_certification_research_sources(source),
+        "replay_lock_local_only": replay_lock.get("local_only"),
+        "replay_lock_requires_external_service": replay_lock.get(
+            "requires_external_service"
+        ),
+    }
+
+
 def _framework_certification_optimization_regression_manifest(
     *,
     source: Mapping[str, Any],
@@ -9880,6 +10426,20 @@ def _has_world_hooks_card(
     return _world_hooks_card(result, source_path=source_path) is not None
 
 
+def _has_workspace_import_certification_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("workspace_import_certification"), Mapping):
+        return True
+    return (
+        _workspace_import_certification_card(result, source_path=source_path)
+        is not None
+    )
+
+
 def _artifact_action_plan_card(result: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     existing = result.get("artifact_action_plan")
     if isinstance(existing, Mapping):
@@ -10329,6 +10889,199 @@ def _world_hooks_markdown(
         lines.extend(
             [
                 "### World Hook Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Kind", "Command or artifact"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+def _workspace_import_certification_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = (
+        report.get("workspace_import_certification")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if not isinstance(card, Mapping):
+        card = _workspace_import_certification_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+
+    metrics = card.get("metrics") if isinstance(card.get("metrics"), Mapping) else {}
+    workspace = (
+        card.get("workspace_summary")
+        if isinstance(card.get("workspace_summary"), Mapping)
+        else {}
+    )
+    framework_import = (
+        card.get("framework_import_summary")
+        if isinstance(card.get("framework_import_summary"), Mapping)
+        else {}
+    )
+    readiness = (
+        card.get("framework_readiness")
+        if isinstance(card.get("framework_readiness"), Mapping)
+        else {}
+    )
+    candidate_lineage = (
+        card.get("candidate_lineage")
+        if isinstance(card.get("candidate_lineage"), Mapping)
+        else {}
+    )
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    proof = artifacts.get("proof") if isinstance(artifacts.get("proof"), Mapping) else {}
+    rows = [
+        ("Status", card.get("status")),
+        ("Task kind", card.get("task_kind")),
+        ("Assurance", card.get("assurance_level")),
+        ("Local only", card.get("local_only")),
+        ("Requires external service", card.get("requires_external_service")),
+        ("Selected candidate", card.get("selected_candidate_id")),
+        ("Frameworks", _join_values(card.get("frameworks"))),
+        ("Environment types", _join_values(card.get("environment_types"))),
+        ("State keys", _join_values(card.get("state_keys"))),
+        ("Checks", f"{card.get('passed_check_count')}/{card.get('check_count')}"),
+        ("Failed checks", _join_values(card.get("failed_check_ids"))),
+        ("Warning checks", _join_values(card.get("warning_check_ids"))),
+        ("Patch paths", _join_values(card.get("selected_patch_paths"))),
+        ("Research sources", _join_values(card.get("research_sources"))),
+    ]
+    workspace_rows = [
+        ("Commands", workspace.get("command_count")),
+        ("Failed commands", workspace.get("failed_command_count")),
+        ("Simulations", workspace.get("simulation_count")),
+        ("Evals", workspace.get("eval_count")),
+        ("Optimizations", workspace.get("optimization_count")),
+        ("Secret leaks", workspace.get("secret_leak_count")),
+        ("Missing evidence", _join_values(workspace.get("missing_required_evidence"))),
+    ]
+    import_rows = [
+        ("Sources", framework_import.get("source_count")),
+        ("Passed sources", framework_import.get("passed_source_count")),
+        ("Failed sources", framework_import.get("failed_source_count")),
+        (
+            "Observed frameworks",
+            _join_values(framework_import.get("observed_frameworks")),
+        ),
+        (
+            "Observed export types",
+            _join_values(framework_import.get("observed_export_types")),
+        ),
+        (
+            "Missing frameworks",
+            _join_values(framework_import.get("missing_required_frameworks")),
+        ),
+        (
+            "Missing signals",
+            _join_values(framework_import.get("missing_required_signals")),
+        ),
+    ]
+    readiness_rows = [
+        ("Readiness status", readiness.get("status")),
+        ("Present layers", _join_values(readiness.get("present_layers"))),
+        ("Weak layers", _join_values(readiness.get("weak_layers"))),
+        ("Weak metrics", _join_values(readiness.get("weak_metrics"))),
+        (
+            "Selected score",
+            candidate_lineage.get("selected_score"),
+        ),
+        (
+            "Score threshold",
+            candidate_lineage.get("score_threshold"),
+        ),
+        (
+            "Candidate lineage count",
+            candidate_lineage.get("candidate_lineage_count"),
+        ),
+    ]
+    metric_rows = [[name, value] for name, value in sorted(metrics.items())]
+    check_rows = [
+        [
+            item.get("id"),
+            item.get("passed"),
+            item.get("required"),
+            item.get("reason"),
+        ]
+        for item in _coerce_list(proof.get("checks"))
+        if isinstance(item, Mapping)
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("kind"),
+            item.get("command") or item.get("artifact_ref"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## Workspace Import Certification",
+        "",
+        *_key_value_table(rows),
+        "",
+    ]
+    if workspace:
+        lines.extend(
+            [
+                "### Workspace Evidence",
+                "",
+                *_key_value_table(workspace_rows),
+                "",
+            ]
+        )
+    if framework_import:
+        lines.extend(
+            [
+                "### Framework Import Evidence",
+                "",
+                *_key_value_table(import_rows),
+                "",
+            ]
+        )
+    if readiness or candidate_lineage:
+        lines.extend(
+            [
+                "### Readiness And Lineage",
+                "",
+                *_key_value_table(readiness_rows),
+                "",
+            ]
+        )
+    if metric_rows:
+        lines.extend(
+            [
+                "### Workspace Import Metrics",
+                "",
+                *_markdown_table(["Metric", "Value"], metric_rows),
+                "",
+            ]
+        )
+    if check_rows:
+        lines.extend(
+            [
+                "### Workspace Import Proof Checks",
+                "",
+                *_markdown_table(
+                    ["Check", "Passed", "Required", "Reason"],
+                    check_rows,
+                ),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Workspace Import Actions",
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Kind", "Command or artifact"],
@@ -11412,6 +12165,55 @@ def _regression_promotion_result(
         if _promotion_level_value(_sarif_level(finding)) >= _promotion_level_value(min_level)
     ][:max_findings]
     if not selected:
+        workspace_import_manifest = (
+            _workspace_import_certification_optimization_regression_manifest(
+                source=source,
+                source_path=source_path,
+                source_name=source_name,
+                manifest_name=(
+                    name
+                    or f"{source_name}-workspace-import-certification-regression"
+                ),
+                required_env=required_env,
+            )
+        )
+        if workspace_import_manifest is not None:
+            workspace_import_summary = (
+                _workspace_import_certification_regression_promotion_summary(
+                    source=source,
+                    manifest=workspace_import_manifest,
+                )
+            )
+            workspace_import_proof = _workspace_import_certification_proof(source)
+            return {
+                "schema_version": CLI_SCHEMA_VERSION,
+                "kind": "agent-simulate.regression_promotion.v1",
+                "name": str(workspace_import_manifest.get("name") or source_name),
+                "status": "passed",
+                "exit_code": 0,
+                "summary": {
+                    "source_name": source_name,
+                    "source_path": str(source_path),
+                    "source_status": source.get("status"),
+                    "source_schema_version": source.get("schema_version"),
+                    "candidate_finding_count": len(promotable),
+                    "promoted_finding_count": 0,
+                    "promoted_manifest_count": 1,
+                    "min_level": min_level,
+                    "max_findings": max_findings,
+                    "promotion_kind": "workspace_import_certification_optimization",
+                    **workspace_import_summary,
+                },
+                "workspace_import_certification_proof": workspace_import_proof,
+                "manifest": workspace_import_manifest,
+                "duration_seconds": duration_seconds,
+            }
+        if _workspace_import_certification_proof(source):
+            raise ManifestError(
+                "workspace import certification regression promotion requires "
+                "a passed local workspace_import_certification_proof with "
+                "workspace_run_manifest and framework_import environments"
+            )
         world_hooks_manifest = _world_hooks_optimization_regression_manifest(
             source=source,
             source_path=source_path,
