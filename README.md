@@ -85,7 +85,11 @@ synthesis, world/framework/memory stacks, multi-agent framework handoffs,
 framework certification, and framework import repair. OpenEnv adapter readiness
 executes a local framework adapter that returns OpenEnv/Gymnasium-style replay
 evidence and verifies generated OpenEnv gates, normalized state, events, and
-artifacts. Regression artifact readiness runs the local baseline, compare,
+artifacts. OpenEnv 10x robustness is also executable: release-check aggregates
+the local OpenEnv, framework, eval, optimizer, adapter, protocol, browser/CUA,
+realtime, memory, multi-agent, red-team, orchestration, and regression proof
+outputs and requires at least ten independent axes to pass before the
+comparison is trusted. Regression artifact readiness runs the local baseline, compare,
 report, promote-to-regression, and replay lifecycle so optimized or red-team
 evidence can become replayable CI artifacts. Optimizer governance readiness
 executes local governed optimizer-society search and verifies candidate lineage,
@@ -1789,6 +1793,14 @@ trace artifacts, plus generated OpenEnv coverage and quality gates.
 `framework_openenv_adapter_readiness`; the static `framework_openenv_manifest.json`
 continues to carry the same OpenEnv framework adapter contract into the manifest
 contract gate.
+
+`agent-learn release-check` also gates the broader comparison as
+`openenv_10x_robustness`. That check does not rely on wording alone: it requires
+the current release artifact to prove at least ten axes across OpenEnv replay,
+framework simulation, local evals, optimizer recovery, adapter promotion,
+protocol routing, browser/CUA, realtime voice, memory lineage, multi-agent
+coordination, world orchestration, red-team suite coverage, and regression
+promotion/replay.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

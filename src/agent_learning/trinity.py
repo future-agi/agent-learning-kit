@@ -1171,6 +1171,37 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
     "openenv_quality",
 ]
 
+V1_OPENENV_10X_ROBUSTNESS_FILES = [
+    "examples/sdk_openenv_environment_optimization.py",
+    "examples/sdk_framework_adapter_openenv_trace.py",
+    "internal-docs/openenv-10x-robustness-research.md",
+]
+
+V1_OPENENV_10X_ROBUSTNESS_AXES = [
+    "openenv_runtime_contract",
+    "cross_framework_simulation_matrix",
+    "local_evaluation_gates",
+    "adaptive_optimizer_recovery",
+    "framework_adapter_promotion",
+    "protocol_tool_routing",
+    "browser_cua_resilience",
+    "realtime_voice_streaming",
+    "memory_lineage_retrieval",
+    "multi_agent_coordination",
+    "world_orchestration_replay",
+    "redteam_pen_test_suite",
+    "regression_promotion_replay",
+]
+
+V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT = 10
+
+V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS = [
+    "https://huggingface.co/docs/openenv/index",
+    "https://gymnasium.farama.org/api/env/",
+    "https://modelcontextprotocol.io/docs/concepts/tools",
+    "https://a2a-protocol.org/latest/specification/",
+]
+
 V1_FRAMEWORK_OPENENV_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_openenv_trace.py",
     "internal-docs/framework-openenv-adapter-readiness-research.md",
@@ -2816,6 +2847,30 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=trinity_stack_probe,
     )
+    openenv_10x_robustness = _release_openenv_10x_robustness_status(
+        root,
+        framework_provider_contract=framework_provider_contract,
+        openenv_optimizer=openenv_optimizer,
+        framework_openenv_adapter=framework_openenv_adapter,
+        protocol_adapter=protocol_adapter,
+        browser_cua_probe=browser_cua_probe,
+        realtime_stack_probe=realtime_stack_probe,
+        memory_layer_probe=memory_layer_probe,
+        multi_agent_room_probe=multi_agent_room_probe,
+        orchestration_stack_probe=orchestration_stack_probe,
+        framework_adapter_trinity_suite=framework_adapter_trinity_suite,
+        regression_artifact=regression_artifact,
+    )
+    _append_release_check(
+        checks,
+        check_id="openenv_10x_robustness",
+        passed=(
+            not openenv_10x_robustness["missing_files"]
+            and not openenv_10x_robustness["axis_errors"]
+        ),
+        milestone="M6",
+        evidence=openenv_10x_robustness,
+    )
     pyproject = _read_pyproject(root)
     _append_release_check(
         checks,
@@ -3082,6 +3137,18 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_openenv_adapter_quality_minima": dict(
             V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+        ),
+        "required_openenv_10x_robustness_files": list(
+            V1_OPENENV_10X_ROBUSTNESS_FILES
+        ),
+        "required_openenv_10x_robustness_axes": list(
+            V1_OPENENV_10X_ROBUSTNESS_AXES
+        ),
+        "required_openenv_10x_robustness_source_urls": list(
+            V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS
+        ),
+        "required_openenv_10x_robustness_min_axis_count": (
+            V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
         ),
         "required_framework_optimizer_files": list(V1_FRAMEWORK_OPTIMIZER_FILES),
         "required_framework_optimizer_contracts": copy.deepcopy(
@@ -9805,6 +9872,873 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_openenv_10x_robustness_status(
+    root: Path,
+    *,
+    framework_provider_contract: Mapping[str, Any],
+    openenv_optimizer: Mapping[str, Any],
+    framework_openenv_adapter: Mapping[str, Any],
+    protocol_adapter: Mapping[str, Any],
+    browser_cua_probe: Mapping[str, Any],
+    realtime_stack_probe: Mapping[str, Any],
+    memory_layer_probe: Mapping[str, Any],
+    multi_agent_room_probe: Mapping[str, Any],
+    orchestration_stack_probe: Mapping[str, Any],
+    framework_adapter_trinity_suite: Mapping[str, Any],
+    regression_artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_OPENENV_10X_ROBUSTNESS_FILES,
+    )
+    axes: list[dict[str, Any]] = []
+    axis_errors: list[dict[str, Any]] = []
+
+    def append_axis(
+        axis: str,
+        *,
+        source_check: str,
+        passed: bool,
+        evidence: Mapping[str, Any],
+        expected: Any,
+    ) -> None:
+        record = {
+            "axis": axis,
+            "source_check": source_check,
+            "passed": bool(passed),
+            "expected": expected,
+            "evidence": copy.deepcopy(dict(evidence)),
+        }
+        axes.append(record)
+        if not passed:
+            axis_errors.append(
+                {
+                    "axis": axis,
+                    "source_check": source_check,
+                    "expected": expected,
+                    "observed": copy.deepcopy(dict(evidence)),
+                }
+            )
+
+    def empty_buckets(source: Mapping[str, Any], buckets: Iterable[str]) -> bool:
+        return not any(source.get(bucket) for bucket in buckets)
+
+    def contains_all(observed: Iterable[Any], required: Iterable[Any]) -> bool:
+        observed_set = {str(item) for item in observed}
+        return {str(item) for item in required} <= observed_set
+
+    def metrics_at_floor(
+        metrics: Mapping[str, Any],
+        required: Iterable[str],
+        *,
+        floor: float = 1.0,
+    ) -> bool:
+        return all(_float_or_zero(metrics.get(metric)) >= floor for metric in required)
+
+    provider_summary = _as_mapping(
+        framework_provider_contract.get("matrix_summary")
+    )
+    provider_frameworks = _as_list(provider_summary.get("frameworks"))
+    append_axis(
+        "cross_framework_simulation_matrix",
+        source_check="framework_provider_contract_readiness",
+        passed=(
+            empty_buckets(
+                framework_provider_contract,
+                (
+                    "missing_files",
+                    "matrix_errors",
+                    "contract_errors",
+                    "manifest_errors",
+                    "external_value_findings",
+                    "errors",
+                ),
+            )
+            and _int_or_zero(provider_summary.get("contract_count")) >= 14
+            and _int_or_zero(provider_summary.get("local_executable_fixture_count"))
+            >= 14
+            and _int_or_zero(provider_summary.get("trace_runtime_count")) >= 14
+            and _int_or_zero(provider_summary.get("external_target_count")) == 0
+            and _int_or_zero(provider_summary.get("requires_external_service_count"))
+            == 0
+            and contains_all(
+                provider_frameworks,
+                [
+                    "langchain",
+                    "langgraph",
+                    "livekit",
+                    "pipecat",
+                    "browser_use",
+                    "openenv",
+                    "gymnasium",
+                    "mcp",
+                    "a2a",
+                ],
+            )
+            and contains_all(provider_summary.get("modalities") or [], ["text", "voice", "cua"])
+            and contains_all(provider_summary.get("transports") or [], ["in_process"])
+        ),
+        expected={
+            "contract_count": ">=14",
+            "local_executable_fixture_count": ">=14",
+            "trace_runtime_count": ">=14",
+            "external_target_count": 0,
+            "requires_external_service_count": 0,
+            "frameworks": [
+                "langchain",
+                "langgraph",
+                "livekit",
+                "pipecat",
+                "browser_use",
+                "openenv",
+                "gymnasium",
+                "mcp",
+                "a2a",
+            ],
+            "modalities": ["text", "voice", "cua"],
+            "transports": ["in_process"],
+        },
+        evidence={
+            "contract_count": provider_summary.get("contract_count"),
+            "local_executable_fixture_count": provider_summary.get(
+                "local_executable_fixture_count"
+            ),
+            "trace_runtime_count": provider_summary.get("trace_runtime_count"),
+            "external_target_count": provider_summary.get("external_target_count"),
+            "requires_external_service_count": provider_summary.get(
+                "requires_external_service_count"
+            ),
+            "frameworks": provider_frameworks,
+            "modalities": provider_summary.get("modalities") or [],
+            "transports": provider_summary.get("transports") or [],
+        },
+    )
+
+    openenv_evidence = _as_mapping(framework_openenv_adapter.get("evidence"))
+    openenv_summary = _as_mapping(openenv_evidence.get("openenv_summary"))
+    required_openenv = _as_list(openenv_evidence.get("required_openenv"))
+    append_axis(
+        "openenv_runtime_contract",
+        source_check="framework_openenv_adapter_readiness",
+        passed=(
+            empty_buckets(
+                framework_openenv_adapter,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "contract_errors",
+                    "metric_errors",
+                ),
+            )
+            and contains_all(
+                required_openenv,
+                V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV,
+            )
+            and _int_or_zero(openenv_summary.get("reset_count")) >= 1
+            and _int_or_zero(openenv_summary.get("step_count")) >= 2
+            and _int_or_zero(openenv_summary.get("action_route_count")) >= 2
+            and _int_or_zero(openenv_summary.get("failure_count")) >= 1
+            and _float_or_zero(openenv_summary.get("reward_total")) >= 1.0
+            and _int_or_zero(openenv_summary.get("error_count")) == 0
+            and openenv_summary.get("done") is True
+            and openenv_summary.get("terminated") is True
+            and openenv_summary.get("sandbox_enabled") is True
+            and openenv_summary.get("requires_external_service") is False
+            and openenv_summary.get("deterministic_reset") is True
+            and openenv_summary.get("runtime") == "in_process"
+            and openenv_summary.get("transport") == "local"
+            and openenv_summary.get("isolation") == "process"
+        ),
+        expected={
+            "required_openenv": V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV,
+            "reset_count": ">=1",
+            "step_count": ">=2",
+            "action_route_count": ">=2",
+            "failure_count": ">=1",
+            "reward_total": ">=1.0",
+            "error_count": 0,
+            "done": True,
+            "terminated": True,
+            "sandbox_enabled": True,
+            "requires_external_service": False,
+            "deterministic_reset": True,
+            "runtime": "in_process",
+            "transport": "local",
+            "isolation": "process",
+        },
+        evidence={
+            "required_openenv": required_openenv,
+            "openenv_summary": dict(openenv_summary),
+        },
+    )
+
+    optimizer_evidence = _as_mapping(openenv_optimizer.get("evidence"))
+    optimizer_metrics = _as_mapping(optimizer_evidence.get("best_metrics"))
+    adapter_metrics = _as_mapping(openenv_evidence.get("metric_averages"))
+    append_axis(
+        "local_evaluation_gates",
+        source_check="openenv_optimizer_readiness+framework_openenv_adapter_readiness",
+        passed=(
+            empty_buckets(
+                openenv_optimizer,
+                (
+                    "missing_files",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "metric_errors",
+                    "errors",
+                ),
+            )
+            and empty_buckets(
+                framework_openenv_adapter,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "contract_errors",
+                    "metric_errors",
+                ),
+            )
+            and metrics_at_floor(
+                optimizer_metrics,
+                V1_OPENENV_OPTIMIZER_REQUIRED_METRICS,
+            )
+            and metrics_at_floor(
+                adapter_metrics,
+                V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS,
+            )
+        ),
+        expected={
+            "optimizer_metrics": V1_OPENENV_OPTIMIZER_REQUIRED_METRICS,
+            "adapter_metrics": V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+        },
+        evidence={
+            "optimizer_metrics": dict(optimizer_metrics),
+            "adapter_metrics": dict(adapter_metrics),
+        },
+    )
+
+    append_axis(
+        "adaptive_optimizer_recovery",
+        source_check="openenv_optimizer_readiness",
+        passed=(
+            empty_buckets(
+                openenv_optimizer,
+                (
+                    "missing_files",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "metric_errors",
+                    "errors",
+                ),
+            )
+            and optimizer_evidence.get("best_candidate_profile")
+            == "verified_openenv_replay"
+            and _int_or_zero(optimizer_evidence.get("manifest_candidate_count")) >= 3
+            and _int_or_zero(optimizer_evidence.get("candidate_lineage_count")) >= 3
+            and contains_all(
+                optimizer_evidence.get("manifest_candidate_profiles") or [],
+                V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES,
+            )
+            and _float_or_zero(optimizer_evidence.get("best_history_score")) >= 1.0
+            and _float_or_zero(optimizer_evidence.get("optimization_score")) >= 1.0
+            and _float_or_zero(optimizer_evidence.get("evaluation_score")) >= 1.0
+        ),
+        expected={
+            "best_candidate_profile": "verified_openenv_replay",
+            "manifest_candidate_count": ">=3",
+            "candidate_lineage_count": ">=3",
+            "candidate_profiles": V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES,
+            "scores": ">=1.0",
+        },
+        evidence={
+            "best_candidate_profile": optimizer_evidence.get(
+                "best_candidate_profile"
+            ),
+            "manifest_candidate_count": optimizer_evidence.get(
+                "manifest_candidate_count"
+            ),
+            "candidate_lineage_count": optimizer_evidence.get(
+                "candidate_lineage_count"
+            ),
+            "manifest_candidate_profiles": optimizer_evidence.get(
+                "manifest_candidate_profiles"
+            )
+            or [],
+            "best_history_score": optimizer_evidence.get("best_history_score"),
+            "optimization_score": optimizer_evidence.get("optimization_score"),
+            "evaluation_score": optimizer_evidence.get("evaluation_score"),
+        },
+    )
+
+    runtime_output = _as_mapping(openenv_evidence.get("runtime_output"))
+    manifest_agent = _as_mapping(openenv_evidence.get("manifest_agent"))
+    append_axis(
+        "framework_adapter_promotion",
+        source_check="framework_openenv_adapter_readiness",
+        passed=(
+            empty_buckets(
+                framework_openenv_adapter,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "contract_errors",
+                    "metric_errors",
+                ),
+            )
+            and openenv_evidence.get("result_kind") == "agent-learning.run.v1"
+            and openenv_evidence.get("result_status") == "passed"
+            and openenv_evidence.get("output_roundtrip") is True
+            and manifest_agent.get("framework") == "openenv"
+            and manifest_agent.get("method") == "run"
+            and manifest_agent.get("input_mode") == "dict"
+            and manifest_agent.get("trace_runtime") is True
+            and "openenv" in set(_as_list(runtime_output.get("state_keys")))
+            and "trace" in set(_as_list(runtime_output.get("artifact_types")))
+            and "openenv" in set(_as_list(runtime_output.get("event_types")))
+        ),
+        expected={
+            "result_kind": "agent-learning.run.v1",
+            "result_status": "passed",
+            "output_roundtrip": True,
+            "agent": {
+                "framework": "openenv",
+                "method": "run",
+                "input_mode": "dict",
+                "trace_runtime": True,
+            },
+            "runtime_output": {
+                "state_keys": ["openenv"],
+                "artifact_types": ["trace"],
+                "event_types": ["openenv"],
+            },
+        },
+        evidence={
+            "result_kind": openenv_evidence.get("result_kind"),
+            "result_status": openenv_evidence.get("result_status"),
+            "output_roundtrip": openenv_evidence.get("output_roundtrip"),
+            "manifest_agent": dict(manifest_agent),
+            "runtime_output": dict(runtime_output),
+        },
+    )
+
+    protocol_adapters = [
+        _as_mapping(item)
+        for item in _as_list(protocol_adapter.get("adapters"))
+        if isinstance(item, Mapping)
+    ]
+    protocols = {str(adapter.get("protocol")): adapter for adapter in protocol_adapters}
+    protocol_metrics_ok = all(
+        metrics_at_floor(_as_mapping(adapter.get("metrics")), adapter.get("metrics", {}))
+        for adapter in protocol_adapters
+    )
+    append_axis(
+        "protocol_tool_routing",
+        source_check="protocol_adapter_readiness",
+        passed=(
+            empty_buckets(
+                protocol_adapter,
+                (
+                    "missing_files",
+                    "adapter_errors",
+                    "event_errors",
+                    "artifact_errors",
+                    "metric_errors",
+                    "summary_errors",
+                    "errors",
+                ),
+            )
+            and {"mcp", "a2a"} <= set(protocols)
+            and protocol_metrics_ok
+            and protocols.get("mcp", {}).get("result_status") == "passed"
+            and protocols.get("a2a", {}).get("result_status") == "passed"
+            and _int_or_zero(
+                _as_mapping(protocols.get("mcp", {}).get("summary")).get(
+                    "tool_count"
+                )
+            )
+            >= 2
+            and _int_or_zero(
+                _as_mapping(protocols.get("a2a", {}).get("summary")).get(
+                    "task_count"
+                )
+            )
+            >= 1
+        ),
+        expected={
+            "protocols": ["mcp", "a2a"],
+            "metric_floor": 1.0,
+            "mcp_tool_count": ">=2",
+            "a2a_task_count": ">=1",
+        },
+        evidence={
+            "protocols": sorted(protocols),
+            "mcp_summary": dict(_as_mapping(protocols.get("mcp", {}).get("summary"))),
+            "a2a_summary": dict(_as_mapping(protocols.get("a2a", {}).get("summary"))),
+            "metrics": {
+                name: dict(_as_mapping(adapter.get("metrics")))
+                for name, adapter in protocols.items()
+            },
+        },
+    )
+
+    browser_evidence = _as_mapping(browser_cua_probe.get("evidence"))
+    browser_proof = _as_mapping(browser_evidence.get("proof"))
+    browser_summary = _as_mapping(browser_proof.get("selected_summary"))
+    browser_selected_metrics = _as_mapping(browser_proof.get("selected_metrics"))
+    append_axis(
+        "browser_cua_resilience",
+        source_check="browser_cua_probe_readiness",
+        passed=(
+            empty_buckets(
+                browser_cua_probe,
+                (
+                    "missing_files",
+                    "optimization_errors",
+                    "proof_errors",
+                    "manifest_errors",
+                    "metric_errors",
+                    "runtime_errors",
+                    "errors",
+                ),
+            )
+            and browser_proof.get("passed") is True
+            and browser_proof.get("requires_external_service") is False
+            and metrics_at_floor(
+                browser_selected_metrics,
+                V1_BROWSER_CUA_PROBE_REQUIRED_METRICS,
+            )
+            and browser_summary.get("current_snapshot_has_dom") is True
+            and browser_summary.get("current_snapshot_has_screenshot") is True
+            and _int_or_zero(browser_summary.get("mutation_count")) >= 2
+            and _int_or_zero(browser_summary.get("prompt_injection_touched_count"))
+            == 0
+        ),
+        expected={
+            "proof_passed": True,
+            "requires_external_service": False,
+            "metric_floor": 1.0,
+            "current_snapshot_has_dom": True,
+            "current_snapshot_has_screenshot": True,
+            "mutation_count": ">=2",
+            "prompt_injection_touched_count": 0,
+        },
+        evidence={
+            "proof_passed": browser_proof.get("passed"),
+            "requires_external_service": browser_proof.get(
+                "requires_external_service"
+            ),
+            "selected_metrics": dict(browser_selected_metrics),
+            "selected_summary": {
+                "current_snapshot_has_dom": browser_summary.get(
+                    "current_snapshot_has_dom"
+                ),
+                "current_snapshot_has_screenshot": browser_summary.get(
+                    "current_snapshot_has_screenshot"
+                ),
+                "mutation_count": browser_summary.get("mutation_count"),
+                "prompt_injection_touched_count": browser_summary.get(
+                    "prompt_injection_touched_count"
+                ),
+            },
+        },
+    )
+
+    realtime_evidence = _as_mapping(realtime_stack_probe.get("evidence"))
+    realtime_proof = _as_mapping(realtime_evidence.get("proof"))
+    realtime_summary = _as_mapping(realtime_proof.get("selected_summary"))
+    realtime_run = _as_mapping(realtime_evidence.get("run"))
+    append_axis(
+        "realtime_voice_streaming",
+        source_check="realtime_stack_probe_readiness",
+        passed=(
+            empty_buckets(
+                realtime_stack_probe,
+                (
+                    "missing_files",
+                    "optimization_errors",
+                    "proof_errors",
+                    "manifest_errors",
+                    "metric_errors",
+                    "runtime_errors",
+                    "errors",
+                ),
+            )
+            and realtime_proof.get("passed") is True
+            and realtime_proof.get("requires_external_service") is False
+            and metrics_at_floor(
+                _as_mapping(realtime_proof.get("selected_metrics")),
+                V1_REALTIME_STACK_PROBE_REQUIRED_METRICS,
+            )
+            and metrics_at_floor(
+                _as_mapping(realtime_run.get("metrics")),
+                V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS,
+            )
+            and realtime_summary.get("current_route")
+            == V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+            and _int_or_zero(realtime_summary.get("streaming_error_count")) == 0
+            and _int_or_zero(realtime_summary.get("streaming_dropped_event_count"))
+            == 0
+        ),
+        expected={
+            "proof_passed": True,
+            "requires_external_service": False,
+            "metric_floor": 1.0,
+            "current_route": V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            "streaming_error_count": 0,
+            "streaming_dropped_event_count": 0,
+        },
+        evidence={
+            "proof_passed": realtime_proof.get("passed"),
+            "requires_external_service": realtime_proof.get(
+                "requires_external_service"
+            ),
+            "selected_metrics": dict(_as_mapping(realtime_proof.get("selected_metrics"))),
+            "run_metrics": dict(_as_mapping(realtime_run.get("metrics"))),
+            "selected_summary": {
+                "current_route": realtime_summary.get("current_route"),
+                "streaming_error_count": realtime_summary.get(
+                    "streaming_error_count"
+                ),
+                "streaming_dropped_event_count": realtime_summary.get(
+                    "streaming_dropped_event_count"
+                ),
+            },
+        },
+    )
+
+    memory_evidence = _as_mapping(memory_layer_probe.get("evidence"))
+    memory_proof = _as_mapping(memory_evidence.get("proof"))
+    memory_summary = _as_mapping(memory_proof.get("selected_summary"))
+    memory_run = _as_mapping(memory_evidence.get("run"))
+    append_axis(
+        "memory_lineage_retrieval",
+        source_check="memory_layer_probe_readiness",
+        passed=(
+            empty_buckets(
+                memory_layer_probe,
+                (
+                    "missing_files",
+                    "optimization_errors",
+                    "proof_errors",
+                    "manifest_errors",
+                    "metric_errors",
+                    "runtime_errors",
+                    "errors",
+                ),
+            )
+            and memory_proof.get("passed") is True
+            and memory_proof.get("requires_external_service") is False
+            and metrics_at_floor(
+                _as_mapping(memory_proof.get("selected_metrics")),
+                V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS,
+            )
+            and metrics_at_floor(
+                _as_mapping(memory_run.get("metrics")),
+                V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS,
+            )
+            and memory_summary.get("retrieval_citations_current") is True
+            and _int_or_zero(memory_summary.get("open_poisoning_count")) == 0
+            and _int_or_zero(memory_summary.get("policy_violation_count")) == 0
+            and _int_or_zero(memory_summary.get("isolation_violation_count")) == 0
+        ),
+        expected={
+            "proof_passed": True,
+            "requires_external_service": False,
+            "metric_floor": 1.0,
+            "retrieval_citations_current": True,
+            "open_poisoning_count": 0,
+            "policy_violation_count": 0,
+            "isolation_violation_count": 0,
+        },
+        evidence={
+            "proof_passed": memory_proof.get("passed"),
+            "requires_external_service": memory_proof.get(
+                "requires_external_service"
+            ),
+            "selected_metrics": dict(_as_mapping(memory_proof.get("selected_metrics"))),
+            "run_metrics": dict(_as_mapping(memory_run.get("metrics"))),
+            "selected_summary": {
+                "retrieval_citations_current": memory_summary.get(
+                    "retrieval_citations_current"
+                ),
+                "open_poisoning_count": memory_summary.get("open_poisoning_count"),
+                "policy_violation_count": memory_summary.get(
+                    "policy_violation_count"
+                ),
+                "isolation_violation_count": memory_summary.get(
+                    "isolation_violation_count"
+                ),
+            },
+        },
+    )
+
+    room_evidence = _as_mapping(multi_agent_room_probe.get("evidence"))
+    room_optimization = _as_mapping(room_evidence.get("optimization"))
+    room_summary = _as_mapping(room_optimization.get("selected_report_summary"))
+    append_axis(
+        "multi_agent_coordination",
+        source_check="multi_agent_room_probe_readiness",
+        passed=(
+            empty_buckets(
+                multi_agent_room_probe,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "optimization_errors",
+                    "proof_errors",
+                    "promotion_errors",
+                    "metric_errors",
+                    "coordination_errors",
+                ),
+            )
+            and _as_mapping(room_optimization.get("proof")).get("passed") is True
+            and _as_mapping(room_optimization.get("proof")).get(
+                "requires_external_service"
+            )
+            is False
+            and metrics_at_floor(
+                _as_mapping(room_optimization.get("selected_metrics")),
+                V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS,
+            )
+            and contains_all(
+                room_summary.get("participants") or [],
+                V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS,
+            )
+            and room_summary.get("terminal_state") is True
+            and _int_or_zero(room_summary.get("reconciliation_conflict_count")) == 0
+        ),
+        expected={
+            "proof_passed": True,
+            "requires_external_service": False,
+            "metric_floor": 1.0,
+            "participants": V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS,
+            "terminal_state": True,
+            "reconciliation_conflict_count": 0,
+        },
+        evidence={
+            "proof": dict(_as_mapping(room_optimization.get("proof"))),
+            "selected_metrics": dict(
+                _as_mapping(room_optimization.get("selected_metrics"))
+            ),
+            "selected_report_summary": {
+                "participants": room_summary.get("participants") or [],
+                "terminal_state": room_summary.get("terminal_state"),
+                "reconciliation_conflict_count": room_summary.get(
+                    "reconciliation_conflict_count"
+                ),
+            },
+        },
+    )
+
+    orchestration_evidence = _as_mapping(orchestration_stack_probe.get("evidence"))
+    orchestration_proof = _as_mapping(orchestration_evidence.get("proof"))
+    orchestration_run = _as_mapping(orchestration_evidence.get("run"))
+    orchestration_manifest = _as_mapping(orchestration_evidence.get("manifest"))
+    append_axis(
+        "world_orchestration_replay",
+        source_check="orchestration_stack_probe_readiness",
+        passed=(
+            empty_buckets(
+                orchestration_stack_probe,
+                (
+                    "missing_files",
+                    "optimization_errors",
+                    "proof_errors",
+                    "manifest_errors",
+                    "metric_errors",
+                    "runtime_errors",
+                    "errors",
+                ),
+            )
+            and orchestration_proof.get("passed") is True
+            and orchestration_proof.get("requires_external_service") is False
+            and contains_all(
+                orchestration_manifest.get("environment_types") or [],
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+            )
+            and metrics_at_floor(
+                _as_mapping(orchestration_proof.get("selected_metrics")),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS,
+            )
+            and metrics_at_floor(
+                _as_mapping(orchestration_run.get("metrics")),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS,
+            )
+        ),
+        expected={
+            "proof_passed": True,
+            "requires_external_service": False,
+            "environment_types": V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+            "metric_floor": 1.0,
+        },
+        evidence={
+            "proof_passed": orchestration_proof.get("passed"),
+            "requires_external_service": orchestration_proof.get(
+                "requires_external_service"
+            ),
+            "environment_types": orchestration_manifest.get("environment_types")
+            or [],
+            "selected_metrics": dict(
+                _as_mapping(orchestration_proof.get("selected_metrics"))
+            ),
+            "run_metrics": dict(_as_mapping(orchestration_run.get("metrics"))),
+        },
+    )
+
+    trinity_suite_evidence = _as_mapping(
+        framework_adapter_trinity_suite.get("evidence")
+    )
+    trinity_suite = _as_mapping(trinity_suite_evidence.get("suite"))
+    redteam_manifest = _as_mapping(trinity_suite_evidence.get("redteam_manifest"))
+    trinity_metrics = _as_mapping(trinity_suite_evidence.get("metrics"))
+    append_axis(
+        "redteam_pen_test_suite",
+        source_check="framework_adapter_trinity_suite_readiness",
+        passed=(
+            empty_buckets(
+                framework_adapter_trinity_suite,
+                (
+                    "missing_files",
+                    "suite_errors",
+                    "manifest_errors",
+                    "metric_errors",
+                    "optimization_errors",
+                    "errors",
+                ),
+            )
+            and trinity_suite.get("status") == "passed"
+            and contains_all(trinity_suite.get("child_commands") or [], ["run", "redteam"])
+            and metrics_at_floor(
+                trinity_metrics,
+                V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS,
+            )
+            and contains_all(
+                redteam_manifest.get("attacks") or [],
+                V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS,
+            )
+            and contains_all(
+                redteam_manifest.get("surfaces") or [],
+                V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES,
+            )
+        ),
+        expected={
+            "suite_status": "passed",
+            "child_commands": ["run", "redteam"],
+            "metric_floor": 1.0,
+            "attacks": V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS,
+            "surfaces": V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES,
+        },
+        evidence={
+            "suite": {
+                "status": trinity_suite.get("status"),
+                "child_commands": trinity_suite.get("child_commands") or [],
+            },
+            "metrics": dict(trinity_metrics),
+            "redteam_manifest": {
+                "attacks": redteam_manifest.get("attacks") or [],
+                "surfaces": redteam_manifest.get("surfaces") or [],
+            },
+        },
+    )
+
+    regression_evidence = _as_mapping(regression_artifact.get("evidence"))
+    regression_replay = _as_mapping(regression_evidence.get("replay_summary"))
+    regression_promotion = _as_mapping(
+        regression_evidence.get("promotion_summary")
+    )
+    append_axis(
+        "regression_promotion_replay",
+        source_check="regression_artifact_readiness",
+        passed=(
+            empty_buckets(
+                regression_artifact,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "child_errors",
+                    "contract_errors",
+                    "capability_errors",
+                    "metric_errors",
+                ),
+            )
+            and regression_evidence.get("result_status") == "passed"
+            and regression_evidence.get("capability_gate_passed") is True
+            and contains_all(
+                regression_evidence.get("observed_commands") or [],
+                V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS,
+            )
+            and _int_or_zero(regression_promotion.get("promoted_finding_count"))
+            >= 1
+            and _float_or_zero(
+                regression_replay.get("replay_pass_rate")
+                or regression_replay.get("pass_rate")
+            )
+            >= 1.0
+            and _int_or_zero(regression_replay.get("failed_count")) == 0
+        ),
+        expected={
+            "result_status": "passed",
+            "capability_gate_passed": True,
+            "observed_commands": V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS,
+            "promoted_finding_count": ">=1",
+            "replay_pass_rate": ">=1.0",
+            "replay_failed_count": 0,
+        },
+        evidence={
+            "result_status": regression_evidence.get("result_status"),
+            "capability_gate_passed": regression_evidence.get(
+                "capability_gate_passed"
+            ),
+            "observed_commands": regression_evidence.get("observed_commands") or [],
+            "promotion_summary": dict(regression_promotion),
+            "replay_summary": dict(regression_replay),
+        },
+    )
+
+    passed_axes = [axis["axis"] for axis in axes if axis["passed"]]
+    missing_axes = [
+        axis
+        for axis in V1_OPENENV_10X_ROBUSTNESS_AXES
+        if axis not in set(passed_axes)
+    ]
+    if missing_axes:
+        axis_errors.append(
+            {
+                "axis": "required_axes",
+                "expected": V1_OPENENV_10X_ROBUSTNESS_AXES,
+                "observed": passed_axes,
+                "missing": missing_axes,
+            }
+        )
+    if len(passed_axes) < V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT:
+        axis_errors.append(
+            {
+                "axis": "minimum_axis_count",
+                "expected": f">={V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT}",
+                "observed": len(passed_axes),
+            }
+        )
+
+    return {
+        "required_files": list(V1_OPENENV_10X_ROBUSTNESS_FILES),
+        "required_axes": list(V1_OPENENV_10X_ROBUSTNESS_AXES),
+        "required_source_urls": list(V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS),
+        "min_axis_count": V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT,
+        "missing_files": missing_files,
+        "axis_errors": axis_errors,
+        "evidence": {
+            "axis_count": len(axes),
+            "passed_axis_count": len(passed_axes),
+            "passed_axes": passed_axes,
+            "axes": axes,
+        },
+    }
+
+
 def _release_framework_optimizer_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_FRAMEWORK_OPTIMIZER_FILES)
     manifest_errors: list[dict[str, Any]] = []
@@ -16439,6 +17373,10 @@ __all__ = [
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
+    "V1_OPENENV_10X_ROBUSTNESS_AXES",
+    "V1_OPENENV_10X_ROBUSTNESS_FILES",
+    "V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT",
+    "V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS",
     "V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL",
     "V1_MULTI_AGENT_ROOM_PROBE_FILES",
     "V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND",

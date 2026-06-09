@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `openenv_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -371,6 +371,12 @@ Current checkpoint:
   `agent-learning.run.v1`, execute that promoted run, and close external
   task-quality, world, framework, retrieval, memory-lineage, multi-agent, tool,
   and task metrics.
+- OpenEnv 10x robustness is now an executable release-check gate:
+  `openenv_10x_robustness` aggregates the existing local proof outputs and
+  requires at least ten independent axes to pass across OpenEnv runtime replay,
+  framework simulation, local evals, optimizer recovery, adapter promotion,
+  protocol routing, browser/CUA, realtime, memory, multi-agent coordination,
+  world orchestration, red-team suite coverage, and regression replay.
 
 Acceptance gates:
 
@@ -389,15 +395,15 @@ Next implementation focus:
 - Avoid adding hosted optimizer/eval dependencies.
 - Add real-key live-target checks only for explicitly selected user workloads
   and keep those results out of release metadata.
-- Add an explicit 10x OpenEnv robustness target: support local-first OpenEnv
-  adapter probes for Gymnasium-style `reset()`, `step()`, and `state()`
-  contracts; container/HTTP/WebSocket-backed environment replay; MCP/tool action
-  routing; reward/done/metadata capture; and sandbox/isolation evidence. The
-  Agent Learning Kit framework/provider surface should be materially more robust
-  than an OpenEnv-only baseline by proving at least ten independent resilience
-  axes in release-check evidence: cross-framework simulation, eval, red-team,
-  memory, browser/CUA, realtime, protocol, multi-agent, replay, optimizer
-  recovery, and regression promotion.
+- Keep the explicit 10x OpenEnv robustness target executable: support
+  local-first OpenEnv adapter probes for Gymnasium-style `reset()`, `step()`,
+  and `state()` contracts; container/HTTP/WebSocket-backed environment replay;
+  MCP/tool action routing; reward/done/metadata capture; and sandbox/isolation
+  evidence. The Agent Learning Kit framework/provider surface should be
+  materially more robust than an OpenEnv-only baseline by keeping at least ten
+  independent resilience axes green in release-check evidence: cross-framework
+  simulation, eval, red-team, memory, browser/CUA, realtime, protocol,
+  multi-agent, replay, optimizer recovery, and regression promotion.
 - Treat "10x more robust than OpenEnv" as a measurable release bar, not wording
   for marketing copy: every comparative claim must map to executable artifacts,
   passing metrics, failure-injection coverage, adversarial state coverage,

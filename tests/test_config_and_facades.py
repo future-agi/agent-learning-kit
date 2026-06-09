@@ -15286,6 +15286,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_openenv_adapter_quality_minima"] == (
         trinity.V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
     )
+    assert payload["required_openenv_10x_robustness_files"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_FILES
+    )
+    assert payload["required_openenv_10x_robustness_axes"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    )
+    assert payload["required_openenv_10x_robustness_source_urls"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS
+    )
+    assert payload["required_openenv_10x_robustness_min_axis_count"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+    )
     assert payload["required_framework_optimizer_files"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_FILES
     )
@@ -15600,6 +15612,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_adapter_trinity_suite_readiness",
         "orchestration_stack_probe_readiness",
         "trinity_stack_probe_readiness",
+        "openenv_10x_robustness",
         "package_metadata",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -16810,6 +16823,122 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert "openenv" in runtime_output["event_types"]
     assert runtime_output["openenv_summary"]["step_count"] == 2
     assert runtime_output["openenv_summary"]["done"] is True
+    openenv_10x = checks["openenv_10x_robustness"]["evidence"]
+    assert openenv_10x["required_files"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_FILES
+    )
+    assert openenv_10x["required_axes"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    )
+    assert openenv_10x["required_source_urls"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS
+    )
+    assert openenv_10x["min_axis_count"] == (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+    )
+    assert openenv_10x["missing_files"] == []
+    assert openenv_10x["axis_errors"] == []
+    openenv_10x_evidence = openenv_10x["evidence"]
+    assert openenv_10x_evidence["axis_count"] == len(
+        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    )
+    assert openenv_10x_evidence["passed_axis_count"] >= (
+        trinity.V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+    )
+    assert set(openenv_10x_evidence["passed_axes"]) == set(
+        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    )
+    openenv_10x_axes = {
+        axis["axis"]: axis for axis in openenv_10x_evidence["axes"]
+    }
+    assert set(openenv_10x_axes) == set(trinity.V1_OPENENV_10X_ROBUSTNESS_AXES)
+    assert all(axis["passed"] is True for axis in openenv_10x_axes.values())
+    assert openenv_10x_axes["cross_framework_simulation_matrix"][
+        "source_check"
+    ] == "framework_provider_contract_readiness"
+    matrix_axis = openenv_10x_axes["cross_framework_simulation_matrix"]["evidence"]
+    assert matrix_axis["contract_count"] >= 14
+    assert matrix_axis["local_executable_fixture_count"] >= 14
+    assert matrix_axis["trace_runtime_count"] >= 14
+    assert matrix_axis["external_target_count"] == 0
+    assert matrix_axis["requires_external_service_count"] == 0
+    assert {"openenv", "gymnasium", "mcp", "a2a", "browser_use"} <= set(
+        matrix_axis["frameworks"]
+    )
+    assert {"text", "voice", "cua"} <= set(matrix_axis["modalities"])
+    assert matrix_axis["transports"] == ["in_process"]
+    runtime_axis = openenv_10x_axes["openenv_runtime_contract"]["evidence"]
+    assert set(runtime_axis["required_openenv"]) >= set(
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    )
+    assert runtime_axis["openenv_summary"]["reset_count"] >= 1
+    assert runtime_axis["openenv_summary"]["step_count"] >= 2
+    assert runtime_axis["openenv_summary"]["failure_count"] >= 1
+    assert runtime_axis["openenv_summary"]["error_count"] == 0
+    assert runtime_axis["openenv_summary"]["sandbox_enabled"] is True
+    assert runtime_axis["openenv_summary"]["requires_external_service"] is False
+    eval_axis = openenv_10x_axes["local_evaluation_gates"]["evidence"]
+    for metric in trinity.V1_OPENENV_OPTIMIZER_REQUIRED_METRICS:
+        assert eval_axis["optimizer_metrics"][metric] == pytest.approx(1.0)
+    for metric in trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS:
+        assert eval_axis["adapter_metrics"][metric] == pytest.approx(1.0)
+    optimizer_axis = openenv_10x_axes["adaptive_optimizer_recovery"]["evidence"]
+    assert optimizer_axis["best_candidate_profile"] == "verified_openenv_replay"
+    assert optimizer_axis["candidate_lineage_count"] >= 3
+    assert set(optimizer_axis["manifest_candidate_profiles"]) >= set(
+        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+    )
+    adapter_axis = openenv_10x_axes["framework_adapter_promotion"]["evidence"]
+    assert adapter_axis["result_kind"] == "agent-learning.run.v1"
+    assert adapter_axis["result_status"] == "passed"
+    assert adapter_axis["output_roundtrip"] is True
+    assert adapter_axis["manifest_agent"]["framework"] == "openenv"
+    assert "openenv" in adapter_axis["runtime_output"]["state_keys"]
+    protocol_axis = openenv_10x_axes["protocol_tool_routing"]["evidence"]
+    assert protocol_axis["protocols"] == ["a2a", "mcp"]
+    assert protocol_axis["mcp_summary"]["tool_count"] >= 2
+    assert protocol_axis["a2a_summary"]["task_count"] >= 1
+    browser_axis = openenv_10x_axes["browser_cua_resilience"]["evidence"]
+    assert browser_axis["proof_passed"] is True
+    assert browser_axis["requires_external_service"] is False
+    assert browser_axis["selected_summary"]["mutation_count"] >= 2
+    assert browser_axis["selected_summary"]["prompt_injection_touched_count"] == 0
+    realtime_axis = openenv_10x_axes["realtime_voice_streaming"]["evidence"]
+    assert realtime_axis["proof_passed"] is True
+    assert realtime_axis["requires_external_service"] is False
+    assert realtime_axis["selected_summary"]["current_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_axis["selected_summary"]["streaming_error_count"] == 0
+    memory_axis = openenv_10x_axes["memory_lineage_retrieval"]["evidence"]
+    assert memory_axis["proof_passed"] is True
+    assert memory_axis["requires_external_service"] is False
+    assert memory_axis["selected_summary"]["retrieval_citations_current"] is True
+    assert memory_axis["selected_summary"]["open_poisoning_count"] == 0
+    room_axis = openenv_10x_axes["multi_agent_coordination"]["evidence"]
+    assert room_axis["proof"]["passed"] is True
+    assert set(room_axis["selected_report_summary"]["participants"]) >= set(
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+    )
+    assert room_axis["selected_report_summary"]["terminal_state"] is True
+    orchestration_axis = openenv_10x_axes["world_orchestration_replay"]["evidence"]
+    assert orchestration_axis["proof_passed"] is True
+    assert set(orchestration_axis["environment_types"]) >= set(
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    redteam_axis = openenv_10x_axes["redteam_pen_test_suite"]["evidence"]
+    assert redteam_axis["suite"]["status"] == "passed"
+    assert {"run", "redteam"} <= set(redteam_axis["suite"]["child_commands"])
+    assert redteam_axis["metrics"]["adversarial_resilience"] == pytest.approx(1.0)
+    assert redteam_axis["metrics"]["red_team_campaign_quality"] == pytest.approx(1.0)
+    regression_axis = openenv_10x_axes["regression_promotion_replay"]["evidence"]
+    assert regression_axis["result_status"] == "passed"
+    assert regression_axis["capability_gate_passed"] is True
+    assert set(regression_axis["observed_commands"]) >= set(
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS
+    )
+    assert regression_axis["promotion_summary"]["promoted_finding_count"] >= 1
+    assert regression_axis["replay_summary"]["replay_pass_rate"] == pytest.approx(1.0)
     framework_optimizer = checks["framework_optimizer_readiness"]["evidence"]
     assert framework_optimizer["required_files"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_FILES
