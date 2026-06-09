@@ -15139,6 +15139,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["forbidden_ui_secret_markers"] == (
         trinity.V1_UI_FORBIDDEN_SECRET_MARKERS
     )
+    assert payload["required_regression_artifact_files"] == (
+        trinity.V1_REGRESSION_ARTIFACT_FILES
+    )
+    assert payload["required_regression_artifact_commands"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS
+    )
+    assert payload["required_regression_artifact_result_kinds"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS
+    )
+    assert payload["required_regression_artifact_metrics"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_METRICS
+    )
     assert payload["required_harness_diagnosis_source"] == (
         trinity.V1_HARNESS_DIAGNOSIS_SOURCE
     )
@@ -15243,6 +15255,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "redteam_corpus_execution_readiness",
         "schema_kind_contract",
         "ui_action_report_readiness",
+        "regression_artifact_readiness",
         "harness_diagnosis_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
@@ -15460,6 +15473,78 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert suite_artifact["source_kind"] == "agent-learning.suite.v1"
     assert suite_artifact["report_sections"] == ["summary"]
     assert "report_artifact" in suite_artifact["action_ids"]
+    regression_artifact = checks["regression_artifact_readiness"]["evidence"]
+    assert regression_artifact["required_files"] == (
+        trinity.V1_REGRESSION_ARTIFACT_FILES
+    )
+    assert regression_artifact["required_commands"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS
+    )
+    assert regression_artifact["required_result_kinds"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS
+    )
+    assert regression_artifact["required_metrics"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_METRICS
+    )
+    assert regression_artifact["missing_files"] == []
+    assert regression_artifact["execution_errors"] == []
+    assert regression_artifact["contract_errors"] == []
+    assert regression_artifact["capability_errors"] == []
+    assert regression_artifact["child_errors"] == []
+    assert regression_artifact["metric_errors"] == []
+    regression_evidence = regression_artifact["evidence"]
+    assert regression_evidence["result_kind"] == "agent-learning.suite.v1"
+    assert regression_evidence["result_status"] == "passed"
+    assert regression_evidence["output_roundtrip"] is True
+    assert regression_evidence["job_count"] == 5
+    assert regression_evidence["executed_count"] == 5
+    assert regression_evidence["passed_count"] == 5
+    assert regression_evidence["failed_count"] == 0
+    assert regression_evidence["skipped_count"] == 0
+    assert regression_evidence["capability_gate_passed"] is True
+    assert regression_evidence["missing_required_capabilities"] == {}
+    assert regression_evidence["evidence_gate_passed"] is True
+    assert regression_evidence["admitted_evidence_count"] == 5
+    assert regression_evidence["frozen_evidence_count"] == 5
+    assert regression_evidence["non_admitted_evidence_count"] == 0
+    assert regression_evidence["rejected_evidence_count"] == 0
+    assert regression_evidence["evidence_admission"] == {
+        "admitted_count": 5,
+        "admitted_frozen_count": 5,
+        "non_admitted_count": 0,
+        "rejected_count": 0,
+        "unfrozen_count": 0,
+    }
+    assert regression_evidence["observed_commands"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS
+    )
+    assert regression_evidence["observed_result_kinds"] == (
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS
+    )
+    assert set(regression_evidence["observed_metrics"]) >= set(
+        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_METRICS
+    )
+    assert regression_evidence["compare_summary"] == {
+        "comparison_passed": True,
+        "score_delta": pytest.approx(0.0),
+        "new_finding_count": 0,
+        "new_error_finding_count": 0,
+    }
+    assert regression_evidence["promotion_summary"] == {
+        "promoted_finding_count": 1,
+        "candidate_finding_count": 1,
+        "min_level": "warning",
+        "source_status": "failed",
+        "attack_types": ["prompt_injection"],
+        "surfaces": ["system_prompt"],
+        "environment_types": ["adversarial_attack_pack", "red_team_campaign"],
+    }
+    assert regression_evidence["replay_summary"] == {
+        "manifest_count": 1,
+        "passed_count": 1,
+        "failed_count": 0,
+        "replay_pass_rate": pytest.approx(1.0),
+    }
     harness_diagnosis = checks["harness_diagnosis_readiness"]["evidence"]
     assert harness_diagnosis["source"] == trinity.V1_HARNESS_DIAGNOSIS_SOURCE
     assert harness_diagnosis["missing_files"] == []

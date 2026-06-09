@@ -221,6 +221,35 @@ V1_UI_FORBIDDEN_SECRET_MARKERS = [
     "bearer ",
 ]
 
+V1_REGRESSION_ARTIFACT_FILES = [
+    "examples/regression_artifact_suite.json",
+    "examples/sdk_regression_artifact_suite.py",
+    "internal-docs/regression-artifact-readiness-research.md",
+]
+
+V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS = [
+    "baseline",
+    "compare",
+    "report",
+    "promote_to_regression",
+    "replay",
+]
+
+V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS = [
+    "agent-learning.baseline.v1",
+    "agent-learning.compare.v1",
+    "agent-learning.report.v1",
+    "agent-learning.regression-promotion.v1",
+    "agent-learning.replay.v1",
+]
+
+V1_REGRESSION_ARTIFACT_REQUIRED_METRICS = [
+    "compare_score_delta",
+    "compare_new_findings",
+    "compare_new_error_findings",
+    "replay_pass_rate",
+]
+
 V1_HARNESS_DIAGNOSIS_SOURCE = "examples/sdk_retrospective_harness_optimization.py"
 
 V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS = [
@@ -1607,6 +1636,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M5",
         evidence=ui_action_report,
     )
+    regression_artifact = _release_regression_artifact_status(root)
+    _append_release_check(
+        checks,
+        check_id="regression_artifact_readiness",
+        passed=(
+            not regression_artifact["missing_files"]
+            and not regression_artifact["execution_errors"]
+            and not regression_artifact["contract_errors"]
+            and not regression_artifact["capability_errors"]
+            and not regression_artifact["child_errors"]
+            and not regression_artifact["metric_errors"]
+        ),
+        milestone="M5",
+        evidence=regression_artifact,
+    )
     harness_diagnosis = _release_harness_diagnosis_status(root)
     _append_release_check(
         checks,
@@ -1847,6 +1891,16 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_UI_ACTION_REPORT_ARTIFACTS
         ),
         "forbidden_ui_secret_markers": list(V1_UI_FORBIDDEN_SECRET_MARKERS),
+        "required_regression_artifact_files": list(V1_REGRESSION_ARTIFACT_FILES),
+        "required_regression_artifact_commands": list(
+            V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS
+        ),
+        "required_regression_artifact_result_kinds": list(
+            V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS
+        ),
+        "required_regression_artifact_metrics": list(
+            V1_REGRESSION_ARTIFACT_REQUIRED_METRICS
+        ),
         "required_harness_diagnosis_source": V1_HARNESS_DIAGNOSIS_SOURCE,
         "required_harness_diagnosis_actions": list(
             V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS
@@ -2858,6 +2912,446 @@ def _release_ui_action_report_status(root: Path) -> dict[str, Any]:
         "missing_output_evidence": missing_output_evidence,
         "secret_marker_findings": secret_marker_findings,
         "errors": errors,
+    }
+
+
+def _release_regression_artifact_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_REGRESSION_ARTIFACT_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    contract_errors: list[dict[str, Any]] = []
+    capability_errors: list[dict[str, Any]] = []
+    child_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        errors: list[dict[str, Any]],
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        errors.append(
+            {
+                "path": "examples/sdk_regression_artifact_suite.py",
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        example_path = root / "examples/sdk_regression_artifact_suite.py"
+        env_name = "AGENT_LEARNING_SDK_REGRESSION_ARTIFACT_SUITE_KEY"
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_env = os.environ.get(env_name)
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_regression_artifact",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            os.environ[env_name] = "release-check-regression-artifact-key"
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-regression-artifact-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "regression-artifact-suite.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            result = {}
+            saved = {}
+        finally:
+            if previous_env is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_env
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        if result:
+            summary = _as_mapping(result.get("summary"))
+            capabilities = _as_mapping(summary.get("capabilities"))
+            evidence_admission = _as_mapping(summary.get("evidence_admission"))
+            children = [
+                item for item in _as_list(result.get("children"))
+                if isinstance(item, Mapping)
+            ]
+            child_summaries: list[dict[str, Any]] = []
+            child_by_command: dict[str, Mapping[str, Any]] = {}
+            for child in children:
+                command = str(child.get("command") or "")
+                child_result = _as_mapping(child.get("result"))
+                child_summary = _as_mapping(child_result.get("summary"))
+                stable_child_summary = dict(child_summary)
+                stable_child_summary.pop("source_path", None)
+                child_by_command[command] = child
+                child_summaries.append(
+                    {
+                        "id": child.get("id"),
+                        "command": command,
+                        "status": child.get("status"),
+                        "kind": child.get("kind") or child_result.get("kind"),
+                        "result_status": child_result.get("status"),
+                        "summary": stable_child_summary,
+                    }
+                )
+
+            promotion_child = _as_mapping(
+                child_by_command.get("promote_to_regression")
+            )
+            promotion_result = _as_mapping(promotion_child.get("result"))
+            promotion_summary = _as_mapping(promotion_result.get("summary"))
+            promotion_manifest = _as_mapping(promotion_result.get("manifest"))
+            promotion_simulation = _as_mapping(promotion_manifest.get("simulation"))
+            promotion_environments = [
+                item
+                for item in _as_list(promotion_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            promotion_environment_types = [
+                str(item.get("type"))
+                for item in promotion_environments
+                if item.get("type")
+            ]
+            replay_child = _as_mapping(child_by_command.get("replay"))
+            replay_summary = _as_mapping(
+                _as_mapping(replay_child.get("result")).get("summary")
+            )
+            compare_child = _as_mapping(child_by_command.get("compare"))
+            compare_summary = _as_mapping(
+                _as_mapping(compare_child.get("result")).get("summary")
+            )
+            observed_commands = [str(child.get("command") or "") for child in children]
+            observed_result_kinds = [
+                str(child.get("kind") or _as_mapping(child.get("result")).get("kind"))
+                for child in children
+            ]
+            observed_metrics = [
+                str(metric) for metric in _as_list(capabilities.get("metrics"))
+            ]
+            evidence.update(
+                {
+                    "result_kind": result.get("kind"),
+                    "result_status": result.get("status"),
+                    "output_roundtrip": result == saved,
+                    "job_count": summary.get("job_count"),
+                    "executed_count": summary.get("executed_count"),
+                    "passed_count": summary.get("passed_count"),
+                    "failed_count": summary.get("failed_count"),
+                    "skipped_count": summary.get("skipped_count"),
+                    "score": summary.get("score"),
+                    "capability_gate_passed": summary.get(
+                        "capability_gate_passed"
+                    ),
+                    "missing_required_capabilities": dict(
+                        _as_mapping(summary.get("missing_required_capabilities"))
+                    ),
+                    "evidence_gate_passed": summary.get("evidence_gate_passed"),
+                    "admitted_evidence_count": summary.get(
+                        "admitted_evidence_count"
+                    ),
+                    "frozen_evidence_count": summary.get("frozen_evidence_count"),
+                    "non_admitted_evidence_count": summary.get(
+                        "non_admitted_evidence_count"
+                    ),
+                    "rejected_evidence_count": summary.get(
+                        "rejected_evidence_count"
+                    ),
+                    "evidence_admission": {
+                        "admitted_count": evidence_admission.get("admitted_count"),
+                        "admitted_frozen_count": evidence_admission.get(
+                            "admitted_frozen_count"
+                        ),
+                        "non_admitted_count": evidence_admission.get(
+                            "non_admitted_count"
+                        ),
+                        "rejected_count": evidence_admission.get("rejected_count"),
+                        "unfrozen_count": evidence_admission.get("unfrozen_count"),
+                    },
+                    "observed_commands": observed_commands,
+                    "capability_commands": list(
+                        _as_list(capabilities.get("commands"))
+                    ),
+                    "observed_result_kinds": observed_result_kinds,
+                    "capability_result_kinds": list(
+                        _as_list(capabilities.get("result_kinds"))
+                    ),
+                    "observed_metrics": observed_metrics,
+                    "child_summaries": child_summaries,
+                    "compare_summary": {
+                        "comparison_passed": compare_summary.get(
+                            "comparison_passed"
+                        ),
+                        "score_delta": compare_summary.get("score_delta"),
+                        "new_finding_count": compare_summary.get(
+                            "new_finding_count"
+                        ),
+                        "new_error_finding_count": compare_summary.get(
+                            "new_error_finding_count"
+                        ),
+                    },
+                    "promotion_summary": {
+                        "promoted_finding_count": promotion_summary.get(
+                            "promoted_finding_count"
+                        ),
+                        "candidate_finding_count": promotion_summary.get(
+                            "candidate_finding_count"
+                        ),
+                        "min_level": promotion_summary.get("min_level"),
+                        "source_status": promotion_summary.get("source_status"),
+                        "attack_types": list(
+                            _as_list(promotion_summary.get("attack_types"))
+                        ),
+                        "surfaces": list(
+                            _as_list(promotion_summary.get("surfaces"))
+                        ),
+                        "environment_types": promotion_environment_types,
+                    },
+                    "replay_summary": {
+                        "manifest_count": replay_summary.get("manifest_count"),
+                        "passed_count": replay_summary.get("passed_count"),
+                        "failed_count": replay_summary.get("failed_count"),
+                        "replay_pass_rate": replay_summary.get("replay_pass_rate"),
+                    },
+                }
+            )
+
+            for field, observed, expected in (
+                ("kind", result.get("kind"), "agent-learning.suite.v1"),
+                ("status", result.get("status"), "passed"),
+            ):
+                if observed != expected:
+                    append_error(contract_errors, field, expected, observed)
+            if result != saved:
+                append_error(contract_errors, "output_roundtrip", True, False)
+
+            expected_count = len(V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS)
+            count_expectations = {
+                "summary.job_count": summary.get("job_count"),
+                "summary.executed_count": summary.get("executed_count"),
+                "summary.passed_count": summary.get("passed_count"),
+            }
+            for field, observed in count_expectations.items():
+                if _int_or_zero(observed) != expected_count:
+                    append_error(capability_errors, field, expected_count, observed)
+            for field in ("failed_count", "skipped_count"):
+                observed = summary.get(field)
+                if _int_or_zero(observed) != 0:
+                    append_error(capability_errors, f"summary.{field}", 0, observed)
+            if summary.get("capability_gate_passed") is not True:
+                append_error(
+                    capability_errors,
+                    "summary.capability_gate_passed",
+                    True,
+                    summary.get("capability_gate_passed"),
+                )
+            if summary.get("missing_required_capabilities") not in ({}, None):
+                append_error(
+                    capability_errors,
+                    "summary.missing_required_capabilities",
+                    {},
+                    summary.get("missing_required_capabilities"),
+                )
+            if summary.get("evidence_gate_passed") is not True:
+                append_error(
+                    capability_errors,
+                    "summary.evidence_gate_passed",
+                    True,
+                    summary.get("evidence_gate_passed"),
+                )
+            if _int_or_zero(summary.get("admitted_evidence_count")) < expected_count:
+                append_error(
+                    capability_errors,
+                    "summary.admitted_evidence_count",
+                    f">={expected_count}",
+                    summary.get("admitted_evidence_count"),
+                )
+            if _int_or_zero(summary.get("frozen_evidence_count")) < expected_count:
+                append_error(
+                    capability_errors,
+                    "summary.frozen_evidence_count",
+                    f">={expected_count}",
+                    summary.get("frozen_evidence_count"),
+                )
+            for field in ("non_admitted_evidence_count", "rejected_evidence_count"):
+                observed = summary.get(field)
+                if _int_or_zero(observed) != 0:
+                    append_error(capability_errors, f"summary.{field}", 0, observed)
+
+            if observed_commands != V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS:
+                append_error(
+                    child_errors,
+                    "children.commands",
+                    V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS,
+                    observed_commands,
+                )
+            if observed_result_kinds != V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS:
+                append_error(
+                    child_errors,
+                    "children.kinds",
+                    V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS,
+                    observed_result_kinds,
+                )
+            for child in children:
+                if child.get("status") != "passed":
+                    append_error(
+                        child_errors,
+                        f"children.{child.get('id')}.status",
+                        "passed",
+                        child.get("status"),
+                    )
+                child_result = _as_mapping(child.get("result"))
+                if child_result.get("status") != "passed":
+                    append_error(
+                        child_errors,
+                        f"children.{child.get('id')}.result.status",
+                        "passed",
+                        child_result.get("status"),
+                    )
+
+            normalized_capability_commands = {
+                _release_norm(item) for item in _as_list(capabilities.get("commands"))
+            }
+            missing_commands = sorted(
+                {_release_norm(item) for item in V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS}
+                - normalized_capability_commands
+            )
+            if missing_commands:
+                append_error(
+                    capability_errors,
+                    "summary.capabilities.commands",
+                    V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS,
+                    list(_as_list(capabilities.get("commands"))),
+                )
+            normalized_result_kinds = {
+                _release_norm(item)
+                for item in _as_list(capabilities.get("result_kinds"))
+            }
+            missing_result_kinds = sorted(
+                {
+                    _release_norm(item)
+                    for item in V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS
+                }
+                - normalized_result_kinds
+            )
+            if missing_result_kinds:
+                append_error(
+                    capability_errors,
+                    "summary.capabilities.result_kinds",
+                    V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS,
+                    list(_as_list(capabilities.get("result_kinds"))),
+                )
+            normalized_metrics = {
+                _release_norm(item) for item in _as_list(capabilities.get("metrics"))
+            }
+            missing_metrics = sorted(
+                {
+                    _release_norm(item)
+                    for item in V1_REGRESSION_ARTIFACT_REQUIRED_METRICS
+                }
+                - normalized_metrics
+            )
+            if missing_metrics:
+                append_error(
+                    metric_errors,
+                    "summary.capabilities.metrics",
+                    V1_REGRESSION_ARTIFACT_REQUIRED_METRICS,
+                    observed_metrics,
+                )
+
+            metric_expectations = {
+                "compare.summary.comparison_passed": (
+                    compare_summary.get("comparison_passed"),
+                    True,
+                ),
+                "compare.summary.new_finding_count": (
+                    compare_summary.get("new_finding_count"),
+                    0,
+                ),
+                "compare.summary.new_error_finding_count": (
+                    compare_summary.get("new_error_finding_count"),
+                    0,
+                ),
+                "promotion.summary.promoted_finding_count": (
+                    promotion_summary.get("promoted_finding_count"),
+                    1,
+                ),
+                "replay.summary.manifest_count": (
+                    replay_summary.get("manifest_count"),
+                    1,
+                ),
+                "replay.summary.passed_count": (replay_summary.get("passed_count"), 1),
+                "replay.summary.failed_count": (replay_summary.get("failed_count"), 0),
+            }
+            for field, (observed, expected) in metric_expectations.items():
+                if observed != expected:
+                    append_error(metric_errors, field, expected, observed)
+            if _float_or_zero(compare_summary.get("score_delta")) < 0.0:
+                append_error(
+                    metric_errors,
+                    "compare.summary.score_delta",
+                    ">=0.0",
+                    compare_summary.get("score_delta"),
+                )
+            if _float_or_zero(replay_summary.get("replay_pass_rate")) < 1.0:
+                append_error(
+                    metric_errors,
+                    "replay.summary.replay_pass_rate",
+                    ">=1.0",
+                    replay_summary.get("replay_pass_rate"),
+                )
+            if "adversarial_attack_pack" not in promotion_environment_types:
+                append_error(
+                    child_errors,
+                    "promotion.manifest.simulation.environments.type",
+                    "adversarial_attack_pack",
+                    promotion_environment_types,
+                )
+
+    return {
+        "required_files": list(V1_REGRESSION_ARTIFACT_FILES),
+        "required_commands": list(V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS),
+        "required_result_kinds": list(V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS),
+        "required_metrics": list(V1_REGRESSION_ARTIFACT_REQUIRED_METRICS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "contract_errors": contract_errors,
+        "capability_errors": capability_errors,
+        "child_errors": child_errors,
+        "metric_errors": metric_errors,
+        "evidence": evidence,
     }
 
 
@@ -6380,6 +6874,10 @@ __all__ = [
     "V1_REDTEAM_RESEARCH_FILES",
     "V1_REDTEAM_RESEARCH_SOURCE_URLS",
     "V1_REDTEAM_RESEARCH_SURFACES",
+    "V1_REGRESSION_ARTIFACT_FILES",
+    "V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS",
+    "V1_REGRESSION_ARTIFACT_REQUIRED_METRICS",
+    "V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS",
     "V1_UI_ACTION_REPORT_ARTIFACTS",
     "V1_UI_FORBIDDEN_SECRET_MARKERS",
     "assert_release_ready",

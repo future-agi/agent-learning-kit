@@ -82,12 +82,15 @@ synthesis, world/framework/memory stacks, multi-agent framework handoffs,
 framework certification, and framework import repair. OpenEnv adapter readiness
 executes a local framework adapter that returns OpenEnv/Gymnasium-style replay
 evidence and verifies generated OpenEnv gates, normalized state, events, and
-artifacts. Adapter probe readiness exercises raw probe, discovery,
-optimization, auto-discovery, promotion, and one-call run cookbooks so BYO
-framework objects can become evaluated run manifests locally. The composed
-trinity-stack probe readiness gate proves that the selected orchestration stack
-agent can pass a localhost task evaluator and promote into one run manifest with
-world, framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
+artifacts. Regression artifact readiness runs the local baseline, compare,
+report, promote-to-regression, and replay lifecycle so optimized or red-team
+evidence can become replayable CI artifacts. Adapter probe readiness exercises
+raw probe, discovery, optimization, auto-discovery, promotion, and one-call run
+cookbooks so BYO framework objects can become evaluated run manifests locally.
+The composed trinity-stack probe readiness gate proves that the selected
+orchestration stack agent can pass a localhost task evaluator and promote into
+one run manifest with world, framework, retrieval, memory, multi-agent, and
+evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -1532,7 +1535,11 @@ runnable regression manifest, and replay that manifest, all as first-class
 `suite.build_regression_artifact_suite_manifest()` and
 `examples/sdk_regression_artifact_suite.py` expose the same lifecycle from the
 SDK; the cookbook writes local baseline/current/finding/replay artifacts, runs
-the generated suite, and verifies promotion plus replay evidence.
+the generated suite, and verifies promotion plus replay evidence. `agent-learn
+release-check` gates this as `regression_artifact_readiness`, requiring all five
+lifecycle jobs to pass, every child artifact to be admitted and frozen, one
+warning-level finding to promote into an `adversarial_attack_pack` regression
+manifest, and replay pass rate to remain 1.0.
 
 The `voice_streaming_realtime_manifest.json` example makes `voice` and
 `streaming_trace` first-class manifest environments. It replays voice timing,

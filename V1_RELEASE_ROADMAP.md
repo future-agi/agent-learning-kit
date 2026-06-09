@@ -46,7 +46,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
-| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `harness_diagnosis_readiness` |
+| M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness` |
 | M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
@@ -183,6 +183,11 @@ Current checkpoint:
   renders reports, builds action catalogs, verifies required report sections,
   required UI card keys, required action ids, saved `action-run` output
   evidence, and scans generated UI payloads for key-like secret markers.
+- Regression artifact readiness is now an executable release-check gate:
+  `examples/sdk_regression_artifact_suite.py` must run the baseline, compare,
+  report, promote-to-regression, and replay lifecycle locally, admit and freeze
+  every child artifact, promote one red-team finding into an
+  `adversarial_attack_pack` regression manifest, and replay with pass rate 1.0.
 - The same release-check now runs a local retrospective harness optimization and
   proves the rendered `harness_diagnosis` card, diagnosis actions, retrospective
   rollout plan, retrospective-harness proof, required diagnosis layers, and 2026
