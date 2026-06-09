@@ -458,6 +458,63 @@ V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS = ["local_cli"]
 
 V1_REDTEAM_CORPUS_EXECUTION_CHANNELS = ["chat"]
 
+V1_REDTEAM_READINESS_CERTIFICATION_FILES = [
+    "examples/sdk_redteam_readiness_certification_optimization.py",
+    "internal-docs/redteam-readiness-certification-research.md",
+]
+
+V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES = [
+    "workspace_run_manifest",
+    "framework_import",
+    "red_team_campaign",
+    "agent_trust_boundary",
+    "agent_control_plane",
+    "red_team_readiness",
+]
+
+V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS = [
+    "control_plane",
+    "framework_import",
+    "red_team_campaign",
+    "trust_boundary",
+    "workspace_run",
+]
+
+V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS = [
+    "red_team_readiness_coverage",
+    "red_team_readiness_quality",
+    "tool_selection_accuracy",
+]
+
+V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS = [
+    "agent_control_plane",
+    "agent_trust_boundary_model",
+    "framework_import_manifest",
+    "red_team_campaign",
+    "red_team_readiness",
+    "workspace_run_manifest",
+]
+
+V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS = [
+    "https://arxiv.org/abs/2605.04019",
+    "https://arxiv.org/abs/2605.09684",
+    "https://arxiv.org/abs/2605.13940",
+    "https://arxiv.org/abs/2605.04808",
+    "https://arxiv.org/abs/2601.13518",
+    "https://arxiv.org/abs/2606.04425",
+]
+
+V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS = {
+    "ready_component_count": 5,
+    "artifact_count": 1,
+    "observability_hook_count": 1,
+    "campaign_coverage_cell_count": 4,
+    "campaign_executed_cell_count": 4,
+    "campaign_passed_run_count": 4,
+    "campaign_finding_count": 4,
+    "campaign_implemented_mitigation_count": 4,
+}
+
 V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/framework_certification_optimization.json",
     "examples/framework_import_repair_optimization.json",
@@ -2410,6 +2467,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M4",
         evidence=redteam_corpus_execution,
     )
+    redteam_readiness = _release_redteam_readiness_certification_status(root)
+    _append_release_check(
+        checks,
+        check_id="redteam_readiness_certification",
+        passed=(
+            not redteam_readiness["missing_files"]
+            and not redteam_readiness["execution_errors"]
+            and not redteam_readiness["manifest_errors"]
+            and not redteam_readiness["optimization_errors"]
+            and not redteam_readiness["metric_errors"]
+            and not redteam_readiness["readiness_errors"]
+            and not redteam_readiness["campaign_errors"]
+        ),
+        milestone="M4",
+        evidence=redteam_readiness,
+    )
     _append_release_check(
         checks,
         check_id="schema_kind_contract",
@@ -2845,6 +2918,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_redteam_corpus_execution_channels": list(
             V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
+        ),
+        "required_redteam_readiness_certification_files": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_FILES
+        ),
+        "required_redteam_readiness_certification_environment_types": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES
+        ),
+        "required_redteam_readiness_certification_components": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
+        ),
+        "required_redteam_readiness_certification_metrics": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS
+        ),
+        "required_redteam_readiness_certification_state_keys": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
+        ),
+        "required_redteam_readiness_certification_research_urls": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS
+        ),
+        "required_redteam_readiness_certification_min_counts": dict(
+            V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
         ),
         "required_ui_action_report_artifacts": copy.deepcopy(
             V1_UI_ACTION_REPORT_ARTIFACTS
@@ -5293,6 +5387,628 @@ def _release_redteam_corpus_execution_status(root: Path) -> dict[str, Any]:
         "campaign_errors": campaign_errors,
         "coverage_errors": coverage_errors,
         "blocking_gaps": blocking_gaps,
+    }
+
+
+def _release_redteam_readiness_certification_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_REDTEAM_READINESS_CERTIFICATION_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    readiness_errors: list[dict[str, Any]] = []
+    campaign_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def first_case_report(result: Mapping[str, Any]) -> Mapping[str, Any]:
+        report = _as_mapping(result.get("report"))
+        if not report and result.get("results") is not None:
+            report = result
+        cases = [
+            item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+        ]
+        return _as_mapping(cases[0]) if cases else {}
+
+    def validate_readiness_summary(
+        summary: Mapping[str, Any],
+        *,
+        path: str,
+        prefix: str,
+    ) -> None:
+        if summary.get("blocking_gaps"):
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.blocking_gaps",
+                expected=[],
+                observed=summary.get("blocking_gaps"),
+            )
+        if _int_or_zero(summary.get("blocking_gap_count")) != 0:
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.blocking_gap_count",
+                expected=0,
+                observed=summary.get("blocking_gap_count"),
+            )
+        missing_components = missing_values(
+            summary.get("ready_components"),
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS,
+        )
+        if missing_components:
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.ready_components",
+                expected=V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS,
+                observed=summary.get("ready_components") or [],
+            )
+        for field, minimum in (
+            ("ready_component_count", V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS["ready_component_count"]),
+            ("artifact_count", V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS["artifact_count"]),
+            ("observability_hook_count", V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS["observability_hook_count"]),
+        ):
+            if _int_or_zero(summary.get(field)) < minimum:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=f">={minimum}",
+                    observed=summary.get(field),
+                )
+        for field in (
+            "framework_import_ready",
+            "red_team_campaign_ready",
+            "workspace_run_ready",
+            "trust_boundary_ready",
+            "control_plane_ready",
+            "has_observability",
+            "has_artifacts",
+        ):
+            if summary.get(field) is not True:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=True,
+                    observed=summary.get(field),
+                )
+        for field in (
+            "missing_required_evidence",
+            "missing_required_signals",
+            "failed_components",
+        ):
+            if summary.get(field):
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=[],
+                    observed=summary.get(field),
+                )
+
+    def validate_campaign_summary(
+        summary: Mapping[str, Any],
+        *,
+        path: str,
+        prefix: str,
+    ) -> None:
+        minimum_fields = {
+            "coverage_cell_count": "campaign_coverage_cell_count",
+            "covered_cell_count": "campaign_coverage_cell_count",
+            "executed_cell_count": "campaign_executed_cell_count",
+            "passed_run_count": "campaign_passed_run_count",
+            "finding_count": "campaign_finding_count",
+            "implemented_mitigation_count": "campaign_implemented_mitigation_count",
+        }
+        for field, minimum_key in minimum_fields.items():
+            minimum = V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[minimum_key]
+            if _int_or_zero(summary.get(field)) < minimum:
+                append_error(
+                    campaign_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=f">={minimum}",
+                    observed=summary.get(field),
+                )
+        if _int_or_zero(summary.get("failed_run_count")) != 0:
+            append_error(
+                campaign_errors,
+                path=path,
+                field=f"{prefix}.failed_run_count",
+                expected=0,
+                observed=summary.get("failed_run_count"),
+            )
+        if _int_or_zero(summary.get("open_high_finding_count")) != 0:
+            append_error(
+                campaign_errors,
+                path=path,
+                field=f"{prefix}.open_high_finding_count",
+                expected=0,
+                observed=summary.get("open_high_finding_count"),
+            )
+        for field in (
+            "missing_coverage_cells",
+            "missing_executed_cells",
+            "missing_mitigation_cells",
+            "missing_required_attack_types",
+            "missing_required_channels",
+            "missing_required_providers",
+            "missing_required_surfaces",
+            "missing_required_taxonomies",
+            "missing_run_artifact_cells",
+            "failed_runs",
+            "open_high_findings",
+            "unmapped_findings",
+        ):
+            if summary.get(field):
+                append_error(
+                    campaign_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=[],
+                    observed=summary.get(field),
+                )
+        required_sets = {
+            "observed_attack_types": ["prompt_injection", "credential_exfiltration"],
+            "observed_surfaces": ["tool", "memory"],
+            "observed_channels": ["chat"],
+            "observed_providers": ["local_cli"],
+            "observed_taxonomies": ["owasp_agentic_ai", "owasp_llm_top_10"],
+        }
+        for field, required in required_sets.items():
+            missing = missing_values(summary.get(field), required)
+            if missing:
+                append_error(
+                    campaign_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=required,
+                    observed=summary.get(field) or [],
+                )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        env_name = "AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY"
+        previous_example_env = os.environ.get(env_name)
+        try:
+            example_path = (
+                root / "examples/sdk_redteam_readiness_certification_optimization.py"
+            )
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_redteam_readiness_certification",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            os.environ[env_name] = "release-check-redteam-readiness-key"
+            manifest = module.build_manifest()
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-redteam-readiness-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "redteam-readiness.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+                saved_manifest = json.loads(
+                    output_path.with_suffix(".manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_redteam_readiness_certification_optimization.py",
+                    "error": str(exc),
+                }
+            )
+            manifest = {}
+            result = {}
+            saved = {}
+            saved_manifest = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_example_env
+
+        if manifest:
+            optimization = _as_mapping(manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            metadata = _as_mapping(target.get("metadata"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = [
+                item
+                for item in _as_list(search_space.get("simulation.environments"))
+                if isinstance(item, list)
+            ]
+            candidate_types = [
+                [str(_as_mapping(item).get("type")) for item in candidate]
+                for candidate in candidates
+            ]
+            evaluation_config = _as_mapping(
+                _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+                    "config"
+                )
+            )
+            research_urls = [
+                str(_as_mapping(item).get("url"))
+                for item in _as_list(metadata.get("research_sources"))
+                if _as_mapping(item).get("url")
+            ]
+            scoring = _as_mapping(optimization.get("scoring"))
+            evidence["manifest"] = {
+                "version": manifest.get("version"),
+                "required_env": manifest.get("required_env") or [],
+                "saved_manifest_roundtrip": manifest == saved_manifest,
+                "task_kind": metadata.get("task_kind"),
+                "search_paths": sorted(str(path) for path in search_space),
+                "candidate_count": len(candidates),
+                "candidate_environment_types": candidate_types,
+                "scoring_method": scoring.get("method"),
+                "scoring_layers": list(scoring.get("layers") or []),
+                "metric_weights": sorted(
+                    str(metric)
+                    for metric in _as_mapping(evaluation_config.get("metric_weights"))
+                ),
+                "research_urls": research_urls,
+            }
+            manifest_expectations = {
+                "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+                "required_env": (manifest.get("required_env") or [], [env_name]),
+                "saved_manifest_roundtrip": (manifest == saved_manifest, True),
+                "metadata.task_kind": (
+                    metadata.get("task_kind"),
+                    "redteam_readiness_certification",
+                ),
+                "optimization.target.search_space": (
+                    sorted(str(path) for path in search_space),
+                    ["simulation.environments"],
+                ),
+                "optimization.target.candidate_count": (len(candidates), 2),
+                "optimization.scoring.method": (
+                    scoring.get("method"),
+                    "simulation_evidence",
+                ),
+                "optimization.scoring.layers": (
+                    list(scoring.get("layers") or []),
+                    ["red_team_readiness"],
+                ),
+            }
+            for field, (observed, expected) in manifest_expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            for types in candidate_types:
+                if types != V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES:
+                    append_error(
+                        manifest_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field="optimization.target.candidate.environment_types",
+                        expected=V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES,
+                        observed=types,
+                    )
+            missing_research = missing_values(
+                research_urls,
+                V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS,
+            )
+            if missing_research:
+                append_error(
+                    manifest_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="optimization.target.metadata.research_sources.url",
+                    expected=V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS,
+                    observed=research_urls,
+                )
+            missing_metric_weights = missing_values(
+                _as_mapping(evaluation_config.get("metric_weights")),
+                V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS,
+            )
+            if missing_metric_weights:
+                append_error(
+                    manifest_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="evaluation.agent_report.config.metric_weights",
+                    expected=V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS,
+                    observed=sorted(
+                        str(metric)
+                        for metric in _as_mapping(
+                            evaluation_config.get("metric_weights")
+                        )
+                    ),
+                )
+
+        if result:
+            summary = _as_mapping(result.get("summary"))
+            optimization = _as_mapping(result.get("optimization"))
+            histories = [
+                item
+                for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history = max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+            history_scores = [
+                _float_or_zero(_as_mapping(item).get("score")) for item in histories
+            ]
+            best_metrics = _as_mapping(_as_mapping(best_history).get("metrics"))
+            best_report = _as_mapping(_as_mapping(best_history).get("report"))
+            case = first_case_report(best_report)
+            state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+            readiness_summary = _as_mapping(
+                _as_mapping(state.get("red_team_readiness")).get("summary")
+            )
+            campaign_summary = _as_mapping(
+                _as_mapping(state.get("red_team_campaign")).get("summary")
+            )
+            evidence["optimization"] = {
+                "schema_version": result.get("schema_version"),
+                "kind": result.get("kind"),
+                "status": result.get("status"),
+                "output_roundtrip": result == saved,
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "optimization_passed": summary.get("optimization_passed"),
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "total_evaluations": summary.get("total_evaluations"),
+                "total_iterations": summary.get("total_iterations"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "best_score": _as_mapping(best_history).get("score"),
+                "best_patch_keys": sorted(
+                    str(key) for key in _as_mapping(best_history.get("patch"))
+                ),
+                "history_scores": history_scores,
+                "state_keys": sorted(str(key) for key in state),
+                "best_metrics": {
+                    metric: best_metrics.get(metric)
+                    for metric in V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS
+                },
+                "optimizer_governance_status": summary.get(
+                    "optimizer_governance_status"
+                ),
+                "optimizer_governance_failed_check_count": summary.get(
+                    "optimizer_governance_failed_check_count"
+                ),
+            }
+            evidence["readiness_summary"] = dict(readiness_summary)
+            evidence["campaign_summary"] = {
+                "coverage_cell_count": campaign_summary.get("coverage_cell_count"),
+                "covered_cell_count": campaign_summary.get("covered_cell_count"),
+                "executed_cell_count": campaign_summary.get("executed_cell_count"),
+                "passed_run_count": campaign_summary.get("passed_run_count"),
+                "failed_run_count": campaign_summary.get("failed_run_count"),
+                "finding_count": campaign_summary.get("finding_count"),
+                "implemented_mitigation_count": campaign_summary.get(
+                    "implemented_mitigation_count"
+                ),
+                "open_high_finding_count": campaign_summary.get(
+                    "open_high_finding_count"
+                ),
+                "observed_attack_types": campaign_summary.get(
+                    "observed_attack_types"
+                )
+                or [],
+                "observed_surfaces": campaign_summary.get("observed_surfaces") or [],
+                "observed_channels": campaign_summary.get("observed_channels") or [],
+                "observed_providers": campaign_summary.get("observed_providers") or [],
+                "observed_taxonomies": campaign_summary.get("observed_taxonomies")
+                or [],
+                "missing_coverage_cells": campaign_summary.get(
+                    "missing_coverage_cells"
+                )
+                or [],
+                "missing_executed_cells": campaign_summary.get(
+                    "missing_executed_cells"
+                )
+                or [],
+                "missing_mitigation_cells": campaign_summary.get(
+                    "missing_mitigation_cells"
+                )
+                or [],
+                "missing_run_artifact_cells": campaign_summary.get(
+                    "missing_run_artifact_cells"
+                )
+                or [],
+            }
+            optimization_expectations = {
+                "schema_version": (
+                    result.get("schema_version"),
+                    "agent-learning.cli.v1",
+                ),
+                "status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "summary.optimization_passed": (
+                    summary.get("optimization_passed"),
+                    True,
+                ),
+                "summary.evaluation_passed": (
+                    summary.get("evaluation_passed"),
+                    True,
+                ),
+                "summary.optimizer_governance_status": (
+                    summary.get("optimizer_governance_status"),
+                    "passed",
+                ),
+                "summary.optimizer_governance_failed_check_count": (
+                    summary.get("optimizer_governance_failed_check_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in optimization_expectations.items():
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < 0.95:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="summary.optimization_score",
+                    expected=">=0.95",
+                    observed=summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="summary.evaluation_score",
+                    expected=">=1.0",
+                    observed=summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="summary.candidate_lineage_count",
+                    expected=">=2",
+                    observed=summary.get("candidate_lineage_count"),
+                )
+            if _int_or_zero(summary.get("total_evaluations")) < 2:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="summary.total_evaluations",
+                    expected=">=2",
+                    observed=summary.get("total_evaluations"),
+                )
+            if _float_or_zero(_as_mapping(best_history).get("score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="optimization.history.best.score",
+                    expected=">=1.0",
+                    observed=_as_mapping(best_history).get("score"),
+                )
+            if not any(score < 1.0 for score in history_scores):
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="optimization.history.rejected_score",
+                    expected="at least one score < 1.0",
+                    observed=history_scores,
+                )
+            missing_state_keys = missing_values(
+                state,
+                V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_redteam_readiness_certification_optimization.py",
+                    field="optimization.history.best.report.environment_state",
+                    expected=V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS,
+                    observed=sorted(str(key) for key in state),
+                )
+            for metric in V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path="examples/sdk_redteam_readiness_certification_optimization.py",
+                        field=f"optimization.history.best.metrics.{metric}",
+                        expected=1.0,
+                        observed=best_metrics.get(metric),
+                    )
+            validate_readiness_summary(
+                readiness_summary,
+                path="examples/sdk_redteam_readiness_certification_optimization.py",
+                prefix="red_team_readiness.summary",
+            )
+            validate_campaign_summary(
+                campaign_summary,
+                path="examples/sdk_redteam_readiness_certification_optimization.py",
+                prefix="red_team_campaign.summary",
+            )
+
+    return {
+        "required_files": list(V1_REDTEAM_READINESS_CERTIFICATION_FILES),
+        "required_environment_types": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES
+        ),
+        "required_components": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
+        ),
+        "required_metrics": list(V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS),
+        "required_state_keys": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
+        ),
+        "required_research_urls": list(
+            V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS
+        ),
+        "required_min_counts": dict(
+            V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
+        ),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "readiness_errors": readiness_errors,
+        "campaign_errors": campaign_errors,
+        "evidence": evidence,
     }
 
 
@@ -15679,6 +16395,13 @@ __all__ = [
     "V1_REQUIRED_EVIDENCE_COMPONENTS",
     "V1_REQUIRED_EXAMPLES",
     "V1_REQUIRED_SCHEMA_KINDS",
+    "V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES",
+    "V1_REDTEAM_READINESS_CERTIFICATION_FILES",
+    "V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS",
+    "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS",
+    "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS",
+    "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS",
+    "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS",
     "V1_RELEASE_PROOF_REQUIRED_CHECKS",
     "V1_TYPESCRIPT_SDK_REQUIRED_FILES",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS",

@@ -15166,6 +15166,27 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_corpus_execution_channels"] == (
         trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
     )
+    assert payload["required_redteam_readiness_certification_files"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
+    )
+    assert payload["required_redteam_readiness_certification_environment_types"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES
+    )
+    assert payload["required_redteam_readiness_certification_components"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert payload["required_redteam_readiness_certification_metrics"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS
+    )
+    assert payload["required_redteam_readiness_certification_state_keys"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_redteam_readiness_certification_research_urls"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS
+    )
+    assert payload["required_redteam_readiness_certification_min_counts"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
+    )
     assert payload["required_ui_action_report_artifacts"] == (
         trinity.V1_UI_ACTION_REPORT_ARTIFACTS
     )
@@ -15556,6 +15577,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "redteam_core_examples_present",
         "redteam_research_coverage",
         "redteam_corpus_execution_readiness",
+        "redteam_readiness_certification",
         "schema_kind_contract",
         "ui_action_report_readiness",
         "regression_artifact_readiness",
@@ -15893,6 +15915,154 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert corpus_summary["mitigation_count"] == 12
     assert corpus_summary["implemented_mitigation_count"] == 12
     assert len(redteam_corpus_execution["coverage_cell_ids"]) == 12
+    redteam_readiness = checks["redteam_readiness_certification"]["evidence"]
+    assert redteam_readiness["required_files"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
+    )
+    assert redteam_readiness["required_environment_types"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES
+    )
+    assert redteam_readiness["required_components"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert redteam_readiness["required_metrics"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS
+    )
+    assert redteam_readiness["required_state_keys"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert redteam_readiness["required_research_urls"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS
+    )
+    assert redteam_readiness["required_min_counts"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
+    )
+    assert redteam_readiness["missing_files"] == []
+    assert redteam_readiness["execution_errors"] == []
+    assert redteam_readiness["manifest_errors"] == []
+    assert redteam_readiness["optimization_errors"] == []
+    assert redteam_readiness["metric_errors"] == []
+    assert redteam_readiness["readiness_errors"] == []
+    assert redteam_readiness["campaign_errors"] == []
+    redteam_readiness_evidence = redteam_readiness["evidence"]
+    readiness_manifest = redteam_readiness_evidence["manifest"]
+    assert readiness_manifest["version"] == "agent-learning.optimization.v1"
+    assert readiness_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_REDTEAM_READINESS_CERTIFICATION_KEY"
+    ]
+    assert readiness_manifest["saved_manifest_roundtrip"] is True
+    assert readiness_manifest["task_kind"] == "redteam_readiness_certification"
+    assert readiness_manifest["search_paths"] == ["simulation.environments"]
+    assert readiness_manifest["candidate_count"] == 2
+    assert readiness_manifest["candidate_environment_types"] == [
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES,
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES,
+    ]
+    assert readiness_manifest["scoring_method"] == "simulation_evidence"
+    assert readiness_manifest["scoring_layers"] == ["red_team_readiness"]
+    assert set(readiness_manifest["metric_weights"]) >= set(
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS
+    )
+    assert set(readiness_manifest["research_urls"]) >= set(
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS
+    )
+    readiness_optimization = redteam_readiness_evidence["optimization"]
+    assert readiness_optimization["schema_version"] == "agent-learning.cli.v1"
+    assert readiness_optimization["status"] == "passed"
+    assert readiness_optimization["output_roundtrip"] is True
+    assert readiness_optimization["optimization_passed"] is True
+    assert readiness_optimization["evaluation_passed"] is True
+    assert readiness_optimization["optimization_score"] >= 0.95
+    assert readiness_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert readiness_optimization["total_evaluations"] >= 2
+    assert readiness_optimization["total_iterations"] >= 2
+    assert readiness_optimization["candidate_lineage_count"] >= 2
+    assert readiness_optimization["best_score"] == pytest.approx(1.0)
+    assert min(readiness_optimization["history_scores"]) < 1.0
+    assert set(readiness_optimization["state_keys"]) == set(
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert readiness_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        readiness_optimization["optimizer_governance_failed_check_count"] == 0
+    )
+    for metric in trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS:
+        assert readiness_optimization["best_metrics"][metric] == pytest.approx(1.0)
+    readiness_summary = redteam_readiness_evidence["readiness_summary"]
+    assert readiness_summary["blocking_gaps"] == []
+    assert readiness_summary["blocking_gap_count"] == 0
+    assert set(readiness_summary["ready_components"]) == set(
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert readiness_summary["ready_component_count"] == (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "ready_component_count"
+        ]
+    )
+    assert readiness_summary["artifact_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS["artifact_count"]
+    )
+    assert readiness_summary["observability_hook_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "observability_hook_count"
+        ]
+    )
+    for field in (
+        "framework_import_ready",
+        "red_team_campaign_ready",
+        "workspace_run_ready",
+        "trust_boundary_ready",
+        "control_plane_ready",
+        "has_observability",
+        "has_artifacts",
+    ):
+        assert readiness_summary[field] is True
+    assert readiness_summary["missing_required_evidence"] == []
+    assert readiness_summary["missing_required_signals"] == []
+    assert readiness_summary["failed_components"] == []
+    readiness_campaign = redteam_readiness_evidence["campaign_summary"]
+    assert readiness_campaign["coverage_cell_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "campaign_coverage_cell_count"
+        ]
+    )
+    assert readiness_campaign["executed_cell_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "campaign_executed_cell_count"
+        ]
+    )
+    assert readiness_campaign["passed_run_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "campaign_passed_run_count"
+        ]
+    )
+    assert readiness_campaign["finding_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "campaign_finding_count"
+        ]
+    )
+    assert readiness_campaign["implemented_mitigation_count"] >= (
+        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS[
+            "campaign_implemented_mitigation_count"
+        ]
+    )
+    assert readiness_campaign["failed_run_count"] == 0
+    assert readiness_campaign["open_high_finding_count"] == 0
+    assert set(readiness_campaign["observed_attack_types"]) >= {
+        "prompt_injection",
+        "credential_exfiltration",
+    }
+    assert set(readiness_campaign["observed_surfaces"]) >= {"tool", "memory"}
+    assert readiness_campaign["observed_channels"] == ["chat"]
+    assert readiness_campaign["observed_providers"] == ["local_cli"]
+    assert set(readiness_campaign["observed_taxonomies"]) >= {
+        "owasp_agentic_ai",
+        "owasp_llm_top_10",
+    }
+    assert readiness_campaign["missing_coverage_cells"] == []
+    assert readiness_campaign["missing_executed_cells"] == []
+    assert readiness_campaign["missing_mitigation_cells"] == []
+    assert readiness_campaign["missing_run_artifact_cells"] == []
     ui_readiness = checks["ui_action_report_readiness"]["evidence"]
     assert ui_readiness["missing_files"] == []
     assert ui_readiness["failing_reports"] == []

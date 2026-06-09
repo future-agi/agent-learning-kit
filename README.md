@@ -63,7 +63,10 @@ kinds, packaging metadata, and research-backed red-team corpus/campaign
 coverage across required examples, attack types, surfaces, source lineage, and
 the canonical local corpus rows. It also executes the canonical local red-team
 corpus through the campaign builder and requires full row/cell/run/artifact/
-finding/mitigation closure before M4 passes. It also gates representative
+finding/mitigation closure before M4 passes. Red-team readiness certification
+also runs locally, requiring the optimizer to select the zero-gap
+workspace/import/campaign/trust/control/readiness bundle before adaptive
+attack search is trusted. It also gates representative
 Future AGI UI/action/report readiness: renderable report payloads, executable
 action catalogs, saved action-run output evidence, and key-like secret-marker
 redaction across representative run, action-run, optimization, red-team,
@@ -1898,6 +1901,11 @@ versus verified `simulation.environments` bundles with deterministic
 runtime trust, controllable environment, autonomous red-team, and stored prompt
 injection research as input, then adds our own zero-blocking-gap Future AGI
 certification contract.
+`agent-learn release-check` gates this path as
+`redteam_readiness_certification`: the optimizer must keep the weak readiness
+bundle below the verified one, select the zero-gap candidate, preserve all six
+environment layers, prove all five readiness components, and close campaign
+coverage, artifacts, findings, mitigations, and readiness metrics locally.
 
 `redteam.build_redteam_corpus_campaign()`,
 `simulate.build_redteam_corpus_run_manifest()`, and

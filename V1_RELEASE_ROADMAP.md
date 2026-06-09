@@ -45,7 +45,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
 | M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `task_artifact_evaluation_readiness`, `evaluation_hook_probe_readiness` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
-| M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
+| M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
 | M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
@@ -174,6 +174,12 @@ Current checkpoint:
   artifact-backed trajectories, mapped findings, implemented mitigations, no
   blocking gaps, all required research-backed attack types and surfaces, and
   the expected `agent_learning_kit`/`local_cli`/`chat` execution context.
+- Red-team readiness certification is now an executable release-check gate:
+  `examples/sdk_redteam_readiness_certification_optimization.py` must optimize
+  weak versus verified workspace/import/campaign/trust/control/readiness
+  bundles, select the zero-gap readiness candidate, prove all five components
+  ready, close campaign artifacts/findings/mitigations across prompt-injection
+  and credential-exfiltration cells, and pass red-team readiness metrics.
 
 Acceptance gates:
 
@@ -188,7 +194,8 @@ Acceptance gates:
   campaign dimensions can still request exhaustive cross-product coverage.
 - `agent-learn release-check` gates the required red-team corpus/campaign
   examples plus corpus-only and broader research-backed attack types, attack
-  surfaces, source URLs, and executable local corpus campaign evidence.
+  surfaces, source URLs, executable local corpus campaign evidence, and
+  executable red-team readiness certification before adaptive attack search.
 
 Next implementation focus:
 
