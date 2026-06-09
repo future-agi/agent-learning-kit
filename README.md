@@ -69,7 +69,9 @@ workspace/import/campaign/trust/control/readiness bundle before adaptive
 attack search is trusted. Red-team society plus causal attribution readiness
 also runs locally, requiring Agent Learning-owned multi-agent red-team council
 and causal graph evidence before the pen-testing side of the trinity is treated
-as ready. It also gates representative
+as ready. Adaptive red-team loop plus attack-evolution readiness makes the same
+Agent Learning-owned pen-testing path executable for mutation, shrink, replay,
+promotion, and action-card proof. It also gates representative
 Future AGI UI/action/report readiness: renderable report payloads, executable
 action catalogs, saved action-run output evidence, and key-like secret-marker
 redaction across representative run, action-run, optimization, red-team,
@@ -1791,6 +1793,10 @@ toward trajectory-aware attack evolution, feedback-driven attack refinement,
 self-evolving skill red teams, dynamic integration benchmarks, and replaying
 failed trajectories into regression evidence without adding external runtime
 services.
+`redteam_attack_evolution_readiness` gates this as executable Agent Learning
+pen-testing readiness: the adaptive-loop and attack-evolution cookbooks must
+optimize locally, keep proof and metric floors clean, prove shrink/promotion/
+replay/action-card evidence, and avoid secret leakage.
 
 The `long_horizon_redteam_optimization.json` example builds on recent agentic
 red-team research by searching coherent attack-system candidates instead of

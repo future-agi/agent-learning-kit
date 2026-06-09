@@ -15409,6 +15409,21 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_society_causal_contracts"] == (
         trinity.V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS
     )
+    assert payload["required_redteam_attack_evolution_files"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_FILES
+    )
+    assert payload["required_redteam_attack_evolution_environment_types"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_redteam_attack_evolution_metrics"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS
+    )
+    assert payload["required_redteam_attack_evolution_proof_checks"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS
+    )
+    assert payload["required_redteam_attack_evolution_contracts"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS
+    )
     assert payload["required_ui_action_report_artifacts"] == (
         trinity.V1_UI_ACTION_REPORT_ARTIFACTS
     )
@@ -15897,6 +15912,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "redteam_corpus_execution_readiness",
         "redteam_readiness_certification",
         "redteam_society_causal_readiness",
+        "redteam_attack_evolution_readiness",
         "schema_kind_contract",
         "ui_action_report_readiness",
         "regression_artifact_readiness",
@@ -16730,6 +16746,167 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert causal_summary["evidence_count"] >= 5
     assert causal_summary["unmapped_root_causes"] == 0
     assert causal_summary["accepted_by"] == "dharma_steward"
+    redteam_attack_evolution = checks["redteam_attack_evolution_readiness"]
+    assert redteam_attack_evolution["passed"] is True
+    assert redteam_attack_evolution["milestone"] == "M4"
+    redteam_attack_evolution_evidence = redteam_attack_evolution["evidence"]
+    assert redteam_attack_evolution_evidence["required_files"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_FILES
+    )
+    assert redteam_attack_evolution_evidence["required_environment_types"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert redteam_attack_evolution_evidence["required_metrics"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS
+    )
+    assert redteam_attack_evolution_evidence["required_proof_checks"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS
+    )
+    assert redteam_attack_evolution_evidence["required_contracts"] == (
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS
+    )
+    assert redteam_attack_evolution_evidence["missing_files"] == []
+    assert redteam_attack_evolution_evidence["execution_errors"] == []
+    assert redteam_attack_evolution_evidence["manifest_errors"] == []
+    assert redteam_attack_evolution_evidence["optimization_errors"] == []
+    assert redteam_attack_evolution_evidence["metric_errors"] == []
+    assert redteam_attack_evolution_evidence["adaptive_loop_errors"] == []
+    assert redteam_attack_evolution_evidence["attack_evolution_errors"] == []
+    assert redteam_attack_evolution_evidence["proof_errors"] == []
+    assert redteam_attack_evolution_evidence["artifact_errors"] == []
+    assert redteam_attack_evolution_evidence["security_errors"] == []
+    evolution_examples = redteam_attack_evolution_evidence["evidence"]["examples"]
+    assert set(evolution_examples) == set(
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_FILES
+    )
+    for path, example in evolution_examples.items():
+        contract = trinity.V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS[path]
+        manifest = example["manifest"]
+        assert manifest["version"] == "agent-learning.optimization.v1"
+        assert manifest["required_env"] == [contract["env_name"]]
+        assert manifest["task_kind"] == contract["task_kind"]
+        assert manifest["search_paths"] == contract["required_search_paths"]
+        assert manifest["candidate_count"] == 3
+        if contract["requires_attack_evolution"]:
+            assert manifest["environment_candidate_types"] == [
+                [contract["runtime_environment_type"]],
+                [contract["runtime_environment_type"]],
+                [contract["runtime_environment_type"]],
+            ]
+        else:
+            assert manifest["environment_candidate_types"] == []
+        assert manifest["generated_manifest_roundtrip"] is True
+        assert contract["runtime_environment_type"] in (
+            trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES
+        )
+        assert set(manifest["metric_weights"]) >= set(
+            contract["required_metric_weights"]
+        )
+        optimization = example["optimization"]
+        assert optimization["kind"] == "agent-learning.optimization.v1"
+        assert optimization["schema_version"] == "agent-learning.cli.v1"
+        assert optimization["status"] == "passed"
+        assert optimization["output_roundtrip"] is True
+        assert optimization["optimization_passed"] is True
+        assert optimization["evaluation_passed"] is True
+        assert optimization["optimization_score"] >= 0.95
+        assert optimization["evaluation_score"] == pytest.approx(1.0)
+        assert optimization["best_score"] >= 0.95
+        assert optimization["candidate_lineage_count"] >= 3
+        assert optimization["total_evaluations"] >= 3
+        assert optimization["runtime_state_present"] is True
+        assert optimization["runtime_state_key"] == contract["runtime_state_key"]
+        assert contract["runtime_state_key"] in optimization["state_keys"]
+        assert optimization["best_patch_paths"] == contract["required_search_paths"]
+        assert optimization["forbidden_external_keys"] == []
+        for metric, floor in contract["metric_floors"].items():
+            assert optimization["best_metrics"][metric] >= floor
+
+    adaptive_loop_example = evolution_examples[
+        "examples/sdk_redteam_adaptive_loop_optimization.py"
+    ]
+    adaptive_loop = adaptive_loop_example["adaptive_loop"]
+    assert adaptive_loop["profile"] == "hardened_adaptive_campaign"
+    assert adaptive_loop["requires_external_service"] is False
+    assert adaptive_loop["coverage_cell_count"] == 16
+    assert adaptive_loop["covered_cell_count"] == 16
+    assert adaptive_loop["executed_cell_count"] == 16
+    assert adaptive_loop["artifact_count"] == 16
+    assert adaptive_loop["implemented_mitigation_count"] == 16
+    assert adaptive_loop["failed_run_count"] == 0
+    assert adaptive_loop["open_high_finding_count"] == 0
+    assert set(adaptive_loop["observed_vectors"]) >= {
+        "prompt",
+        "indirect_prompt",
+        "tool",
+        "memory",
+        "retrieval",
+        "multi_agent",
+    }
+
+    attack_evolution_example = evolution_examples[
+        "examples/sdk_redteam_attack_evolution_optimization.py"
+    ]
+    attack_evolution = attack_evolution_example["attack_evolution"]
+    assert attack_evolution["selected_environment_type"] == "red_team_attack_evolution"
+    assert attack_evolution["selected_profile"] == "verified"
+    evolution_summary = attack_evolution["summary"]
+    assert evolution_summary["requires_external_service"] is False
+    assert evolution_summary["seed_attack_count"] == 3
+    assert evolution_summary["mutation_round_count"] >= 2
+    assert evolution_summary["mutation_count"] >= 3
+    assert evolution_summary["successful_mutation_count"] >= 2
+    assert evolution_summary["counterexample_count"] == 1
+    assert evolution_summary["minimized_replay_count"] == 1
+    assert evolution_summary["replay_case_count"] == 1
+    assert evolution_summary["verifier_count"] >= 2
+    assert evolution_summary["has_cross_round_feedback"] is True
+    assert evolution_summary["has_counterexample_minimization"] is True
+    assert evolution_summary["has_replayable_regressions"] is True
+    assert evolution_summary["has_positive_learning_curve"] is True
+    observed_metric = attack_evolution["observed_metric"]
+    assert observed_metric["missing_required_attack_types"] == []
+    assert observed_metric["missing_required_surfaces"] == []
+    assert observed_metric["missing_required_operators"] == []
+    assert observed_metric["unminimized_counterexamples"] == []
+    assert observed_metric["unreplayed_counterexamples"] == []
+    proof = attack_evolution_example["proof"]
+    assert proof["kind"] == (
+        "agent-learning.optimization.redteam-attack-evolution-proof.v1"
+    )
+    assert proof["status"] == "passed"
+    assert proof["passed"] is True
+    assert proof["assurance_level"] == (
+        "l3_native_redteam_attack_evolution_verified"
+    )
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert set(proof["passed_check_ids"]) >= set(
+        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS
+    )
+    artifacts = attack_evolution_example["artifacts"]
+    assert artifacts["card_kind"] == "attack_evolution_evidence"
+    assert artifacts["card_status"] == "closed_loop_verified"
+    assert artifacts["card_local_only"] is True
+    assert artifacts["card_profile"] == "verified"
+    assert artifacts["shrink_kind"] == "agent-learning.attack-evolution-shrink.v1"
+    assert artifacts["shrink_status"] == "passed"
+    assert artifacts["shrink_replay_status"] == "passed"
+    assert artifacts["promotion_status"] == "passed"
+    assert artifacts["promotion_kind"] == "redteam_attack_evolution_optimization"
+    assert artifacts["replay_status"] == "passed"
+    assert artifacts["replay_passed_count"] == 1
+    assert artifacts["replay_failed_count"] == 0
+    assert artifacts["replay_card_status"] == "closed_loop_verified"
+    assert artifacts["replay_card_pass_rate"] == pytest.approx(1.0)
+    assert "attack_evolution" in artifacts["report_sections"]
+    assert {"report_attack_evolution", "shrink_attack_evolution_regression"} <= set(
+        artifacts["card_actions"]
+    )
+    assert "export_attack_evolution_minimal_repro" in artifacts["catalog_actions"]
+    assert artifacts["minimal_repro_counterexample_id"]["id"] == (
+        "cx_prompt_memory_001"
+    )
     ui_readiness = checks["ui_action_report_readiness"]["evidence"]
     assert ui_readiness["missing_files"] == []
     assert ui_readiness["failing_reports"] == []
@@ -20071,6 +20248,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     }
     milestones = {milestone["id"]: milestone for milestone in payload["milestones"]}
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
+    assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
     assert payload["findings"] == []
     assert {

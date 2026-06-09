@@ -910,6 +910,64 @@ V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS = {
     },
 }
 
+V1_REDTEAM_ATTACK_EVOLUTION_FILES = [
+    "examples/sdk_redteam_adaptive_loop_optimization.py",
+    "examples/sdk_redteam_attack_evolution_optimization.py",
+]
+
+V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES = [
+    "red_team_campaign",
+    "red_team_attack_evolution",
+]
+
+V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS = [
+    "red_team_adaptive_loop_quality",
+    "red_team_attack_evolution_coverage",
+    "red_team_attack_evolution_quality",
+]
+
+V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS = [
+    "native_no_external_attack_evolution_dependency",
+    "attack_evolution_evidence_present",
+    "mutation_feedback_loop_closed",
+    "counterexample_minimization_replay_closed",
+    "attack_evolution_scope_expanded",
+    "attack_evolution_search_surface_present",
+    "attack_evolution_optimization_regression_gate_passed",
+    "attack_evolution_metric_evidence_closed",
+]
+
+V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS = {
+    "examples/sdk_redteam_adaptive_loop_optimization.py": {
+        "env_name": "AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY",
+        "module_name": "agent_learning_release_redteam_adaptive_loop",
+        "task_kind": "adaptive_redteam_campaign",
+        "required_search_paths": ["redteam"],
+        "runtime_state_key": "red_team_campaign",
+        "runtime_environment_type": "red_team_campaign",
+        "required_metric_weights": ["red_team_adaptive_loop_quality"],
+        "metric_floors": {"red_team_adaptive_loop_quality": 1.0},
+        "requires_attack_evolution": False,
+    },
+    "examples/sdk_redteam_attack_evolution_optimization.py": {
+        "env_name": "AGENT_LEARNING_SDK_REDTEAM_ATTACK_EVOLUTION_KEY",
+        "module_name": "agent_learning_release_redteam_attack_evolution",
+        "task_kind": "redteam_attack_evolution",
+        "required_search_paths": ["simulation.environments"],
+        "runtime_state_key": "red_team_attack_evolution",
+        "runtime_environment_type": "red_team_attack_evolution",
+        "required_metric_weights": [
+            "red_team_attack_evolution_coverage",
+            "red_team_attack_evolution_quality",
+        ],
+        "metric_floors": {
+            "red_team_attack_evolution_coverage": 1.0,
+            "red_team_attack_evolution_quality": 1.0,
+        },
+        "requires_attack_evolution": True,
+    },
+}
+
 V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/framework_certification_optimization.json",
     "examples/framework_import_repair_optimization.json",
@@ -3354,6 +3412,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M4",
         evidence=redteam_society_causal,
     )
+    redteam_attack_evolution = _release_redteam_attack_evolution_status(root)
+    _append_release_check(
+        checks,
+        check_id="redteam_attack_evolution_readiness",
+        passed=(
+            not redteam_attack_evolution["missing_files"]
+            and not redteam_attack_evolution["execution_errors"]
+            and not redteam_attack_evolution["manifest_errors"]
+            and not redteam_attack_evolution["optimization_errors"]
+            and not redteam_attack_evolution["metric_errors"]
+            and not redteam_attack_evolution["adaptive_loop_errors"]
+            and not redteam_attack_evolution["attack_evolution_errors"]
+            and not redteam_attack_evolution["proof_errors"]
+            and not redteam_attack_evolution["artifact_errors"]
+            and not redteam_attack_evolution["security_errors"]
+        ),
+        milestone="M4",
+        evidence=redteam_attack_evolution,
+    )
     _append_release_check(
         checks,
         check_id="schema_kind_contract",
@@ -3989,6 +4066,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_redteam_society_causal_contracts": {
             path: dict(contract)
             for path, contract in V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS.items()
+        },
+        "required_redteam_attack_evolution_files": list(
+            V1_REDTEAM_ATTACK_EVOLUTION_FILES
+        ),
+        "required_redteam_attack_evolution_environment_types": list(
+            V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_redteam_attack_evolution_metrics": list(
+            V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS
+        ),
+        "required_redteam_attack_evolution_proof_checks": list(
+            V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS
+        ),
+        "required_redteam_attack_evolution_contracts": {
+            path: dict(contract)
+            for path, contract in V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS.items()
         },
         "required_ui_action_report_artifacts": copy.deepcopy(
             V1_UI_ACTION_REPORT_ARTIFACTS
@@ -10107,6 +10200,1109 @@ def _release_redteam_society_causal_status(root: Path) -> dict[str, Any]:
         "campaign_errors": campaign_errors,
         "causal_errors": causal_errors,
         "proof_errors": proof_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_redteam_attack_evolution_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_REDTEAM_ATTACK_EVOLUTION_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    adaptive_loop_errors: list[dict[str, Any]] = []
+    attack_evolution_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    artifact_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def nested_key_names(value: Any) -> set[str]:
+        names: set[str] = set()
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                names.add(str(key))
+                names.update(nested_key_names(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                names.update(nested_key_names(item))
+        return names
+
+    def first_case_report(result: Mapping[str, Any]) -> Mapping[str, Any]:
+        report = _as_mapping(result.get("report"))
+        if not report and result.get("results") is not None:
+            report = result
+        cases = [
+            item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+        ]
+        return _as_mapping(cases[0]) if cases else {}
+
+    def selected_history(optimization: Mapping[str, Any]) -> Mapping[str, Any]:
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        return _as_mapping(
+            max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+        )
+
+    def agent_report_metrics(case: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        evaluation = _as_mapping(case.get("evaluation"))
+        agent_report = _as_mapping(evaluation.get("agent_report"))
+        return [
+            _as_mapping(item)
+            for item in _as_list(agent_report.get("metrics"))
+            if isinstance(item, Mapping)
+        ]
+
+    def metric_details(
+        metrics: Iterable[Mapping[str, Any]],
+        metric_name: str,
+    ) -> Mapping[str, Any]:
+        for metric in metrics:
+            if metric.get("name") == metric_name:
+                return _as_mapping(metric.get("details"))
+        return {}
+
+    def validate_manifest(
+        path: str,
+        manifest: Mapping[str, Any],
+        saved_manifest: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        optimization = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization.get("target"))
+        metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        required_search_paths = [str(item) for item in contract["required_search_paths"]]
+        first_search_path = required_search_paths[0]
+        candidates = _as_list(search_space.get(first_search_path))
+        evaluation_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        environment_candidate_types = [
+            [str(_as_mapping(item).get("type")) for item in _as_list(candidate)]
+            for candidate in _as_list(search_space.get("simulation.environments"))
+        ]
+        example_evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "task_kind": metadata.get("task_kind"),
+            "search_paths": sorted(str(path) for path in search_space),
+            "candidate_count": len(candidates),
+            "environment_candidate_types": environment_candidate_types,
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+            "generated_manifest_roundtrip": manifest == saved_manifest,
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                [contract["env_name"]],
+            ),
+            "metadata.task_kind": (
+                metadata.get("task_kind"),
+                contract["task_kind"],
+            ),
+            "optimization.target.search_space": (
+                sorted(str(path) for path in search_space),
+                required_search_paths,
+            ),
+            "generated_manifest_roundtrip": (manifest == saved_manifest, True),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if len(candidates) < 3:
+            append_error(
+                manifest_errors,
+                path=path,
+                field=f"optimization.target.search_space.{first_search_path}",
+                expected=">=3 candidates",
+                observed=len(candidates),
+            )
+        missing_metric_weights = missing_values(
+            metric_weights,
+            contract["required_metric_weights"],
+        )
+        if missing_metric_weights:
+            append_error(
+                manifest_errors,
+                path=path,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=contract["required_metric_weights"],
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+        if contract["requires_attack_evolution"]:
+            for types in environment_candidate_types:
+                if types != [contract["runtime_environment_type"]]:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=(
+                            "optimization.target.search_space."
+                            "simulation.environments.type"
+                        ),
+                        expected=[contract["runtime_environment_type"]],
+                        observed=types,
+                    )
+            attack_config = _as_mapping(
+                evaluation_config.get("red_team_attack_evolution_quality")
+            )
+            attack_expectations = {
+                "require_no_external_service": True,
+                "require_counterexample_minimization": True,
+                "require_replayable_regressions": True,
+                "require_positive_learning_curve": True,
+            }
+            for field, expected in attack_expectations.items():
+                if attack_config.get(field) != expected:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=(
+                            "evaluation.agent_report.config."
+                            f"red_team_attack_evolution_quality.{field}"
+                        ),
+                        expected=expected,
+                        observed=attack_config.get(field),
+                    )
+        else:
+            loop_config = _as_mapping(
+                evaluation_config.get("red_team_adaptive_loop_quality")
+            )
+            required_loop_signals = [
+                "strategy_generation",
+                "execution",
+                "trajectory_refinement",
+                "outcome_feedback",
+                "verifier",
+            ]
+            if loop_config.get("require_no_external_service") is not True:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=(
+                        "evaluation.agent_report.config."
+                        "red_team_adaptive_loop_quality.require_no_external_service"
+                    ),
+                    expected=True,
+                    observed=loop_config.get("require_no_external_service"),
+                )
+            missing_signals = missing_values(
+                loop_config.get("required_loop_signals"),
+                required_loop_signals,
+            )
+            if missing_signals:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=(
+                        "evaluation.agent_report.config."
+                        "red_team_adaptive_loop_quality.required_loop_signals"
+                    ),
+                    expected=required_loop_signals,
+                    observed=loop_config.get("required_loop_signals"),
+                )
+
+    def validate_optimization(
+        path: str,
+        result: Mapping[str, Any],
+        saved: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_history = selected_history(optimization)
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_report = _as_mapping(best_history.get("report"))
+        case = first_case_report(best_report)
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        runtime_state = _as_mapping(state.get(str(contract["runtime_state_key"])))
+        forbidden_keys = sorted(
+            {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+            & nested_key_names(best_config)
+        )
+        example_evidence["optimization"] = {
+            "schema_version": result.get("schema_version"),
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "best_score": best_history.get("score"),
+            "best_patch_paths": sorted(str(path) for path in _as_mapping(best_history.get("patch"))),
+            "best_metrics": {
+                str(metric): best_metrics.get(str(metric))
+                for metric in sorted(
+                    str(item)
+                    for item in _as_mapping(contract.get("metric_floors"))
+                )
+            },
+            "state_keys": sorted(str(key) for key in state),
+            "runtime_state_key": contract["runtime_state_key"],
+            "runtime_state_present": bool(runtime_state),
+            "forbidden_external_keys": forbidden_keys,
+        }
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 0.95:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.optimization_score",
+                expected=">=0.95",
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.evaluation_score",
+                expected=">=1.0",
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.candidate_lineage_count",
+                expected=">=3",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 3:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.total_evaluations",
+                expected=">=3",
+                observed=summary.get("total_evaluations"),
+            )
+        if _float_or_zero(best_history.get("score")) < 0.95:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.history.best.score",
+                expected=">=0.95",
+                observed=best_history.get("score"),
+            )
+        if not runtime_state:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.history.best.report.environment_state",
+                expected=contract["runtime_state_key"],
+                observed=sorted(str(key) for key in state),
+            )
+        for metric, minimum in _as_mapping(contract.get("metric_floors")).items():
+            metric_name = str(metric)
+            floor = _float_or_zero(minimum)
+            if _float_or_zero(best_metrics.get(metric_name)) < floor:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field=f"optimization.history.best.metrics.{metric_name}",
+                    expected=f">={floor}",
+                    observed=best_metrics.get(metric_name),
+                )
+        if forbidden_keys:
+            append_error(
+                security_errors,
+                path=path,
+                field="optimization.best_config.external_dependency_keys",
+                expected=[],
+                observed=forbidden_keys,
+            )
+        return best_config, case, runtime_state
+
+    def validate_adaptive_loop(
+        path: str,
+        best_config: Mapping[str, Any],
+        case: Mapping[str, Any],
+        campaign: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(campaign.get("summary"))
+        redteam_config = _as_mapping(best_config.get("redteam"))
+        observed_metric = _as_mapping(
+            metric_details(
+                agent_report_metrics(case),
+                "red_team_adaptive_loop_quality",
+            ).get("observed")
+        )
+        example_evidence["adaptive_loop"] = {
+            "profile": redteam_config.get("profile"),
+            "coverage_cell_count": summary.get("coverage_cell_count"),
+            "covered_cell_count": summary.get("covered_cell_count"),
+            "executed_cell_count": summary.get("executed_cell_count"),
+            "artifact_count": summary.get("artifact_count"),
+            "implemented_mitigation_count": summary.get(
+                "implemented_mitigation_count"
+            ),
+            "failed_run_count": summary.get("failed_run_count"),
+            "open_high_finding_count": summary.get("open_high_finding_count"),
+            "observed_vectors": observed_metric.get("vectors"),
+            "requires_external_service": observed_metric.get(
+                "requires_external_service"
+            ),
+        }
+        if redteam_config.get("profile") != "hardened_adaptive_campaign":
+            append_error(
+                adaptive_loop_errors,
+                path=path,
+                field="optimization.best_config.redteam.profile",
+                expected="hardened_adaptive_campaign",
+                observed=redteam_config.get("profile"),
+            )
+        for field in (
+            "coverage_cell_count",
+            "covered_cell_count",
+            "executed_cell_count",
+            "artifact_count",
+            "implemented_mitigation_count",
+        ):
+            if _int_or_zero(summary.get(field)) < 16:
+                append_error(
+                    adaptive_loop_errors,
+                    path=path,
+                    field=f"runtime.red_team_campaign.summary.{field}",
+                    expected=">=16",
+                    observed=summary.get(field),
+                )
+        for field in ("failed_run_count", "open_high_finding_count"):
+            if _int_or_zero(summary.get(field)) != 0:
+                append_error(
+                    adaptive_loop_errors,
+                    path=path,
+                    field=f"runtime.red_team_campaign.summary.{field}",
+                    expected=0,
+                    observed=summary.get(field),
+                )
+        for field in (
+            "missing_coverage_cells",
+            "missing_executed_cells",
+            "missing_mitigation_cells",
+            "missing_required_attack_types",
+            "missing_required_channels",
+            "missing_required_providers",
+            "missing_required_surfaces",
+            "missing_required_taxonomies",
+            "missing_run_artifact_cells",
+            "failed_runs",
+            "open_high_findings",
+            "unmapped_findings",
+        ):
+            if summary.get(field):
+                append_error(
+                    adaptive_loop_errors,
+                    path=path,
+                    field=f"runtime.red_team_campaign.summary.{field}",
+                    expected=[],
+                    observed=summary.get(field),
+                )
+        missing_vectors = missing_values(
+            observed_metric.get("vectors"),
+            ["prompt", "indirect_prompt", "tool", "memory", "retrieval", "multi_agent"],
+        )
+        if missing_vectors:
+            append_error(
+                adaptive_loop_errors,
+                path=path,
+                field=(
+                    "optimization.history.best.report.metrics."
+                    "red_team_adaptive_loop_quality.observed.vectors"
+                ),
+                expected=[
+                    "prompt",
+                    "indirect_prompt",
+                    "tool",
+                    "memory",
+                    "retrieval",
+                    "multi_agent",
+                ],
+                observed=observed_metric.get("vectors"),
+            )
+        if observed_metric.get("requires_external_service") is not False:
+            append_error(
+                adaptive_loop_errors,
+                path=path,
+                field=(
+                    "optimization.history.best.report.metrics."
+                    "red_team_adaptive_loop_quality.observed.requires_external_service"
+                ),
+                expected=False,
+                observed=observed_metric.get("requires_external_service"),
+            )
+
+    def validate_attack_evolution(
+        path: str,
+        result: Mapping[str, Any],
+        best_config: Mapping[str, Any],
+        case: Mapping[str, Any],
+        evolution: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        summary = _as_mapping(evolution.get("summary"))
+        selected_env = _as_mapping(
+            _as_list(_as_mapping(best_config.get("simulation")).get("environments"))[0]
+            if _as_list(_as_mapping(best_config.get("simulation")).get("environments"))
+            else {}
+        )
+        selected_env_data = _as_mapping(selected_env.get("data"))
+        selected_env_metadata = _as_mapping(selected_env_data.get("metadata"))
+        observed_metric = _as_mapping(
+            metric_details(
+                agent_report_metrics(case),
+                "red_team_attack_evolution_quality",
+            ).get("observed")
+        )
+        example_evidence["attack_evolution"] = {
+            "selected_environment_type": selected_env.get("type"),
+            "selected_profile": selected_env_metadata.get("profile"),
+            "summary": {
+                "seed_attack_count": summary.get("seed_attack_count"),
+                "mutation_round_count": summary.get("mutation_round_count"),
+                "mutation_count": summary.get("mutation_count"),
+                "successful_mutation_count": summary.get(
+                    "successful_mutation_count"
+                ),
+                "counterexample_count": summary.get("counterexample_count"),
+                "minimized_replay_count": summary.get("minimized_replay_count"),
+                "replay_case_count": summary.get("replay_case_count"),
+                "verifier_count": summary.get("verifier_count"),
+                "feedback_signal_count": summary.get("feedback_signal_count"),
+                "has_cross_round_feedback": summary.get("has_cross_round_feedback"),
+                "has_counterexample_minimization": summary.get(
+                    "has_counterexample_minimization"
+                ),
+                "has_replayable_regressions": summary.get(
+                    "has_replayable_regressions"
+                ),
+                "has_positive_learning_curve": summary.get(
+                    "has_positive_learning_curve"
+                ),
+                "requires_external_service": summary.get(
+                    "requires_external_service"
+                ),
+            },
+            "observed_metric": dict(observed_metric),
+        }
+        if selected_env.get("type") != "red_team_attack_evolution":
+            append_error(
+                attack_evolution_errors,
+                path=path,
+                field="optimization.best_config.simulation.environments.0.type",
+                expected="red_team_attack_evolution",
+                observed=selected_env.get("type"),
+            )
+        if selected_env_metadata.get("profile") != "verified":
+            append_error(
+                attack_evolution_errors,
+                path=path,
+                field=(
+                    "optimization.best_config.simulation.environments.0."
+                    "data.metadata.profile"
+                ),
+                expected="verified",
+                observed=selected_env_metadata.get("profile"),
+            )
+        minimums = {
+            "seed_attack_count": 2,
+            "mutation_round_count": 2,
+            "mutation_count": 3,
+            "successful_mutation_count": 2,
+            "counterexample_count": 1,
+            "minimized_replay_count": 1,
+            "replay_case_count": 1,
+            "verifier_count": 2,
+            "feedback_signal_count": 1,
+        }
+        for field, minimum in minimums.items():
+            if _int_or_zero(summary.get(field)) < minimum:
+                append_error(
+                    attack_evolution_errors,
+                    path=path,
+                    field=f"runtime.red_team_attack_evolution.summary.{field}",
+                    expected=f">={minimum}",
+                    observed=summary.get(field),
+                )
+        for field in (
+            "has_cross_round_feedback",
+            "has_counterexample_minimization",
+            "has_replayable_regressions",
+            "has_positive_learning_curve",
+            "has_path_expansion",
+            "has_surface_expansion",
+        ):
+            if summary.get(field) is not True:
+                append_error(
+                    attack_evolution_errors,
+                    path=path,
+                    field=f"runtime.red_team_attack_evolution.summary.{field}",
+                    expected=True,
+                    observed=summary.get(field),
+                )
+        for field in ("unminimized_counterexamples", "unreplayed_counterexamples"):
+            if _as_list(summary.get(field)):
+                append_error(
+                    attack_evolution_errors,
+                    path=path,
+                    field=f"runtime.red_team_attack_evolution.summary.{field}",
+                    expected=[],
+                    observed=summary.get(field),
+                )
+        if summary.get("requires_external_service") is not False:
+            append_error(
+                attack_evolution_errors,
+                path=path,
+                field=(
+                    "runtime.red_team_attack_evolution.summary."
+                    "requires_external_service"
+                ),
+                expected=False,
+                observed=summary.get("requires_external_service"),
+            )
+        for field in (
+            "has_cross_round_feedback",
+            "has_counterexample_minimization",
+            "has_replayable_regressions",
+            "has_positive_learning_curve",
+        ):
+            if observed_metric.get(field) is not True:
+                append_error(
+                    attack_evolution_errors,
+                    path=path,
+                    field=(
+                        "optimization.history.best.report.metrics."
+                        f"red_team_attack_evolution_quality.observed.{field}"
+                    ),
+                    expected=True,
+                    observed=observed_metric.get(field),
+                )
+        if observed_metric.get("requires_external_service") is not False:
+            append_error(
+                attack_evolution_errors,
+                path=path,
+                field=(
+                    "optimization.history.best.report.metrics."
+                    "red_team_attack_evolution_quality.observed."
+                    "requires_external_service"
+                ),
+                expected=False,
+                observed=observed_metric.get("requires_external_service"),
+            )
+
+        proof = _as_mapping(result.get("redteam_attack_evolution_proof"))
+        checks = [
+            _as_mapping(check)
+            for check in _as_list(proof.get("checks"))
+            if isinstance(check, Mapping)
+        ]
+        passed_check_ids = [
+            str(check.get("id")) for check in checks if check.get("passed") is True
+        ]
+        example_evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "check_count": proof.get("check_count"),
+            "failed_check_ids": proof.get("failed_check_ids"),
+            "warning_check_ids": proof.get("warning_check_ids"),
+            "passed_check_ids": passed_check_ids,
+        }
+        proof_expectations = {
+            "redteam_attack_evolution_proof.kind": (
+                proof.get("kind"),
+                "agent-learning.optimization.redteam-attack-evolution-proof.v1",
+            ),
+            "redteam_attack_evolution_proof.status": (
+                proof.get("status"),
+                "passed",
+            ),
+            "redteam_attack_evolution_proof.passed": (proof.get("passed"), True),
+            "redteam_attack_evolution_proof.assurance_level": (
+                proof.get("assurance_level"),
+                "l3_native_redteam_attack_evolution_verified",
+            ),
+            "redteam_attack_evolution_proof.failed_check_ids": (
+                proof.get("failed_check_ids") or [],
+                [],
+            ),
+            "redteam_attack_evolution_proof.warning_check_ids": (
+                proof.get("warning_check_ids") or [],
+                [],
+            ),
+            "summary.redteam_attack_evolution_proof_passed": (
+                _as_mapping(result.get("summary")).get(
+                    "redteam_attack_evolution_proof_passed"
+                ),
+                True,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_checks = missing_values(
+            passed_check_ids,
+            V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS,
+        )
+        if missing_checks:
+            append_error(
+                proof_errors,
+                path=path,
+                field="redteam_attack_evolution_proof.checks",
+                expected=V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS,
+                observed=passed_check_ids,
+            )
+
+    def validate_attack_artifacts(
+        path: str,
+        output_path: Path,
+        result: Mapping[str, Any],
+        env_name: str,
+        example_evidence: dict[str, Any],
+    ) -> None:
+        from . import actions as agent_actions
+        from . import simulate as agent_simulate
+
+        report = agent_simulate.render_report(result, source_path=output_path)
+        card = _as_mapping(_as_mapping(report.get("report")).get("attack_evolution"))
+        card_actions = [
+            str(action.get("id"))
+            for action in _as_list(card.get("actions"))
+            if isinstance(action, Mapping)
+        ]
+        catalog = agent_actions.action_catalog(result, source_path=output_path)
+        catalog_actions = [
+            str(action.get("id"))
+            for action in _as_list(catalog.get("actions"))
+            if isinstance(action, Mapping)
+        ]
+        shrink = agent_simulate.shrink_attack_evolution(
+            result,
+            source_path=output_path,
+            name="release-check-redteam-attack-evolution-shrink",
+            required_env=[env_name],
+        )
+        shrink_manifest_path = (
+            output_path.parent / "release-check-redteam-attack-evolution-shrink.json"
+        )
+        shrink_manifest_path.write_text(
+            json.dumps(shrink["manifest"], indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        shrink_replay = agent_simulate.replay_manifests(
+            [shrink_manifest_path],
+            name="release-check-redteam-attack-evolution-shrink-replay",
+        )
+        promotion = agent_simulate.promote_to_regression(
+            result,
+            source_path=output_path,
+            name="release-check-redteam-attack-evolution-regression",
+            required_env=[env_name],
+        )
+        regression_manifest_path = (
+            output_path.parent
+            / "release-check-redteam-attack-evolution-regression.json"
+        )
+        regression_manifest_path.write_text(
+            json.dumps(promotion["manifest"], indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        replay = agent_simulate.replay_manifests(
+            [regression_manifest_path],
+            name="release-check-redteam-attack-evolution-regression-replay",
+        )
+        replay_report = agent_simulate.render_report(
+            replay,
+            source_path=output_path.parent
+            / "release-check-redteam-attack-evolution-replay.json",
+        )
+        replay_card = _as_mapping(
+            _as_mapping(replay_report.get("report")).get("attack_evolution")
+        )
+        example_evidence["artifacts"] = {
+            "report_sections": _as_mapping(report.get("summary")).get("sections"),
+            "card_kind": card.get("kind"),
+            "card_status": card.get("status"),
+            "card_profile": card.get("profile"),
+            "card_local_only": card.get("local_only"),
+            "card_actions": card_actions,
+            "catalog_actions": catalog_actions,
+            "minimal_repro_counterexample_id": _as_mapping(
+                _as_mapping(card.get("artifacts")).get("minimal_repro")
+            ).get("counterexample", {}),
+            "shrink_status": shrink.get("status"),
+            "shrink_kind": shrink.get("kind"),
+            "shrink_replay_status": shrink_replay.get("status"),
+            "promotion_status": promotion.get("status"),
+            "promotion_kind": _as_mapping(promotion.get("summary")).get(
+                "promotion_kind"
+            ),
+            "replay_status": replay.get("status"),
+            "replay_passed_count": _as_mapping(replay.get("summary")).get(
+                "passed_count"
+            ),
+            "replay_failed_count": _as_mapping(replay.get("summary")).get(
+                "failed_count"
+            ),
+            "replay_card_status": replay_card.get("status"),
+            "replay_card_pass_rate": _as_mapping(replay_card.get("replay")).get(
+                "pass_rate"
+            ),
+        }
+        required_actions = [
+            "report_attack_evolution",
+            "promote_attack_evolution_regression",
+            "shrink_attack_evolution_regression",
+            "export_attack_evolution_action_card",
+            "export_attack_evolution_trace_jsonl",
+            "export_attack_evolution_minimal_repro",
+            "export_attack_evolution_replay_lock",
+        ]
+        artifact_expectations = {
+            "report.attack_evolution.kind": (
+                card.get("kind"),
+                "attack_evolution_evidence",
+            ),
+            "report.attack_evolution.status": (
+                card.get("status"),
+                "closed_loop_verified",
+            ),
+            "report.attack_evolution.local_only": (card.get("local_only"), True),
+            "report.attack_evolution.profile": (card.get("profile"), "verified"),
+            "shrink.kind": (
+                shrink.get("kind"),
+                "agent-learning.attack-evolution-shrink.v1",
+            ),
+            "shrink.status": (shrink.get("status"), "passed"),
+            "shrink.summary.local_only": (
+                _as_mapping(shrink.get("summary")).get("local_only"),
+                True,
+            ),
+            "shrink.summary.requires_external_service": (
+                _as_mapping(shrink.get("summary")).get(
+                    "requires_external_service"
+                ),
+                False,
+            ),
+            "shrink_replay.status": (shrink_replay.get("status"), "passed"),
+            "promotion.status": (promotion.get("status"), "passed"),
+            "promotion.summary.promotion_kind": (
+                _as_mapping(promotion.get("summary")).get("promotion_kind"),
+                "redteam_attack_evolution_optimization",
+            ),
+            "replay.status": (replay.get("status"), "passed"),
+            "replay.summary.failed_count": (
+                _as_mapping(replay.get("summary")).get("failed_count"),
+                0,
+            ),
+            "replay.report.attack_evolution.status": (
+                replay_card.get("status"),
+                "closed_loop_verified",
+            ),
+        }
+        for field, (observed, expected) in artifact_expectations.items():
+            if observed != expected:
+                append_error(
+                    artifact_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_actions = missing_values(card_actions, required_actions)
+        if missing_actions:
+            append_error(
+                artifact_errors,
+                path=path,
+                field="report.attack_evolution.actions",
+                expected=required_actions,
+                observed=card_actions,
+            )
+        missing_catalog_actions = missing_values(
+            catalog_actions,
+            ["export_attack_evolution_minimal_repro"],
+        )
+        if missing_catalog_actions:
+            append_error(
+                artifact_errors,
+                path=path,
+                field="actions.catalog.attack_evolution",
+                expected=["export_attack_evolution_minimal_repro"],
+                observed=catalog_actions,
+            )
+        card_artifacts = _as_mapping(card.get("artifacts"))
+        minimal_repro = _as_mapping(card_artifacts.get("minimal_repro"))
+        replay_lock = _as_mapping(card_artifacts.get("replay_lock"))
+        if not _as_mapping(minimal_repro.get("counterexample")).get("id"):
+            append_error(
+                artifact_errors,
+                path=path,
+                field="report.attack_evolution.artifacts.minimal_repro",
+                expected="counterexample.id",
+                observed=minimal_repro,
+            )
+        if replay_lock.get("requires_external_service") is not False:
+            append_error(
+                artifact_errors,
+                path=path,
+                field=(
+                    "report.attack_evolution.artifacts.replay_lock."
+                    "requires_external_service"
+                ),
+                expected=False,
+                observed=replay_lock.get("requires_external_service"),
+            )
+        replay_metrics = _as_mapping(
+            _as_mapping(
+                _as_mapping(
+                    _as_list(_as_mapping(replay.get("replay")).get("manifests"))[0]
+                    if _as_list(_as_mapping(replay.get("replay")).get("manifests"))
+                    else {}
+                ).get("summary")
+            ).get("metric_averages")
+        )
+        for metric in (
+            "red_team_attack_evolution_coverage",
+            "red_team_attack_evolution_quality",
+        ):
+            if _float_or_zero(replay_metrics.get(metric)) < 1.0:
+                append_error(
+                    artifact_errors,
+                    path=path,
+                    field=f"replay.summary.metric_averages.{metric}",
+                    expected=">=1.0",
+                    observed=replay_metrics.get(metric),
+                )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        for path in V1_REDTEAM_ATTACK_EVOLUTION_FILES:
+            contract = V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS[path]
+            env_name = str(contract["env_name"])
+            env_value = f"release-check-{Path(path).stem}-key"
+            previous_config_env = {
+                name: os.environ.get(name) for name in config_env_names
+            }
+            previous_config = agent_config.current_config()
+            previous_example_env = os.environ.get(env_name)
+            manifest: Mapping[str, Any] = {}
+            saved_manifest: Mapping[str, Any] = {}
+            result: Mapping[str, Any] = {}
+            saved: Mapping[str, Any] = {}
+            output_path: Path | None = None
+            try:
+                example_path = root / path
+                spec = importlib.util.spec_from_file_location(
+                    str(contract["module_name"]),
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                os.environ[env_name] = env_value
+                manifest = module.build_manifest()
+                with tempfile.TemporaryDirectory(
+                    prefix="agent-learning-redteam-attack-evolution-"
+                ) as tmpdir:
+                    output_path = Path(tmpdir) / f"{Path(path).stem}.json"
+                    result = module.run(output_path)
+                    saved = json.loads(output_path.read_text(encoding="utf-8"))
+                    saved_manifest = json.loads(
+                        output_path.with_suffix(".manifest.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    example_evidence: dict[str, Any] = {}
+                    evidence["examples"][path] = example_evidence
+                    validate_manifest(
+                        path,
+                        manifest,
+                        saved_manifest,
+                        contract,
+                        example_evidence,
+                    )
+                    best_config, case, runtime_state = validate_optimization(
+                        path,
+                        result,
+                        saved,
+                        contract,
+                        example_evidence,
+                    )
+                    if contract["requires_attack_evolution"]:
+                        validate_attack_evolution(
+                            path,
+                            result,
+                            best_config,
+                            case,
+                            runtime_state,
+                            example_evidence,
+                        )
+                        validate_attack_artifacts(
+                            path,
+                            output_path,
+                            result,
+                            env_name,
+                            example_evidence,
+                        )
+                    else:
+                        validate_adaptive_loop(
+                            path,
+                            best_config,
+                            case,
+                            runtime_state,
+                            example_evidence,
+                        )
+            except Exception as exc:
+                execution_errors.append({"path": path, "error": str(exc)})
+                evidence["examples"].setdefault(path, {})
+            finally:
+                agent_config._CONFIG = previous_config
+                for name, value in previous_config_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                if previous_example_env is None:
+                    os.environ.pop(env_name, None)
+                else:
+                    os.environ[env_name] = previous_example_env
+
+            if result:
+                serialized_payloads = {
+                    "result": result,
+                    "saved_result": saved,
+                    "saved_manifest": saved_manifest,
+                }
+                serialized = json.dumps(
+                    serialized_payloads,
+                    sort_keys=True,
+                    default=str,
+                )
+                if env_value in serialized:
+                    append_error(
+                        security_errors,
+                        path=path,
+                        field="runtime.output.secret_leakage",
+                        expected=f"{env_name} value absent",
+                        observed=f"{env_name} value present",
+                    )
+
+    return {
+        "required_files": list(V1_REDTEAM_ATTACK_EVOLUTION_FILES),
+        "required_environment_types": list(
+            V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_metrics": list(V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS),
+        "required_proof_checks": list(
+            V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS
+        ),
+        "required_contracts": {
+            path: dict(contract)
+            for path, contract in V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS.items()
+        },
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "adaptive_loop_errors": adaptive_loop_errors,
+        "attack_evolution_errors": attack_evolution_errors,
+        "proof_errors": proof_errors,
+        "artifact_errors": artifact_errors,
         "security_errors": security_errors,
         "evidence": evidence,
     }
@@ -23062,6 +24258,11 @@ __all__ = [
     "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS",
     "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS",
     "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS",
+    "V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS",
+    "V1_REDTEAM_ATTACK_EVOLUTION_FILES",
+    "V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS",
+    "V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS",
     "V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS",
     "V1_REDTEAM_SOCIETY_CAUSAL_FILES",
     "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES",
