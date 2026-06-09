@@ -280,13 +280,28 @@ def test_facades_expose_unified_agent_learning_modules():
         fi_simulate.StatefulToolWorldEnvironment
     )
     assert simulate.normalize_stateful_tool_world_manifest is not None
+    assert simulate.EnvironmentReplayEnvironment is (
+        fi_simulate.EnvironmentReplayEnvironment
+    )
+    assert simulate.EnvironmentReplayEnvironment is simulate.OpenEnvEnvironment
+    assert simulate.normalize_environment_replay_manifest is (
+        fi_simulate.normalize_environment_replay_manifest
+    )
+    assert simulate.load_environment_replay_manifest is (
+        fi_simulate.load_environment_replay_manifest
+    )
+    assert simulate.build_environment_replay_run_manifest is not None
+    assert simulate.build_environment_replay_environments is not None
     assert simulate.OpenEnvEnvironment is fi_simulate.OpenEnvEnvironment
     assert simulate.normalize_openenv_manifest is not None
+    assert simulate.load_openenv_manifest is not None
     assert simulate.build_openenv_run_manifest is not None
     assert simulate.build_openenv_environments is not None
     assert simulate.build_stateful_tool_world_run_manifest is not None
     assert simulate.build_stateful_tool_world_environments is not None
     assert simulate.build_world_model_run_manifest is not None
+    assert optimize.build_environment_replay_optimization_manifest is not None
+    assert optimize.optimize_environment_replay is not None
     assert optimize.build_openenv_optimization_manifest is not None
     assert optimize.optimize_openenv is not None
     assert optimize.build_stateful_tool_world_optimization_manifest is not None
@@ -20088,6 +20103,29 @@ def test_openenv_manifest_builds_executable_replay_candidates(monkeypatch, tmp_p
         "verified_openenv_replay"
     )
 
+    environment_replay_manifest = (
+        optimize.build_environment_replay_optimization_manifest(
+            name="sdk-environment-replay-optimization",
+            environment_replay={
+                "metadata": {"compatibility_input_shape": "openenv"}
+            },
+            required_env=["AGENT_LEARNING_SDK_OPENENV_KEY"],
+        )
+    )
+    assert environment_replay_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_OPENENV_KEY"
+    ]
+    assert [
+        env["type"]
+        for env in environment_replay_manifest["simulation"]["environments"]
+    ] == ["openenv"]
+    environment_replay_candidates = environment_replay_manifest["optimization"][
+        "target"
+    ]["search_space"]["simulation.environments"]
+    assert {
+        candidate[0]["type"] for candidate in environment_replay_candidates
+    } == {"openenv"}
+
     run_manifest = simulate.build_openenv_run_manifest(
         name="sdk-openenv-environment-run",
         required_env=["AGENT_LEARNING_SDK_OPENENV_KEY"],
@@ -20102,6 +20140,21 @@ def test_openenv_manifest_builds_executable_replay_candidates(monkeypatch, tmp_p
         "gymnasium_env",
         "environment_replay",
     } <= set(simulate.supported_manifest_environment_types())
+
+    environment_replay_run_manifest = (
+        simulate.build_environment_replay_run_manifest(
+            name="sdk-environment-replay-run",
+            environment_replay={
+                "metadata": {"compatibility_input_shape": "gymnasium"}
+            },
+            required_env=["AGENT_LEARNING_SDK_OPENENV_KEY"],
+        )
+    )
+    assert environment_replay_run_manifest["version"] == "agent-learning.run.v1"
+    assert [
+        env["type"]
+        for env in environment_replay_run_manifest["simulation"]["environments"]
+    ] == ["openenv"]
 
     manifest_path = tmp_path / "openenv-run.json"
     simulate.write_manifest_file(run_manifest, manifest_path)

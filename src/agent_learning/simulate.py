@@ -84,6 +84,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "ImageEnvironment",
     "MultiAgentRoomEnvironment",
     "ObservabilityReplayEnvironment",
+    "EnvironmentReplayEnvironment",
     "OpenEnvEnvironment",
     "OptimizerPortfolioEnvironment",
     "OptimizerTraceEnvironment",
@@ -125,6 +126,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "load_framework_import_manifest",
     "load_mcp_tool_session_export",
     "load_observability_replay_pack",
+    "load_environment_replay_manifest",
     "load_openenv_manifest",
     "load_optimizer_backend_portfolio",
     "load_persistent_state_attack_manifest",
@@ -154,6 +156,7 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "normalize_framework_probe_suite",
     "normalize_framework_adapter_conformance",
     "normalize_observability_replay_pack",
+    "normalize_environment_replay_manifest",
     "normalize_openenv_manifest",
     "normalize_optimizer_backend_portfolio",
     "normalize_optimizer_society_trace",
@@ -1918,6 +1921,26 @@ def build_openenv_environments(
             **copy.deepcopy(dict(payload.get("metadata") or {})),
         }
     return [{"type": "openenv", "data": payload}]
+
+
+def build_environment_replay_environments(
+    *,
+    environment_replay: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
+    """Return environment replay environments on compatibility wire keys."""
+
+    return build_openenv_environments(openenv=environment_replay, **kwargs)
+
+
+def build_environment_replay_run_manifest(
+    *,
+    environment_replay: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Build an environment replay run while preserving compatibility wire keys."""
+
+    return build_openenv_run_manifest(openenv=environment_replay, **kwargs)
 
 
 def build_multimodal_image_run_manifest(
@@ -8971,6 +8994,8 @@ __all__ = [
     "build_multi_agent_framework_handoff_run_manifest",
     "build_multi_framework_suite_manifest",
     "build_optimizer_backend_portfolio_run_manifest",
+    "build_environment_replay_environments",
+    "build_environment_replay_run_manifest",
     "build_openenv_environments",
     "build_openenv_run_manifest",
     "build_optimizer_governance_run_manifest",

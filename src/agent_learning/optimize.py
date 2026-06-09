@@ -3887,6 +3887,26 @@ def optimize_openenv(
     )
 
 
+def build_environment_replay_optimization_manifest(
+    *,
+    environment_replay: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Build environment replay optimization on compatibility wire keys."""
+
+    return build_openenv_optimization_manifest(openenv=environment_replay, **kwargs)
+
+
+def optimize_environment_replay(
+    *,
+    environment_replay: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Build and execute environment replay optimization through compatibility paths."""
+
+    return optimize_openenv(openenv=environment_replay, **kwargs)
+
+
 def build_world_model_optimization_manifest(
     *,
     name: str = "world-model-optimization",
@@ -31193,6 +31213,7 @@ __all__ = [
     "build_multi_agent_framework_handoff_optimization_manifest",
     "build_multi_agent_optimization_manifest",
     "build_multimodal_image_optimization_manifest",
+    "build_environment_replay_optimization_manifest",
     "build_openenv_optimization_manifest",
     "build_optimizer_backend_portfolio_optimization_manifest",
     "build_optimizer_governance_optimization_manifest",
@@ -31239,6 +31260,7 @@ __all__ = [
     "optimize_component",
     "optimize_evaluation_hooks",
     "optimize_evaluation_hook_probe",
+    "optimize_environment_replay",
     "optimize_external_agent_adapter",
     "optimize_framework_adapter_matrix",
     "optimize_framework_adapter_probe",

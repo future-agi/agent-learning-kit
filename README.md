@@ -79,13 +79,15 @@ adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
 CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, and
 A2A, requires local fixture targets with no external service dependency, and
 validates representative text, voice, CUA, realtime, browser/CUA, memory,
-workflow, orchestration, lifecycle, protocol, and OpenEnv framework manifests.
+workflow, orchestration, lifecycle, protocol, and environment replay framework
+manifests.
 It also runs framework optimizer readiness for custom adapters, social-memory
 synthesis, world/framework/memory stacks, multi-agent framework handoffs,
-framework certification, and framework import repair. OpenEnv adapter readiness
-executes a local framework adapter that returns OpenEnv/Gymnasium-style replay
-evidence and verifies generated OpenEnv gates, normalized state, events, and
-artifacts as compatibility coverage. Agent Learning environment robustness is
+framework certification, and framework import repair. Environment replay adapter
+readiness executes a local framework adapter that returns OpenEnv/Gymnasium-style
+replay evidence and verifies generated compatibility gates, normalized state,
+events, and artifacts as coverage for external input shapes. Agent Learning
+environment robustness is
 also executable: release-check aggregates local replay, framework, eval,
 optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
 red-team, orchestration, and regression proof outputs and requires at least ten
@@ -1826,25 +1828,30 @@ SDK entry points are `simulate.build_stateful_tool_world_run_manifest()`,
 `optimize.build_stateful_tool_world_optimization_manifest()`, and
 `optimize.optimize_stateful_tool_world()`.
 
-The `sdk_openenv_environment_simulation.py` example adds a local-first OpenEnv
-cookbook. It runs an executable `openenv` replay with deterministic reset,
-Gymnasium-style step results, reward/done capture, state/observation snapshots,
-sandbox metadata, and contained failure-injection evidence. The same contract
-can be searched through `optimize.build_openenv_optimization_manifest()` and
-`optimize.optimize_openenv()`, which compare weak, partial, and verified
-environment bundles using `openenv_quality` and `openenv_coverage` report
-metrics. `examples/sdk_openenv_environment_optimization.py` is the runnable
+Environment replay is the Agent Learning-owned surface for executable
+environment evidence. The existing `sdk_openenv_environment_simulation.py`
+example remains the OpenEnv/Gymnasium-compatible cookbook: it runs an executable
+`openenv` replay with deterministic reset, Gymnasium-style step results,
+reward/done capture, state/observation snapshots, sandbox metadata, and
+contained failure-injection evidence. The Agent Learning-owned APIs are
+`simulate.build_environment_replay_run_manifest()`,
+`simulate.build_environment_replay_environments()`,
+`optimize.build_environment_replay_optimization_manifest()`, and
+`optimize.optimize_environment_replay()`; the existing `build_openenv_*` and
+`optimize_openenv()` names remain compatibility aliases. The manifest wire type
+stays `openenv` for compatibility while the product surface is environment
+replay. `examples/sdk_openenv_environment_optimization.py` is the runnable
 AgentOptimizer cookbook, and `agent-learn release-check` now verifies that this
-local optimizer path selects the verified OpenEnv replay bundle.
+local optimizer path selects the verified environment replay bundle.
 
 The `sdk_framework_adapter_openenv_trace.py` example covers the adapter side of
-the same contract: a local framework returns a plain OpenEnv/Gymnasium-style
+the same contract: a local framework returns a plain OpenEnv/Gymnasium-compatible
 trace dict, and adapter promotion derives `openenv` state, `openenv` events,
-trace artifacts, plus generated OpenEnv coverage and quality gates.
+trace artifacts, plus generated environment replay coverage and quality gates.
 `agent-learn release-check` now executes that adapter cookbook as
 `framework_openenv_adapter_readiness`; the static `framework_openenv_manifest.json`
-continues to carry the same OpenEnv framework adapter contract into the manifest
-contract gate.
+continues to carry the same compatibility contract into the manifest contract
+gate.
 
 `agent-learn release-check` also gates the broader Agent Learning environment
 bar as `environment_10x_robustness`. That check does not rely on wording alone:

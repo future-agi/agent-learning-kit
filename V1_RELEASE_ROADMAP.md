@@ -297,9 +297,9 @@ Current checkpoint:
   representative provider manifests.
 - Representative manifests are validated for text framework simulation,
   LiveKit/Pipecat voice framework simulation, and LiveKit realtime
-  voice/streaming trace simulation, plus a static OpenEnv framework-adapter
-  manifest that requires OpenEnv runtime state, events, artifacts, coverage, and
-  quality gates.
+  voice/streaming trace simulation, plus a static environment replay
+  compatibility manifest that accepts OpenEnv/Gymnasium-shaped runtime state,
+  events, artifacts, coverage, and quality gates.
 - Agent integration readiness is now an executable release-check gate:
   `examples/sdk_agent_integration_optimization.py` and
   `examples/sdk_agent_integration_simulation.py` must run locally, prove the
@@ -314,15 +314,23 @@ Current checkpoint:
   tool-call evidence, and require AgentOptimizer to select the verified
   `openai_chat` adapter with `external_agent_status` evidence before external
   target-agent claims are release-ready.
-- OpenEnv optimizer readiness is now an executable release-check gate:
+- Environment replay optimizer readiness is now an executable release-check
+  gate through the existing `openenv_optimizer_readiness` compatibility check:
   `examples/sdk_openenv_environment_optimization.py` runs local AgentOptimizer
-  bundle search over weak, partial, and verified OpenEnv replays and must select
-  the verified replay with `openenv_coverage=1.0` and `openenv_quality=1.0`.
-- Framework OpenEnv adapter readiness is now an executable release-check gate:
-  `examples/sdk_framework_adapter_openenv_trace.py` must promote a local
-  `openenv.run(dict)` adapter, generate OpenEnv eval gates, normalize
-  reset/step/reward/done/sandbox/failure evidence into `openenv` state, events,
-  and trace artifacts, and pass OpenEnv coverage/quality metrics.
+  bundle search over weak, partial, and verified OpenEnv/Gymnasium-shaped
+  replays and must select the verified environment replay with
+  `openenv_coverage=1.0` and `openenv_quality=1.0`. The public API should lead
+  with `build_environment_replay_optimization_manifest()` and
+  `optimize_environment_replay()` while preserving `build_openenv_*` and
+  `optimize_openenv()` as compatibility names.
+- Framework environment replay adapter readiness is now an executable
+  release-check gate through the existing `framework_openenv_adapter_readiness`
+  compatibility check: `examples/sdk_framework_adapter_openenv_trace.py` must
+  promote a local environment replay adapter, generate compatibility eval gates,
+  normalize reset/step/reward/done/sandbox/failure evidence into `openenv` wire
+  state, events, and trace artifacts, and pass environment replay coverage and
+  quality metrics. OpenEnv and Gymnasium remain compatibility input shapes, not
+  the product center.
 - Framework trace export readiness is now an executable release-check gate:
   `examples/sdk_framework_adapter_trace_export.py` must promote a local
   `langgraph.execute_task(dict)` adapter, normalize OTLP-style trace export
@@ -353,7 +361,7 @@ Current checkpoint:
   close framework runtime, adapter-contract, trace, and tool metrics.
 - Framework adapter IO readiness is now an executable release-check gate:
   streaming, typed-output, keyword-input, side-kwargs, nested-method,
-  provider-envelope, message-history, and handoff-transcript cookbooks must run
+  provider-response, message-history, and handoff-transcript cookbooks must run
   locally, preserve the selected manifest/runtime contract, normalize state,
   events, artifacts, and transcript evidence, and close the relevant runtime,
   adapter-contract, streaming, transcript, and tool metrics.

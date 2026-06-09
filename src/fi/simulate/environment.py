@@ -2406,6 +2406,11 @@ def load_openenv_manifest(
     return OpenEnvEnvironment(normalize_openenv_manifest(_coerce_plain_dict(loaded)))
 
 
+EnvironmentReplayEnvironment = OpenEnvEnvironment
+normalize_environment_replay_manifest = normalize_openenv_manifest
+load_environment_replay_manifest = load_openenv_manifest
+
+
 def _normalize_openenv_step(value: Any, *, index: int) -> Dict[str, Any]:
     step = _coerce_plain_dict(value)
     terminated = bool(step.get("terminated", step.get("done", False)))
