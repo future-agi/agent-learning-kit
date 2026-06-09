@@ -79,13 +79,15 @@ validates representative text, voice, CUA, realtime, browser/CUA, memory,
 workflow, orchestration, lifecycle, protocol, and OpenEnv framework manifests.
 It also runs framework optimizer readiness for custom adapters, social-memory
 synthesis, world/framework/memory stacks, multi-agent framework handoffs,
-framework certification, and framework import repair. Adapter probe readiness
-exercises raw probe, discovery, optimization, auto-discovery, promotion, and
-one-call run cookbooks so BYO framework objects can become evaluated run
-manifests locally. The composed trinity-stack probe readiness gate proves that
-the selected orchestration stack agent can pass a localhost task evaluator and
-promote into one run manifest with world, framework, retrieval, memory,
-multi-agent, and evaluation-hook evidence.
+framework certification, and framework import repair. OpenEnv adapter readiness
+executes a local framework adapter that returns OpenEnv/Gymnasium-style replay
+evidence and verifies generated OpenEnv gates, normalized state, events, and
+artifacts. Adapter probe readiness exercises raw probe, discovery,
+optimization, auto-discovery, promotion, and one-call run cookbooks so BYO
+framework objects can become evaluated run manifests locally. The composed
+trinity-stack probe readiness gate proves that the selected orchestration stack
+agent can pass a localhost task evaluator and promote into one run manifest with
+world, framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -730,7 +732,10 @@ evidence. Local adapters can return `openenv`, `open_env`, reset/step
 trajectories, reward/done fields, sandbox metadata, or failure-injection
 records; the generic wrapper promotes them to `openenv` state, trace artifacts,
 `openenv` events, and generated `required_openenv` / `openenv_quality` gates.
-See `examples/sdk_framework_adapter_openenv_trace.py`.
+See `examples/sdk_framework_adapter_openenv_trace.py`. `agent-learn
+release-check` runs this cookbook as `framework_openenv_adapter_readiness` and
+requires normalized reset/step/reward/done/sandbox/failure evidence plus passing
+OpenEnv coverage and quality metrics.
 
 Realtime framework exports are normalized from local session traces. Pipecat-like
 `frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
@@ -1699,8 +1704,10 @@ The `sdk_framework_adapter_openenv_trace.py` example covers the adapter side of
 the same contract: a local framework returns a plain OpenEnv/Gymnasium-style
 trace dict, and adapter promotion derives `openenv` state, `openenv` events,
 trace artifacts, plus generated OpenEnv coverage and quality gates.
-The static `framework_openenv_manifest.json` carries the same OpenEnv framework
-adapter gate into `agent-learn release-check`.
+`agent-learn release-check` now executes that adapter cookbook as
+`framework_openenv_adapter_readiness`; the static `framework_openenv_manifest.json`
+continues to carry the same OpenEnv framework adapter contract into the manifest
+contract gate.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

@@ -15172,6 +15172,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_openenv_optimizer_files"] == (
         trinity.V1_OPENENV_OPTIMIZER_FILES
     )
+    assert payload["required_framework_openenv_adapter_files"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_FILES
+    )
+    assert payload["required_framework_openenv_adapter_openenv"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    )
+    assert payload["required_framework_openenv_adapter_metrics"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+    )
+    assert payload["required_framework_openenv_adapter_quality_minima"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+    )
     assert payload["required_framework_optimizer_files"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_FILES
     )
@@ -15235,6 +15247,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
         "openenv_optimizer_readiness",
+        "framework_openenv_adapter_readiness",
         "framework_optimizer_readiness",
         "framework_adapter_probe_readiness",
         "protocol_adapter_readiness",
@@ -15652,6 +15665,104 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "openenv_coverage": pytest.approx(1.0),
         "openenv_quality": pytest.approx(1.0),
     }
+    framework_openenv_adapter = checks[
+        "framework_openenv_adapter_readiness"
+    ]["evidence"]
+    assert framework_openenv_adapter["required_files"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_FILES
+    )
+    assert framework_openenv_adapter["required_openenv"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    )
+    assert framework_openenv_adapter["required_metrics"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+    )
+    assert framework_openenv_adapter["quality_minima"] == (
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+    )
+    assert framework_openenv_adapter["missing_files"] == []
+    assert framework_openenv_adapter["execution_errors"] == []
+    assert framework_openenv_adapter["manifest_errors"] == []
+    assert framework_openenv_adapter["contract_errors"] == []
+    assert framework_openenv_adapter["metric_errors"] == []
+    framework_openenv_evidence = framework_openenv_adapter["evidence"]
+    assert framework_openenv_evidence["result_kind"] == "agent-learning.run.v1"
+    assert framework_openenv_evidence["result_status"] == "passed"
+    assert framework_openenv_evidence["output_roundtrip"] is True
+    assert framework_openenv_evidence["manifest_version"] == (
+        "agent-learning.run.v1"
+    )
+    assert framework_openenv_evidence["manifest_agent"] == {
+        "framework": "openenv",
+        "method": "run",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert set(framework_openenv_evidence["required_openenv"]) >= set(
+        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    )
+    assert framework_openenv_evidence["runtime_contract"][
+        "required_state_keys"
+    ] == ["openenv"]
+    assert {"artifact", "event", "openenv", "state"} <= set(
+        framework_openenv_evidence["runtime_contract"]["required_signals"]
+    )
+    assert framework_openenv_evidence["openenv_quality"] == {
+        "min_reset_count": 1,
+        "min_step_count": 2,
+        "min_action_route_count": 2,
+        "min_failure_count": 1,
+        "min_metadata_capture_count": 3,
+        "min_reward_total": pytest.approx(1.0),
+        "max_error_count": 0,
+        "require_done": True,
+        "require_terminated": True,
+        "require_sandbox": True,
+        "require_metadata_capture": True,
+        "require_no_external_service": True,
+        "require_deterministic_reset": True,
+        "required_runtime": "in_process",
+        "required_transport": "local",
+        "required_isolation": "process",
+    }
+    assert framework_openenv_evidence["metric_weights"][
+        "openenv_coverage"
+    ] == pytest.approx(4.0)
+    assert framework_openenv_evidence["metric_weights"][
+        "openenv_quality"
+    ] == pytest.approx(4.0)
+    assert framework_openenv_evidence["metric_averages"] == {
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "openenv_coverage": pytest.approx(1.0),
+        "openenv_quality": pytest.approx(1.0),
+    }
+    assert {"framework_runtime", "framework_trace", "openenv"} <= set(
+        framework_openenv_evidence["state_keys"]
+    )
+    assert framework_openenv_evidence["openenv_summary"] == {
+        "reset_count": 1,
+        "step_count": 2,
+        "action_route_count": 2,
+        "failure_count": 1,
+        "metadata_capture_count": 3,
+        "reward_total": pytest.approx(1.0),
+        "error_count": 0,
+        "done": True,
+        "terminated": True,
+        "sandbox_enabled": True,
+        "requires_external_service": False,
+        "deterministic_reset": True,
+        "runtime": "in_process",
+        "transport": "local",
+        "isolation": "process",
+    }
+    runtime_output = framework_openenv_evidence["runtime_output"]
+    assert "openenv" in runtime_output["state_keys"]
+    assert "trace" in runtime_output["artifact_types"]
+    assert "openenv" in runtime_output["event_types"]
+    assert runtime_output["openenv_summary"]["step_count"] == 2
+    assert runtime_output["openenv_summary"]["done"] is True
     framework_optimizer = checks["framework_optimizer_readiness"]["evidence"]
     assert framework_optimizer["required_files"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_FILES

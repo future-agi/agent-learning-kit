@@ -562,6 +562,44 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
     "openenv_quality",
 ]
 
+V1_FRAMEWORK_OPENENV_ADAPTER_FILES = [
+    "examples/sdk_framework_adapter_openenv_trace.py",
+    "internal-docs/framework-openenv-adapter-readiness-research.md",
+]
+
+V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV = [
+    "openenv",
+    "state",
+    "observation",
+    "reset",
+    "step",
+    "action",
+    "reward",
+    "metadata",
+    "failure_injection",
+    "done",
+    "terminated",
+    "sandbox",
+    "in_process",
+    "local",
+]
+
+V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS = [
+    "framework_runtime_contract",
+    "framework_adapter_contract_quality",
+    "openenv_coverage",
+    "openenv_quality",
+]
+
+V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = {
+    "reset_count": 1,
+    "step_count": 2,
+    "action_route_count": 2,
+    "failure_count": 1,
+    "metadata_capture_count": 3,
+    "reward_total": 1.0,
+}
+
 V1_FRAMEWORK_OPTIMIZER_FILES = [
     "examples/custom_framework_optimization.json",
     "examples/social_memory_framework_optimization.json",
@@ -1630,6 +1668,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=openenv_optimizer,
     )
+    framework_openenv_adapter = _release_framework_openenv_adapter_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_openenv_adapter_readiness",
+        passed=(
+            not framework_openenv_adapter["missing_files"]
+            and not framework_openenv_adapter["execution_errors"]
+            and not framework_openenv_adapter["manifest_errors"]
+            and not framework_openenv_adapter["contract_errors"]
+            and not framework_openenv_adapter["metric_errors"]
+        ),
+        milestone="M6",
+        evidence=framework_openenv_adapter,
+    )
     framework_optimizer = _release_framework_optimizer_status(root)
     _append_release_check(
         checks,
@@ -1823,6 +1875,18 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
         ),
         "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
+        "required_framework_openenv_adapter_files": list(
+            V1_FRAMEWORK_OPENENV_ADAPTER_FILES
+        ),
+        "required_framework_openenv_adapter_openenv": list(
+            V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+        ),
+        "required_framework_openenv_adapter_metrics": list(
+            V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+        ),
+        "required_framework_openenv_adapter_quality_minima": dict(
+            V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+        ),
         "required_framework_optimizer_files": list(V1_FRAMEWORK_OPTIMIZER_FILES),
         "required_framework_optimizer_contracts": copy.deepcopy(
             V1_FRAMEWORK_OPTIMIZER_CONTRACTS
@@ -3925,6 +3989,399 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_FRAMEWORK_OPENENV_ADAPTER_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    contract_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        errors: list[dict[str, Any]],
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        errors.append(
+            {
+                "path": "examples/sdk_framework_adapter_openenv_trace.py",
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    if not missing_files:
+        example_path = root / "examples/sdk_framework_adapter_openenv_trace.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_framework_openenv_adapter",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-openenv-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "framework-openenv-adapter.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            result = {}
+            saved = {}
+
+        if result:
+            manifest = _as_mapping(
+                result.get("framework_adapter_openenv_trace_manifest")
+            )
+            agent = _as_mapping(manifest.get("agent"))
+            evaluation = _as_mapping(manifest.get("evaluation"))
+            agent_report = _as_mapping(evaluation.get("agent_report"))
+            config = _as_mapping(agent_report.get("config"))
+            runtime_contract = _as_mapping(config.get("framework_runtime_contract"))
+            openenv_quality = _as_mapping(config.get("openenv_quality"))
+            metric_weights = _as_mapping(config.get("metric_weights"))
+            required_openenv = [
+                str(item) for item in _as_list(config.get("required_openenv"))
+            ]
+            summary = _as_mapping(result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report = _as_mapping(result.get("report"))
+            report_results = [
+                item for item in _as_list(report.get("results"))
+                if isinstance(item, Mapping)
+            ]
+            first_report = _as_mapping(report_results[0]) if report_results else {}
+            metadata = _as_mapping(first_report.get("metadata"))
+            environment_state = _as_mapping(metadata.get("environment_state"))
+            openenv_state = _as_mapping(environment_state.get("openenv"))
+            openenv_summary = _as_mapping(openenv_state.get("summary"))
+            framework_runtime = _as_mapping(
+                environment_state.get("framework_runtime")
+            )
+            invocations = [
+                item for item in _as_list(framework_runtime.get("invocations"))
+                if isinstance(item, Mapping)
+            ]
+            invocation = _as_mapping(invocations[0]) if invocations else {}
+            invocation_output = _as_mapping(invocation.get("output"))
+            manifest_version = manifest.get("version") or manifest.get("kind")
+            output_openenv_summary = _as_mapping(
+                invocation_output.get("openenv_summary")
+            )
+            evidence.update(
+                {
+                    "result_kind": result.get("kind"),
+                    "result_status": result.get("status"),
+                    "output_roundtrip": result == saved,
+                    "manifest_version": manifest_version,
+                    "manifest_agent": {
+                        "framework": agent.get("framework"),
+                        "method": agent.get("method"),
+                        "input_mode": agent.get("input_mode"),
+                        "trace_runtime": agent.get("trace_runtime"),
+                    },
+                    "required_openenv": required_openenv,
+                    "openenv_quality": {
+                        "min_reset_count": openenv_quality.get("min_reset_count"),
+                        "min_step_count": openenv_quality.get("min_step_count"),
+                        "min_action_route_count": openenv_quality.get(
+                            "min_action_route_count"
+                        ),
+                        "min_failure_count": openenv_quality.get(
+                            "min_failure_count"
+                        ),
+                        "min_metadata_capture_count": openenv_quality.get(
+                            "min_metadata_capture_count"
+                        ),
+                        "min_reward_total": openenv_quality.get(
+                            "min_reward_total"
+                        ),
+                        "max_error_count": openenv_quality.get("max_error_count"),
+                        "require_done": openenv_quality.get("require_done"),
+                        "require_terminated": openenv_quality.get(
+                            "require_terminated"
+                        ),
+                        "require_sandbox": openenv_quality.get("require_sandbox"),
+                        "require_metadata_capture": openenv_quality.get(
+                            "require_metadata_capture"
+                        ),
+                        "require_no_external_service": openenv_quality.get(
+                            "require_no_external_service"
+                        ),
+                        "require_deterministic_reset": openenv_quality.get(
+                            "require_deterministic_reset"
+                        ),
+                        "required_runtime": openenv_quality.get(
+                            "required_runtime"
+                        ),
+                        "required_transport": openenv_quality.get(
+                            "required_transport"
+                        ),
+                        "required_isolation": openenv_quality.get(
+                            "required_isolation"
+                        ),
+                    },
+                    "runtime_contract": {
+                        "required_state_keys": list(
+                            runtime_contract.get("required_state_keys") or []
+                        ),
+                        "required_signals": list(
+                            runtime_contract.get("required_signals") or []
+                        ),
+                        "required_artifact_types": list(
+                            runtime_contract.get("required_artifact_types") or []
+                        ),
+                    },
+                    "metric_weights": {
+                        metric: metric_weights.get(metric)
+                        for metric in V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+                    },
+                    "metric_averages": {
+                        metric: metric_averages.get(metric)
+                        for metric in V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+                    },
+                    "state_keys": sorted(str(key) for key in environment_state),
+                    "runtime_output": {
+                        "state_keys": list(invocation_output.get("state_keys") or []),
+                        "artifact_types": list(
+                            invocation_output.get("artifact_types") or []
+                        ),
+                        "event_types": list(invocation_output.get("event_types") or []),
+                        "openenv_summary": dict(output_openenv_summary),
+                    },
+                    "openenv_summary": {
+                        "reset_count": openenv_summary.get("reset_count"),
+                        "step_count": openenv_summary.get("step_count"),
+                        "action_route_count": openenv_summary.get(
+                            "action_route_count"
+                        ),
+                        "failure_count": openenv_summary.get("failure_count"),
+                        "metadata_capture_count": openenv_summary.get(
+                            "metadata_capture_count"
+                        ),
+                        "reward_total": openenv_summary.get("reward_total"),
+                        "error_count": openenv_summary.get("error_count"),
+                        "done": openenv_summary.get("done"),
+                        "terminated": openenv_summary.get("terminated"),
+                        "sandbox_enabled": openenv_summary.get("sandbox_enabled"),
+                        "requires_external_service": openenv_summary.get(
+                            "requires_external_service"
+                        ),
+                        "deterministic_reset": openenv_summary.get(
+                            "deterministic_reset"
+                        ),
+                        "runtime": openenv_summary.get("runtime"),
+                        "transport": openenv_summary.get("transport"),
+                        "isolation": openenv_summary.get("isolation"),
+                    },
+                }
+            )
+
+            for field, observed, expected in (
+                ("kind", result.get("kind"), "agent-learning.run.v1"),
+                ("status", result.get("status"), "passed"),
+            ):
+                if observed != expected:
+                    append_error(contract_errors, field, expected, observed)
+            if result != saved:
+                append_error(contract_errors, "output_roundtrip", True, False)
+
+            if not manifest:
+                append_error(manifest_errors, "manifest", "present", None)
+            elif manifest_version != "agent-learning.run.v1":
+                append_error(
+                    manifest_errors,
+                    "manifest.version",
+                    "agent-learning.run.v1",
+                    manifest_version,
+                )
+            expected_agent = {
+                "framework": "openenv",
+                "method": "run",
+                "input_mode": "dict",
+                "trace_runtime": True,
+            }
+            for field, expected in expected_agent.items():
+                observed = agent.get(field)
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        f"manifest.agent.{field}",
+                        expected,
+                        observed,
+                    )
+
+            missing_openenv = sorted(
+                set(V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV)
+                - set(required_openenv)
+            )
+            if missing_openenv:
+                append_error(
+                    manifest_errors,
+                    "evaluation.agent_report.config.required_openenv",
+                    V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV,
+                    required_openenv,
+                )
+            runtime_required_state = set(
+                _as_list(runtime_contract.get("required_state_keys"))
+            )
+            if "openenv" not in runtime_required_state:
+                append_error(
+                    manifest_errors,
+                    "evaluation.agent_report.config.framework_runtime_contract.required_state_keys",
+                    ["openenv"],
+                    sorted(runtime_required_state),
+                )
+            runtime_required_signals = set(
+                str(item) for item in _as_list(runtime_contract.get("required_signals"))
+            )
+            missing_runtime_signals = sorted(
+                {"artifact", "event", "openenv", "state"} - runtime_required_signals
+            )
+            if missing_runtime_signals:
+                append_error(
+                    manifest_errors,
+                    "evaluation.agent_report.config.framework_runtime_contract.required_signals",
+                    ["artifact", "event", "openenv", "state"],
+                    sorted(runtime_required_signals),
+                )
+
+            for summary_key, minimum in (
+                V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA.items()
+            ):
+                quality_field = f"min_{summary_key}"
+                if _float_or_zero(openenv_quality.get(quality_field)) < float(
+                    minimum
+                ):
+                    append_error(
+                        manifest_errors,
+                        f"evaluation.agent_report.config.openenv_quality.{quality_field}",
+                        f">={minimum}",
+                        openenv_quality.get(quality_field),
+                    )
+                if _float_or_zero(openenv_summary.get(summary_key)) < float(minimum):
+                    append_error(
+                        contract_errors,
+                        f"environment_state.openenv.summary.{summary_key}",
+                        f">={minimum}",
+                        openenv_summary.get(summary_key),
+                    )
+
+            quality_expectations = {
+                "max_error_count": 0,
+                "require_done": True,
+                "require_terminated": True,
+                "require_sandbox": True,
+                "require_metadata_capture": True,
+                "require_no_external_service": True,
+                "require_deterministic_reset": True,
+                "required_runtime": "in_process",
+                "required_transport": "local",
+                "required_isolation": "process",
+            }
+            for field, expected in quality_expectations.items():
+                observed = openenv_quality.get(field)
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        f"evaluation.agent_report.config.openenv_quality.{field}",
+                        expected,
+                        observed,
+                    )
+
+            summary_expectations = {
+                "error_count": 0,
+                "done": True,
+                "terminated": True,
+                "sandbox_enabled": True,
+                "requires_external_service": False,
+                "deterministic_reset": True,
+                "runtime": "in_process",
+                "transport": "local",
+                "isolation": "process",
+            }
+            for field, expected in summary_expectations.items():
+                observed = openenv_summary.get(field)
+                if observed != expected:
+                    append_error(
+                        contract_errors,
+                        f"environment_state.openenv.summary.{field}",
+                        expected,
+                        observed,
+                    )
+
+            if "openenv" not in environment_state:
+                append_error(
+                    contract_errors,
+                    "report.results.metadata.environment_state",
+                    "openenv",
+                    sorted(str(key) for key in environment_state),
+                )
+            if "openenv" not in set(_as_list(invocation_output.get("state_keys"))):
+                append_error(
+                    contract_errors,
+                    "framework_runtime.invocations.output.state_keys",
+                    "openenv",
+                    invocation_output.get("state_keys"),
+                )
+            if "trace" not in set(_as_list(invocation_output.get("artifact_types"))):
+                append_error(
+                    contract_errors,
+                    "framework_runtime.invocations.output.artifact_types",
+                    "trace",
+                    invocation_output.get("artifact_types"),
+                )
+            if "openenv" not in set(_as_list(invocation_output.get("event_types"))):
+                append_error(
+                    contract_errors,
+                    "framework_runtime.invocations.output.event_types",
+                    "openenv",
+                    invocation_output.get("event_types"),
+                )
+            if _int_or_zero(output_openenv_summary.get("step_count")) < 2:
+                append_error(
+                    contract_errors,
+                    "framework_runtime.invocations.output.openenv_summary.step_count",
+                    ">=2",
+                    output_openenv_summary.get("step_count"),
+                )
+
+            for metric in V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS:
+                if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        f"summary.metric_averages.{metric}",
+                        ">=1.0",
+                        metric_averages.get(metric),
+                    )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_OPENENV_ADAPTER_FILES),
+        "required_openenv": list(V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV),
+        "required_metrics": list(V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS),
+        "quality_minima": dict(V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "contract_errors": contract_errors,
+        "metric_errors": metric_errors,
+        "evidence": evidence,
+    }
+
+
 def _release_framework_optimizer_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_FRAMEWORK_OPTIMIZER_FILES)
     manifest_errors: list[dict[str, Any]] = []
@@ -5904,6 +6361,10 @@ __all__ = [
     "V1_BROWSER_REALTIME_ADAPTER_FILES",
     "V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_PROBE_FILES",
+    "V1_FRAMEWORK_OPENENV_ADAPTER_FILES",
+    "V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA",
+    "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS",
+    "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",

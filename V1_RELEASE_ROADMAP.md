@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `harness_diagnosis_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_optimizer_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -231,6 +231,11 @@ Current checkpoint:
   `examples/sdk_openenv_environment_optimization.py` runs local AgentOptimizer
   bundle search over weak, partial, and verified OpenEnv replays and must select
   the verified replay with `openenv_coverage=1.0` and `openenv_quality=1.0`.
+- Framework OpenEnv adapter readiness is now an executable release-check gate:
+  `examples/sdk_framework_adapter_openenv_trace.py` must promote a local
+  `openenv.run(dict)` adapter, generate OpenEnv eval gates, normalize
+  reset/step/reward/done/sandbox/failure evidence into `openenv` state, events,
+  and trace artifacts, and pass OpenEnv coverage/quality metrics.
 - Framework optimizer readiness is now an executable release-check gate:
   `examples/custom_framework_optimization.json`,
   `examples/social_memory_framework_optimization.json`,
@@ -304,10 +309,11 @@ Next implementation focus:
   framework objects should be discoverable, optimizable, promotable, and
   evaluable without external services before adding live framework-specific
   shortcuts.
-- Extend that target through framework adapters: local framework/provider
-  outputs that return OpenEnv/Gymnasium-style reset, step, state, reward/done,
-  sandbox, or failure-injection traces must normalize into evaluator-visible
-  `openenv` state, artifacts, events, and generated OpenEnv quality gates.
+- Keep extending that target through framework adapters: local
+  framework/provider outputs that return OpenEnv/Gymnasium-style reset, step,
+  state, reward/done, sandbox, or failure-injection traces must keep
+  normalizing into evaluator-visible `openenv` state, artifacts, events, and
+  generated OpenEnv quality gates before adding live environment shortcuts.
 - Treat the OpenEnv comparison as an executable roadmap bar, not a marketing
   claim: V1 should exercise deterministic resets, failure-injection scenarios,
   adversarial environment states, tool/action contract drift, transcript/replay
