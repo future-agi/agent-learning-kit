@@ -316,14 +316,20 @@ Next implementation focus:
 - Avoid adding hosted optimizer/eval dependencies.
 - Add real-key live-target checks only for explicitly selected user workloads
   and keep those results out of release metadata.
-- Add a 10x OpenEnv robustness target: support local-first OpenEnv adapter
-  probes for Gymnasium-style `reset()`, `step()`, and `state()` contracts;
-  container/HTTP/WebSocket-backed environment replay; MCP/tool action routing;
-  reward/done/metadata capture; and sandbox/isolation evidence. The Agent
-  Learning Kit framework/provider surface should be strictly more robust than
-  OpenEnv by proving cross-framework simulation, eval, red-team, memory,
-  browser/CUA, realtime, protocol, multi-agent, replay, optimizer, and
-  regression-promotion gates in one artifact.
+- Add an explicit 10x OpenEnv robustness target: support local-first OpenEnv
+  adapter probes for Gymnasium-style `reset()`, `step()`, and `state()`
+  contracts; container/HTTP/WebSocket-backed environment replay; MCP/tool action
+  routing; reward/done/metadata capture; and sandbox/isolation evidence. The
+  Agent Learning Kit framework/provider surface should be materially more robust
+  than an OpenEnv-only baseline by proving at least ten independent resilience
+  axes in release-check evidence: cross-framework simulation, eval, red-team,
+  memory, browser/CUA, realtime, protocol, multi-agent, replay, optimizer
+  recovery, and regression promotion.
+- Treat "10x more robust than OpenEnv" as a measurable release bar, not wording
+  for marketing copy: every comparative claim must map to executable artifacts,
+  passing metrics, failure-injection coverage, adversarial state coverage,
+  sandbox evidence, and local reproducibility before it appears in release
+  notes.
 - Keep backing that target with the executable `OpenEnvEnvironment` adapter,
   `openenv_quality`/`openenv_coverage` report gates, SDK cookbook manifests,
   and the release-checked agent-opt OpenEnv bundle search before using the claim
