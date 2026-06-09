@@ -2025,6 +2025,11 @@ tool evidence. The SDK entry points are
 `optimize.optimize_external_agent_adapter()`, and the artifact works with the
 same `agent-learn report`, `actions`, and `action-run` CLI flow as the other
 promptfoo-style cookbooks.
+`agent-learn release-check` gates this path as
+`external_agent_adapter_readiness` by running the SDK example against a local
+OpenAI-compatible HTTP target, requiring redacted auth, preserved
+`external_agent_status` tool-call evidence, passing adapter/security metrics,
+and optimizer selection of the verified `openai_chat` tool-schema candidate.
 
 The `sdk_workflow_hook_optimization.py` example adds executable HTTP workflow
 hooks to the simulator. A manifest can expose `workflow_hook` tools backed by

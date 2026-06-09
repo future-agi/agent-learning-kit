@@ -8,6 +8,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import urlparse
 
 from .config import current_config
 
@@ -488,6 +489,93 @@ V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS = [
     "https://arxiv.org/abs/2606.03892",
     "https://arxiv.org/abs/2606.02372",
     "https://arxiv.org/abs/2605.30880",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES = [
+    "examples/sdk_external_http_agent_optimization.py",
+    "internal-docs/external-agent-adapter-readiness-research.md",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES = [
+    "raw_http_agent_learning_payload",
+    "openai_compatible_without_tool_schema",
+    "verified_openai_compatible_tools",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE = "verified_openai_compatible_tools"
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS = [
+    "integration",
+    "tools",
+    "security",
+    "environment",
+    "evaluator",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS = [
+    "agent",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES = [
+    "tool_mock",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS = [
+    "external_agent_status",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL = "openai_chat"
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE = "openai_compatible"
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS = [
+    "tool_selection_accuracy",
+    "task_completion",
+    "secret_leakage",
+    "tool_argument_schema",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS = [
+    "auth.redacted",
+    "auth.api_key_env",
+    "protocol",
+    "status_code",
+    "success",
+    "request_tool_count",
+    "response_tool_call_count",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS = [
+    "external_agent",
+    "external_agent_status",
+    "external_agent_trace",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS = [
+    "report_artifact",
+    "rerun_optimization",
+    "promote_to_regression",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS = [
+    "https://arxiv.org/abs/2605.11378",
+    "https://arxiv.org/abs/2602.03238",
+    "https://arxiv.org/abs/2603.15483",
+    "https://arxiv.org/abs/2605.10912",
+    "https://arxiv.org/abs/2604.16762",
+    "https://arxiv.org/abs/2604.11790",
+    "https://arxiv.org/abs/2603.30016",
+    "https://arxiv.org/abs/2604.04820",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS = [
+    "https://developers.openai.com/api/docs/guides/function-calling",
+    "https://developers.openai.com/api/reference/overview#authentication",
+]
+
+V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS = [
+    *V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS,
+    *V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS,
 ]
 
 V1_EVALUATION_HOOK_PROBE_FILES = [
@@ -2806,6 +2894,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=agent_integration,
     )
+    external_agent_adapter = _release_external_agent_adapter_status(root)
+    _append_release_check(
+        checks,
+        check_id="external_agent_adapter_readiness",
+        passed=(
+            not external_agent_adapter["missing_files"]
+            and not external_agent_adapter["execution_errors"]
+            and not external_agent_adapter["manifest_errors"]
+            and not external_agent_adapter["optimization_errors"]
+            and not external_agent_adapter["trace_errors"]
+            and not external_agent_adapter["metric_errors"]
+            and not external_agent_adapter["report_errors"]
+            and not external_agent_adapter["security_errors"]
+            and not external_agent_adapter["source_errors"]
+        ),
+        milestone="M6",
+        evidence=external_agent_adapter,
+    )
     openenv_optimizer = _release_openenv_optimizer_status(root)
     _append_release_check(
         checks,
@@ -3363,6 +3469,54 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_agent_integration_min_counts": dict(
             V1_AGENT_INTEGRATION_MIN_COUNTS
+        ),
+        "required_external_agent_adapter_files": list(
+            V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES
+        ),
+        "required_external_agent_adapter_candidate_profiles": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
+        ),
+        "required_external_agent_adapter_selected_profile": (
+            V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE
+        ),
+        "required_external_agent_adapter_layers": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS
+        ),
+        "required_external_agent_adapter_search_paths": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS
+        ),
+        "required_external_agent_adapter_environment_types": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_external_agent_adapter_tools": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
+        ),
+        "required_external_agent_adapter_protocol": (
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL
+        ),
+        "required_external_agent_adapter_agent_type": (
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE
+        ),
+        "required_external_agent_adapter_metrics": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS
+        ),
+        "required_external_agent_adapter_trace_fields": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS
+        ),
+        "required_external_agent_adapter_state_keys": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS
+        ),
+        "required_external_agent_adapter_actions": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS
+        ),
+        "required_external_agent_adapter_research_urls": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
+        ),
+        "required_external_agent_adapter_protocol_doc_urls": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS
+        ),
+        "required_external_agent_adapter_source_urls": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
         ),
         "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
         "required_framework_openenv_adapter_files": list(
@@ -11172,6 +11326,708 @@ def _release_agent_integration_status(root: Path) -> dict[str, Any]:
         "simulation_errors": simulation_errors,
         "metric_errors": metric_errors,
         "readiness_errors": readiness_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_external_agent_adapter_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    trace_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    source = "examples/sdk_external_http_agent_optimization.py"
+    research_doc = "internal-docs/external-agent-adapter-readiness-research.md"
+    release_key = "release-check-external-agent-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        path: str = source,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_set = {str(item) for item in observed}
+        return sorted({str(item) for item in required} - observed_set)
+
+    def local_endpoint_host(value: Any) -> bool:
+        parsed = urlparse(str(value or ""))
+        host = parsed.hostname or ""
+        return host in {"127.0.0.1", "localhost"}
+
+    def load_module(path: Path, name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    manifest: Mapping[str, Any] = {}
+    result: Mapping[str, Any] = {}
+    saved: Mapping[str, Any] = {}
+    rendered_report: Mapping[str, Any] = {}
+    action_catalog: Mapping[str, Any] = {}
+    serialized_output = ""
+
+    if not missing_files:
+        from . import actions as agent_actions
+        from . import config as agent_config
+        from . import simulate as agent_simulate
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env_names = (
+            "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+            "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_ENDPOINT",
+        )
+        previous_example_env = {
+            name: os.environ.get(name) for name in example_env_names
+        }
+        try:
+            example_path = root / source
+            module = load_module(
+                example_path,
+                "agent_learning_release_external_agent_adapter",
+            )
+            required_env_name = str(
+                getattr(
+                    module,
+                    "REQUIRED_ENV",
+                    "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+                )
+            )
+            endpoint_env_name = str(
+                getattr(
+                    module,
+                    "ENDPOINT_ENV",
+                    "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_ENDPOINT",
+                )
+            )
+            os.environ[required_env_name] = release_key
+            os.environ.pop(endpoint_env_name, None)
+            manifest = module.build_manifest(
+                endpoint="http://127.0.0.1:8765/v1/chat/completions"
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-external-agent-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "external-agent-adapter.json"
+                result = module.run(output_path)
+                serialized_output = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized_output)
+                rendered_report = agent_simulate.render_report(
+                    result,
+                    source_path=output_path,
+                )
+                action_catalog = agent_actions.action_catalog(
+                    result,
+                    source_path=output_path,
+                )
+        except Exception as exc:
+            execution_errors.append({"path": source, "error": str(exc)})
+            manifest = {}
+            result = {}
+            saved = {}
+            rendered_report = {}
+            action_catalog = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            for name, value in previous_example_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    if manifest:
+        optimization = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        candidates = [
+            _as_mapping(item)
+            for item in _as_list(search_space.get("agent"))
+            if isinstance(item, Mapping)
+        ]
+        candidate_profiles = [
+            str(_as_mapping(candidate.get("metadata")).get("candidate_profile"))
+            for candidate in candidates
+        ]
+        selected_candidate = _as_mapping(candidates[-1]) if candidates else {}
+        simulation = _as_mapping(manifest.get("simulation"))
+        environment_types = [
+            str(_as_mapping(item).get("type"))
+            for item in _as_list(simulation.get("environments"))
+            if isinstance(item, Mapping)
+        ]
+        evaluation = _as_mapping(manifest.get("evaluation"))
+        agent_report = _as_mapping(evaluation.get("agent_report"))
+        config = _as_mapping(agent_report.get("config"))
+        research_urls = sorted(
+            str(source_item.get("url"))
+            for source_item in _as_list(target_metadata.get("research_sources"))
+            if isinstance(source_item, Mapping) and source_item.get("url")
+        )
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_layers": list(target.get("layers") or []),
+            "search_paths": sorted(str(path) for path in search_space),
+            "candidate_profiles": candidate_profiles,
+            "selected_candidate": {
+                "type": selected_candidate.get("type"),
+                "protocol": selected_candidate.get("protocol"),
+                "include_tools": selected_candidate.get("include_tools"),
+                "api_key_env": selected_candidate.get("api_key_env"),
+                "profile": _as_mapping(selected_candidate.get("metadata")).get(
+                    "candidate_profile"
+                ),
+            },
+            "environment_types": environment_types,
+            "available_tools": list(config.get("available_tools") or []),
+            "required_tools": list(config.get("required_tools") or []),
+            "metric_weights": dict(_as_mapping(config.get("metric_weights"))),
+            "allow_extra_tool_arguments": config.get(
+                "allow_extra_tool_arguments"
+            ),
+            "research_urls": research_urls,
+            "task_kind": target_metadata.get("task_kind"),
+        }
+        for field, observed, expected in (
+            ("version", manifest.get("version"), "agent-learning.optimization.v1"),
+            (
+                "required_env",
+                list(manifest.get("required_env") or []),
+                ["AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"],
+            ),
+            (
+                "optimization.target.layers",
+                list(target.get("layers") or []),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS,
+            ),
+            (
+                "optimization.target.search_space",
+                sorted(str(path) for path in search_space),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS,
+            ),
+            (
+                "optimization.target.search_space.agent.metadata.candidate_profile",
+                candidate_profiles,
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES,
+            ),
+            (
+                "optimization.target.selected_candidate.type",
+                selected_candidate.get("type"),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE,
+            ),
+            (
+                "optimization.target.selected_candidate.protocol",
+                selected_candidate.get("protocol"),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL,
+            ),
+            (
+                "optimization.target.selected_candidate.include_tools",
+                selected_candidate.get("include_tools"),
+                True,
+            ),
+            (
+                "optimization.target.metadata.task_kind",
+                target_metadata.get("task_kind"),
+                "external_agent_adapter",
+            ),
+            (
+                "simulation.environments.type",
+                environment_types,
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES,
+            ),
+            (
+                "evaluation.agent_report.config.available_tools",
+                list(config.get("available_tools") or []),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS,
+            ),
+            (
+                "evaluation.agent_report.config.required_tools",
+                list(config.get("required_tools") or []),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS,
+            ),
+            (
+                "evaluation.agent_report.config.allow_extra_tool_arguments",
+                config.get("allow_extra_tool_arguments"),
+                True,
+            ),
+        ):
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_research_urls = missing_values(
+            research_urls,
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS,
+        )
+        if missing_research_urls:
+            append_error(
+                source_errors,
+                field="optimization.target.metadata.research_sources.url",
+                expected=V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS,
+                observed=research_urls,
+            )
+
+    if not missing_files:
+        doc_path = root / research_doc
+        doc_text = doc_path.read_text(encoding="utf-8") if doc_path.exists() else ""
+        doc_urls = [
+            url
+            for url in V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
+            if url in doc_text
+        ]
+        evidence["source_urls"] = {
+            "research_doc": research_doc,
+            "documented_urls": doc_urls,
+        }
+        missing_doc_urls = missing_values(
+            doc_urls,
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS,
+        )
+        if missing_doc_urls:
+            append_error(
+                source_errors,
+                path=research_doc,
+                field="source_urls",
+                expected=V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS,
+                observed=doc_urls,
+            )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            item for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        best_history: Mapping[str, Any] = {}
+        best_score = -1.0
+        for history in histories:
+            score = _float_or_zero(history.get("score"))
+            if score > best_score:
+                best_score = score
+                best_history = history
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_patch = _as_mapping(best_history.get("patch"))
+        best_report = _as_mapping(best_history.get("report"))
+        report_results = [
+            item for item in _as_list(best_report.get("results"))
+            if isinstance(item, Mapping)
+        ]
+        first_case = _as_mapping(report_results[0]) if report_results else {}
+        state = _as_mapping(
+            _as_mapping(first_case.get("metadata")).get("environment_state")
+        )
+        status_state = _as_mapping(state.get("external_agent_status"))
+        trace = _as_mapping(state.get("external_agent_trace"))
+        auth = _as_mapping(trace.get("auth"))
+        tool_call_names = [
+            str(
+                _as_mapping(_as_mapping(call).get("function")).get("name")
+                or _as_mapping(call).get("name")
+            )
+            for call in _as_list(first_case.get("tool_calls"))
+            if isinstance(call, Mapping)
+        ]
+        report_body = _as_mapping(rendered_report.get("report"))
+        report_sections = list(
+            _as_mapping(rendered_report.get("summary")).get("sections")
+            or report_body.get("sections")
+            or []
+        )
+        report_action_ids = [
+            str(action.get("id"))
+            for action in agent_actions.extract_actions(rendered_report)
+            if isinstance(action, Mapping) and action.get("id")
+        ]
+        catalog_action_ids = [
+            str(action.get("id"))
+            for action in _as_list(action_catalog.get("actions"))
+            if isinstance(action, Mapping) and action.get("id")
+        ]
+        serialized_result = json.dumps(result, sort_keys=True, default=str)
+        serialized_trace = json.dumps(trace, sort_keys=True, default=str)
+        endpoint = str(best_agent.get("endpoint") or trace.get("endpoint") or "")
+        state_keys = sorted(str(key) for key in state)
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "threshold": summary.get("threshold"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "best_history_score": best_history.get("score"),
+            "best_patch_keys": sorted(str(key) for key in best_patch),
+            "best_agent": {
+                "type": best_agent.get("type"),
+                "protocol": best_agent.get("protocol"),
+                "include_tools": best_agent.get("include_tools"),
+                "api_key_env": best_agent.get("api_key_env"),
+                "candidate_profile": _as_mapping(best_agent.get("metadata")).get(
+                    "candidate_profile"
+                ),
+                "endpoint_host_local": local_endpoint_host(endpoint),
+            },
+        }
+        evidence["trace"] = {
+            "state_keys": state_keys,
+            "status_state": dict(status_state),
+            "trace": {
+                "kind": trace.get("kind"),
+                "protocol": trace.get("protocol"),
+                "status_code": trace.get("status_code"),
+                "success": trace.get("success"),
+                "auth": dict(auth),
+                "endpoint_host_local": local_endpoint_host(endpoint),
+                "request_tool_count": trace.get("request_tool_count"),
+                "response_tool_call_count": trace.get("response_tool_call_count"),
+                "error": trace.get("error"),
+            },
+            "tool_call_names": tool_call_names,
+        }
+        evidence["metrics"] = {
+            "best_metrics": {
+                metric: best_metrics.get(metric)
+                for metric in V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS
+            }
+        }
+        evidence["report"] = {
+            "report_kind": rendered_report.get("kind"),
+            "report_status": rendered_report.get("status"),
+            "report_sections": report_sections,
+            "report_card_keys": sorted(
+                key
+                for key in report_body
+                if key not in {"format", "markdown", "sections", "source_path"}
+            ),
+            "report_action_ids": report_action_ids,
+            "action_catalog_kind": action_catalog.get("kind"),
+            "action_catalog_status": action_catalog.get("status"),
+            "action_ids": catalog_action_ids,
+        }
+        evidence["security"] = {
+            "api_key_redacted": (
+                release_key not in serialized_output
+                and release_key not in serialized_result
+                and release_key not in serialized_trace
+            ),
+            "api_key_env": auth.get("api_key_env"),
+            "auth_redacted": auth.get("redacted"),
+        }
+        for field, observed, expected in (
+            ("kind", result.get("kind"), "agent-learning.optimization.v1"),
+            ("schema_version", result.get("schema_version"), "agent-learning.cli.v1"),
+            ("status", result.get("status"), "passed"),
+            ("output_roundtrip", result == saved, True),
+            ("summary.optimization_passed", summary.get("optimization_passed"), True),
+            ("summary.evaluation_passed", summary.get("evaluation_passed"), True),
+            (
+                "optimization.best_config.agent.type",
+                best_agent.get("type"),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE,
+            ),
+            (
+                "optimization.best_config.agent.protocol",
+                best_agent.get("protocol"),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL,
+            ),
+            (
+                "optimization.best_config.agent.include_tools",
+                best_agent.get("include_tools"),
+                True,
+            ),
+            (
+                "optimization.best_config.agent.api_key_env",
+                best_agent.get("api_key_env"),
+                "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+            ),
+            (
+                "optimization.best_config.agent.metadata.candidate_profile",
+                _as_mapping(best_agent.get("metadata")).get("candidate_profile"),
+                V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE,
+            ),
+            ("optimization.history.best.patch", sorted(str(key) for key in best_patch), ["agent"]),
+        ):
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < _float_or_zero(
+            summary.get("threshold")
+        ):
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=f">={summary.get('threshold')}",
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=">=1.0",
+                observed=summary.get("evaluation_score"),
+            )
+        if _float_or_zero(best_history.get("score")) < _float_or_zero(
+            summary.get("threshold")
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.history.best.score",
+                expected=f">={summary.get('threshold')}",
+                observed=best_history.get("score"),
+            )
+        for field in ("total_evaluations", "total_iterations", "candidate_lineage_count"):
+            if _int_or_zero(summary.get(field)) < len(
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
+            ):
+                append_error(
+                    optimization_errors,
+                    field=f"summary.{field}",
+                    expected=(
+                        f">={len(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES)}"
+                    ),
+                    observed=summary.get(field),
+                )
+        if not local_endpoint_host(endpoint):
+            append_error(
+                trace_errors,
+                field="optimization.best_config.agent.endpoint",
+                expected="localhost or 127.0.0.1",
+                observed=endpoint,
+            )
+
+        missing_state_keys = missing_values(
+            state_keys,
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS,
+        )
+        if missing_state_keys:
+            append_error(
+                trace_errors,
+                field="optimization.history.best.report.environment_state",
+                expected=V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS,
+                observed=state_keys,
+            )
+        for field, observed, expected in (
+            ("external_agent_status.status", status_state.get("status"), "verified"),
+            (
+                "external_agent_status.tool_evidence",
+                status_state.get("tool_evidence"),
+                True,
+            ),
+            (
+                "external_agent_status.auth_redacted",
+                status_state.get("auth_redacted"),
+                True,
+            ),
+            ("external_agent_trace.kind", trace.get("kind"), "external_agent_http_trace"),
+            (
+                "external_agent_trace.protocol",
+                trace.get("protocol"),
+                V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL,
+            ),
+            ("external_agent_trace.status_code", trace.get("status_code"), 200),
+            ("external_agent_trace.success", trace.get("success"), True),
+            ("external_agent_trace.auth.redacted", auth.get("redacted"), True),
+            (
+                "external_agent_trace.auth.api_key_env",
+                auth.get("api_key_env"),
+                "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+            ),
+            ("external_agent_trace.error", trace.get("error"), None),
+        ):
+            if observed != expected:
+                append_error(
+                    trace_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field in ("request_tool_count", "response_tool_call_count"):
+            if _int_or_zero(trace.get(field)) < 1:
+                append_error(
+                    trace_errors,
+                    field=f"external_agent_trace.{field}",
+                    expected=">=1",
+                    observed=trace.get(field),
+                )
+        missing_tool_calls = missing_values(
+            tool_call_names,
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS,
+        )
+        if missing_tool_calls:
+            append_error(
+                trace_errors,
+                field="optimization.history.best.report.results.tool_calls",
+                expected=V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS,
+                observed=tool_call_names,
+            )
+
+        for metric in V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS:
+            if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"optimization.history.best.metrics.{metric}",
+                    expected=">=1.0",
+                    observed=best_metrics.get(metric),
+                )
+
+        required_sections = [
+            "summary",
+            "optimization",
+            "optimization_replay",
+            "harness_diagnosis",
+            "metrics",
+        ]
+        missing_sections = missing_values(report_sections, required_sections)
+        if missing_sections:
+            append_error(
+                report_errors,
+                field="report.sections",
+                expected=required_sections,
+                observed=report_sections,
+            )
+        for field, observed, expected in (
+            ("report.kind", rendered_report.get("kind"), "agent-learning.report.v1"),
+            ("report.status", rendered_report.get("status"), "passed"),
+            (
+                "actions.kind",
+                action_catalog.get("kind"),
+                "agent-learning.actions.v1",
+            ),
+            ("actions.status", action_catalog.get("status"), "passed"),
+        ):
+            if observed != expected:
+                append_error(
+                    report_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_actions = missing_values(
+            catalog_action_ids,
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS,
+        )
+        missing_report_actions = missing_values(
+            report_action_ids,
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS,
+        )
+        if missing_actions or missing_report_actions:
+            append_error(
+                report_errors,
+                field="actions.id",
+                expected=V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS,
+                observed={
+                    "catalog": catalog_action_ids,
+                    "report": report_action_ids,
+                },
+            )
+
+        if evidence["security"]["api_key_redacted"] is not True:
+            append_error(
+                security_errors,
+                field="security.api_key_redacted",
+                expected=True,
+                observed=False,
+            )
+        if auth.get("redacted") is not True:
+            append_error(
+                security_errors,
+                field="external_agent_trace.auth.redacted",
+                expected=True,
+                observed=auth.get("redacted"),
+            )
+
+    return {
+        "required_files": list(V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES),
+        "required_candidate_profiles": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
+        ),
+        "selected_profile": V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE,
+        "required_layers": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS),
+        "required_search_paths": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS),
+        "required_environment_types": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_tools": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS),
+        "required_protocol": V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL,
+        "required_agent_type": V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE,
+        "required_metrics": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS),
+        "required_trace_fields": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS),
+        "required_state_keys": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS),
+        "required_actions": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS),
+        "required_research_urls": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS),
+        "required_protocol_doc_urls": list(
+            V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS
+        ),
+        "required_source_urls": list(V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "trace_errors": trace_errors,
+        "metric_errors": metric_errors,
+        "report_errors": report_errors,
+        "security_errors": security_errors,
+        "source_errors": source_errors,
         "evidence": evidence,
     }
 
@@ -19260,6 +20116,22 @@ __all__ = [
     "V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS",
     "V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS",
     "V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS",
+    "V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS",
+    "V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS",
+    "V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE",
     "V1_REQUIRED_CLI_COMMANDS",
     "V1_REQUIRED_DOCS",
     "V1_REQUIRED_EVIDENCE_COMPONENTS",

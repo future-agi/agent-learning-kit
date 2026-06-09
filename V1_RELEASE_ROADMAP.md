@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `openenv_10x_robustness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `openenv_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -297,6 +297,12 @@ Current checkpoint:
   frameworks, close credential/session/observability/eval gaps, emit report and
   rerun actions, and pass integration, framework-trace, voice, and streaming
   metrics.
+- External agent adapter readiness is now an executable release-check gate:
+  `examples/sdk_external_http_agent_optimization.py` must run against a local
+  OpenAI-compatible HTTP target, keep bearer auth redacted, preserve native
+  tool-call evidence, and require AgentOptimizer to select the verified
+  `openai_chat` adapter with `external_agent_status` evidence before external
+  target-agent claims are release-ready.
 - OpenEnv optimizer readiness is now an executable release-check gate:
   `examples/sdk_openenv_environment_optimization.py` runs local AgentOptimizer
   bundle search over weak, partial, and verified OpenEnv replays and must select

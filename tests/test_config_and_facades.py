@@ -15340,6 +15340,54 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_agent_integration_min_counts"] == (
         trinity.V1_AGENT_INTEGRATION_MIN_COUNTS
     )
+    assert payload["required_external_agent_adapter_files"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES
+    )
+    assert payload["required_external_agent_adapter_candidate_profiles"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
+    )
+    assert payload["required_external_agent_adapter_selected_profile"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE
+    )
+    assert payload["required_external_agent_adapter_layers"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS
+    )
+    assert payload["required_external_agent_adapter_search_paths"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["required_external_agent_adapter_environment_types"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_external_agent_adapter_tools"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
+    )
+    assert payload["required_external_agent_adapter_protocol"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL
+    )
+    assert payload["required_external_agent_adapter_agent_type"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE
+    )
+    assert payload["required_external_agent_adapter_metrics"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS
+    )
+    assert payload["required_external_agent_adapter_trace_fields"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS
+    )
+    assert payload["required_external_agent_adapter_state_keys"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_external_agent_adapter_actions"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS
+    )
+    assert payload["required_external_agent_adapter_research_urls"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
+    )
+    assert payload["required_external_agent_adapter_protocol_doc_urls"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS
+    )
+    assert payload["required_external_agent_adapter_source_urls"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
+    )
     assert payload["required_openenv_optimizer_files"] == (
         trinity.V1_OPENENV_OPTIMIZER_FILES
     )
@@ -15669,6 +15717,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
         "agent_integration_readiness",
+        "external_agent_adapter_readiness",
         "openenv_optimizer_readiness",
         "framework_openenv_adapter_readiness",
         "framework_optimizer_readiness",
@@ -16885,6 +16934,186 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "rerun_agent_integration_simulation",
     }
     assert simulation["readiness_status"] == "ready"
+
+    external_agent = checks["external_agent_adapter_readiness"]["evidence"]
+    assert external_agent["required_files"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES
+    )
+    assert external_agent["required_candidate_profiles"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
+    )
+    assert external_agent["selected_profile"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE
+    )
+    assert external_agent["required_layers"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS
+    )
+    assert external_agent["required_search_paths"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS
+    )
+    assert external_agent["required_environment_types"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert external_agent["required_tools"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
+    )
+    assert external_agent["required_protocol"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL
+    )
+    assert external_agent["required_agent_type"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE
+    )
+    assert external_agent["required_metrics"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS
+    )
+    assert external_agent["required_trace_fields"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS
+    )
+    assert external_agent["required_state_keys"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS
+    )
+    assert external_agent["required_actions"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS
+    )
+    assert external_agent["required_research_urls"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
+    )
+    assert external_agent["required_protocol_doc_urls"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS
+    )
+    assert external_agent["required_source_urls"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
+    )
+    assert external_agent["missing_files"] == []
+    assert external_agent["execution_errors"] == []
+    assert external_agent["manifest_errors"] == []
+    assert external_agent["optimization_errors"] == []
+    assert external_agent["trace_errors"] == []
+    assert external_agent["metric_errors"] == []
+    assert external_agent["report_errors"] == []
+    assert external_agent["security_errors"] == []
+    assert external_agent["source_errors"] == []
+
+    external_evidence = external_agent["evidence"]
+    external_manifest = external_evidence["manifest"]
+    assert external_manifest["version"] == "agent-learning.optimization.v1"
+    assert external_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"
+    ]
+    assert external_manifest["target_layers"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS
+    )
+    assert external_manifest["search_paths"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS
+    )
+    assert external_manifest["candidate_profiles"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
+    )
+    assert external_manifest["selected_candidate"] == {
+        "type": trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE,
+        "protocol": trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL,
+        "include_tools": True,
+        "api_key_env": "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+        "profile": trinity.V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE,
+    }
+    assert external_manifest["environment_types"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert external_manifest["available_tools"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
+    )
+    assert external_manifest["required_tools"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
+    )
+    assert external_manifest["allow_extra_tool_arguments"] is True
+    assert set(external_manifest["research_urls"]) >= set(
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
+    )
+    assert set(external_evidence["source_urls"]["documented_urls"]) >= set(
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
+    )
+
+    external_optimization = external_evidence["optimization"]
+    assert external_optimization["kind"] == "agent-learning.optimization.v1"
+    assert external_optimization["schema_version"] == "agent-learning.cli.v1"
+    assert external_optimization["status"] == "passed"
+    assert external_optimization["output_roundtrip"] is True
+    assert external_optimization["optimization_score"] >= (
+        external_optimization["threshold"]
+    )
+    assert external_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert external_optimization["optimization_passed"] is True
+    assert external_optimization["evaluation_passed"] is True
+    assert external_optimization["total_evaluations"] >= 3
+    assert external_optimization["total_iterations"] >= 3
+    assert external_optimization["candidate_lineage_count"] >= 3
+    assert external_optimization["best_history_score"] >= (
+        external_optimization["threshold"]
+    )
+    assert external_optimization["best_patch_keys"] == ["agent"]
+    assert external_optimization["best_agent"] == {
+        "type": trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE,
+        "protocol": trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL,
+        "include_tools": True,
+        "api_key_env": "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+        "candidate_profile": trinity.V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE,
+        "endpoint_host_local": True,
+    }
+
+    external_trace = external_evidence["trace"]
+    assert external_trace["state_keys"] == sorted(
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS
+    )
+    assert external_trace["status_state"] == {
+        "auth_redacted": True,
+        "status": "verified",
+        "tool_evidence": True,
+    }
+    assert external_trace["trace"]["kind"] == "external_agent_http_trace"
+    assert external_trace["trace"]["protocol"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL
+    )
+    assert external_trace["trace"]["status_code"] == 200
+    assert external_trace["trace"]["success"] is True
+    assert external_trace["trace"]["auth"]["redacted"] is True
+    assert external_trace["trace"]["auth"]["api_key_env"] == (
+        "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY"
+    )
+    assert external_trace["trace"]["endpoint_host_local"] is True
+    assert external_trace["trace"]["request_tool_count"] >= 1
+    assert external_trace["trace"]["response_tool_call_count"] >= 1
+    assert external_trace["trace"]["error"] is None
+    assert external_trace["tool_call_names"] == (
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
+    )
+    for metric in trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS:
+        assert external_evidence["metrics"]["best_metrics"][metric] == (
+            pytest.approx(1.0)
+        )
+    external_report = external_evidence["report"]
+    assert external_report["report_kind"] == "agent-learning.report.v1"
+    assert external_report["report_status"] == "passed"
+    assert {
+        "summary",
+        "optimization",
+        "optimization_replay",
+        "harness_diagnosis",
+        "metrics",
+    } <= set(external_report["report_sections"])
+    assert external_report["action_catalog_kind"] == "agent-learning.actions.v1"
+    assert external_report["action_catalog_status"] == "passed"
+    assert set(external_report["action_ids"]) >= set(
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS
+    )
+    assert set(external_report["report_action_ids"]) >= set(
+        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS
+    )
+    assert external_evidence["security"] == {
+        "api_key_redacted": True,
+        "api_key_env": "AGENT_LEARNING_SDK_EXTERNAL_HTTP_AGENT_KEY",
+        "auth_redacted": True,
+    }
+
     openenv_optimizer = checks["openenv_optimizer_readiness"]["evidence"]
     assert openenv_optimizer["required_files"] == trinity.V1_OPENENV_OPTIMIZER_FILES
     assert openenv_optimizer["required_profiles"] == (
