@@ -1089,6 +1089,13 @@ cookbook as `generic_target_optimizer_readiness` and verifies that the optimizer
 patches only `simulation.environments.0.data.transitions`, not any implicit
 `agent` or prompt path.
 
+For a framework-adapter target path, see
+`examples/sdk_framework_adapter_target_optimization.py`. It keeps the custom
+framework adapter fixed on local `dict` input and uses generic `optimize_target`
+search over exactly `agent.method`; `agent-learn release-check` runs it as
+`framework_adapter_target_optimizer_readiness` and requires the selected
+`execute_task` method to pass framework runtime proof.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can
@@ -1403,6 +1410,10 @@ AGENT_LEARNING_SDK_TASK_WORLD_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_TARGET_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_target_optimization.py \
   artifacts/sdk-target-optimization.json
+
+AGENT_LEARNING_SDK_FRAMEWORK_ADAPTER_TARGET_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_framework_adapter_target_optimization.py \
+  artifacts/sdk-framework-adapter-target-optimization.json
 
 AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY=... \
   PYTHONPATH=src python examples/sdk_behavior_entropy_optimization.py \

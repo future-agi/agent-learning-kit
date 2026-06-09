@@ -3803,6 +3803,69 @@ def test_sdk_target_optimization_example_runs(monkeypatch, tmp_path):
     assert best_world["data"]["transitions"][0]["id"] == "approve_refund"
 
 
+def test_sdk_framework_adapter_target_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_FRAMEWORK_ADAPTER_TARGET_OPTIMIZATION_KEY",
+        "real-local-sdk-framework-adapter-target-key",
+    )
+    example_path = (
+        PROJECT_ROOT / "examples" / "sdk_framework_adapter_target_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_target_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_ADAPTER_TARGET_OPTIMIZATION_KEY"
+    ]
+    search_space = manifest["optimization"]["target"]["search_space"]
+    assert search_space == {"agent.method": ["run", "execute_task"]}
+    assert "agent" not in search_space
+    assert manifest["agent"]["type"] == "framework"
+    assert manifest["agent"]["method"] == "run"
+    assert manifest["agent"]["input_mode"] == "dict"
+
+    output_path = tmp_path / "sdk-framework-adapter-target-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.95
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {"agent.method"}
+    assert best_history["patch"]["agent.method"] == "execute_task"
+    best_agent = result["optimization"]["best_config"]["agent"]
+    assert best_agent["method"] == "execute_task"
+    assert best_agent["input_mode"] == "dict"
+    assert best_agent["framework"] == "custom_refund_orchestrator"
+    assert best_history["metrics"]["framework_runtime_contract"] == pytest.approx(1.0)
+    assert best_history["metrics"]["framework_adapter_contract_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["framework_trace_coverage"] == pytest.approx(1.0)
+    runtime_state = best_history["report"]["results"][0]["metadata"][
+        "environment_state"
+    ]["framework_runtime"]
+    assert runtime_state["summary"]["methods"] == ["execute_task"]
+    assert runtime_state["summary"]["input_modes"] == ["dict"]
+    assert runtime_state["summary"]["tool_call_count"] == 1
+    assert result["framework_runtime_proof"]["status"] == "passed"
+    assert result["framework_runtime_proof"]["failed_check_ids"] == []
+
+
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     from agent_learning import optimize
 
@@ -15620,6 +15683,53 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_generic_target_optimizer_task_kind"] == (
         trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
     )
+    assert payload["required_framework_adapter_target_optimizer_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES
+    )
+    assert payload["required_framework_adapter_target_optimizer_search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["forbidden_framework_adapter_target_optimizer_search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert payload["required_framework_adapter_target_optimizer_layers"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_framework_adapter_target_optimizer_metrics"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert payload["required_framework_adapter_target_optimizer_metric_weights"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
+    )
+    assert (
+        payload["required_framework_adapter_target_optimizer_environment_types"]
+        == trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_framework_adapter_target_optimizer_framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
+    )
+    assert payload["required_framework_adapter_target_optimizer_rejected_method"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD
+    )
+    assert payload["required_framework_adapter_target_optimizer_selected_method"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
+    )
+    assert payload["required_framework_adapter_target_optimizer_input_mode"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
+    )
+    assert payload["required_framework_adapter_target_optimizer_source"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert payload["required_framework_adapter_target_optimizer_task_kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert payload["required_framework_adapter_target_optimizer_surface"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert (
+        payload["required_framework_adapter_target_optimizer_proof_assurance_level"]
+        == trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -16473,6 +16583,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "evaluation_hook_readiness",
         "native_optimizer_evidence_components",
         "generic_target_optimizer_readiness",
+        "framework_adapter_target_optimizer_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -16978,6 +17089,191 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert generic_target_world["transition_ids"] == (
         trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
     )
+
+    framework_adapter_target = checks[
+        "framework_adapter_target_optimizer_readiness"
+    ]["evidence"]
+    assert framework_adapter_target["required_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES
+    )
+    assert framework_adapter_target["required_search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert framework_adapter_target["forbidden_search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert framework_adapter_target["required_layers"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert framework_adapter_target["required_metrics"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert framework_adapter_target["required_metric_weights"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
+    )
+    assert framework_adapter_target["required_environment_types"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert framework_adapter_target["required_framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
+    )
+    assert framework_adapter_target["rejected_method"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD
+    )
+    assert framework_adapter_target["selected_method"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
+    )
+    assert framework_adapter_target["input_mode"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
+    )
+    assert framework_adapter_target["required_source"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert framework_adapter_target["required_task_kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert framework_adapter_target["required_surface"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert framework_adapter_target["required_proof_assurance_level"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
+    )
+    assert framework_adapter_target["missing_files"] == []
+    assert framework_adapter_target["execution_errors"] == []
+    assert framework_adapter_target["manifest_errors"] == []
+    assert framework_adapter_target["optimization_errors"] == []
+    assert framework_adapter_target["metric_errors"] == []
+    assert framework_adapter_target["runtime_errors"] == []
+    assert framework_adapter_target["security_errors"] == []
+    framework_target_evidence = framework_adapter_target["evidence"]
+    framework_target_manifest = framework_target_evidence["manifest"]
+    assert framework_target_manifest["version"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert framework_target_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_FRAMEWORK_ADAPTER_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert framework_target_manifest["target_source"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert framework_target_manifest["target_task_kind"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert framework_target_manifest["optimized_surface"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert framework_target_manifest["framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
+    )
+    assert framework_target_manifest["target_layers"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert framework_target_manifest["search_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert framework_target_manifest["forbidden_search_paths_present"] == []
+    assert framework_target_manifest["method_candidates"] == [
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD,
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD,
+    ]
+    assert framework_target_manifest["auto_execute_tools"] is True
+    assert framework_target_manifest["environment_types"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert framework_target_manifest["base_agent"] == {
+        "type": "framework",
+        "framework": trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+        "method": trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD,
+        "input_mode": trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE,
+        "target_local": True,
+        "target_scheme": "",
+        "trace_runtime": True,
+        "factory": True,
+    }
+    assert framework_target_manifest["target_base_agent"]["method"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD
+    )
+    assert framework_target_manifest["runtime_contract"]["method"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
+    )
+    assert framework_target_manifest["runtime_contract"]["input_mode"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
+    )
+    assert framework_target_manifest["adapter_contract_quality"][
+        "require_trace_runtime"
+    ] is True
+    assert framework_target_manifest["adapter_contract_quality"][
+        "require_no_external_service"
+    ] is True
+    assert set(framework_target_manifest["metric_weights"]) == set(
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
+    )
+    framework_target_optimization = framework_target_evidence["optimization"]
+    assert framework_target_optimization["kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert framework_target_optimization["schema_version"] == (
+        "agent-learning.cli.v1"
+    )
+    assert framework_target_optimization["status"] == "passed"
+    assert framework_target_optimization["output_roundtrip"] is True
+    assert framework_target_optimization["optimization_passed"] is True
+    assert framework_target_optimization["evaluation_passed"] is True
+    assert framework_target_optimization["optimization_score"] >= 0.95
+    assert framework_target_optimization["evaluation_score"] >= 0.95
+    assert framework_target_optimization["total_evaluations"] >= 2
+    assert framework_target_optimization["total_iterations"] >= 2
+    assert framework_target_optimization["candidate_lineage_count"] >= 2
+    assert framework_target_optimization["selected_patch_paths"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert framework_target_optimization["forbidden_patch_paths_present"] == []
+    assert framework_target_optimization["best_agent"] == {
+        "type": "framework",
+        "framework": trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+        "method": trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD,
+        "input_mode": trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE,
+        "target_local": True,
+        "target_scheme": "",
+        "trace_runtime": True,
+        "factory": True,
+    }
+    assert framework_target_optimization["fixed_agent_fields_unchanged"] is True
+    assert framework_target_optimization["best_history_score"] >= 0.95
+    assert framework_target_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        framework_target_optimization["optimizer_governance_failed_check_count"]
+        == 0
+    )
+    framework_target_metrics = framework_target_evidence["metrics"]
+    assert framework_target_metrics["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
+    }
+    framework_target_runtime = framework_target_evidence["runtime"]
+    assert framework_target_runtime["framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
+    )
+    assert framework_target_runtime["methods"] == [
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
+    ]
+    assert framework_target_runtime["input_modes"] == [
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
+    ]
+    assert framework_target_runtime["tool_call_count"] >= 1
+    assert framework_target_runtime["error_count"] == 0
+    assert framework_target_runtime["adapter_conformance_passed"] is True
+    assert framework_target_runtime["adapter_conformance_score"] == pytest.approx(1.0)
+    framework_target_proof = framework_target_evidence["proof"]
+    assert framework_target_proof["status"] == "passed"
+    assert framework_target_proof["passed"] is True
+    assert framework_target_proof["assurance_level"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
+    )
+    assert framework_target_proof["failed_check_ids"] == []
+    framework_target_security = framework_target_evidence["security"]
+    assert framework_target_security["serialized_secret_absent"] is True
+    assert framework_target_security["target_local"] is True
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES
@@ -22579,6 +22875,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     }
     milestones = {milestone["id"]: milestone for milestone in payload["milestones"]}
     assert "generic_target_optimizer_readiness" in milestones["M3"]["check_ids"]
+    assert (
+        "framework_adapter_target_optimizer_readiness"
+        in milestones["M3"]["check_ids"]
+    )
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]

@@ -520,6 +520,68 @@ V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
 
 V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
 
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES = [
+    "examples/sdk_framework_adapter_target_optimization.py",
+    "internal-docs/framework-adapter-target-optimizer-readiness-research.md",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
+    "agent.method",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS = [
+    "agent",
+    "agent.responses",
+    "agent.prompt",
+    "prompt",
+    "simulation.environments.0.data.transitions",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS = [
+    "framework",
+    "harness",
+    "evaluator",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS = [
+    "framework_adapter_contract_quality",
+    "framework_runtime_contract",
+    "framework_runtime_coverage",
+    "framework_trace_coverage",
+    "tool_selection_accuracy",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS = [
+    *V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS,
+    "task_completion",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES = [
+    "framework_trace",
+]
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK = "custom_refund_orchestrator"
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD = "run"
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD = "execute_task"
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE = "dict"
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
+    "agent_learning.optimize.build_target_optimization_manifest"
+)
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
+    "framework_adapter_method"
+)
+
+V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL = (
+    "l3_native_framework_runtime_verified"
+)
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -3915,6 +3977,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=generic_target_optimizer,
     )
+    framework_adapter_target_optimizer = (
+        _release_framework_adapter_target_optimizer_status(root)
+    )
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_target_optimizer_readiness",
+        passed=(
+            not framework_adapter_target_optimizer["missing_files"]
+            and not framework_adapter_target_optimizer["execution_errors"]
+            and not framework_adapter_target_optimizer["manifest_errors"]
+            and not framework_adapter_target_optimizer["optimization_errors"]
+            and not framework_adapter_target_optimizer["metric_errors"]
+            and not framework_adapter_target_optimizer["runtime_errors"]
+            and not framework_adapter_target_optimizer["security_errors"]
+        ),
+        milestone="M3",
+        evidence=framework_adapter_target_optimizer,
+    )
     optimizer_governance = _release_optimizer_governance_status(root)
     _append_release_check(
         checks,
@@ -4742,6 +4822,51 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_generic_target_optimizer_task_kind": (
             V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_framework_adapter_target_optimizer_files": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES
+        ),
+        "required_framework_adapter_target_optimizer_search_paths": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_framework_adapter_target_optimizer_search_paths": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_framework_adapter_target_optimizer_layers": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_framework_adapter_target_optimizer_metrics": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_framework_adapter_target_optimizer_metric_weights": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
+        ),
+        "required_framework_adapter_target_optimizer_environment_types": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_framework_adapter_target_optimizer_framework": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
+        ),
+        "required_framework_adapter_target_optimizer_rejected_method": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD
+        ),
+        "required_framework_adapter_target_optimizer_selected_method": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
+        ),
+        "required_framework_adapter_target_optimizer_input_mode": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
+        ),
+        "required_framework_adapter_target_optimizer_source": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE
+        ),
+        "required_framework_adapter_target_optimizer_task_kind": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_framework_adapter_target_optimizer_surface": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE
+        ),
+        "required_framework_adapter_target_optimizer_proof_assurance_level": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -7816,6 +7941,625 @@ def _release_generic_target_optimizer_status(root: Path) -> dict[str, Any]:
         "optimization_errors": optimization_errors,
         "metric_errors": metric_errors,
         "world_errors": world_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_framework_adapter_target_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = "release-check-framework-adapter-target-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def forbidden_paths(paths: Iterable[str]) -> list[str]:
+        findings: list[str] = []
+        for path in paths:
+            for forbidden in (
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+            ):
+                if forbidden == "agent":
+                    matched = path == forbidden
+                else:
+                    matched = path == forbidden or path.startswith(f"{forbidden}.")
+                if matched:
+                    findings.append(path)
+                    break
+        return sorted(findings)
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_FRAMEWORK_ADAPTER_TARGET_OPTIMIZATION_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_framework_adapter_target_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_framework_adapter_target_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = release_secret
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-adapter-target-optimizer-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-framework-adapter-target.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_config = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_config.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        search_paths = sorted(str(path) for path in search_space)
+        forbidden_search_paths = forbidden_paths(search_paths)
+        method_candidates = [
+            str(method)
+            for method in _as_list(
+                search_space.get(
+                    V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS[0]
+                )
+            )
+        ]
+        agent = _as_mapping(manifest.get("agent"))
+        target_base_agent = _as_mapping(
+            _as_mapping(target.get("base_config")).get("agent")
+        )
+        target_url = str(agent.get("target") or "")
+        target_scheme = urlparse(target_url).scheme.lower()
+        target_local = bool(target_url) and target_scheme not in {"http", "https"}
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            _as_mapping(environment)
+            for environment in _as_list(simulation.get("environments"))
+        ]
+        environment_types = [
+            str(environment.get("type"))
+            for environment in environments
+            if environment.get("type")
+        ]
+        evaluation_config = _as_mapping(
+            _as_mapping(manifest.get("evaluation")).get("agent_report")
+        )
+        evaluation_config = _as_mapping(evaluation_config.get("config"))
+        runtime_contract = _as_mapping(
+            evaluation_config.get("framework_runtime_contract")
+        )
+        adapter_quality = _as_mapping(
+            evaluation_config.get("framework_adapter_contract_quality")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_source": target_metadata.get("source"),
+            "target_task_kind": target_metadata.get("task_kind"),
+            "optimized_surface": target_metadata.get("optimized_surface"),
+            "framework": target_metadata.get("framework"),
+            "target_layers": list(target.get("layers") or []),
+            "search_paths": search_paths,
+            "forbidden_search_paths_present": forbidden_search_paths,
+            "method_candidates": method_candidates,
+            "auto_execute_tools": simulation.get("auto_execute_tools"),
+            "environment_types": environment_types,
+            "base_agent": {
+                "type": agent.get("type"),
+                "framework": agent.get("framework"),
+                "method": agent.get("method"),
+                "input_mode": agent.get("input_mode"),
+                "target_local": target_local,
+                "target_scheme": target_scheme,
+                "trace_runtime": agent.get("trace_runtime"),
+                "factory": agent.get("factory"),
+            },
+            "target_base_agent": {
+                "type": target_base_agent.get("type"),
+                "framework": target_base_agent.get("framework"),
+                "method": target_base_agent.get("method"),
+                "input_mode": target_base_agent.get("input_mode"),
+            },
+            "runtime_contract": {
+                "framework": runtime_contract.get("framework"),
+                "method": runtime_contract.get("method"),
+                "input_mode": runtime_contract.get("input_mode"),
+                "required_tools": list(runtime_contract.get("required_tools") or []),
+            },
+            "adapter_contract_quality": {
+                "framework": adapter_quality.get("framework"),
+                "method": adapter_quality.get("method"),
+                "input_mode": adapter_quality.get("input_mode"),
+                "require_trace_runtime": adapter_quality.get("require_trace_runtime"),
+                "require_no_external_service": adapter_quality.get(
+                    "require_no_external_service"
+                ),
+            },
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in (
+                    V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
+                )
+            },
+        }
+
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_FRAMEWORK_ADAPTER_TARGET_OPTIMIZATION_KEY"],
+            ),
+            "optimization.target.metadata.source": (
+                target_metadata.get("source"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+            ),
+            "optimization.target.metadata.task_kind": (
+                target_metadata.get("task_kind"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+            ),
+            "optimization.target.metadata.optimized_surface": (
+                target_metadata.get("optimized_surface"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+            ),
+            "optimization.target.metadata.framework": (
+                target_metadata.get("framework"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS,
+            ),
+            "optimization.target.search_space": (
+                search_paths,
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "optimization.target.forbidden_search_paths_present": (
+                forbidden_search_paths,
+                [],
+            ),
+            "optimization.target.search_space.agent.method": (
+                method_candidates,
+                [
+                    V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD,
+                    V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD,
+                ],
+            ),
+            "agent.type": (agent.get("type"), "framework"),
+            "agent.framework": (
+                agent.get("framework"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+            ),
+            "agent.method": (
+                agent.get("method"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD,
+            ),
+            "agent.input_mode": (
+                agent.get("input_mode"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE,
+            ),
+            "agent.trace_runtime": (agent.get("trace_runtime"), True),
+            "agent.target_local": (target_local, True),
+            "optimization.target.base_config.agent.method": (
+                target_base_agent.get("method"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD,
+            ),
+            "simulation.auto_execute_tools": (
+                simulation.get("auto_execute_tools"),
+                True,
+            ),
+            "simulation.environments.type": (
+                environment_types,
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+            ),
+            "framework_runtime_contract.framework": (
+                runtime_contract.get("framework"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+            ),
+            "framework_runtime_contract.method": (
+                runtime_contract.get("method"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD,
+            ),
+            "framework_runtime_contract.input_mode": (
+                runtime_contract.get("input_mode"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for metric in V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS:
+            if _float_or_zero(metric_weights.get(metric)) <= 0.0:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.metric_weights.{metric}",
+                    expected=">0",
+                    observed=metric_weights.get(metric),
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        best_history = max(
+            histories,
+            key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            default={},
+        )
+        best_history = _as_mapping(best_history)
+        selected_metrics = _as_mapping(best_history.get("metrics"))
+        selected_patch = _as_mapping(best_history.get("patch"))
+        selected_patch_paths = sorted(str(path) for path in selected_patch)
+        forbidden_patch_paths = forbidden_paths(selected_patch_paths)
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        manifest_agent = _as_mapping(manifest.get("agent"))
+        best_target = str(best_agent.get("target") or "")
+        best_target_scheme = urlparse(best_target).scheme.lower()
+        best_target_local = bool(best_target) and best_target_scheme not in {
+            "http",
+            "https",
+        }
+        fixed_fields_unchanged = all(
+            best_agent.get(field) == manifest_agent.get(field)
+            for field in (
+                "type",
+                "framework",
+                "target",
+                "factory",
+                "trace_runtime",
+                "input_mode",
+            )
+        )
+        report = _as_mapping(best_history.get("report"))
+        result_rows = _as_list(report.get("results"))
+        result_row = _as_mapping(result_rows[0]) if result_rows else {}
+        metadata = _as_mapping(result_row.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        runtime_state = _as_mapping(environment_state.get("framework_runtime"))
+        runtime_summary = _as_mapping(runtime_state.get("summary"))
+        framework_trace = _as_mapping(environment_state.get("framework_trace"))
+        adapter_conformance = _as_mapping(
+            framework_trace.get("adapter_conformance")
+        )
+        proof = _as_mapping(result.get("framework_runtime_proof"))
+        proof_failed_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("failed_check_ids"))
+        ]
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        release_secret_absent = release_secret not in serialized
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "selected_patch_paths": selected_patch_paths,
+            "forbidden_patch_paths_present": forbidden_patch_paths,
+            "best_history_score": best_history.get("score"),
+            "best_agent": {
+                "type": best_agent.get("type"),
+                "framework": best_agent.get("framework"),
+                "method": best_agent.get("method"),
+                "input_mode": best_agent.get("input_mode"),
+                "target_local": best_target_local,
+                "target_scheme": best_target_scheme,
+                "trace_runtime": best_agent.get("trace_runtime"),
+                "factory": best_agent.get("factory"),
+            },
+            "fixed_agent_fields_unchanged": fixed_fields_unchanged,
+            "optimizer_governance_status": summary.get(
+                "optimizer_governance_status"
+            ),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["metrics"] = {
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
+            }
+        }
+        evidence["runtime"] = {
+            "framework": runtime_summary.get("framework"),
+            "methods": list(runtime_summary.get("methods") or []),
+            "input_modes": list(runtime_summary.get("input_modes") or []),
+            "tool_call_count": runtime_summary.get("tool_call_count"),
+            "error_count": runtime_summary.get("error_count"),
+            "adapter_conformance_passed": adapter_conformance.get("passed"),
+            "adapter_conformance_score": adapter_conformance.get("score"),
+            "adapter_conformance_findings": list(
+                adapter_conformance.get("findings") or []
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "failed_check_ids": proof_failed_check_ids,
+        }
+        evidence["security"] = {
+            "serialized_secret_absent": release_secret_absent,
+            "target_local": best_target_local,
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+            "best_history.patch": (
+                selected_patch_paths,
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "best_history.forbidden_patch_paths_present": (
+                forbidden_patch_paths,
+                [],
+            ),
+            "best_agent.method": (
+                best_agent.get("method"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD,
+            ),
+            "best_agent.input_mode": (
+                best_agent.get("input_mode"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE,
+            ),
+            "best_agent.framework": (
+                best_agent.get("framework"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+            ),
+            "best_agent.target_local": (best_target_local, True),
+            "best_agent.trace_runtime": (best_agent.get("trace_runtime"), True),
+            "best_agent.fixed_fields_unchanged": (fixed_fields_unchanged, True),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        score_expectations = {
+            "summary.optimization_score": summary.get("optimization_score"),
+            "summary.evaluation_score": summary.get("evaluation_score"),
+            "best_history.score": best_history.get("score"),
+        }
+        for field, observed in score_expectations.items():
+            if _float_or_zero(observed) < 0.95:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=0.95",
+                    observed=observed,
+                )
+        count_expectations = {
+            "summary.total_evaluations": summary.get("total_evaluations"),
+            "summary.total_iterations": summary.get("total_iterations"),
+            "summary.candidate_lineage_count": summary.get(
+                "candidate_lineage_count"
+            ),
+        }
+        for field, observed in count_expectations.items():
+            if _int_or_zero(observed) < 2:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=2",
+                    observed=observed,
+                )
+        for metric in V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            observed = selected_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"best_history.metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        runtime_expectations = {
+            "framework_runtime.summary.framework": (
+                runtime_summary.get("framework"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+            ),
+            "framework_runtime.summary.methods": (
+                list(runtime_summary.get("methods") or []),
+                [V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD],
+            ),
+            "framework_runtime.summary.input_modes": (
+                list(runtime_summary.get("input_modes") or []),
+                [V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE],
+            ),
+            "framework_runtime.summary.error_count": (
+                runtime_summary.get("error_count"),
+                0,
+            ),
+            "framework_trace.adapter_conformance.passed": (
+                adapter_conformance.get("passed"),
+                True,
+            ),
+            "framework_runtime_proof.status": (proof.get("status"), "passed"),
+            "framework_runtime_proof.passed": (proof.get("passed"), True),
+            "framework_runtime_proof.assurance_level": (
+                proof.get("assurance_level"),
+                V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL,
+            ),
+            "framework_runtime_proof.failed_check_ids": (
+                proof_failed_check_ids,
+                [],
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(runtime_summary.get("tool_call_count")) < 1:
+            append_error(
+                runtime_errors,
+                field="framework_runtime.summary.tool_call_count",
+                expected=">=1",
+                observed=runtime_summary.get("tool_call_count"),
+            )
+        if _float_or_zero(adapter_conformance.get("score")) < 1.0:
+            append_error(
+                runtime_errors,
+                field="framework_trace.adapter_conformance.score",
+                expected=1.0,
+                observed=adapter_conformance.get("score"),
+            )
+        if not release_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES),
+        "required_search_paths": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_search_paths": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_layers": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_metrics": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_metric_weights": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
+        ),
+        "required_environment_types": list(
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_framework": V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK,
+        "rejected_method": V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD,
+        "selected_method": V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD,
+        "input_mode": V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE,
+        "required_source": V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+        "required_task_kind": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_surface": V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+        "required_proof_assurance_level": (
+            V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
+        ),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "security_errors": security_errors,
         "evidence": evidence,
     }
 
@@ -33598,6 +34342,21 @@ __all__ = [
     "V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
+    "V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD",
     "V1_GENERIC_TARGET_OPTIMIZER_FILES",
     "V1_GENERIC_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS",
     "V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
