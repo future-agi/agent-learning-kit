@@ -1232,6 +1232,12 @@ path as `realtime_stack_probe_readiness`: the optimizer must select the local
 LiveKit support-route stack, pass native realtime-stack proof checks, promote to
 `agent-learning.run.v1`, and close voice, timing, streaming, route/tool,
 completion, no-drop/no-error, and run metrics.
+Browser CUA probe readiness is gated the same way as
+`browser_cua_probe_readiness`: the optimizer must select a hardened local
+`browser_cua` candidate over a weak browser-only candidate, pass native proof,
+promote to `agent-learning.run.v1`, and close browser trace/action/outcome,
+safety, grounding, mutation, selector-fallback, storage/runtime/network,
+layout-shift, prompt-injection-avoidance, and run metrics.
 
 Runnable SDK cookbook:
 
@@ -2120,6 +2126,12 @@ layout-shift evidence, and prompt-injection-surface avoidance.
 the selected bundle into the normal CUA simulation path. See
 `examples/sdk_browser_cua_probe_optimization.py` for an end-to-end probe,
 promotion, and evaluated run cookbook.
+`agent-learn release-check` gates this path as `browser_cua_probe_readiness`:
+the optimizer must select local hardened `browser_cua` over weak `browser`,
+pass native proof, promote to `agent-learning.run.v1`, execute the promoted CUA
+run, and close browser trace/action/outcome/safety/grounding/mutation, selector
+fallback, storage/runtime/network, layout shift, prompt-injection avoidance, and
+run metrics.
 The same harness is available from Python through
 `optimize.build_browser_cua_optimization_manifest()` and
 `examples/sdk_browser_cua_optimization.py`, which search weak versus hardened

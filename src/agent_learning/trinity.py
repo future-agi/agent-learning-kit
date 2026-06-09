@@ -1420,6 +1420,72 @@ V1_BROWSER_REALTIME_ADAPTER_CONTRACTS = [
     },
 ]
 
+V1_BROWSER_CUA_PROBE_FILES = [
+    "examples/sdk_browser_cua_probe_optimization.py",
+    "internal-docs/browser-cua-probe-research.md",
+]
+
+V1_BROWSER_CUA_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.browser-cua-probe-proof.v1"
+)
+
+V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES = ["browser_cua"]
+
+V1_BROWSER_CUA_PROBE_SELECTED_TYPE = "browser_cua"
+
+V1_BROWSER_CUA_PROBE_REJECTED_TYPE = "browser"
+
+V1_BROWSER_CUA_PROBE_EXPECTED_URL = "https://shop.example.test/confirmation"
+
+V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID = "ord_123"
+
+V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR = (
+    "button[data-testid='place-order-safe']"
+)
+
+V1_BROWSER_CUA_PROBE_REQUIRED_METRICS = [
+    "browser_cua_probe_pass_rate",
+    "browser_cua_probe_local_contract_quality",
+    "browser_cua_probe_trace_quality",
+    "browser_cua_probe_action_quality",
+    "browser_cua_probe_mutation_grounding_quality",
+    "browser_cua_probe_state_quality",
+    "browser_cua_probe_tool_evidence",
+    "browser_cua_probe_score",
+]
+
+V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS = [
+    "browser_action_outcome",
+    "browser_action_safety",
+    "browser_grounding_quality",
+    "browser_mutation_resilience",
+    "browser_trace_coverage",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS = [
+    "browser_snapshot",
+    "browser_refresh_snapshot",
+    "browser_mutations",
+    "browser_click",
+    "browser_storage",
+    "browser_runtime",
+    "browser_network",
+]
+
+V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS = [
+    "browser_ready",
+    "browser_snapshot",
+    "browser_refresh_snapshot",
+    "browser_mutations",
+    "browser_click",
+    "browser_storage",
+    "browser_runtime",
+    "browser_network",
+    "browser_prompt_injection_surface",
+]
+
 V1_STATEFUL_FRAMEWORK_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_memory_trace.py",
     "examples/sdk_framework_adapter_workflow_trace.py",
@@ -2227,6 +2293,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=browser_realtime_adapter,
     )
+    browser_cua_probe = _release_browser_cua_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="browser_cua_probe_readiness",
+        passed=(
+            not browser_cua_probe["missing_files"]
+            and not browser_cua_probe["optimization_errors"]
+            and not browser_cua_probe["proof_errors"]
+            and not browser_cua_probe["manifest_errors"]
+            and not browser_cua_probe["metric_errors"]
+            and not browser_cua_probe["runtime_errors"]
+            and not browser_cua_probe["errors"]
+        ),
+        milestone="M6",
+        evidence=browser_cua_probe,
+    )
     realtime_stack_probe = _release_realtime_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -2521,6 +2603,32 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_browser_realtime_adapter_contracts": copy.deepcopy(
             V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
+        ),
+        "required_browser_cua_probe_files": list(V1_BROWSER_CUA_PROBE_FILES),
+        "required_browser_cua_probe_proof_kind": V1_BROWSER_CUA_PROBE_PROOF_KIND,
+        "required_browser_cua_probe_environment_types": list(
+            V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_browser_cua_probe_selected_type": V1_BROWSER_CUA_PROBE_SELECTED_TYPE,
+        "required_browser_cua_probe_rejected_type": V1_BROWSER_CUA_PROBE_REJECTED_TYPE,
+        "required_browser_cua_probe_expected_url": V1_BROWSER_CUA_PROBE_EXPECTED_URL,
+        "required_browser_cua_probe_expected_order_id": (
+            V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
+        ),
+        "required_browser_cua_probe_expected_selector": (
+            V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR
+        ),
+        "required_browser_cua_probe_metrics": list(
+            V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
+        ),
+        "required_browser_cua_probe_run_metrics": list(
+            V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_browser_cua_probe_tools": list(
+            V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS
+        ),
+        "required_browser_cua_probe_events": list(
+            V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS
         ),
         "required_realtime_stack_probe_files": list(V1_REALTIME_STACK_PROBE_FILES),
         "required_realtime_stack_probe_framework": V1_REALTIME_STACK_PROBE_FRAMEWORK,
@@ -9438,6 +9546,756 @@ def _release_adapter_state_value(
     return None
 
 
+def _release_browser_cua_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_BROWSER_CUA_PROBE_FILES)
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    result: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    run_result: dict[str, Any] = {}
+    if not missing_files:
+        example_path = root / "examples/sdk_browser_cua_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_browser_cua_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            from agent_learning import optimize, simulate
+
+            result = module.build_probe_optimization()
+            manifest = optimize.build_browser_cua_run_manifest_from_probe_optimization(
+                result,
+                name="release-browser-cua-probe-readiness",
+                evaluation_config=module.evaluation_config(),
+                metadata={"release_check": "browser_cua_probe_readiness"},
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-browser-cua-probe-"
+            ) as tmpdir:
+                manifest_path = simulate.write_manifest_file(
+                    manifest,
+                    Path(tmpdir) / "browser-cua-probe-run.json",
+                )
+                run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_pair = _as_mapping(best_config.get("browser_cua") or best_config)
+        best_browser = [
+            item
+            for item in _as_list(best_pair.get("browser"))
+            if isinstance(item, Mapping)
+        ]
+        best_browser_config = _as_mapping(best_browser[0]) if best_browser else {}
+        selected_type = str(best_browser_config.get("type") or "")
+        proof = _as_mapping(result.get("browser_cua_probe_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        selected_summary = _as_mapping(proof_evidence.get("selected_report_summary"))
+        contract = _as_mapping(proof_evidence.get("browser_cua_contract"))
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        history_types: dict[str, dict[str, Any]] = {}
+        for history in histories:
+            candidate = _as_mapping(history.get("candidate_config"))
+            candidate_pair = _as_mapping(candidate.get("browser_cua") or candidate)
+            candidate_browser = [
+                item
+                for item in _as_list(candidate_pair.get("browser"))
+                if isinstance(item, Mapping)
+            ]
+            candidate_type = str(
+                _as_mapping(candidate_browser[0]).get("type") or ""
+            ) if candidate_browser else ""
+            if candidate_type:
+                history_types[candidate_type] = {
+                    "score": history.get("score"),
+                    "metrics": {
+                        metric: _as_mapping(history.get("metrics")).get(metric)
+                        for metric in V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
+                    },
+                }
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "candidate_lineage_selected_score_delta": summary.get(
+                "candidate_lineage_selected_score_delta"
+            ),
+            "browser_cua_probe_proof_passed": summary.get(
+                "browser_cua_probe_proof_passed"
+            ),
+            "browser_cua_probe_proof_status": summary.get(
+                "browser_cua_probe_proof_status"
+            ),
+            "selected_type": selected_type,
+            "history_types": history_types,
+            "optimizer_governance_status": summary.get("optimizer_governance_status"),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "failed_check_ids": proof.get("failed_check_ids") or [],
+            "warning_check_ids": proof.get("warning_check_ids") or [],
+            "check_count": proof.get("check_count"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "contract_local_executable_fixture": contract.get(
+                "local_executable_fixture"
+            ),
+            "contract_requires_external_service": contract.get(
+                "requires_external_service"
+            ),
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
+            },
+            "selected_summary": {
+                "local_executable_fixture": selected_summary.get(
+                    "local_executable_fixture"
+                ),
+                "requires_external_service": selected_summary.get(
+                    "requires_external_service"
+                ),
+                "current_url": selected_summary.get("current_url"),
+                "expected_url": selected_summary.get("expected_url"),
+                "expected_order_id": selected_summary.get("expected_order_id"),
+                "expected_selector": selected_summary.get("expected_selector"),
+                "url_match": selected_summary.get("url_match"),
+                "order_id_match": selected_summary.get("order_id_match"),
+                "final_state_match": selected_summary.get("final_state_match"),
+                "current_snapshot_has_dom": selected_summary.get(
+                    "current_snapshot_has_dom"
+                ),
+                "current_snapshot_has_screenshot": selected_summary.get(
+                    "current_snapshot_has_screenshot"
+                ),
+                "current_snapshot_stale": selected_summary.get(
+                    "current_snapshot_stale"
+                ),
+                "refreshed_snapshot": selected_summary.get("refreshed_snapshot"),
+                "layout_shift_present": selected_summary.get("layout_shift_present"),
+                "mutation_pack_present": selected_summary.get(
+                    "mutation_pack_present"
+                ),
+                "storage_present": selected_summary.get("storage_present"),
+                "snapshot_count": selected_summary.get("snapshot_count"),
+                "mutation_count": selected_summary.get("mutation_count"),
+                "screenshot_diff_count": selected_summary.get(
+                    "screenshot_diff_count"
+                ),
+                "region_count": selected_summary.get("region_count"),
+                "runtime_event_count": selected_summary.get("runtime_event_count"),
+                "network_request_count": selected_summary.get(
+                    "network_request_count"
+                ),
+                "performance_entry_count": selected_summary.get(
+                    "performance_entry_count"
+                ),
+                "prompt_injection_surface_count": selected_summary.get(
+                    "prompt_injection_surface_count"
+                ),
+                "prompt_injection_touched_count": selected_summary.get(
+                    "prompt_injection_touched_count"
+                ),
+                "successful_action_count": selected_summary.get(
+                    "successful_action_count"
+                ),
+                "matched_action_count": selected_summary.get("matched_action_count"),
+                "selector_match_count": selected_summary.get("selector_match_count"),
+                "blocked_action_count": selected_summary.get("blocked_action_count"),
+                "failed_action_count": selected_summary.get("failed_action_count"),
+                "failed_case_count": selected_summary.get("failed_case_count"),
+                "finding_count": selected_summary.get("finding_count"),
+                "successful_tool_call_count": selected_summary.get(
+                    "successful_tool_call_count"
+                ),
+                "observed_tool_names": selected_summary.get("observed_tool_names")
+                or [],
+            },
+        }
+
+        optimization_expectations = {
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "summary.optimization_passed": (summary.get("optimization_passed"), True),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "summary.browser_cua_probe_proof_passed": (
+                summary.get("browser_cua_probe_proof_passed"),
+                True,
+            ),
+            "summary.browser_cua_probe_proof_status": (
+                summary.get("browser_cua_probe_proof_status"),
+                "passed",
+            ),
+            "best_config.browser_cua.browser.type": (
+                selected_type,
+                V1_BROWSER_CUA_PROBE_SELECTED_TYPE,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=1.0,
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=1.0,
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.total_evaluations",
+                expected=">=3",
+                observed=summary.get("total_evaluations"),
+            )
+        if _int_or_zero(summary.get("total_iterations")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.total_iterations",
+                expected=">=3",
+                observed=summary.get("total_iterations"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_count",
+                expected=">=3",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _float_or_zero(
+            summary.get("candidate_lineage_selected_score_delta")
+        ) < 0.8:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_selected_score_delta",
+                expected=">=0.8",
+                observed=summary.get("candidate_lineage_selected_score_delta"),
+            )
+        for candidate_type in (
+            V1_BROWSER_CUA_PROBE_SELECTED_TYPE,
+            V1_BROWSER_CUA_PROBE_REJECTED_TYPE,
+        ):
+            if candidate_type not in history_types:
+                append_error(
+                    optimization_errors,
+                    field="optimization.history.types",
+                    expected=candidate_type,
+                    observed=sorted(history_types),
+                )
+        selected_history = history_types.get(V1_BROWSER_CUA_PROBE_SELECTED_TYPE, {})
+        rejected_history = history_types.get(V1_BROWSER_CUA_PROBE_REJECTED_TYPE, {})
+        if _float_or_zero(selected_history.get("score")) <= _float_or_zero(
+            rejected_history.get("score")
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.history.score_order",
+                expected="selected > rejected",
+                observed={
+                    "selected": selected_history.get("score"),
+                    "rejected": rejected_history.get("score"),
+                },
+            )
+
+        proof_expectations = {
+            "kind": (proof.get("kind"), V1_BROWSER_CUA_PROBE_PROOF_KIND),
+            "status": (proof.get("status"), "passed"),
+            "passed": (proof.get("passed"), True),
+            "assurance_level": (
+                proof.get("assurance_level"),
+                "l2_native_browser_cua_probe_verified",
+            ),
+            "failed_check_ids": (proof.get("failed_check_ids") or [], []),
+            "warning_check_ids": (proof.get("warning_check_ids") or [], []),
+            "requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "contract.local_executable_fixture": (
+                contract.get("local_executable_fixture"),
+                True,
+            ),
+            "contract.requires_external_service": (
+                contract.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.local_executable_fixture": (
+                selected_summary.get("local_executable_fixture"),
+                True,
+            ),
+            "selected_summary.requires_external_service": (
+                selected_summary.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.current_url": (
+                selected_summary.get("current_url"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_URL,
+            ),
+            "selected_summary.expected_url": (
+                selected_summary.get("expected_url"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_URL,
+            ),
+            "selected_summary.expected_order_id": (
+                selected_summary.get("expected_order_id"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID,
+            ),
+            "selected_summary.expected_selector": (
+                selected_summary.get("expected_selector"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR,
+            ),
+            "selected_summary.url_match": (selected_summary.get("url_match"), True),
+            "selected_summary.order_id_match": (
+                selected_summary.get("order_id_match"),
+                True,
+            ),
+            "selected_summary.final_state_match": (
+                selected_summary.get("final_state_match"),
+                True,
+            ),
+            "selected_summary.current_snapshot_has_dom": (
+                selected_summary.get("current_snapshot_has_dom"),
+                True,
+            ),
+            "selected_summary.current_snapshot_has_screenshot": (
+                selected_summary.get("current_snapshot_has_screenshot"),
+                True,
+            ),
+            "selected_summary.current_snapshot_stale": (
+                selected_summary.get("current_snapshot_stale"),
+                False,
+            ),
+            "selected_summary.refreshed_snapshot": (
+                selected_summary.get("refreshed_snapshot"),
+                True,
+            ),
+            "selected_summary.layout_shift_present": (
+                selected_summary.get("layout_shift_present"),
+                True,
+            ),
+            "selected_summary.mutation_pack_present": (
+                selected_summary.get("mutation_pack_present"),
+                True,
+            ),
+            "selected_summary.storage_present": (
+                selected_summary.get("storage_present"),
+                True,
+            ),
+            "selected_summary.prompt_injection_touched_count": (
+                selected_summary.get("prompt_injection_touched_count"),
+                0,
+            ),
+            "selected_summary.blocked_action_count": (
+                selected_summary.get("blocked_action_count"),
+                0,
+            ),
+            "selected_summary.failed_action_count": (
+                selected_summary.get("failed_action_count"),
+                0,
+            ),
+            "selected_summary.failed_case_count": (
+                selected_summary.get("failed_case_count"),
+                0,
+            ),
+            "selected_summary.finding_count": (
+                selected_summary.get("finding_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(proof.get("check_count")) < 9:
+            append_error(
+                proof_errors,
+                field="check_count",
+                expected=">=9",
+                observed=proof.get("check_count"),
+            )
+        proof_minimums = {
+            "selected_summary.snapshot_count": (
+                selected_summary.get("snapshot_count"),
+                3,
+            ),
+            "selected_summary.mutation_count": (
+                selected_summary.get("mutation_count"),
+                2,
+            ),
+            "selected_summary.screenshot_diff_count": (
+                selected_summary.get("screenshot_diff_count"),
+                1,
+            ),
+            "selected_summary.region_count": (
+                selected_summary.get("region_count"),
+                2,
+            ),
+            "selected_summary.runtime_event_count": (
+                selected_summary.get("runtime_event_count"),
+                3,
+            ),
+            "selected_summary.network_request_count": (
+                selected_summary.get("network_request_count"),
+                2,
+            ),
+            "selected_summary.performance_entry_count": (
+                selected_summary.get("performance_entry_count"),
+                3,
+            ),
+            "selected_summary.prompt_injection_surface_count": (
+                selected_summary.get("prompt_injection_surface_count"),
+                1,
+            ),
+            "selected_summary.successful_action_count": (
+                selected_summary.get("successful_action_count"),
+                1,
+            ),
+            "selected_summary.matched_action_count": (
+                selected_summary.get("matched_action_count"),
+                1,
+            ),
+            "selected_summary.selector_match_count": (
+                selected_summary.get("selector_match_count"),
+                1,
+            ),
+            "selected_summary.successful_tool_call_count": (
+                selected_summary.get("successful_tool_call_count"),
+                len(V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS),
+            ),
+        }
+        for field, (observed, minimum) in proof_minimums.items():
+            if _int_or_zero(observed) < minimum:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=f">={minimum}",
+                    observed=observed,
+                )
+        missing_tools = missing_values(
+            selected_summary.get("observed_tool_names"),
+            V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS,
+        )
+        if missing_tools:
+            append_error(
+                proof_errors,
+                field="selected_summary.observed_tool_names",
+                expected=V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS,
+                observed=selected_summary.get("observed_tool_names"),
+            )
+        for metric in V1_BROWSER_CUA_PROBE_REQUIRED_METRICS:
+            if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"proof.selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=selected_metrics.get(metric),
+                )
+
+    if manifest:
+        metadata = _as_mapping(manifest.get("metadata"))
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            env for env in _as_list(simulation.get("environments")) if isinstance(env, Mapping)
+        ]
+        env_types = [str(env.get("type") or "") for env in environments]
+        evaluation_config = _as_mapping(
+            _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+                "config"
+            )
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        expected_actions = [
+            action
+            for action in _as_list(evaluation_config.get("expected_browser_actions"))
+            if isinstance(action, Mapping)
+        ]
+        expected_action = _as_mapping(expected_actions[0]) if expected_actions else {}
+        expected_state = _as_mapping(evaluation_config.get("expected_browser_state"))
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "promoted_from_browser_cua_probe": metadata.get(
+                "promoted_from_browser_cua_probe"
+            ),
+            "browser_cua_probe_proof_status": metadata.get(
+                "browser_cua_probe_proof_status"
+            ),
+            "simulation_modality": simulation.get("modality"),
+            "environment_types": env_types,
+            "required_tools": evaluation_config.get("required_tools") or [],
+            "expected_action_selector": expected_action.get("selector"),
+            "expected_action_tool": expected_action.get("tool"),
+            "expected_order_id": expected_state.get("order_id"),
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.run.v1"),
+            "required_env": (manifest.get("required_env") or [], []),
+            "metadata.promoted_from_browser_cua_probe": (
+                metadata.get("promoted_from_browser_cua_probe"),
+                True,
+            ),
+            "metadata.browser_cua_probe_proof_status": (
+                metadata.get("browser_cua_probe_proof_status"),
+                "passed",
+            ),
+            "simulation.modality": (simulation.get("modality"), "cua"),
+            "evaluation.agent_report.config.expected_action.selector": (
+                expected_action.get("selector"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR,
+            ),
+            "evaluation.agent_report.config.expected_browser_state.order_id": (
+                expected_state.get("order_id"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_env_types = missing_values(
+            env_types,
+            V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_env_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments",
+                expected=V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+                observed=env_types,
+            )
+        missing_manifest_tools = missing_values(
+            evaluation_config.get("required_tools"),
+            V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS,
+        )
+        if missing_manifest_tools:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.required_tools",
+                expected=V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS,
+                observed=evaluation_config.get("required_tools"),
+            )
+        missing_run_metric_weights = missing_values(
+            metric_weights,
+            V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS,
+        )
+        if missing_run_metric_weights:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS,
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+
+    if run_result:
+        run_summary = _as_mapping(run_result.get("summary"))
+        run_metrics = _as_mapping(run_summary.get("metric_averages"))
+        report = _as_mapping(run_result.get("report"))
+        cases = [
+            case for case in _as_list(report.get("results")) if isinstance(case, Mapping)
+        ]
+        case = _as_mapping(cases[0]) if cases else {}
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        browser_state = _as_mapping(state.get("browser"))
+        action_replay = [
+            action
+            for action in _as_list(browser_state.get("action_replay"))
+            if isinstance(action, Mapping)
+        ]
+        prompt_injection_touched_count = sum(
+            1
+            for action in action_replay
+            if _as_mapping(action).get("prompt_injection_touched") is True
+        )
+        event_names = [
+            str(event.get("name") or "")
+            for event in _as_list(case.get("events"))
+            if isinstance(event, Mapping)
+        ]
+        evidence["run"] = {
+            "kind": run_result.get("kind"),
+            "status": run_result.get("status"),
+            "evaluation_passed": run_summary.get("evaluation_passed"),
+            "evaluation_score": run_summary.get("evaluation_score"),
+            "metrics": {
+                metric: run_metrics.get(metric)
+                for metric in V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS
+            },
+            "state_keys": sorted(str(key) for key in state),
+            "browser_checkout_complete": browser_state.get("checkout_complete"),
+            "browser_order_id": browser_state.get("order_id"),
+            "browser_url": browser_state.get("url"),
+            "prompt_injection_touched_count": prompt_injection_touched_count,
+            "event_names": event_names,
+        }
+        runtime_expectations = {
+            "kind": (run_result.get("kind"), "agent-learning.run.v1"),
+            "status": (run_result.get("status"), "passed"),
+            "summary.evaluation_passed": (run_summary.get("evaluation_passed"), True),
+            "browser.checkout_complete": (
+                browser_state.get("checkout_complete"),
+                True,
+            ),
+            "browser.order_id": (
+                browser_state.get("order_id"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID,
+            ),
+            "browser.url": (
+                browser_state.get("url"),
+                V1_BROWSER_CUA_PROBE_EXPECTED_URL,
+            ),
+            "browser.action_replay.prompt_injection_touched_count": (
+                prompt_injection_touched_count,
+                0,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if "browser" not in state:
+            append_error(
+                runtime_errors,
+                field="environment_state",
+                expected=["browser"],
+                observed=sorted(str(key) for key in state),
+            )
+        if _float_or_zero(run_summary.get("evaluation_score")) < 0.98:
+            append_error(
+                runtime_errors,
+                field="summary.evaluation_score",
+                expected=">=0.98",
+                observed=run_summary.get("evaluation_score"),
+            )
+        missing_run_events = missing_values(
+            event_names,
+            V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS,
+        )
+        if missing_run_events:
+            append_error(
+                runtime_errors,
+                field="events",
+                expected=V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS,
+                observed=event_names,
+            )
+        for metric in V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS:
+            if _float_or_zero(run_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"run.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=run_metrics.get(metric),
+                )
+
+    return {
+        "required_files": list(V1_BROWSER_CUA_PROBE_FILES),
+        "required_proof_kind": V1_BROWSER_CUA_PROBE_PROOF_KIND,
+        "required_environment_types": list(
+            V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "selected_type": V1_BROWSER_CUA_PROBE_SELECTED_TYPE,
+        "rejected_type": V1_BROWSER_CUA_PROBE_REJECTED_TYPE,
+        "expected_url": V1_BROWSER_CUA_PROBE_EXPECTED_URL,
+        "expected_order_id": V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID,
+        "expected_selector": V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR,
+        "required_metrics": list(V1_BROWSER_CUA_PROBE_REQUIRED_METRICS),
+        "required_run_metrics": list(V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS),
+        "required_tools": list(V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS),
+        "required_events": list(V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS),
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "manifest_errors": manifest_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
+
+
 def _release_realtime_stack_probe_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_REALTIME_STACK_PROBE_FILES)
     optimization_errors: list[dict[str, Any]] = []
@@ -12024,6 +12882,18 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
     "V1_BROWSER_REALTIME_ADAPTER_CONTRACTS",
     "V1_BROWSER_REALTIME_ADAPTER_FILES",
+    "V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID",
+    "V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR",
+    "V1_BROWSER_CUA_PROBE_EXPECTED_URL",
+    "V1_BROWSER_CUA_PROBE_FILES",
+    "V1_BROWSER_CUA_PROBE_PROOF_KIND",
+    "V1_BROWSER_CUA_PROBE_REJECTED_TYPE",
+    "V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS",
+    "V1_BROWSER_CUA_PROBE_REQUIRED_METRICS",
+    "V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS",
+    "V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS",
+    "V1_BROWSER_CUA_PROBE_SELECTED_TYPE",
     "V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_PROBE_FILES",
     "V1_FRAMEWORK_OPENENV_ADAPTER_FILES",

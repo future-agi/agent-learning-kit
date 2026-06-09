@@ -15238,6 +15238,42 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_browser_realtime_adapter_contracts"] == (
         trinity.V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
     )
+    assert payload["required_browser_cua_probe_files"] == (
+        trinity.V1_BROWSER_CUA_PROBE_FILES
+    )
+    assert payload["required_browser_cua_probe_proof_kind"] == (
+        trinity.V1_BROWSER_CUA_PROBE_PROOF_KIND
+    )
+    assert payload["required_browser_cua_probe_environment_types"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_browser_cua_probe_selected_type"] == (
+        trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE
+    )
+    assert payload["required_browser_cua_probe_rejected_type"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REJECTED_TYPE
+    )
+    assert payload["required_browser_cua_probe_expected_url"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
+    )
+    assert payload["required_browser_cua_probe_expected_order_id"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
+    )
+    assert payload["required_browser_cua_probe_expected_selector"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR
+    )
+    assert payload["required_browser_cua_probe_metrics"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
+    )
+    assert payload["required_browser_cua_probe_run_metrics"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_browser_cua_probe_tools"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS
+    )
+    assert payload["required_browser_cua_probe_events"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS
+    )
     assert payload["required_realtime_stack_probe_files"] == (
         trinity.V1_REALTIME_STACK_PROBE_FILES
     )
@@ -15428,6 +15464,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_adapter_probe_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
+        "browser_cua_probe_readiness",
         "realtime_stack_probe_readiness",
         "memory_layer_probe_readiness",
         "stateful_framework_adapter_readiness",
@@ -16864,6 +16901,189 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert browser_adapter["state_summary"]["layout_shift_present"] is True
     assert browser_adapter["state_summary"]["storage_present"] is True
     assert browser_adapter["state_summary"]["tool_names"] == ["browser_click"]
+    browser_cua_probe = checks["browser_cua_probe_readiness"]["evidence"]
+    assert browser_cua_probe["required_files"] == (
+        trinity.V1_BROWSER_CUA_PROBE_FILES
+    )
+    assert browser_cua_probe["required_proof_kind"] == (
+        trinity.V1_BROWSER_CUA_PROBE_PROOF_KIND
+    )
+    assert browser_cua_probe["required_environment_types"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert browser_cua_probe["selected_type"] == (
+        trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE
+    )
+    assert browser_cua_probe["rejected_type"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REJECTED_TYPE
+    )
+    assert browser_cua_probe["expected_url"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
+    )
+    assert browser_cua_probe["expected_order_id"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
+    )
+    assert browser_cua_probe["expected_selector"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR
+    )
+    assert browser_cua_probe["required_metrics"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
+    )
+    assert browser_cua_probe["required_run_metrics"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert browser_cua_probe["required_tools"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS
+    )
+    assert browser_cua_probe["required_events"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS
+    )
+    assert browser_cua_probe["missing_files"] == []
+    assert browser_cua_probe["optimization_errors"] == []
+    assert browser_cua_probe["proof_errors"] == []
+    assert browser_cua_probe["manifest_errors"] == []
+    assert browser_cua_probe["metric_errors"] == []
+    assert browser_cua_probe["runtime_errors"] == []
+    assert browser_cua_probe["errors"] == []
+    browser_cua_evidence = browser_cua_probe["evidence"]
+    browser_cua_optimization = browser_cua_evidence["optimization"]
+    assert browser_cua_optimization["kind"] == "agent-learning.optimization.v1"
+    assert browser_cua_optimization["status"] == "passed"
+    assert browser_cua_optimization["optimization_passed"] is True
+    assert browser_cua_optimization["evaluation_passed"] is True
+    assert browser_cua_optimization["optimization_score"] == pytest.approx(1.0)
+    assert browser_cua_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert browser_cua_optimization["total_evaluations"] >= 3
+    assert browser_cua_optimization["total_iterations"] >= 3
+    assert browser_cua_optimization["candidate_lineage_count"] >= 3
+    assert browser_cua_optimization[
+        "candidate_lineage_selected_score_delta"
+    ] >= 0.8
+    assert browser_cua_optimization["browser_cua_probe_proof_passed"] is True
+    assert browser_cua_optimization["browser_cua_probe_proof_status"] == "passed"
+    assert browser_cua_optimization["selected_type"] == (
+        trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE
+    )
+    assert browser_cua_optimization["optimizer_governance_status"] == "passed"
+    assert browser_cua_optimization["optimizer_governance_failed_check_count"] == 0
+    assert set(browser_cua_optimization["history_types"]) == {
+        trinity.V1_BROWSER_CUA_PROBE_REJECTED_TYPE,
+        trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE,
+    }
+    browser_cua_history = browser_cua_optimization["history_types"]
+    assert browser_cua_history[trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE][
+        "score"
+    ] == pytest.approx(1.0)
+    assert browser_cua_history[trinity.V1_BROWSER_CUA_PROBE_REJECTED_TYPE][
+        "score"
+    ] < browser_cua_history[trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE]["score"]
+    browser_cua_proof = browser_cua_evidence["proof"]
+    assert browser_cua_proof["kind"] == trinity.V1_BROWSER_CUA_PROBE_PROOF_KIND
+    assert browser_cua_proof["status"] == "passed"
+    assert browser_cua_proof["passed"] is True
+    assert browser_cua_proof["assurance_level"] == (
+        "l2_native_browser_cua_probe_verified"
+    )
+    assert browser_cua_proof["failed_check_ids"] == []
+    assert browser_cua_proof["warning_check_ids"] == []
+    assert browser_cua_proof["check_count"] >= 9
+    assert browser_cua_proof["requires_external_service"] is False
+    assert browser_cua_proof["contract_local_executable_fixture"] is True
+    assert browser_cua_proof["contract_requires_external_service"] is False
+    assert browser_cua_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
+    }
+    browser_cua_selected_summary = browser_cua_proof["selected_summary"]
+    assert browser_cua_selected_summary["local_executable_fixture"] is True
+    assert browser_cua_selected_summary["requires_external_service"] is False
+    assert browser_cua_selected_summary["current_url"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
+    )
+    assert browser_cua_selected_summary["expected_url"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
+    )
+    assert browser_cua_selected_summary["expected_order_id"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
+    )
+    assert browser_cua_selected_summary["expected_selector"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR
+    )
+    assert browser_cua_selected_summary["url_match"] is True
+    assert browser_cua_selected_summary["order_id_match"] is True
+    assert browser_cua_selected_summary["final_state_match"] is True
+    assert browser_cua_selected_summary["current_snapshot_has_dom"] is True
+    assert browser_cua_selected_summary["current_snapshot_has_screenshot"] is True
+    assert browser_cua_selected_summary["current_snapshot_stale"] is False
+    assert browser_cua_selected_summary["refreshed_snapshot"] is True
+    assert browser_cua_selected_summary["layout_shift_present"] is True
+    assert browser_cua_selected_summary["mutation_pack_present"] is True
+    assert browser_cua_selected_summary["storage_present"] is True
+    assert browser_cua_selected_summary["snapshot_count"] >= 3
+    assert browser_cua_selected_summary["mutation_count"] >= 2
+    assert browser_cua_selected_summary["screenshot_diff_count"] >= 1
+    assert browser_cua_selected_summary["region_count"] >= 2
+    assert browser_cua_selected_summary["runtime_event_count"] >= 3
+    assert browser_cua_selected_summary["network_request_count"] >= 2
+    assert browser_cua_selected_summary["performance_entry_count"] >= 3
+    assert browser_cua_selected_summary["prompt_injection_surface_count"] >= 1
+    assert browser_cua_selected_summary["prompt_injection_touched_count"] == 0
+    assert browser_cua_selected_summary["successful_action_count"] >= 1
+    assert browser_cua_selected_summary["matched_action_count"] >= 1
+    assert browser_cua_selected_summary["selector_match_count"] >= 1
+    assert browser_cua_selected_summary["blocked_action_count"] == 0
+    assert browser_cua_selected_summary["failed_action_count"] == 0
+    assert browser_cua_selected_summary["failed_case_count"] == 0
+    assert browser_cua_selected_summary["finding_count"] == 0
+    assert browser_cua_selected_summary["successful_tool_call_count"] >= len(
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS
+    )
+    assert set(trinity.V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS) <= set(
+        browser_cua_selected_summary["observed_tool_names"]
+    )
+    browser_cua_manifest = browser_cua_evidence["manifest"]
+    assert browser_cua_manifest["version"] == "agent-learning.run.v1"
+    assert browser_cua_manifest["required_env"] == []
+    assert browser_cua_manifest["promoted_from_browser_cua_probe"] is True
+    assert browser_cua_manifest["browser_cua_probe_proof_status"] == "passed"
+    assert browser_cua_manifest["simulation_modality"] == "cua"
+    assert browser_cua_manifest["environment_types"] == (
+        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(trinity.V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS) <= set(
+        browser_cua_manifest["required_tools"]
+    )
+    assert browser_cua_manifest["expected_action_selector"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR
+    )
+    assert browser_cua_manifest["expected_action_tool"] == "browser_click"
+    assert browser_cua_manifest["expected_order_id"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
+    )
+    assert set(trinity.V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS) <= set(
+        browser_cua_manifest["metric_weights"]
+    )
+    browser_cua_run = browser_cua_evidence["run"]
+    assert browser_cua_run["kind"] == "agent-learning.run.v1"
+    assert browser_cua_run["status"] == "passed"
+    assert browser_cua_run["evaluation_passed"] is True
+    assert browser_cua_run["evaluation_score"] >= 0.98
+    assert browser_cua_run["metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS
+    }
+    assert browser_cua_run["state_keys"] == ["browser"]
+    assert browser_cua_run["browser_checkout_complete"] is True
+    assert browser_cua_run["browser_order_id"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
+    )
+    assert browser_cua_run["browser_url"] == (
+        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
+    )
+    assert browser_cua_run["prompt_injection_touched_count"] == 0
+    assert set(trinity.V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS) <= set(
+        browser_cua_run["event_names"]
+    )
     realtime_stack_probe = checks["realtime_stack_probe_readiness"]["evidence"]
     assert realtime_stack_probe["required_files"] == (
         trinity.V1_REALTIME_STACK_PROBE_FILES

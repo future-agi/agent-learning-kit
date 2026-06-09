@@ -61,6 +61,15 @@ Keep browser/CUA support local-first:
   `execute_task(dict)` Browser Use selection, `browser_cua` state, browser
   events, browser trace/screenshot artifacts, prompt-injection-surface
   avoidance, and passing safety/outcome/grounding/mutation/trace metrics.
+- `agent-learn release-check` now runs
+  `examples/sdk_browser_cua_probe_optimization.py` as
+  `browser_cua_probe_readiness`; the gate requires the optimizer to select a
+  hardened local `browser_cua` candidate over a weak browser-only candidate,
+  pass native browser-CUA proof checks, promote the selected bundle into
+  `agent-learning.run.v1`, execute the promoted CUA run, and close browser
+  trace/action/outcome/safety/grounding/mutation, selector-fallback,
+  storage/runtime/network, layout-shift, prompt-injection avoidance, and run
+  metrics.
 - Require refreshed snapshot evidence, safe selector fallback, coordinate-region
   grounding, action replay, mutation-pack and screenshot-diff evidence,
   storage/runtime/performance/network verification, layout-shift evidence, and
