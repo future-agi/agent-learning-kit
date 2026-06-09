@@ -88,10 +88,14 @@ workflow, orchestration, lifecycle, protocol, and environment replay framework
 manifests.
 It also runs framework optimizer readiness for custom adapters, social-memory
 synthesis, world/framework/memory stacks, multi-agent framework handoffs,
-framework certification, and framework import repair. Environment replay adapter
-readiness executes a local framework adapter that returns OpenEnv/Gymnasium-style
-replay evidence and verifies generated compatibility gates, normalized state,
-events, and artifacts as coverage for external input shapes. Agent Learning
+framework certification, and framework import repair. Workspace import
+certification readiness makes project/framework import surfaces executable too:
+release-check verifies a local workspace plus framework-import bundle before
+arbitrary project adapters are treated as simulation and optimization targets.
+Environment replay adapter readiness executes a local framework adapter that
+returns OpenEnv/Gymnasium-style replay evidence and verifies generated
+compatibility gates, normalized state, events, and artifacts as coverage for
+external input shapes. Agent Learning
 environment robustness is
 also executable: release-check aggregates local replay, framework, eval,
 optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
@@ -1983,6 +1987,12 @@ agent benchmarks and eval-integrity work, then adds our own Future AGI
 certification contract so a UI/API workflow can checkout a user repo, certify
 that it is runnable, and then expose `agent-learn report`, `agent-learn
 actions`, and `agent-learn action-run` follow-ups from the saved artifact.
+`agent-learn release-check` gates this path as
+`workspace_import_certification_readiness`: the optimizer must select the
+verified workspace/import bundle, keep the workflow local-only, close workspace
+and framework import metrics, preserve certification/component evidence, and keep
+secret/security buckets empty before arbitrary project import claims count as
+V1-ready.
 
 `optimize.build_redteam_readiness_certification_optimization_manifest()` and
 `examples/sdk_redteam_readiness_certification_optimization.py` add the next

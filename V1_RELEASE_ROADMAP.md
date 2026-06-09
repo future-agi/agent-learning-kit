@@ -367,6 +367,12 @@ Current checkpoint:
   the expected best adapter/world/framework/memory/multi-agent/certification/
   import-repair candidates, preserve candidate lineage, pass required optimizer
   metrics, and emit native optimizer proofs where available.
+- Workspace import certification readiness is now an executable release-check
+  gate: `examples/sdk_workspace_import_certification_optimization.py` must run
+  locally, select the verified workspace plus framework-import bundle, prove
+  local-only execution, close workspace/import metrics and component evidence,
+  and keep secret/security buckets empty before arbitrary project/framework
+  import surfaces count as simulation and optimization targets.
 - Multi-agent room probe readiness is now an executable release-check gate:
   `examples/sdk_multi_agent_room_probe_optimization.py` must select a local
   planner/retriever/critic room, close role boundaries, handoff contracts,

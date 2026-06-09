@@ -15616,6 +15616,24 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_optimizer_contracts"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_CONTRACTS
     )
+    assert payload["required_workspace_import_certification_files"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
+    )
+    assert payload["required_workspace_import_certification_environment_types"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_workspace_import_certification_state_keys"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_workspace_import_certification_metrics"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+    )
+    assert payload["required_workspace_import_certification_components"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert payload["required_workspace_import_certification_contracts"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
+    )
     assert payload["required_framework_adapter_probe_files"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES
     )
@@ -15945,6 +15963,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_openenv_adapter_readiness",
         "framework_trace_export_readiness",
         "framework_optimizer_readiness",
+        "workspace_import_certification_readiness",
         "multi_agent_room_probe_readiness",
         "framework_adapter_probe_readiness",
         "framework_adapter_io_readiness",
@@ -18220,6 +18239,126 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_import_quality": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    workspace_certification = checks["workspace_import_certification_readiness"]
+    assert workspace_certification["passed"] is True
+    assert workspace_certification["milestone"] == "M6"
+    workspace_certification_evidence = workspace_certification["evidence"]
+    assert workspace_certification_evidence["required_files"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
+    )
+    assert workspace_certification_evidence["required_environment_types"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert workspace_certification_evidence["required_state_keys"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert workspace_certification_evidence["required_metrics"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+    )
+    assert workspace_certification_evidence["required_components"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert workspace_certification_evidence["required_contracts"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
+    )
+    assert workspace_certification_evidence["missing_files"] == []
+    assert workspace_certification_evidence["execution_errors"] == []
+    assert workspace_certification_evidence["manifest_errors"] == []
+    assert workspace_certification_evidence["optimization_errors"] == []
+    assert workspace_certification_evidence["metric_errors"] == []
+    assert workspace_certification_evidence["certification_errors"] == []
+    assert workspace_certification_evidence["readiness_errors"] == []
+    assert workspace_certification_evidence["component_errors"] == []
+    assert workspace_certification_evidence["security_errors"] == []
+    workspace_contract = trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS[
+        "examples/sdk_workspace_import_certification_optimization.py"
+    ]
+    workspace_examples = workspace_certification_evidence["evidence"]["examples"]
+    assert set(workspace_examples) == set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
+    )
+    workspace_example = workspace_examples[
+        "examples/sdk_workspace_import_certification_optimization.py"
+    ]
+    workspace_manifest = workspace_example["manifest"]
+    assert workspace_manifest["version"] == "agent-learning.optimization.v1"
+    assert workspace_manifest["required_env"] == [workspace_contract["env_name"]]
+    assert workspace_manifest["task_kind"] == workspace_contract["task_kind"]
+    assert workspace_manifest["search_paths"] == (
+        workspace_contract["required_search_paths"]
+    )
+    assert workspace_manifest["candidate_count"] == 2
+    assert workspace_manifest["candidate_environment_types"] == [
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+    ]
+    verified_bundle = workspace_manifest["verified_candidate"]
+    verified_workspace = verified_bundle["workspace_summary"]
+    verified_import = verified_bundle["framework_import_summary"]
+    assert verified_workspace["failed_command_count"] == 0
+    assert verified_workspace["secret_leak_count"] == 0
+    assert verified_workspace["missing_required_evidence"] == []
+    assert verified_import["failed_source_count"] == 0
+    assert set(verified_import["observed_frameworks"]) >= set(
+        workspace_contract["required_frameworks"]
+    )
+    assert set(workspace_manifest["metric_weights"]) >= set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+    )
+    workspace_result = workspace_example["optimization"]
+    assert workspace_result["kind"] == "agent-learning.optimization.v1"
+    assert workspace_result["schema_version"] == "agent-learning.cli.v1"
+    assert workspace_result["status"] == "passed"
+    assert workspace_result["output_roundtrip"] is True
+    assert workspace_result["optimization_passed"] is True
+    assert workspace_result["evaluation_passed"] is True
+    assert workspace_result["optimization_score"] >= 0.95
+    assert workspace_result["evaluation_score"] == pytest.approx(1.0)
+    assert workspace_result["candidate_lineage_count"] >= 2
+    assert workspace_result["best_patch_keys"] == workspace_contract[
+        "required_search_paths"
+    ]
+    assert workspace_result["best_environment_types"] == (
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(workspace_result["state_keys"]) == set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
+    )
+    assert workspace_result["workspace_state_present"] is True
+    assert workspace_result["framework_import_state_present"] is True
+    assert workspace_result["forbidden_external_keys"] == []
+    for metric in trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS:
+        assert workspace_result["best_metrics"][metric] == pytest.approx(1.0)
+    selected_bundle = workspace_example["certification_bundle"]
+    assert selected_bundle["workspace_kind"] == "workspace_run_manifest"
+    assert selected_bundle["framework_import_kind"] == "framework_import_manifest"
+    workspace_summary = selected_bundle["workspace_summary"]
+    assert workspace_summary["failed_command_count"] == 0
+    assert workspace_summary["secret_leak_count"] == 0
+    assert workspace_summary["missing_required_evidence"] == []
+    import_summary = selected_bundle["framework_import_summary"]
+    assert import_summary["source_count"] >= 3
+    assert import_summary["passed_source_count"] >= 3
+    assert import_summary["failed_source_count"] == 0
+    assert set(import_summary["observed_frameworks"]) >= set(
+        workspace_contract["required_frameworks"]
+    )
+    workspace_components = workspace_example["score_simulation_evidence"]
+    assert workspace_components["score"] == pytest.approx(1.0)
+    assert set(workspace_components["component_names"]) == set(
+        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+    )
+    assert workspace_components["tool_component_score"] == pytest.approx(1.0)
+    assert workspace_components["framework_import_component_score"] == pytest.approx(
+        1.0
+    )
+    assert workspace_components["tool_component_missing"] == []
+    assert workspace_components["framework_import_missing"] == []
+    assert workspace_components["framework_import_missing_required"] == []
+    assert workspace_components["framework_import_failing_checks"] == []
+    assert not any(
+        workspace_components["framework_import_blocking_gaps"].values()
+    )
     room_probe = checks["multi_agent_room_probe_readiness"]["evidence"]
     assert room_probe["required_files"] == trinity.V1_MULTI_AGENT_ROOM_PROBE_FILES
     assert room_probe["required_proof_kind"] == (
@@ -20390,6 +20529,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]
+    assert (
+        "workspace_import_certification_readiness"
+        in milestones["M6"]["check_ids"]
+    )
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
     assert payload["findings"] == []
     assert {

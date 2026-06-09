@@ -1136,6 +1136,71 @@ V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
     },
 ]
 
+V1_WORKSPACE_IMPORT_CERTIFICATION_FILES = [
+    "examples/sdk_workspace_import_certification_optimization.py",
+]
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES = [
+    "workspace_run_manifest",
+    "framework_import",
+]
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS = [
+    "workspace_run_manifest",
+    "framework_import_manifest",
+]
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS = [
+    "workspace_run_coverage",
+    "workspace_run_quality",
+    "framework_import_coverage",
+    "framework_import_quality",
+    "tool_selection_accuracy",
+]
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS = [
+    "tool_coverage",
+    "framework_import",
+]
+
+V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS = {
+    "examples/sdk_workspace_import_certification_optimization.py": {
+        "env_name": "AGENT_LEARNING_SDK_WORKSPACE_IMPORT_CERTIFICATION_KEY",
+        "module_name": "agent_learning_release_workspace_import_certification",
+        "task_kind": "workspace_import_certification",
+        "required_search_paths": ["simulation.environments"],
+        "required_frameworks": ["langchain", "langgraph", "pipecat"],
+        "required_export_types": ["probe_suite"],
+        "required_sources": [
+            "langgraph_factory",
+            "langchain_factory",
+            "pipecat_factory",
+        ],
+        "required_signals": [
+            "adapter",
+            "artifact",
+            "callable",
+            "framework_import",
+            "module_import",
+            "observability",
+            "python_import",
+            "runtime_call",
+            "runtime_import",
+            "target",
+        ],
+        "required_state_keys": [
+            *V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS,
+        ],
+        "metric_floors": {
+            "workspace_run_coverage": 1.0,
+            "workspace_run_quality": 1.0,
+            "framework_import_coverage": 1.0,
+            "framework_import_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+}
+
 V1_AGENT_INTEGRATION_FILES = [
     "examples/agent_integration_optimization.json",
     "examples/sdk_agent_integration_optimization.py",
@@ -3594,6 +3659,26 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_provider_contract,
     )
+    workspace_import_certification = _release_workspace_import_certification_status(
+        root
+    )
+    _append_release_check(
+        checks,
+        check_id="workspace_import_certification_readiness",
+        passed=(
+            not workspace_import_certification["missing_files"]
+            and not workspace_import_certification["execution_errors"]
+            and not workspace_import_certification["manifest_errors"]
+            and not workspace_import_certification["optimization_errors"]
+            and not workspace_import_certification["certification_errors"]
+            and not workspace_import_certification["readiness_errors"]
+            and not workspace_import_certification["component_errors"]
+            and not workspace_import_certification["metric_errors"]
+            and not workspace_import_certification["security_errors"]
+        ),
+        milestone="M6",
+        evidence=workspace_import_certification,
+    )
     agent_integration = _release_agent_integration_status(root)
     _append_release_check(
         checks,
@@ -4257,6 +4342,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_provider_manifest_contracts": copy.deepcopy(
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
         ),
+        "required_workspace_import_certification_files": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
+        ),
+        "required_workspace_import_certification_environment_types": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_workspace_import_certification_state_keys": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
+        ),
+        "required_workspace_import_certification_metrics": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+        ),
+        "required_workspace_import_certification_components": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+        ),
+        "required_workspace_import_certification_contracts": {
+            path: dict(contract)
+            for path, contract in V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.items()
+        },
         "required_agent_integration_files": list(V1_AGENT_INTEGRATION_FILES),
         "required_agent_integration_providers": list(
             V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
@@ -14614,6 +14718,1072 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
         "manifest_errors": manifest_errors,
         "external_value_findings": external_value_findings,
         "errors": errors,
+    }
+
+
+def _release_workspace_import_certification_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root, V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    certification_errors: list[dict[str, Any]] = []
+    readiness_errors: list[dict[str, Any]] = []
+    component_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def nested_key_names(value: Any) -> set[str]:
+        names: set[str] = set()
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                names.add(str(key))
+                names.update(nested_key_names(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                names.update(nested_key_names(item))
+        return names
+
+    def selected_history(optimization: Mapping[str, Any]) -> Mapping[str, Any]:
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        return _as_mapping(
+            max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+        )
+
+    def first_case_report(report: Mapping[str, Any]) -> Mapping[str, Any]:
+        cases = [
+            item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+        ]
+        return _as_mapping(cases[0]) if cases else {}
+
+    def validate_manifest(
+        path: str,
+        manifest: Mapping[str, Any],
+        generated_manifest: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        optimization = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization.get("target"))
+        metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        evaluation_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        workspace_quality = _as_mapping(evaluation_config.get("workspace_run_quality"))
+        import_quality = _as_mapping(
+            evaluation_config.get("framework_import_quality")
+        )
+        required_search_paths = [str(item) for item in contract["required_search_paths"]]
+        first_search_path = required_search_paths[0]
+        candidates = [
+            _as_list(candidate)
+            for candidate in _as_list(search_space.get(first_search_path))
+            if isinstance(candidate, list)
+        ]
+        candidate_types = [
+            [str(_as_mapping(item).get("type")) for item in candidate]
+            for candidate in candidates
+        ]
+        verified_candidate = candidates[-1] if candidates else []
+        verified_workspace = (
+            _as_mapping(_as_mapping(verified_candidate[0]).get("data"))
+            if len(verified_candidate) > 0
+            else {}
+        )
+        verified_import = (
+            _as_mapping(_as_mapping(verified_candidate[1]).get("data"))
+            if len(verified_candidate) > 1
+            else {}
+        )
+        workspace_summary = _as_mapping(verified_workspace.get("summary"))
+        import_summary = _as_mapping(verified_import.get("summary"))
+        example_evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "task_kind": metadata.get("task_kind"),
+            "threshold": optimization.get("threshold"),
+            "search_paths": sorted(str(path) for path in search_space),
+            "candidate_count": len(candidates),
+            "candidate_environment_types": candidate_types,
+            "target_layers": list(target.get("layers") or []),
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+            "generated_manifest_roundtrip": manifest == generated_manifest,
+            "verified_candidate": {
+                "workspace_kind": verified_workspace.get("kind"),
+                "framework_import_kind": verified_import.get("kind"),
+                "workspace_summary": {
+                    "command_count": workspace_summary.get("command_count"),
+                    "failed_command_count": workspace_summary.get(
+                        "failed_command_count"
+                    ),
+                    "optimization_count": workspace_summary.get(
+                        "optimization_count"
+                    ),
+                    "simulation_count": workspace_summary.get("simulation_count"),
+                    "secret_leak_count": workspace_summary.get("secret_leak_count"),
+                    "missing_required_evidence": list(
+                        workspace_summary.get("missing_required_evidence") or []
+                    ),
+                },
+                "framework_import_summary": {
+                    "source_count": import_summary.get("source_count"),
+                    "passed_source_count": import_summary.get("passed_source_count"),
+                    "failed_source_count": import_summary.get("failed_source_count"),
+                    "observed_frameworks": list(
+                        import_summary.get("observed_frameworks") or []
+                    ),
+                    "observed_export_types": list(
+                        import_summary.get("observed_export_types") or []
+                    ),
+                    "missing_required_frameworks": list(
+                        import_summary.get("missing_required_frameworks") or []
+                    ),
+                    "missing_required_signals": list(
+                        import_summary.get("missing_required_signals") or []
+                    ),
+                },
+            },
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                [contract["env_name"]],
+            ),
+            "metadata.task_kind": (metadata.get("task_kind"), contract["task_kind"]),
+            "optimization.target.search_space": (
+                sorted(str(path) for path in search_space),
+                required_search_paths,
+            ),
+            "generated_manifest_roundtrip": (manifest == generated_manifest, True),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(optimization.get("threshold")) < 0.95:
+            append_error(
+                manifest_errors,
+                path=path,
+                field="optimization.threshold",
+                expected=">=0.95",
+                observed=optimization.get("threshold"),
+            )
+        if len(candidates) < 2:
+            append_error(
+                manifest_errors,
+                path=path,
+                field=f"optimization.target.search_space.{first_search_path}",
+                expected=">=2 candidates",
+                observed=len(candidates),
+            )
+        for types in candidate_types:
+            if types != V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=(
+                        "optimization.target.search_space."
+                        "simulation.environments.type"
+                    ),
+                    expected=(
+                        V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+                    ),
+                    observed=types,
+                )
+        missing_metric_weights = missing_values(
+            metric_weights,
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS,
+        )
+        if missing_metric_weights:
+            append_error(
+                manifest_errors,
+                path=path,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS,
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+        framework_config_expectations = {
+            "required_frameworks": (
+                import_quality.get("required_frameworks") or [],
+                contract["required_frameworks"],
+            ),
+            "required_export_types": (
+                import_quality.get("required_export_types") or [],
+                contract["required_export_types"],
+            ),
+            "required_sources": (
+                import_quality.get("required_sources") or [],
+                contract["required_sources"],
+            ),
+            "required_signals": (
+                import_quality.get("required_signals") or [],
+                contract["required_signals"],
+            ),
+            "max_failed_sources": (import_quality.get("max_failed_sources"), 0),
+            "require_target": (import_quality.get("require_target"), True),
+            "require_adapter": (import_quality.get("require_adapter"), True),
+            "require_observability": (
+                import_quality.get("require_observability"),
+                True,
+            ),
+            "require_artifacts": (import_quality.get("require_artifacts"), True),
+        }
+        for field, (observed, expected) in framework_config_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=(
+                        "evaluation.agent_report.config."
+                        f"framework_import_quality.{field}"
+                    ),
+                    expected=expected,
+                    observed=observed,
+                )
+        workspace_config_expectations = {
+            "min_command_count": 4,
+            "min_optimization_count": 1,
+            "min_simulation_count": 1,
+            "min_eval_count": 1,
+            "max_failed_commands": 0,
+            "max_secret_leaks": 0,
+            "require_clean_exit": True,
+            "require_no_secret_leakage": True,
+            "require_secret_redaction": True,
+            "require_security_gate": True,
+        }
+        for field, expected in workspace_config_expectations.items():
+            observed = workspace_quality.get(field)
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=(
+                        "evaluation.agent_report.config."
+                        f"workspace_run_quality.{field}"
+                    ),
+                    expected=expected,
+                    observed=observed,
+                )
+        if verified_candidate and candidate_types[-1] != (
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+        ):
+            append_error(
+                manifest_errors,
+                path=path,
+                field="optimization.target.search_space.verified.type",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+                observed=candidate_types[-1],
+            )
+
+    def validate_optimization(
+        path: str,
+        manifest: Mapping[str, Any],
+        result: Mapping[str, Any],
+        saved: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_history = selected_history(optimization)
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_report = _as_mapping(best_history.get("report"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environment_types = [
+            str(_as_mapping(item).get("type"))
+            for item in _as_list(best_simulation.get("environments"))
+            if isinstance(item, Mapping)
+        ]
+        case = first_case_report(best_report)
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        workspace_state = _as_mapping(state.get("workspace_run_manifest"))
+        import_state = _as_mapping(state.get("framework_import_manifest"))
+        forbidden_keys = sorted(
+            {"endpoint", "auth", "api_key", "apiKey", "secret", "token"}
+            & nested_key_names(best_config)
+        )
+        example_evidence["optimization"] = {
+            "schema_version": result.get("schema_version"),
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "best_score": best_history.get("score"),
+            "best_patch_keys": sorted(
+                str(key) for key in _as_mapping(best_history.get("patch"))
+            ),
+            "best_environment_types": best_environment_types,
+            "best_metrics": {
+                metric: best_metrics.get(metric)
+                for metric in V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
+            },
+            "state_keys": sorted(str(key) for key in state),
+            "workspace_state_present": bool(workspace_state),
+            "framework_import_state_present": bool(import_state),
+            "forbidden_external_keys": forbidden_keys,
+        }
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        threshold = _float_or_zero(
+            _as_mapping(manifest.get("optimization")).get("threshold")
+        )
+        if _float_or_zero(summary.get("optimization_score")) < threshold:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.optimization_score",
+                expected=f">={threshold}",
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.evaluation_score",
+                expected=">=1.0",
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.candidate_lineage_count",
+                expected=">=2",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 2:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="summary.total_evaluations",
+                expected=">=2",
+                observed=summary.get("total_evaluations"),
+                )
+        if set(_as_mapping(best_history.get("patch"))) != {"simulation.environments"}:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.history.best.patch",
+                expected=["simulation.environments"],
+                observed=sorted(
+                    str(key) for key in _as_mapping(best_history.get("patch"))
+                ),
+            )
+        if (
+            best_environment_types
+            != V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+        ):
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.best_config.simulation.environments.type",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES,
+                observed=best_environment_types,
+            )
+        missing_state_keys = missing_values(state, contract["required_state_keys"])
+        if missing_state_keys:
+            append_error(
+                optimization_errors,
+                path=path,
+                field="optimization.history.best.report.environment_state",
+                expected=contract["required_state_keys"],
+                observed=sorted(str(key) for key in state),
+            )
+        for metric, minimum in _as_mapping(contract.get("metric_floors")).items():
+            metric_name = str(metric)
+            floor = _float_or_zero(minimum)
+            if _float_or_zero(best_metrics.get(metric_name)) < floor:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field=f"optimization.history.best.metrics.{metric_name}",
+                    expected=f">={floor}",
+                    observed=best_metrics.get(metric_name),
+                )
+        if forbidden_keys:
+            append_error(
+                security_errors,
+                path=path,
+                field="optimization.best_config.external_dependency_keys",
+                expected=[],
+                observed=forbidden_keys,
+            )
+        return best_config, best_report, state
+
+    def validate_certification_bundle(
+        path: str,
+        state: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        workspace = _as_mapping(state.get("workspace_run_manifest"))
+        workspace_summary = _as_mapping(workspace.get("summary"))
+        framework_import = _as_mapping(state.get("framework_import_manifest"))
+        import_summary = _as_mapping(framework_import.get("summary"))
+        example_evidence["certification_bundle"] = {
+            "workspace_kind": workspace.get("kind"),
+            "framework_import_kind": framework_import.get("kind"),
+            "workspace_summary": {
+                "command_count": workspace_summary.get("command_count"),
+                "passed_command_count": workspace_summary.get("passed_command_count"),
+                "failed_command_count": workspace_summary.get("failed_command_count"),
+                "optimization_count": workspace_summary.get("optimization_count"),
+                "simulation_count": workspace_summary.get("simulation_count"),
+                "eval_count": workspace_summary.get("eval_count"),
+                "artifact_count": workspace_summary.get("artifact_count"),
+                "observability_hook_count": workspace_summary.get(
+                    "observability_hook_count"
+                ),
+                "secret_leak_count": workspace_summary.get("secret_leak_count"),
+                "missing_required_evidence": list(
+                    workspace_summary.get("missing_required_evidence") or []
+                ),
+            },
+            "framework_import_summary": {
+                "source_count": import_summary.get("source_count"),
+                "passed_source_count": import_summary.get("passed_source_count"),
+                "failed_source_count": import_summary.get("failed_source_count"),
+                "artifact_count": import_summary.get("artifact_count"),
+                "observability_hook_count": import_summary.get(
+                    "observability_hook_count"
+                ),
+                "observed_frameworks": list(
+                    import_summary.get("observed_frameworks") or []
+                ),
+                "observed_export_types": list(
+                    import_summary.get("observed_export_types") or []
+                ),
+                "missing_required_sources": list(
+                    import_summary.get("missing_required_sources") or []
+                ),
+                "missing_required_frameworks": list(
+                    import_summary.get("missing_required_frameworks") or []
+                ),
+                "missing_required_export_types": list(
+                    import_summary.get("missing_required_export_types") or []
+                ),
+                "missing_required_signals": list(
+                    import_summary.get("missing_required_signals") or []
+                ),
+            },
+        }
+        bundle_expectations = {
+            "workspace_run_manifest.kind": (
+                workspace.get("kind"),
+                "workspace_run_manifest",
+            ),
+            "workspace_run_manifest.summary.failed_command_count": (
+                workspace_summary.get("failed_command_count"),
+                0,
+            ),
+            "workspace_run_manifest.summary.secret_leak_count": (
+                workspace_summary.get("secret_leak_count"),
+                0,
+            ),
+            "workspace_run_manifest.summary.missing_required_evidence": (
+                workspace_summary.get("missing_required_evidence") or [],
+                [],
+            ),
+            "framework_import_manifest.kind": (
+                framework_import.get("kind"),
+                "framework_import_manifest",
+            ),
+            "framework_import_manifest.summary.failed_source_count": (
+                import_summary.get("failed_source_count"),
+                0,
+            ),
+            "framework_import_manifest.summary.missing_required_sources": (
+                import_summary.get("missing_required_sources") or [],
+                [],
+            ),
+            "framework_import_manifest.summary.missing_required_frameworks": (
+                import_summary.get("missing_required_frameworks") or [],
+                [],
+            ),
+            "framework_import_manifest.summary.missing_required_export_types": (
+                import_summary.get("missing_required_export_types") or [],
+                [],
+            ),
+            "framework_import_manifest.summary.missing_required_signals": (
+                import_summary.get("missing_required_signals") or [],
+                [],
+            ),
+        }
+        for field, (observed, expected) in bundle_expectations.items():
+            if observed != expected:
+                append_error(
+                    certification_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        workspace_minima = {
+            "command_count": 4,
+            "passed_command_count": 4,
+            "optimization_count": 1,
+            "simulation_count": 1,
+            "eval_count": 1,
+            "artifact_count": 10,
+            "observability_hook_count": 3,
+        }
+        for field, minimum in workspace_minima.items():
+            if _int_or_zero(workspace_summary.get(field)) < minimum:
+                append_error(
+                    certification_errors,
+                    path=path,
+                    field=f"workspace_run_manifest.summary.{field}",
+                    expected=f">={minimum}",
+                    observed=workspace_summary.get(field),
+                )
+        import_minima = {
+            "source_count": 3,
+            "passed_source_count": 3,
+            "artifact_count": 1,
+            "observability_hook_count": 5,
+        }
+        for field, minimum in import_minima.items():
+            if _int_or_zero(import_summary.get(field)) < minimum:
+                append_error(
+                    certification_errors,
+                    path=path,
+                    field=f"framework_import_manifest.summary.{field}",
+                    expected=f">={minimum}",
+                    observed=import_summary.get(field),
+                )
+        for field in (
+            "has_target",
+            "has_adapter",
+            "has_probe_suite",
+            "has_observability",
+            "has_artifacts",
+        ):
+            if import_summary.get(field) is not True:
+                append_error(
+                    certification_errors,
+                    path=path,
+                    field=f"framework_import_manifest.summary.{field}",
+                    expected=True,
+                    observed=import_summary.get(field),
+                )
+        observed_frameworks = import_summary.get("observed_frameworks") or []
+        missing_frameworks = missing_values(
+            observed_frameworks,
+            contract["required_frameworks"],
+        )
+        if missing_frameworks:
+            append_error(
+                certification_errors,
+                path=path,
+                field="framework_import_manifest.summary.observed_frameworks",
+                expected=contract["required_frameworks"],
+                observed=list(observed_frameworks),
+            )
+        missing_export_types = missing_values(
+            import_summary.get("observed_export_types"),
+            contract["required_export_types"],
+        )
+        if missing_export_types:
+            append_error(
+                certification_errors,
+                path=path,
+                field="framework_import_manifest.summary.observed_export_types",
+                expected=contract["required_export_types"],
+                observed=list(import_summary.get("observed_export_types") or []),
+            )
+
+    def validate_readiness(
+        path: str,
+        result: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        readiness = _as_mapping(result.get("framework_readiness"))
+        import_layer = _as_mapping(readiness.get("import"))
+        layers = [
+            _as_mapping(layer)
+            for layer in _as_list(readiness.get("layers"))
+            if isinstance(layer, Mapping)
+        ]
+        verified_import_layer = next(
+            (
+                layer
+                for layer in layers
+                if layer.get("layer") == "import" and layer.get("verified") is True
+            ),
+            {},
+        )
+        example_evidence["framework_readiness"] = {
+            "kind": readiness.get("kind"),
+            "status": readiness.get("status"),
+            "present_layers": list(readiness.get("present_layers") or []),
+            "weak_layers": list(readiness.get("weak_layers") or []),
+            "weak_metrics": list(readiness.get("weak_metrics") or []),
+            "frameworks": list(readiness.get("frameworks") or []),
+            "import": {
+                "source_count": import_layer.get("source_count"),
+                "passed_source_count": import_layer.get("passed_source_count"),
+                "failed_source_count": import_layer.get("failed_source_count"),
+                "missing_required_sources": list(
+                    import_layer.get("missing_required_sources") or []
+                ),
+                "observed_frameworks": list(
+                    import_layer.get("observed_frameworks") or []
+                ),
+                "observed_export_types": list(
+                    import_layer.get("observed_export_types") or []
+                ),
+            },
+            "verified_import_layer": {
+                "status": verified_import_layer.get("status"),
+                "verified": verified_import_layer.get("verified"),
+                "state_key": verified_import_layer.get("state_key"),
+            },
+        }
+        readiness_expectations = {
+            "framework_readiness.kind": (
+                readiness.get("kind"),
+                "framework_readiness_map",
+            ),
+            "framework_readiness.status": (readiness.get("status"), "ready"),
+            "framework_readiness.present_layers": (
+                readiness.get("present_layers") or [],
+                ["import"],
+            ),
+            "framework_readiness.weak_layers": (
+                readiness.get("weak_layers") or [],
+                [],
+            ),
+            "framework_readiness.weak_metrics": (
+                readiness.get("weak_metrics") or [],
+                [],
+            ),
+            "framework_readiness.import.failed_source_count": (
+                import_layer.get("failed_source_count"),
+                0,
+            ),
+            "framework_readiness.import.missing_required_sources": (
+                import_layer.get("missing_required_sources") or [],
+                [],
+            ),
+            "framework_readiness.layers.import.status": (
+                verified_import_layer.get("status"),
+                "ready",
+            ),
+            "framework_readiness.layers.import.verified": (
+                verified_import_layer.get("verified"),
+                True,
+            ),
+            "framework_readiness.layers.import.state_key": (
+                verified_import_layer.get("state_key"),
+                "framework_import_manifest",
+            ),
+        }
+        for field, (observed, expected) in readiness_expectations.items():
+            if observed != expected:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_frameworks = missing_values(
+            readiness.get("frameworks"),
+            contract["required_frameworks"],
+        )
+        if missing_frameworks:
+            append_error(
+                readiness_errors,
+                path=path,
+                field="framework_readiness.frameworks",
+                expected=contract["required_frameworks"],
+                observed=list(readiness.get("frameworks") or []),
+            )
+
+    def validate_components(
+        path: str,
+        manifest: Mapping[str, Any],
+        result: Mapping[str, Any],
+        best_report: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        from . import optimize as agent_optimize
+
+        target = _as_mapping(_as_mapping(manifest.get("optimization")).get("target"))
+        scoring_config = _as_mapping(
+            _as_mapping(manifest.get("optimization")).get("scoring")
+        )
+        candidate = agent_optimize.AgentCandidate.from_config(
+            _as_mapping(_as_mapping(result.get("optimization")).get("best_config")),
+            target_name=str(target.get("name") or ""),
+            metadata=_as_mapping(target.get("metadata")),
+            layers=list(target.get("layers") or []),
+        )
+        score = agent_optimize.score_simulation_evidence(
+            best_report,
+            manifest=manifest,
+            candidate=candidate,
+            config=scoring_config,
+        )
+        score_metadata = _as_mapping(getattr(score, "metadata", {}))
+        simulation_evidence = _as_mapping(
+            score_metadata.get("simulation_evidence_score")
+        )
+        components = [
+            _as_mapping(component)
+            for component in _as_list(simulation_evidence.get("components"))
+            if isinstance(component, Mapping)
+        ]
+        component_names = [str(component.get("name")) for component in components]
+        tool_component = next(
+            (component for component in components if component.get("name") == "tool_coverage"),
+            {},
+        )
+        framework_component = next(
+            (
+                component
+                for component in components
+                if component.get("name") == "framework_import"
+            ),
+            {},
+        )
+        tool_details = _as_mapping(tool_component.get("details"))
+        framework_details = _as_mapping(framework_component.get("details"))
+        framework_summary = _as_mapping(framework_details.get("summary"))
+        framework_checks = [
+            _as_mapping(check)
+            for check in _as_list(framework_details.get("checks"))
+            if isinstance(check, Mapping)
+        ]
+        failing_framework_checks = [
+            check for check in framework_checks if check.get("match") is not True
+        ]
+        example_evidence["score_simulation_evidence"] = {
+            "score": getattr(score, "score", None),
+            "component_names": component_names,
+            "tool_component_score": tool_component.get("score"),
+            "tool_component_missing": list(tool_details.get("missing") or []),
+            "framework_import_component_score": framework_component.get("score"),
+            "framework_import_missing": list(framework_details.get("missing") or []),
+            "framework_import_missing_required": list(
+                framework_details.get("missing_required") or []
+            ),
+            "framework_import_blocking_gaps": dict(
+                _as_mapping(framework_details.get("blocking_gaps"))
+            ),
+            "framework_import_summary": {
+                "source_count": framework_summary.get("source_count"),
+                "passed_source_count": framework_summary.get("passed_source_count"),
+                "failed_source_count": framework_summary.get("failed_source_count"),
+                "observed_frameworks": list(
+                    framework_summary.get("observed_frameworks") or []
+                ),
+                "observed_export_types": list(
+                    framework_summary.get("observed_export_types") or []
+                ),
+            },
+            "framework_import_failing_checks": failing_framework_checks,
+        }
+        if sorted(component_names) != sorted(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+        ):
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.components",
+                expected=V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS,
+                observed=component_names,
+            )
+        if _float_or_zero(getattr(score, "score", None)) < 1.0:
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.score",
+                expected=">=1.0",
+                observed=getattr(score, "score", None),
+            )
+        component_expectations = {
+            "score_simulation_evidence.tool_coverage.score": (
+                tool_component.get("score"),
+                1.0,
+            ),
+            "score_simulation_evidence.tool_coverage.missing": (
+                tool_details.get("missing") or [],
+                [],
+            ),
+            "score_simulation_evidence.framework_import.score": (
+                framework_component.get("score"),
+                1.0,
+            ),
+            "score_simulation_evidence.framework_import.missing": (
+                framework_details.get("missing") or [],
+                [],
+            ),
+            "score_simulation_evidence.framework_import.missing_required": (
+                framework_details.get("missing_required") or [],
+                [],
+            ),
+        }
+        for field, (observed, expected) in component_expectations.items():
+            if observed != expected:
+                append_error(
+                    component_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if failing_framework_checks:
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.framework_import.checks",
+                expected=[],
+                observed=failing_framework_checks,
+            )
+        blocking_gaps = _as_mapping(framework_details.get("blocking_gaps"))
+        nonempty_blocking_gaps = {
+            str(key): value for key, value in blocking_gaps.items() if value
+        }
+        if nonempty_blocking_gaps:
+            append_error(
+                component_errors,
+                path=path,
+                field="score_simulation_evidence.framework_import.blocking_gaps",
+                expected={},
+                observed=nonempty_blocking_gaps,
+            )
+        missing_frameworks = missing_values(
+            framework_summary.get("observed_frameworks"),
+            contract["required_frameworks"],
+        )
+        if missing_frameworks:
+            append_error(
+                component_errors,
+                path=path,
+                field=(
+                    "score_simulation_evidence.framework_import."
+                    "summary.observed_frameworks"
+                ),
+                expected=contract["required_frameworks"],
+                observed=list(framework_summary.get("observed_frameworks") or []),
+            )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        for path in V1_WORKSPACE_IMPORT_CERTIFICATION_FILES:
+            contract = V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS[path]
+            env_name = str(contract["env_name"])
+            env_value = f"release-check-{Path(path).stem}-key"
+            previous_config_env = {
+                name: os.environ.get(name) for name in config_env_names
+            }
+            previous_config = agent_config.current_config()
+            previous_example_env = os.environ.get(env_name)
+            manifest: Mapping[str, Any] = {}
+            generated_manifest: Mapping[str, Any] = {}
+            result: Mapping[str, Any] = {}
+            saved: Mapping[str, Any] = {}
+            try:
+                example_path = root / path
+                spec = importlib.util.spec_from_file_location(
+                    str(contract["module_name"]),
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                os.environ[env_name] = env_value
+                manifest = module.build_manifest()
+                with tempfile.TemporaryDirectory(
+                    prefix="agent-learning-workspace-import-certification-"
+                ) as tmpdir:
+                    output_path = Path(tmpdir) / "workspace-import-certification.json"
+                    result = module.run(output_path)
+                    saved = json.loads(output_path.read_text(encoding="utf-8"))
+                    generated_manifest = json.loads(
+                        output_path.with_suffix(".manifest.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                example_evidence: dict[str, Any] = {}
+                evidence["examples"][path] = example_evidence
+                validate_manifest(
+                    path,
+                    manifest,
+                    generated_manifest,
+                    contract,
+                    example_evidence,
+                )
+                _best_config, best_report, state = validate_optimization(
+                    path,
+                    manifest,
+                    result,
+                    saved,
+                    contract,
+                    example_evidence,
+                )
+                validate_certification_bundle(
+                    path,
+                    state,
+                    contract,
+                    example_evidence,
+                )
+                validate_readiness(path, result, contract, example_evidence)
+                validate_components(
+                    path,
+                    manifest,
+                    result,
+                    best_report,
+                    contract,
+                    example_evidence,
+                )
+                serialized = json.dumps(
+                    {
+                        "manifest": manifest,
+                        "generated_manifest": generated_manifest,
+                        "result": result,
+                        "saved": saved,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
+                if env_value in serialized:
+                    append_error(
+                        security_errors,
+                        path=path,
+                        field="runtime.output.secret_leakage",
+                        expected=f"{env_name} value absent",
+                        observed=f"{env_name} value present",
+                    )
+            except Exception as exc:
+                execution_errors.append({"path": path, "error": str(exc)})
+                evidence["examples"].setdefault(path, {})
+            finally:
+                agent_config._CONFIG = previous_config
+                for name, value in previous_config_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                if previous_example_env is None:
+                    os.environ.pop(env_name, None)
+                else:
+                    os.environ[env_name] = previous_example_env
+
+    return {
+        "required_files": list(V1_WORKSPACE_IMPORT_CERTIFICATION_FILES),
+        "required_environment_types": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_state_keys": list(V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS),
+        "required_metrics": list(V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS),
+        "required_components": list(
+            V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
+        ),
+        "required_contracts": {
+            path: dict(contract)
+            for path, contract in V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.items()
+        },
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "certification_errors": certification_errors,
+        "readiness_errors": readiness_errors,
+        "component_errors": component_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
     }
 
 
@@ -25259,6 +26429,12 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_FILES",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS",
+    "V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS",
     "V1_BROWSER_REALTIME_ADAPTER_CONTRACTS",
     "V1_BROWSER_REALTIME_ADAPTER_FILES",
     "V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID",
