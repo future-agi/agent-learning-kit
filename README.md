@@ -730,7 +730,11 @@ wrappers, and explicit `framework_trace` span/event records become
 `framework_trace` state, trace artifacts, `framework_trace_*` events, ordinary
 tool-call evidence, adapter conformance summaries, and generated
 `framework_trace_coverage` / `framework_trace_quality` eval gates. See
-`examples/sdk_framework_adapter_trace_export.py`.
+`examples/sdk_framework_adapter_trace_export.py`. `agent-learn release-check`
+runs this cookbook as `framework_trace_export_readiness` and requires the
+selected `execute_task(dict)` adapter to emit trace state, span events,
+framework trace artifacts, `policy_lookup` tool evidence, and passing runtime,
+adapter-contract, trace coverage, and trace quality metrics.
 
 A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs
 carrying agent cards, JSON-RPC `SendMessage` records, messages, tasks, task

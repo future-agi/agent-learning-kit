@@ -1,6 +1,6 @@
 # Framework Trace Export Adapter Research Note
 
-Date: 2026-06-08
+Date: 2026-06-09
 
 ## Sources Checked
 
@@ -8,6 +8,12 @@ Date: 2026-06-08
   https://opentelemetry.io/docs/concepts/signals/traces/
 - OpenTelemetry Protocol exporter specification:
   https://opentelemetry.io/docs/specs/otlp/
+- OpenTelemetry GenAI semantic conventions:
+  https://opentelemetry.io/docs/specs/semconv/gen-ai/
+- OpenInference semantic conventions:
+  https://arize-ai.github.io/openinference/spec/semantic_conventions.html
+- W3C Trace Context recommendation:
+  https://www.w3.org/TR/trace-context/
 - Future AGI TraceAI concepts:
   https://docs.futureagi.com/docs/tracing/concepts/traceai/
 
@@ -19,6 +25,11 @@ state or checkpoint writes, retrieval, memory, latency, cost, and error signals.
 OpenTelemetry exports can arrive as OTLP JSON with `resourceSpans` and
 `scopeSpans`; TraceAI/Future AGI exports and framework-specific SDKs can also
 wrap spans under `data`, `traces`, `records`, or `spans`.
+GenAI semantic conventions and OpenInference-style attributes make model,
+tool, retrieval, and chain/agent spans portable enough for local simulation to
+score them without importing the originating framework. Trace Context remains
+important for preserving trace/span lineage when these exports are stitched back
+into multi-agent, browser, voice, or orchestration runs.
 
 The generic framework adapter should therefore treat explicit trace-export
 payloads as first-class simulation evidence instead of leaving them in opaque
@@ -57,3 +68,12 @@ adapter emits an OTLP `resourceSpans` export with model, tool, state, latency,
 and cost signals, and the promoted run requires the resulting trace state,
 events, artifact, tool evidence, adapter conformance, trace coverage, and trace
 quality metrics.
+
+`agent-learn release-check` now runs that cookbook as
+`framework_trace_export_readiness`. The gate requires the promoted local
+LangGraph adapter to keep trace export evidence executable and evaluator-visible:
+the result must be `agent-learning.run.v1`, select `execute_task(dict)`, emit
+`framework_trace` state, `framework_trace_span`/`framework_trace` events,
+`framework_runtime` and `framework_trace` artifacts, preserve `policy_lookup`
+tool evidence, close adapter conformance, and pass framework runtime,
+adapter-contract, trace coverage, and trace quality metrics.

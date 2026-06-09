@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `openenv_10x_robustness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `openenv_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -317,6 +317,12 @@ Current checkpoint:
   `openenv.run(dict)` adapter, generate OpenEnv eval gates, normalize
   reset/step/reward/done/sandbox/failure evidence into `openenv` state, events,
   and trace artifacts, and pass OpenEnv coverage/quality metrics.
+- Framework trace export readiness is now an executable release-check gate:
+  `examples/sdk_framework_adapter_trace_export.py` must promote a local
+  `langgraph.execute_task(dict)` adapter, normalize OTLP-style trace export
+  spans into evaluator-visible `framework_trace` state, events, artifacts, and
+  tool evidence, and pass framework runtime, adapter-contract, trace coverage,
+  and trace quality metrics.
 - Framework optimizer readiness is now an executable release-check gate:
   `examples/custom_framework_optimization.json`,
   `examples/social_memory_framework_optimization.json`,
@@ -453,6 +459,11 @@ Next implementation focus:
   state, reward/done, sandbox, or failure-injection traces must keep
   normalizing into evaluator-visible `openenv` state, artifacts, events, and
   generated OpenEnv quality gates before adding live environment shortcuts.
+- Keep trace-export adapters on the same local-first bar: OTLP, TraceAI,
+  OpenInference, and framework-native span exports should normalize into
+  evaluator-visible `framework_trace` state, events, artifacts, ordinary tool
+  evidence, adapter conformance, and generated trace coverage/quality gates
+  before relying on hosted observability backends.
 - Treat the OpenEnv comparison as an executable roadmap bar, not a marketing
   claim: V1 should exercise deterministic resets, failure-injection scenarios,
   adversarial environment states, tool/action contract drift, transcript/replay

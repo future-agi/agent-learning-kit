@@ -15523,6 +15523,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_openenv_adapter_quality_minima"] == (
         trinity.V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
     )
+    assert payload["required_framework_trace_export_files"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_FILES
+    )
+    assert payload["required_framework_trace_export_framework"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK
+    )
+    assert payload["required_framework_trace_export_signals"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
+    )
+    assert payload["required_framework_trace_export_metrics"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS
+    )
+    assert payload["required_framework_trace_export_quality_minima"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA
+    )
+    assert payload["required_framework_trace_export_tools"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS
+    )
+    assert payload["required_framework_trace_export_events"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS
+    )
+    assert payload["required_framework_trace_export_artifact_kinds"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS
+    )
+    assert payload["required_framework_trace_export_source_urls"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
+    )
     assert payload["required_openenv_10x_robustness_files"] == (
         trinity.V1_OPENENV_10X_ROBUSTNESS_FILES
     )
@@ -15841,6 +15868,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "external_agent_adapter_readiness",
         "openenv_optimizer_readiness",
         "framework_openenv_adapter_readiness",
+        "framework_trace_export_readiness",
         "framework_optimizer_readiness",
         "multi_agent_room_probe_readiness",
         "framework_adapter_probe_readiness",
@@ -17475,6 +17503,124 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert "openenv" in runtime_output["event_types"]
     assert runtime_output["openenv_summary"]["step_count"] == 2
     assert runtime_output["openenv_summary"]["done"] is True
+    framework_trace_export = checks["framework_trace_export_readiness"][
+        "evidence"
+    ]
+    assert framework_trace_export["required_files"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_FILES
+    )
+    assert framework_trace_export["required_framework"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK
+    )
+    assert framework_trace_export["required_signals"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
+    )
+    assert framework_trace_export["required_metrics"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS
+    )
+    assert framework_trace_export["quality_minima"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA
+    )
+    assert framework_trace_export["required_tools"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS
+    )
+    assert framework_trace_export["required_events"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS
+    )
+    assert framework_trace_export["required_artifact_kinds"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS
+    )
+    assert framework_trace_export["required_source_urls"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
+    )
+    assert framework_trace_export["missing_files"] == []
+    assert framework_trace_export["execution_errors"] == []
+    assert framework_trace_export["manifest_errors"] == []
+    assert framework_trace_export["contract_errors"] == []
+    assert framework_trace_export["metric_errors"] == []
+    assert framework_trace_export["source_errors"] == []
+    trace_export_evidence = framework_trace_export["evidence"]
+    assert trace_export_evidence["result_kind"] == "agent-learning.run.v1"
+    assert trace_export_evidence["result_status"] == "passed"
+    assert trace_export_evidence["output_roundtrip"] is True
+    assert trace_export_evidence["manifest_version"] == "agent-learning.run.v1"
+    assert trace_export_evidence["manifest_agent"] == {
+        "framework": "langgraph",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert set(trace_export_evidence["required_framework_trace"]) >= set(
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
+    )
+    assert trace_export_evidence["runtime_contract"][
+        "required_state_keys"
+    ] == ["framework_trace"]
+    assert trace_export_evidence["runtime_contract"]["required_tools"] == (
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS
+    )
+    assert trace_export_evidence["runtime_contract"][
+        "required_artifact_types"
+    ] == ["trace"]
+    assert {"artifact", "event", "state", "tool"} <= set(
+        trace_export_evidence["runtime_contract"]["required_signals"]
+    )
+    trace_quality = trace_export_evidence["trace_quality"]
+    assert {
+        key: value
+        for key, value in trace_quality.items()
+        if key not in {"required_signals", "required_tools"}
+    } == {
+        "framework": "langgraph",
+        "min_span_count": 3,
+        "min_model_span_count": 1,
+        "min_tool_span_count": 1,
+        "min_state_span_count": 1,
+        "min_latency_span_count": 3,
+        "min_cost_span_count": 1,
+        "min_tool_count": 1,
+        "max_error_count": 0,
+        "require_adapter_conformance": True,
+        "max_adapter_conformance_findings": 0,
+    }
+    assert set(trace_quality["required_signals"]) >= set(
+        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
+    )
+    assert trace_quality["required_tools"] == ["policy_lookup"]
+    for metric in trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS:
+        assert metric in trace_export_evidence["metric_weights"]
+        assert trace_export_evidence["metric_averages"][metric] == pytest.approx(1.0)
+    assert {"framework_runtime", "framework_trace"} <= set(
+        trace_export_evidence["state_keys"]
+    )
+    assert trace_export_evidence["trace_summary"] == {
+        "span_count": 3,
+        "model_span_count": 1,
+        "tool_span_count": 1,
+        "state_span_count": 1,
+        "latency_span_count": 3,
+        "cost_span_count": 1,
+        "tool_count": 1,
+        "error_count": 0,
+    }
+    assert trace_export_evidence["adapter_conformance"]["passed"] is True
+    assert trace_export_evidence["adapter_conformance"]["finding_count"] == 0
+    assert {"model", "tool", "state", "latency", "cost"} <= set(
+        trace_export_evidence["adapter_conformance"]["observed_signals"]
+    )
+    assert set(trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS) <= set(
+        trace_export_evidence["event_types"]
+    )
+    assert set(trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS) <= set(
+        trace_export_evidence["artifact_kinds"]
+    )
+    trace_runtime_output = trace_export_evidence["runtime_output"]
+    assert "framework_trace" in trace_runtime_output["state_keys"]
+    assert "trace" in trace_runtime_output["artifact_types"]
+    assert {"framework_trace", "framework_trace_span"} <= set(
+        trace_runtime_output["event_types"]
+    )
+    assert trace_runtime_output["tool_names"] == ["policy_lookup"]
     openenv_10x = checks["openenv_10x_robustness"]["evidence"]
     assert openenv_10x["required_files"] == (
         trinity.V1_OPENENV_10X_ROBUSTNESS_FILES

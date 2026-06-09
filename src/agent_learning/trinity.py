@@ -858,6 +858,7 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
+    "examples/sdk_framework_adapter_trace_export.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
     "examples/sdk_openenv_environment_optimization.py",
     "examples/sdk_realtime_voice_optimization.py",
@@ -1542,6 +1543,62 @@ V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = {
     "metadata_capture_count": 3,
     "reward_total": 1.0,
 }
+
+V1_FRAMEWORK_TRACE_EXPORT_FILES = [
+    "examples/sdk_framework_adapter_trace_export.py",
+    "internal-docs/framework-trace-export-adapter-research.md",
+]
+
+V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK = "langgraph"
+
+V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS = [
+    "framework_trace",
+    "span",
+    "model",
+    "tool",
+    "state",
+    "latency",
+    "cost",
+]
+
+V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS = [
+    "framework_runtime_contract",
+    "framework_adapter_contract_quality",
+    "framework_trace_coverage",
+    "framework_trace_quality",
+]
+
+V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA = {
+    "span_count": 3,
+    "model_span_count": 1,
+    "tool_span_count": 1,
+    "state_span_count": 1,
+    "latency_span_count": 3,
+    "cost_span_count": 1,
+    "tool_count": 1,
+    "error_count": 0,
+    "adapter_conformance_finding_count": 0,
+}
+
+V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS = ["policy_lookup"]
+
+V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS = [
+    "framework_trace_span",
+    "framework_trace",
+]
+
+V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS = [
+    "framework_runtime",
+    "framework_trace",
+]
+
+V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS = [
+    "https://opentelemetry.io/docs/concepts/signals/traces/",
+    "https://opentelemetry.io/docs/specs/otlp/",
+    "https://opentelemetry.io/docs/specs/semconv/gen-ai/",
+    "https://arize-ai.github.io/openinference/spec/semantic_conventions.html",
+    "https://www.w3.org/TR/trace-context/",
+]
 
 V1_FRAMEWORK_OPTIMIZER_FILES = [
     "examples/custom_framework_optimization.json",
@@ -3029,6 +3086,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_openenv_adapter,
     )
+    framework_trace_export = _release_framework_trace_export_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_trace_export_readiness",
+        passed=(
+            not framework_trace_export["missing_files"]
+            and not framework_trace_export["execution_errors"]
+            and not framework_trace_export["manifest_errors"]
+            and not framework_trace_export["contract_errors"]
+            and not framework_trace_export["metric_errors"]
+            and not framework_trace_export["source_errors"]
+        ),
+        milestone="M6",
+        evidence=framework_trace_export,
+    )
     framework_optimizer = _release_framework_optimizer_status(root)
     _append_release_check(
         checks,
@@ -3643,6 +3715,33 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_openenv_adapter_quality_minima": dict(
             V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+        ),
+        "required_framework_trace_export_files": list(
+            V1_FRAMEWORK_TRACE_EXPORT_FILES
+        ),
+        "required_framework_trace_export_framework": (
+            V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK
+        ),
+        "required_framework_trace_export_signals": list(
+            V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
+        ),
+        "required_framework_trace_export_metrics": list(
+            V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS
+        ),
+        "required_framework_trace_export_quality_minima": dict(
+            V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA
+        ),
+        "required_framework_trace_export_tools": list(
+            V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS
+        ),
+        "required_framework_trace_export_events": list(
+            V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS
+        ),
+        "required_framework_trace_export_artifact_kinds": list(
+            V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS
+        ),
+        "required_framework_trace_export_source_urls": list(
+            V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
         ),
         "required_openenv_10x_robustness_files": list(
             V1_OPENENV_10X_ROBUSTNESS_FILES
@@ -13133,6 +13232,472 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_framework_trace_export_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_FRAMEWORK_TRACE_EXPORT_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    contract_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    source = "examples/sdk_framework_adapter_trace_export.py"
+    research_doc = "internal-docs/framework-trace-export-adapter-research.md"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        path: str = source,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    if not missing_files:
+        example_path = root / source
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_framework_trace_export",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-trace-export-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "framework-trace-export.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append({"path": source, "error": str(exc)})
+            result = {}
+            saved = {}
+
+        if result:
+            manifest = _as_mapping(result.get("framework_adapter_trace_export_manifest"))
+            agent = _as_mapping(manifest.get("agent"))
+            evaluation = _as_mapping(manifest.get("evaluation"))
+            agent_report = _as_mapping(evaluation.get("agent_report"))
+            config = _as_mapping(agent_report.get("config"))
+            runtime_contract = _as_mapping(config.get("framework_runtime_contract"))
+            trace_quality = _as_mapping(config.get("framework_trace_quality"))
+            metric_weights = _as_mapping(config.get("metric_weights"))
+            summary = _as_mapping(result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report = _as_mapping(result.get("report"))
+            cases = [
+                item for item in _as_list(report.get("results"))
+                if isinstance(item, Mapping)
+            ]
+            case = _as_mapping(cases[0]) if cases else {}
+            metadata = _as_mapping(case.get("metadata"))
+            environment_state = _as_mapping(metadata.get("environment_state"))
+            framework_trace = _as_mapping(environment_state.get("framework_trace"))
+            trace_summary = _as_mapping(framework_trace.get("summary"))
+            adapter_conformance = _as_mapping(
+                framework_trace.get("adapter_conformance")
+            )
+            framework_runtime = _as_mapping(environment_state.get("framework_runtime"))
+            invocations = [
+                item for item in _as_list(framework_runtime.get("invocations"))
+                if isinstance(item, Mapping)
+            ]
+            invocation = _as_mapping(invocations[0]) if invocations else {}
+            runtime_output = _as_mapping(invocation.get("output"))
+            events = [
+                item for item in _as_list(case.get("events"))
+                if isinstance(item, Mapping)
+            ]
+            event_types = sorted(
+                str(event.get("type"))
+                for event in events
+                if event.get("type")
+            )
+            artifacts = [
+                item for item in _as_list(case.get("artifacts"))
+                if isinstance(item, Mapping)
+            ]
+            artifact_kinds = sorted(
+                str(_as_mapping(artifact.get("metadata")).get("kind"))
+                for artifact in artifacts
+                if _as_mapping(artifact.get("metadata")).get("kind")
+            )
+            required_framework_trace = [
+                str(item) for item in _as_list(config.get("required_framework_trace"))
+            ]
+            trace_required_signals = [
+                str(item) for item in _as_list(trace_quality.get("required_signals"))
+            ]
+            trace_required_tools = [
+                str(item) for item in _as_list(trace_quality.get("required_tools"))
+            ]
+
+            evidence.update(
+                {
+                    "result_kind": result.get("kind"),
+                    "result_status": result.get("status"),
+                    "output_roundtrip": result == saved,
+                    "manifest_version": manifest.get("version"),
+                    "manifest_agent": {
+                        "framework": agent.get("framework"),
+                        "method": agent.get("method"),
+                        "input_mode": agent.get("input_mode"),
+                        "trace_runtime": agent.get("trace_runtime"),
+                    },
+                    "required_framework_trace": required_framework_trace,
+                    "runtime_contract": {
+                        "required_state_keys": list(
+                            runtime_contract.get("required_state_keys") or []
+                        ),
+                        "required_tools": list(
+                            runtime_contract.get("required_tools") or []
+                        ),
+                        "required_artifact_types": list(
+                            runtime_contract.get("required_artifact_types") or []
+                        ),
+                        "required_signals": list(
+                            runtime_contract.get("required_signals") or []
+                        ),
+                    },
+                    "trace_quality": {
+                        "framework": trace_quality.get("framework"),
+                        "min_span_count": trace_quality.get("min_span_count"),
+                        "min_model_span_count": trace_quality.get(
+                            "min_model_span_count"
+                        ),
+                        "min_tool_span_count": trace_quality.get(
+                            "min_tool_span_count"
+                        ),
+                        "min_state_span_count": trace_quality.get(
+                            "min_state_span_count"
+                        ),
+                        "min_latency_span_count": trace_quality.get(
+                            "min_latency_span_count"
+                        ),
+                        "min_cost_span_count": trace_quality.get(
+                            "min_cost_span_count"
+                        ),
+                        "min_tool_count": trace_quality.get("min_tool_count"),
+                        "max_error_count": trace_quality.get("max_error_count"),
+                        "require_adapter_conformance": trace_quality.get(
+                            "require_adapter_conformance"
+                        ),
+                        "max_adapter_conformance_findings": trace_quality.get(
+                            "max_adapter_conformance_findings"
+                        ),
+                        "required_signals": trace_required_signals,
+                        "required_tools": trace_required_tools,
+                    },
+                    "metric_weights": {
+                        metric: metric_weights.get(metric)
+                        for metric in V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS
+                    },
+                    "metric_averages": {
+                        metric: metric_averages.get(metric)
+                        for metric in V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS
+                    },
+                    "state_keys": sorted(str(key) for key in environment_state),
+                    "trace_summary": {
+                        key: trace_summary.get(key)
+                        for key in V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA
+                        if key != "adapter_conformance_finding_count"
+                    },
+                    "adapter_conformance": {
+                        "passed": adapter_conformance.get("passed"),
+                        "finding_count": len(_as_list(adapter_conformance.get("findings"))),
+                        "observed_signals": list(
+                            adapter_conformance.get("observed_signals") or []
+                        ),
+                        "required_signals": list(
+                            adapter_conformance.get("required_signals") or []
+                        ),
+                    },
+                    "event_types": event_types,
+                    "artifact_kinds": artifact_kinds,
+                    "runtime_output": {
+                        "state_keys": list(runtime_output.get("state_keys") or []),
+                        "artifact_types": list(
+                            runtime_output.get("artifact_types") or []
+                        ),
+                        "event_types": list(runtime_output.get("event_types") or []),
+                        "tool_names": list(runtime_output.get("tool_names") or []),
+                    },
+                }
+            )
+
+            expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.run.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "manifest.version": (manifest.get("version"), "agent-learning.run.v1"),
+                "manifest.required_env": (manifest.get("required_env") or [], []),
+                "agent.framework": (
+                    agent.get("framework"),
+                    V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK,
+                ),
+                "agent.method": (agent.get("method"), "execute_task"),
+                "agent.input_mode": (agent.get("input_mode"), "dict"),
+                "agent.trace_runtime": (agent.get("trace_runtime"), True),
+                "framework_trace.framework": (
+                    framework_trace.get("framework"),
+                    V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK,
+                ),
+                "framework_trace.adapter_conformance.passed": (
+                    adapter_conformance.get("passed"),
+                    True,
+                ),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+
+            for field, expected in {
+                "runtime_contract.required_state_keys": ["framework_trace"],
+                "runtime_contract.required_tools": (
+                    V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS
+                ),
+                "runtime_contract.required_artifact_types": ["trace"],
+            }.items():
+                observed = field.split(".", 1)[1]
+                observed_value = runtime_contract.get(observed) or []
+                if list(observed_value) != list(expected):
+                    append_error(
+                        contract_errors,
+                        field=f"evaluation.agent_report.config.{field}",
+                        expected=expected,
+                        observed=observed_value,
+                    )
+
+            missing_required_trace = sorted(
+                set(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS)
+                - set(required_framework_trace)
+            )
+            if missing_required_trace:
+                append_error(
+                    contract_errors,
+                    field="evaluation.agent_report.config.required_framework_trace",
+                    expected=V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS,
+                    observed=required_framework_trace,
+                )
+
+            required_quality_signals = [
+                signal
+                for signal in V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
+                if signal not in {"framework_trace", "span"}
+            ]
+            missing_quality_signals = sorted(
+                set(required_quality_signals) - set(trace_required_signals)
+            )
+            if missing_quality_signals:
+                append_error(
+                    contract_errors,
+                    field="evaluation.agent_report.config.framework_trace_quality.required_signals",
+                    expected=required_quality_signals,
+                    observed=trace_required_signals,
+                )
+            if trace_required_tools != V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS:
+                append_error(
+                    contract_errors,
+                    field="evaluation.agent_report.config.framework_trace_quality.required_tools",
+                    expected=V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS,
+                    observed=trace_required_tools,
+                )
+
+            trace_quality_expectations = {
+                "framework": V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK,
+                "min_span_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "span_count"
+                ],
+                "min_model_span_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "model_span_count"
+                ],
+                "min_tool_span_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "tool_span_count"
+                ],
+                "min_state_span_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "state_span_count"
+                ],
+                "min_latency_span_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "latency_span_count"
+                ],
+                "min_cost_span_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "cost_span_count"
+                ],
+                "min_tool_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "tool_count"
+                ],
+                "max_error_count": V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                    "error_count"
+                ],
+                "require_adapter_conformance": True,
+                "max_adapter_conformance_findings": (
+                    V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA[
+                        "adapter_conformance_finding_count"
+                    ]
+                ),
+            }
+            for field, expected in trace_quality_expectations.items():
+                observed = trace_quality.get(field)
+                if observed != expected:
+                    append_error(
+                        contract_errors,
+                        field=f"evaluation.agent_report.config.framework_trace_quality.{field}",
+                        expected=expected,
+                        observed=observed,
+                    )
+
+            missing_state_keys = sorted(
+                {"framework_runtime", "framework_trace"} - set(environment_state)
+            )
+            if missing_state_keys:
+                append_error(
+                    contract_errors,
+                    field="report.results.metadata.environment_state",
+                    expected=["framework_runtime", "framework_trace"],
+                    observed=sorted(str(key) for key in environment_state),
+                )
+
+            missing_events = sorted(
+                set(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS) - set(event_types)
+            )
+            if missing_events:
+                append_error(
+                    contract_errors,
+                    field="report.results.events.type",
+                    expected=V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS,
+                    observed=event_types,
+                )
+
+            missing_artifact_kinds = sorted(
+                set(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS)
+                - set(artifact_kinds)
+            )
+            if missing_artifact_kinds:
+                append_error(
+                    contract_errors,
+                    field="report.results.artifacts.metadata.kind",
+                    expected=V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS,
+                    observed=artifact_kinds,
+                )
+
+            runtime_output_expectations = {
+                "state_keys": "framework_trace",
+                "artifact_types": "trace",
+                "event_types": "framework_trace",
+                "tool_names": V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS[0],
+            }
+            for field, expected in runtime_output_expectations.items():
+                observed_values = {str(item) for item in _as_list(runtime_output.get(field))}
+                if expected not in observed_values:
+                    append_error(
+                        contract_errors,
+                        field=f"framework_runtime.invocations.output.{field}",
+                        expected=expected,
+                        observed=sorted(observed_values),
+                    )
+            if "framework_trace_span" not in {
+                str(item) for item in _as_list(runtime_output.get("event_types"))
+            }:
+                append_error(
+                    contract_errors,
+                    field="framework_runtime.invocations.output.event_types",
+                    expected="framework_trace_span",
+                    observed=runtime_output.get("event_types"),
+                )
+
+            for field, minimum in V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA.items():
+                if field == "adapter_conformance_finding_count":
+                    observed = len(_as_list(adapter_conformance.get("findings")))
+                    if observed > int(minimum):
+                        append_error(
+                            contract_errors,
+                            field="framework_trace.adapter_conformance.findings",
+                            expected=f"<={minimum}",
+                            observed=observed,
+                        )
+                    continue
+                observed = trace_summary.get(field)
+                if field == "error_count":
+                    if _int_or_zero(observed) > int(minimum):
+                        append_error(
+                            contract_errors,
+                            field=f"framework_trace.summary.{field}",
+                            expected=f"<={minimum}",
+                            observed=observed,
+                        )
+                elif _float_or_zero(observed) < float(minimum):
+                    append_error(
+                        contract_errors,
+                        field=f"framework_trace.summary.{field}",
+                        expected=f">={minimum}",
+                        observed=observed,
+                    )
+
+            for metric in V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS:
+                if metric not in metric_weights:
+                    append_error(
+                        metric_errors,
+                        field="evaluation.agent_report.config.metric_weights",
+                        expected=metric,
+                        observed=sorted(str(key) for key in metric_weights),
+                    )
+                if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        field=f"summary.metric_averages.{metric}",
+                        expected=">=1.0",
+                        observed=metric_averages.get(metric),
+                    )
+
+        doc_text = (root / research_doc).read_text(encoding="utf-8")
+        missing_source_urls = sorted(
+            set(V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS) - set(doc_text.split())
+        )
+        if missing_source_urls:
+            append_error(
+                source_errors,
+                field="research.sources",
+                expected=V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS,
+                observed=missing_source_urls,
+                path=research_doc,
+            )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_TRACE_EXPORT_FILES),
+        "required_framework": V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK,
+        "required_signals": list(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS),
+        "required_metrics": list(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS),
+        "quality_minima": dict(V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA),
+        "required_tools": list(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS),
+        "required_events": list(V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS),
+        "required_artifact_kinds": list(
+            V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS
+        ),
+        "required_source_urls": list(V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "contract_errors": contract_errors,
+        "metric_errors": metric_errors,
+        "source_errors": source_errors,
+        "evidence": evidence,
+    }
+
+
 def _release_openenv_10x_robustness_status(
     root: Path,
     *,
@@ -20648,6 +21213,15 @@ __all__ = [
     "V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA",
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS",
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV",
+    "V1_FRAMEWORK_TRACE_EXPORT_FILES",
+    "V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK",
+    "V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA",
+    "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS",
+    "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS",
+    "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS",
+    "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS",
+    "V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS",
+    "V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
     "V1_OPENENV_10X_ROBUSTNESS_AXES",
