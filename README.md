@@ -102,7 +102,9 @@ with framework runtime, adapter-contract, adversarial, campaign, and optimizer
 governance evidence. The composed trinity-stack probe readiness gate proves that
 the selected orchestration stack agent can pass a localhost task evaluator and
 promote into one run manifest with world, framework, retrieval, memory,
-multi-agent, and evaluation-hook evidence.
+multi-agent, and evaluation-hook evidence; release-check also executes that
+promoted run and requires the external task-quality hook plus world/framework/
+retrieval/memory/multi-agent metrics to close.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -1027,7 +1029,12 @@ emits `agent-learning.optimization.trinity-stack-probe-proof.v1`.
 `optimize.build_trinity_run_manifest_from_probe_optimization(...)` promotes that
 single selected agent/stack/evaluator contract into one run manifest. See
 `examples/sdk_trinity_stack_probe_optimization.py` for the composed local probe,
-promotion, and evaluated run cookbook.
+promotion, and evaluated run cookbook. `agent-learn release-check` gates this
+path as `trinity_stack_probe_readiness`: the composed optimizer must pass
+orchestration proof, local evaluation-hook proof, same-agent selection, manifest
+promotion, and the promoted run with `external_task_quality`, world contract,
+framework trace, retrieval attribution, memory-lineage, multi-agent, tool, and
+task metrics closed.
 
 For direct, non-optimizer orchestration simulation,
 `simulate.build_orchestration_stack_run_manifest()` and

@@ -576,6 +576,28 @@ V1_TRINITY_STACK_PROBE_PROOF_KIND = (
     "agent-learning.optimization.trinity-stack-probe-proof.v1"
 )
 
+V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS = [
+    "external_task_quality",
+    "world_contract_coverage",
+    "world_contract_quality",
+    "framework_trace_coverage",
+    "retrieval_memory_attribution",
+    "agent_memory_lineage_coverage",
+    "agent_memory_lineage_quality",
+    "multi_agent_trace_coverage",
+    "multi_agent_coordination_quality",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS = [
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent",
+]
+
 V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES = [
     "examples/sdk_framework_adapter_trinity_suite.py",
     "examples/sdk_framework_adapter_trinity_suite_optimization.py",
@@ -2226,6 +2248,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not trinity_stack_probe["optimization_errors"]
             and not trinity_stack_probe["proof_errors"]
             and not trinity_stack_probe["manifest_errors"]
+            and not trinity_stack_probe["runtime_errors"]
             and not trinity_stack_probe["errors"]
         ),
         milestone="M6",
@@ -2503,6 +2526,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
         ),
         "required_trinity_stack_probe_proof_kind": V1_TRINITY_STACK_PROBE_PROOF_KIND,
+        "required_trinity_stack_probe_run_metrics": list(
+            V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_trinity_stack_probe_state_keys": list(
+            V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS
+        ),
         "required_docs": list(V1_REQUIRED_DOCS),
         "required_evidence_components": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "trinity": trinity,
@@ -10652,8 +10681,38 @@ def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
     optimization_errors: list[dict[str, Any]] = []
     proof_errors: list[dict[str, Any]] = []
     manifest_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {}
+    run_result: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def collect_evaluation_hook_traces(value: Any) -> list[dict[str, Any]]:
+        traces: list[dict[str, Any]] = []
+        if isinstance(value, Mapping):
+            trace = value.get("evaluation_hook_trace")
+            if isinstance(trace, Mapping):
+                traces.append(dict(trace))
+            for item in value.values():
+                traces.extend(collect_evaluation_hook_traces(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                traces.extend(collect_evaluation_hook_traces(item))
+        return traces
 
     if not missing_files:
         example_path = root / "examples/sdk_trinity_stack_probe_optimization.py"
@@ -10667,7 +10726,7 @@ def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            from agent_learning import optimize
+            from agent_learning import optimize, simulate
 
             with module._local_trinity_evaluation_hook() as endpoint:
                 result = module.build_probe_optimization(endpoint)
@@ -10676,10 +10735,21 @@ def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
                     name="release-trinity-stack-probe-readiness",
                     metadata={"release_check": "trinity_stack_probe_readiness"},
                 )
+                with tempfile.TemporaryDirectory(
+                    prefix="agent-learning-trinity-stack-probe-"
+                ) as tmpdir:
+                    manifest_path = simulate.write_manifest_file(
+                        manifest,
+                        Path(tmpdir) / "trinity-stack-probe-run.json",
+                    )
+                    run_result = asyncio.run(
+                        simulate.run_manifest_file(manifest_path)
+                    )
         except Exception as exc:
             errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
             result = {}
             manifest = {}
+            run_result = {}
 
         if result:
             summary = _as_mapping(result.get("summary"))
@@ -10920,16 +10990,152 @@ def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
                     }
                 )
 
+        if run_result:
+            run_summary = _as_mapping(run_result.get("summary"))
+            run_metrics = _as_mapping(run_summary.get("metric_averages"))
+            report = _as_mapping(run_result.get("report"))
+            cases = [
+                case
+                for case in _as_list(report.get("results"))
+                if isinstance(case, Mapping)
+            ]
+            case = _as_mapping(cases[0]) if cases else {}
+            state = _as_mapping(
+                _as_mapping(case.get("metadata")).get("environment_state")
+            )
+            hook_traces = collect_evaluation_hook_traces(run_result)
+            hook_success_count = sum(
+                1 for trace in hook_traces if trace.get("success") is True
+            )
+            hook_status_codes = sorted(
+                {
+                    int(trace.get("status_code"))
+                    for trace in hook_traces
+                    if isinstance(trace.get("status_code"), int)
+                }
+            )
+            hook_endpoint_hosts = sorted(
+                {
+                    str(trace.get("endpoint_host") or "")
+                    for trace in hook_traces
+                    if trace.get("endpoint_host")
+                }
+            )
+            non_local_hosts = [
+                host
+                for host in hook_endpoint_hosts
+                if not (
+                    host.startswith("127.0.0.1:")
+                    or host.startswith("localhost:")
+                )
+            ]
+            evidence.update(
+                {
+                    "run_kind": run_result.get("kind"),
+                    "run_status": run_result.get("status"),
+                    "run_evaluation_passed": run_summary.get(
+                        "evaluation_passed"
+                    ),
+                    "run_evaluation_score": run_summary.get("evaluation_score"),
+                    "run_metrics": {
+                        metric: run_metrics.get(metric)
+                        for metric in V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS
+                    },
+                    "run_state_keys": sorted(str(key) for key in state),
+                    "run_evaluation_hook_trace_count": len(hook_traces),
+                    "run_evaluation_hook_success_trace_count": hook_success_count,
+                    "run_evaluation_hook_status_codes": hook_status_codes,
+                    "run_evaluation_hook_endpoint_host_count": len(
+                        hook_endpoint_hosts
+                    ),
+                    "run_evaluation_hook_endpoint_hosts_local": (
+                        bool(hook_endpoint_hosts) and not non_local_hosts
+                    ),
+                }
+            )
+            runtime_expectations = {
+                "kind": (run_result.get("kind"), "agent-learning.run.v1"),
+                "status": (run_result.get("status"), "passed"),
+                "summary.evaluation_passed": (
+                    run_summary.get("evaluation_passed"),
+                    True,
+                ),
+            }
+            for field, (observed, expected) in runtime_expectations.items():
+                if observed != expected:
+                    append_error(
+                        runtime_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(run_summary.get("evaluation_score")) < 0.98:
+                append_error(
+                    runtime_errors,
+                    field="summary.evaluation_score",
+                    expected=">=0.98",
+                    observed=run_summary.get("evaluation_score"),
+                )
+            missing_state_keys = sorted(
+                set(V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS) - set(state)
+            )
+            if missing_state_keys:
+                append_error(
+                    runtime_errors,
+                    field="report.results.0.metadata.environment_state",
+                    expected=V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS,
+                    observed=sorted(str(key) for key in state),
+                )
+            for metric in V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS:
+                if _float_or_zero(run_metrics.get(metric)) < 1.0:
+                    append_error(
+                        runtime_errors,
+                        field=f"summary.metric_averages.{metric}",
+                        expected=1.0,
+                        observed=run_metrics.get(metric),
+                    )
+            if not hook_traces:
+                append_error(
+                    runtime_errors,
+                    field="evaluation_hook_trace",
+                    expected="non-empty",
+                    observed=0,
+                )
+            elif hook_success_count != len(hook_traces):
+                append_error(
+                    runtime_errors,
+                    field="evaluation_hook_trace.success",
+                    expected=f"{len(hook_traces)}/{len(hook_traces)}",
+                    observed=f"{hook_success_count}/{len(hook_traces)}",
+                )
+            if hook_status_codes != [200]:
+                append_error(
+                    runtime_errors,
+                    field="evaluation_hook_trace.status_code",
+                    expected=[200],
+                    observed=hook_status_codes,
+                )
+            if non_local_hosts:
+                append_error(
+                    runtime_errors,
+                    field="evaluation_hook_trace.endpoint_host",
+                    expected="localhost or 127.0.0.1",
+                    observed=non_local_hosts,
+                )
+
     return {
         "required_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_environment_types": list(
             V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
         ),
         "required_proof_kind": V1_TRINITY_STACK_PROBE_PROOF_KIND,
+        "required_run_metrics": list(V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS),
+        "required_state_keys": list(V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS),
         "missing_files": missing_files,
         "optimization_errors": optimization_errors,
         "proof_errors": proof_errors,
         "manifest_errors": manifest_errors,
+        "runtime_errors": runtime_errors,
         "errors": errors,
         "evidence": evidence,
     }

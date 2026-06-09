@@ -15313,6 +15313,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_trinity_stack_probe_proof_kind"] == (
         trinity.V1_TRINITY_STACK_PROBE_PROOF_KIND
     )
+    assert payload["required_trinity_stack_probe_run_metrics"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_trinity_stack_probe_state_keys"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS
+    )
     assert payload["required_release_proof_checks"] == (
         trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
     )
@@ -17295,10 +17301,17 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert trinity_stack_probe["required_proof_kind"] == (
         trinity.V1_TRINITY_STACK_PROBE_PROOF_KIND
     )
+    assert trinity_stack_probe["required_run_metrics"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert trinity_stack_probe["required_state_keys"] == (
+        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS
+    )
     assert trinity_stack_probe["missing_files"] == []
     assert trinity_stack_probe["optimization_errors"] == []
     assert trinity_stack_probe["proof_errors"] == []
     assert trinity_stack_probe["manifest_errors"] == []
+    assert trinity_stack_probe["runtime_errors"] == []
     assert trinity_stack_probe["errors"] == []
     trinity_evidence = trinity_stack_probe["evidence"]
     assert trinity_evidence["optimization_kind"] == "agent-learning.optimization.v1"
@@ -17325,6 +17338,25 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert trinity_evidence["manifest_promoted_from_trinity_stack_probe"] is True
     assert trinity_evidence["manifest_trinity_stack_probe_proof_status"] == "passed"
     assert trinity_evidence["manifest_evaluation_hook_count"] >= 1
+    assert trinity_evidence["run_kind"] == "agent-learning.run.v1"
+    assert trinity_evidence["run_status"] == "passed"
+    assert trinity_evidence["run_evaluation_passed"] is True
+    assert trinity_evidence["run_evaluation_score"] >= 0.98
+    assert trinity_evidence["run_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS
+    }
+    assert set(trinity.V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS) <= set(
+        trinity_evidence["run_state_keys"]
+    )
+    assert trinity_evidence["run_evaluation_hook_trace_count"] >= 1
+    assert (
+        trinity_evidence["run_evaluation_hook_success_trace_count"]
+        == trinity_evidence["run_evaluation_hook_trace_count"]
+    )
+    assert trinity_evidence["run_evaluation_hook_status_codes"] == [200]
+    assert trinity_evidence["run_evaluation_hook_endpoint_host_count"] >= 1
+    assert trinity_evidence["run_evaluation_hook_endpoint_hosts_local"] is True
     evidence = checks["native_optimizer_evidence_components"]["evidence"]
     assert evidence["missing"] == []
     assert "framework_lifecycle" in evidence["observed"]

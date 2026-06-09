@@ -316,6 +316,13 @@ Current checkpoint:
   from a run-only seed to the nested full-trinity `suite.json` job while
   preserving framework runtime, adapter-contract, adversarial, campaign, and
   optimizer-governance evidence.
+- Trinity stack probe readiness is now an executable release-check gate:
+  `examples/sdk_trinity_stack_probe_optimization.py` must select the local
+  orchestration stack, reuse the same selected agent through a localhost
+  evaluation hook, pass native trinity-stack proof checks, promote to
+  `agent-learning.run.v1`, execute that promoted run, and close external
+  task-quality, world, framework, retrieval, memory-lineage, multi-agent, tool,
+  and task metrics.
 
 Acceptance gates:
 

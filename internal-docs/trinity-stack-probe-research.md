@@ -28,3 +28,9 @@ Keep the composed path coherent and local-first:
   `optimize.build_trinity_run_manifest_from_probe_optimization()` so one run
   manifest carries the selected agent, selected stack environments, and local
   evaluation-hook config together.
+- `agent-learn release-check` runs the composed cookbook as
+  `trinity_stack_probe_readiness`; the gate must execute the promoted run while
+  the localhost evaluator is alive and require passing run status, local
+  evaluation-hook traces, `external_task_quality`, world contract, framework
+  trace, retrieval attribution, memory-lineage, multi-agent, tool-selection, and
+  task-completion metrics.
