@@ -66,7 +66,10 @@ corpus through the campaign builder and requires full row/cell/run/artifact/
 finding/mitigation closure before M4 passes. Red-team readiness certification
 also runs locally, requiring the optimizer to select the zero-gap
 workspace/import/campaign/trust/control/readiness bundle before adaptive
-attack search is trusted. It also gates representative
+attack search is trusted. Red-team society plus causal attribution readiness
+also runs locally, requiring Agent Learning-owned multi-agent red-team council
+and causal graph evidence before the pen-testing side of the trinity is treated
+as ready. It also gates representative
 Future AGI UI/action/report readiness: renderable report payloads, executable
 action catalogs, saved action-run output evidence, and key-like secret-marker
 redaction across representative run, action-run, optimization, red-team,
@@ -1817,6 +1820,12 @@ own deterministic contract for root-cause and mitigation closure. The same
 causal search is available from Python through
 `optimize.build_redteam_causal_attribution_optimization_manifest()` and
 `examples/sdk_redteam_causal_attribution_optimization.py`.
+`agent-learn release-check` gates the society and causal cookbooks together as
+`redteam_society_causal_readiness`: both examples must run locally, preserve the
+required red-team roles, close the 25-cell campaign matrix, map the causal DAG
+to root causes, mitigations, and evidence, and keep proof/secret checks clean.
+That makes the pen-testing leg of the Agent Learning testing/simulation/
+pen-testing trinity executable instead of aspirational.
 
 The `sdk_stateful_tool_world_optimization.py` example adds a benchmark-style
 stateful tool-world red-team cookbook. It searches weak, partial, and verified

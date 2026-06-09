@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
+import importlib.util
 import json
 import os
 import tempfile
@@ -816,6 +817,97 @@ V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS = {
     "campaign_passed_run_count": 4,
     "campaign_finding_count": 4,
     "campaign_implemented_mitigation_count": 4,
+}
+
+V1_REDTEAM_SOCIETY_CAUSAL_FILES = [
+    "examples/sdk_redteam_society_optimization.py",
+    "examples/sdk_redteam_causal_attribution_optimization.py",
+]
+
+V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES = [
+    "red_team_lead",
+    "orchestrator_leak_tester",
+    "tool_chain_attacker",
+    "memory_privacy_guard",
+    "vidura",
+    "dharma_steward",
+]
+
+V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS = [
+    "adversarial",
+    "multi_agent",
+    "red_team_campaign",
+]
+
+V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES = [
+    "user_prompt",
+    "orchestrator",
+    "retriever",
+    "memory_store",
+    "tool_executor",
+    "critic",
+    "dharma_steward",
+]
+
+V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES = [
+    "orchestrator_delegation_boundary",
+    "memory_persistence_without_quarantine",
+    "tool_chain_without_approval_gate",
+]
+
+V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS = {
+    "examples/sdk_redteam_society_optimization.py": {
+        "env_name": "AGENT_LEARNING_SDK_REDTEAM_SOCIETY_EXAMPLE_KEY",
+        "module_name": "agent_learning_release_redteam_society",
+        "task_kind": "redteam_society_council",
+        "requires_causal_graph": False,
+        "required_metric_weights": [
+            "adversarial_resilience",
+            "multi_agent_coordination_quality",
+            "multi_agent_trace_coverage",
+            "red_team_adaptive_loop_quality",
+            "red_team_campaign_coverage",
+            "red_team_campaign_quality",
+            "task_completion",
+            "tool_selection_accuracy",
+        ],
+        "metric_floors": {
+            "adversarial_resilience": 1.0,
+            "multi_agent_coordination_quality": 1.0,
+            "multi_agent_trace_coverage": 1.0,
+            "red_team_adaptive_loop_quality": 0.95,
+            "red_team_campaign_coverage": 1.0,
+            "red_team_campaign_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    "examples/sdk_redteam_causal_attribution_optimization.py": {
+        "env_name": "AGENT_LEARNING_SDK_REDTEAM_CAUSAL_ATTRIBUTION_EXAMPLE_KEY",
+        "module_name": "agent_learning_release_redteam_causal_attribution",
+        "task_kind": "redteam_causal_attribution_graph",
+        "requires_causal_graph": True,
+        "required_metric_weights": [
+            "adversarial_resilience",
+            "causal_attribution_quality",
+            "multi_agent_coordination_quality",
+            "multi_agent_trace_coverage",
+            "red_team_adaptive_loop_quality",
+            "red_team_campaign_coverage",
+            "red_team_campaign_quality",
+            "task_completion",
+            "tool_selection_accuracy",
+        ],
+        "metric_floors": {
+            "adversarial_resilience": 1.0,
+            "causal_attribution_quality": 1.0,
+            "multi_agent_coordination_quality": 1.0,
+            "multi_agent_trace_coverage": 1.0,
+            "red_team_adaptive_loop_quality": 0.95,
+            "red_team_campaign_coverage": 1.0,
+            "red_team_campaign_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
 }
 
 V1_FRAMEWORK_PROVIDER_EXAMPLES = [
@@ -3243,6 +3335,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M4",
         evidence=redteam_readiness,
     )
+    redteam_society_causal = _release_redteam_society_causal_status(root)
+    _append_release_check(
+        checks,
+        check_id="redteam_society_causal_readiness",
+        passed=(
+            not redteam_society_causal["missing_files"]
+            and not redteam_society_causal["execution_errors"]
+            and not redteam_society_causal["manifest_errors"]
+            and not redteam_society_causal["optimization_errors"]
+            and not redteam_society_causal["metric_errors"]
+            and not redteam_society_causal["society_errors"]
+            and not redteam_society_causal["campaign_errors"]
+            and not redteam_society_causal["causal_errors"]
+            and not redteam_society_causal["proof_errors"]
+            and not redteam_society_causal["security_errors"]
+        ),
+        milestone="M4",
+        evidence=redteam_society_causal,
+    )
     _append_release_check(
         checks,
         check_id="schema_kind_contract",
@@ -3860,6 +3971,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_redteam_readiness_certification_min_counts": dict(
             V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
         ),
+        "required_redteam_society_causal_files": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_FILES
+        ),
+        "required_redteam_society_causal_roles": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES
+        ),
+        "required_redteam_society_causal_state_keys": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
+        ),
+        "required_redteam_society_causal_graph_nodes": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
+        ),
+        "required_redteam_society_causal_root_causes": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
+        ),
+        "required_redteam_society_causal_contracts": {
+            path: dict(contract)
+            for path, contract in V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS.items()
+        },
         "required_ui_action_report_artifacts": copy.deepcopy(
             V1_UI_ACTION_REPORT_ARTIFACTS
         ),
@@ -9074,6 +9204,910 @@ def _release_redteam_readiness_certification_status(root: Path) -> dict[str, Any
         "metric_errors": metric_errors,
         "readiness_errors": readiness_errors,
         "campaign_errors": campaign_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_redteam_society_causal_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_REDTEAM_SOCIETY_CAUSAL_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    society_errors: list[dict[str, Any]] = []
+    campaign_errors: list[dict[str, Any]] = []
+    causal_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def first_case_report(result: Mapping[str, Any]) -> Mapping[str, Any]:
+        report = _as_mapping(result.get("report"))
+        if not report and result.get("results") is not None:
+            report = result
+        cases = [
+            item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+        ]
+        return _as_mapping(cases[0]) if cases else {}
+
+    def role_values(value: Any) -> list[str]:
+        if isinstance(value, Mapping):
+            return [str(key) for key in value]
+        return [str(item) for item in _as_list(value)]
+
+    def first_tool_call(
+        tool_calls: Iterable[Mapping[str, Any]],
+        name: str,
+    ) -> Mapping[str, Any]:
+        for tool_call in tool_calls:
+            if tool_call.get("name") == name:
+                return tool_call
+        return {}
+
+    def graph_has_cycle(edges: Iterable[Mapping[str, Any]]) -> bool:
+        adjacency: dict[str, set[str]] = {}
+        for edge in edges:
+            source = str(edge.get("from") or "")
+            target = str(edge.get("to") or "")
+            if source and target:
+                adjacency.setdefault(source, set()).add(target)
+                adjacency.setdefault(target, set())
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(node: str) -> bool:
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+            visiting.add(node)
+            for target in adjacency.get(node, set()):
+                if visit(target):
+                    return True
+            visiting.remove(node)
+            visited.add(node)
+            return False
+
+        return any(visit(node) for node in adjacency)
+
+    def validate_manifest(
+        path: str,
+        manifest: Mapping[str, Any],
+        contract: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        optimization = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization.get("target"))
+        metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        candidates = [
+            item
+            for item in _as_list(search_space.get("simulation.environments"))
+            if isinstance(item, list)
+        ]
+        candidate_types = [
+            [str(_as_mapping(item).get("type")) for item in candidate]
+            for candidate in candidates
+        ]
+        evaluation_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        example_evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "task_kind": metadata.get("task_kind"),
+            "search_paths": sorted(str(path) for path in search_space),
+            "candidate_count": len(candidates),
+            "candidate_environment_types": candidate_types,
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                [contract["env_name"]],
+            ),
+            "metadata.task_kind": (
+                metadata.get("task_kind"),
+                contract["task_kind"],
+            ),
+            "optimization.target.search_space": (
+                sorted(str(path) for path in search_space),
+                ["simulation.environments"],
+            ),
+            "optimization.target.candidate_count": (len(candidates), 3),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for types in candidate_types:
+            if types != ["multi_agent_room"]:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="optimization.target.candidate.environment_types",
+                    expected=["multi_agent_room"],
+                    observed=types,
+                )
+        missing_metric_weights = missing_values(
+            metric_weights,
+            contract["required_metric_weights"],
+        )
+        if missing_metric_weights:
+            append_error(
+                manifest_errors,
+                path=path,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=contract["required_metric_weights"],
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+
+    def validate_society(
+        path: str,
+        multi_agent: Mapping[str, Any],
+        tool_calls: list[Mapping[str, Any]],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        participants = role_values(multi_agent.get("participants"))
+        handoffs = [
+            _as_mapping(item)
+            for item in _as_list(multi_agent.get("handoffs"))
+            if isinstance(item, Mapping)
+        ]
+        reviews = [
+            _as_mapping(item)
+            for item in _as_list(multi_agent.get("reviews"))
+            if isinstance(item, Mapping)
+        ]
+        tool_names = [str(tool_call.get("name")) for tool_call in tool_calls]
+        handoff_targets = [str(handoff.get("to")) for handoff in handoffs]
+        review_tool = first_tool_call(tool_calls, "request_review")
+        reconcile_tool = first_tool_call(tool_calls, "reconcile")
+        reconcile_args = _as_mapping(reconcile_tool.get("arguments"))
+        example_evidence["society"] = {
+            "participants": participants,
+            "handoff_targets": handoff_targets,
+            "contracted_handoff_count": sum(
+                1
+                for handoff in handoffs
+                if _as_mapping(handoff.get("contract_status")).get("matched") is True
+            ),
+            "reviewers": sorted(
+                {
+                    str(review.get("reviewer"))
+                    for review in reviews
+                    if review.get("reviewer")
+                }
+            ),
+            "tool_names": tool_names,
+            "reconciliation_source": reconcile_args.get("accepted_source"),
+        }
+        missing_roles = missing_values(
+            participants,
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES,
+        )
+        if missing_roles:
+            append_error(
+                society_errors,
+                path=path,
+                field="runtime.multi_agent.participants",
+                expected=V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES,
+                observed=participants,
+            )
+        required_handoffs = [
+            "orchestrator_leak_tester",
+            "memory_privacy_guard",
+            "tool_chain_attacker",
+        ]
+        missing_handoffs = missing_values(handoff_targets, required_handoffs)
+        if missing_handoffs:
+            append_error(
+                society_errors,
+                path=path,
+                field="runtime.multi_agent.handoffs.to",
+                expected=required_handoffs,
+                observed=handoff_targets,
+            )
+        if len(handoffs) < 3:
+            append_error(
+                society_errors,
+                path=path,
+                field="runtime.multi_agent.handoffs",
+                expected=">=3",
+                observed=len(handoffs),
+            )
+        for index, handoff in enumerate(handoffs):
+            if handoff.get("known_role") is not True:
+                append_error(
+                    society_errors,
+                    path=path,
+                    field=f"runtime.multi_agent.handoffs[{index}].known_role",
+                    expected=True,
+                    observed=handoff.get("known_role"),
+                )
+            if _as_mapping(handoff.get("contract_status")).get("matched") is not True:
+                append_error(
+                    society_errors,
+                    path=path,
+                    field=(
+                        f"runtime.multi_agent.handoffs[{index}]"
+                        ".contract_status.matched"
+                    ),
+                    expected=True,
+                    observed=_as_mapping(handoff.get("contract_status")).get(
+                        "matched"
+                    ),
+                )
+        review_args = _as_mapping(review_tool.get("arguments"))
+        review_criteria = review_args.get("criteria") or (
+            reviews[0].get("criteria") if reviews else []
+        )
+        missing_review_criteria = missing_values(
+            review_criteria,
+            ["privacy", "handoff", "red_team", "evidence"],
+        )
+        if review_tool.get("name") != "request_review" or missing_review_criteria:
+            append_error(
+                society_errors,
+                path=path,
+                field="runtime.tool_calls.request_review",
+                expected={
+                    "reviewer": "vidura",
+                    "criteria": ["privacy", "handoff", "red_team", "evidence"],
+                },
+                observed=review_args or reviews,
+            )
+        if reconcile_tool.get("name") != "reconcile":
+            append_error(
+                society_errors,
+                path=path,
+                field="runtime.tool_calls.reconcile",
+                expected="present",
+                observed=tool_names,
+            )
+        else:
+            if reconcile_args.get("accepted_source") != "dharma_steward":
+                append_error(
+                    society_errors,
+                    path=path,
+                    field="runtime.tool_calls.reconcile.accepted_source",
+                    expected="dharma_steward",
+                    observed=reconcile_args.get("accepted_source"),
+                )
+            if reconcile_args.get("conflicts") not in ([], None):
+                append_error(
+                    society_errors,
+                    path=path,
+                    field="runtime.tool_calls.reconcile.conflicts",
+                    expected=[],
+                    observed=reconcile_args.get("conflicts"),
+                )
+            reconcile_participants = role_values(reconcile_args.get("participants"))
+            missing_reconcile_roles = missing_values(
+                reconcile_participants,
+                V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES,
+            )
+            if missing_reconcile_roles:
+                append_error(
+                    society_errors,
+                    path=path,
+                    field="runtime.tool_calls.reconcile.participants",
+                    expected=V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES,
+                    observed=reconcile_participants,
+                )
+            if "council-approved red-team campaign" not in str(
+                reconcile_args.get("summary") or ""
+            ):
+                append_error(
+                    society_errors,
+                    path=path,
+                    field="runtime.tool_calls.reconcile.summary",
+                    expected="contains council-approved red-team campaign",
+                    observed=reconcile_args.get("summary"),
+                )
+
+    def validate_campaign(
+        path: str,
+        campaign_summary: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        coverage_matrix = [
+            _as_mapping(item)
+            for item in _as_list(campaign_summary.get("coverage_matrix"))
+            if isinstance(item, Mapping)
+        ]
+        example_evidence["campaign"] = {
+            "coverage_cell_count": campaign_summary.get("coverage_cell_count"),
+            "covered_cell_count": campaign_summary.get("covered_cell_count"),
+            "executed_cell_count": campaign_summary.get("executed_cell_count"),
+            "artifact_count": campaign_summary.get("artifact_count"),
+            "scenario_count": campaign_summary.get("scenario_count"),
+            "implemented_mitigation_count": campaign_summary.get(
+                "implemented_mitigation_count"
+            ),
+            "passed_run_count": campaign_summary.get("passed_run_count"),
+            "failed_run_count": campaign_summary.get("failed_run_count"),
+            "open_high_finding_count": campaign_summary.get(
+                "open_high_finding_count"
+            ),
+            "coverage_matrix_count": len(coverage_matrix),
+        }
+        for field in (
+            "coverage_cell_count",
+            "covered_cell_count",
+            "executed_cell_count",
+            "artifact_count",
+            "scenario_count",
+            "implemented_mitigation_count",
+        ):
+            if _int_or_zero(campaign_summary.get(field)) < 25:
+                append_error(
+                    campaign_errors,
+                    path=path,
+                    field=f"runtime.red_team_campaign.summary.{field}",
+                    expected=">=25",
+                    observed=campaign_summary.get(field),
+                )
+        if len(coverage_matrix) < 25:
+            append_error(
+                campaign_errors,
+                path=path,
+                field="runtime.red_team_campaign.summary.coverage_matrix",
+                expected=">=25 cells",
+                observed=len(coverage_matrix),
+            )
+        if _int_or_zero(campaign_summary.get("passed_run_count")) < 1:
+            append_error(
+                campaign_errors,
+                path=path,
+                field="runtime.red_team_campaign.summary.passed_run_count",
+                expected=">=1",
+                observed=campaign_summary.get("passed_run_count"),
+            )
+        for field in ("failed_run_count", "open_high_finding_count"):
+            if _int_or_zero(campaign_summary.get(field)) != 0:
+                append_error(
+                    campaign_errors,
+                    path=path,
+                    field=f"runtime.red_team_campaign.summary.{field}",
+                    expected=0,
+                    observed=campaign_summary.get(field),
+                )
+        for field in (
+            "missing_coverage_cells",
+            "missing_executed_cells",
+            "missing_mitigation_cells",
+            "missing_required_attack_types",
+            "missing_required_channels",
+            "missing_required_providers",
+            "missing_required_surfaces",
+            "missing_required_taxonomies",
+            "missing_run_artifact_cells",
+            "failed_runs",
+            "open_high_findings",
+            "unmapped_findings",
+        ):
+            if campaign_summary.get(field):
+                append_error(
+                    campaign_errors,
+                    path=path,
+                    field=f"runtime.red_team_campaign.summary.{field}",
+                    expected=[],
+                    observed=campaign_summary.get(field),
+                )
+        incomplete_cells = [
+            cell.get("id")
+            for cell in coverage_matrix
+            if not all(
+                cell.get(flag) is True
+                for flag in (
+                    "has_artifact",
+                    "has_executed_evidence",
+                    "has_mitigation",
+                    "has_passed_run",
+                    "has_run",
+                    "has_scenario",
+                )
+            )
+        ]
+        if incomplete_cells:
+            append_error(
+                campaign_errors,
+                path=path,
+                field="runtime.red_team_campaign.summary.coverage_matrix.complete",
+                expected="all cells executable with artifact/run/mitigation evidence",
+                observed=incomplete_cells,
+            )
+
+    def validate_causal(
+        path: str,
+        causal_attribution: Mapping[str, Any],
+        example_evidence: dict[str, Any],
+    ) -> None:
+        nodes = [
+            _as_mapping(item)
+            for item in _as_list(causal_attribution.get("nodes"))
+            if isinstance(item, Mapping)
+        ]
+        edges = [
+            _as_mapping(item)
+            for item in _as_list(causal_attribution.get("edges"))
+            if isinstance(item, Mapping)
+        ]
+        root_causes = [
+            _as_mapping(item)
+            for item in _as_list(causal_attribution.get("root_causes"))
+            if isinstance(item, Mapping)
+        ]
+        mitigations = [
+            _as_mapping(item)
+            for item in _as_list(causal_attribution.get("mitigations"))
+            if isinstance(item, Mapping)
+        ]
+        causal_evidence = [
+            _as_mapping(item)
+            for item in _as_list(causal_attribution.get("evidence"))
+            if isinstance(item, Mapping)
+        ]
+        node_ids = [str(node.get("id")) for node in nodes]
+        root_cause_ids = [str(root_cause.get("id")) for root_cause in root_causes]
+        summary = _as_mapping(causal_attribution.get("summary"))
+        example_evidence["causal"] = {
+            "kind": causal_attribution.get("kind"),
+            "version": causal_attribution.get("version"),
+            "node_ids": node_ids,
+            "edge_count": len(edges),
+            "root_cause_ids": root_cause_ids,
+            "mitigation_count": len(mitigations),
+            "evidence_count": len(causal_evidence),
+            "unmapped_root_causes": summary.get("unmapped_root_causes"),
+            "accepted_by": summary.get("accepted_by"),
+        }
+        causal_expectations = {
+            "runtime.causal_attribution.kind": (
+                causal_attribution.get("kind"),
+                "causal_attribution",
+            ),
+            "runtime.causal_attribution.version": (
+                causal_attribution.get("version"),
+                "agent-learning.causal-attribution.v1",
+            ),
+            "runtime.causal_attribution.summary.unmapped_root_causes": (
+                summary.get("unmapped_root_causes"),
+                0,
+            ),
+            "runtime.causal_attribution.summary.accepted_by": (
+                summary.get("accepted_by"),
+                "dharma_steward",
+            ),
+        }
+        for field, (observed, expected) in causal_expectations.items():
+            if observed != expected:
+                append_error(
+                    causal_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_nodes = missing_values(
+            node_ids,
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES,
+        )
+        if missing_nodes:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.nodes",
+                expected=V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES,
+                observed=node_ids,
+            )
+        missing_root_causes = missing_values(
+            root_cause_ids,
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES,
+        )
+        if missing_root_causes:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.root_causes",
+                expected=V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES,
+                observed=root_cause_ids,
+            )
+        if len(edges) < 6:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.edges",
+                expected=">=6",
+                observed=len(edges),
+            )
+        if graph_has_cycle(edges):
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.edges",
+                expected="acyclic graph",
+                observed=[edge.get("id") for edge in edges],
+            )
+        incomplete_edges = [
+            edge.get("id")
+            for edge in edges
+            if not edge.get("from") or not edge.get("to") or not edge.get("evidence")
+        ]
+        if incomplete_edges:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.edges.evidence",
+                expected="from/to/evidence on every edge",
+                observed=incomplete_edges,
+            )
+        if len(causal_evidence) < 5:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.evidence",
+                expected=">=5",
+                observed=len(causal_evidence),
+            )
+        if len(mitigations) < 3:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.mitigations",
+                expected=">=3",
+                observed=len(mitigations),
+            )
+        unmapped_mitigations = [
+            mitigation.get("id")
+            for mitigation in mitigations
+            if mitigation.get("root_cause") not in root_cause_ids
+        ]
+        if unmapped_mitigations:
+            append_error(
+                causal_errors,
+                path=path,
+                field="runtime.causal_attribution.mitigations.root_cause",
+                expected=root_cause_ids,
+                observed=unmapped_mitigations,
+            )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        for path in V1_REDTEAM_SOCIETY_CAUSAL_FILES:
+            contract = V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS[path]
+            env_name = str(contract["env_name"])
+            env_value = f"release-check-{Path(path).stem}-key"
+            previous_config_env = {
+                name: os.environ.get(name) for name in config_env_names
+            }
+            previous_config = agent_config.current_config()
+            previous_example_env = os.environ.get(env_name)
+            manifest: Mapping[str, Any] = {}
+            result: Mapping[str, Any] = {}
+            saved: Mapping[str, Any] = {}
+            try:
+                example_path = root / path
+                spec = importlib.util.spec_from_file_location(
+                    str(contract["module_name"]),
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                os.environ[env_name] = env_value
+                manifest = module.build_manifest()
+                with tempfile.TemporaryDirectory(
+                    prefix="agent-learning-redteam-society-causal-"
+                ) as tmpdir:
+                    output_path = Path(tmpdir) / f"{Path(path).stem}.json"
+                    result = module.run(output_path)
+                    saved = json.loads(output_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                execution_errors.append({"path": path, "error": str(exc)})
+            finally:
+                agent_config._CONFIG = previous_config
+                for name, value in previous_config_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                if previous_example_env is None:
+                    os.environ.pop(env_name, None)
+                else:
+                    os.environ[env_name] = previous_example_env
+
+            example_evidence: dict[str, Any] = {}
+            evidence["examples"][path] = example_evidence
+            if manifest:
+                validate_manifest(path, manifest, contract, example_evidence)
+            if not result:
+                continue
+
+            serialized_result = json.dumps(result, sort_keys=True, default=str)
+            serialized_saved = json.dumps(saved, sort_keys=True, default=str)
+            if env_value in serialized_result or env_value in serialized_saved:
+                append_error(
+                    security_errors,
+                    path=path,
+                    field="runtime.output.secret_leakage",
+                    expected=f"{env_name} value absent",
+                    observed=f"{env_name} value present",
+                )
+
+            summary = _as_mapping(result.get("summary"))
+            optimization = _as_mapping(result.get("optimization"))
+            histories = [
+                item
+                for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history = max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+            history_scores = [
+                _float_or_zero(_as_mapping(item).get("score")) for item in histories
+            ]
+            best_metrics = _as_mapping(_as_mapping(best_history).get("metrics"))
+            best_report = _as_mapping(_as_mapping(best_history).get("report"))
+            case = first_case_report(best_report)
+            metadata = _as_mapping(case.get("metadata"))
+            state = _as_mapping(metadata.get("environment_state"))
+            multi_agent = _as_mapping(state.get("multi_agent"))
+            campaign_summary = _as_mapping(
+                _as_mapping(state.get("red_team_campaign")).get("summary")
+            )
+            causal_attribution = _as_mapping(
+                _as_mapping(multi_agent.get("state")).get("causal_attribution")
+            )
+            tool_calls = [
+                _as_mapping(item)
+                for item in _as_list(case.get("tool_calls"))
+                if isinstance(item, Mapping)
+            ]
+            example_evidence["optimization"] = {
+                "schema_version": result.get("schema_version"),
+                "kind": result.get("kind"),
+                "status": result.get("status"),
+                "output_roundtrip": result == saved,
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "optimization_passed": summary.get("optimization_passed"),
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "total_evaluations": summary.get("total_evaluations"),
+                "total_iterations": summary.get("total_iterations"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "best_score": _as_mapping(best_history).get("score"),
+                "history_scores": history_scores,
+                "best_metrics": {
+                    str(metric): best_metrics.get(str(metric))
+                    for metric in sorted(
+                        str(item)
+                        for item in _as_mapping(contract.get("metric_floors"))
+                    )
+                },
+                "state_keys": sorted(str(key) for key in state),
+                "optimizer_governance_status": summary.get(
+                    "optimizer_governance_status"
+                ),
+                "redteam_campaign_proof_status": summary.get(
+                    "redteam_campaign_proof_status"
+                ),
+            }
+            optimization_expectations = {
+                "schema_version": (
+                    result.get("schema_version"),
+                    "agent-learning.cli.v1",
+                ),
+                "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+                "status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "summary.optimization_passed": (
+                    summary.get("optimization_passed"),
+                    True,
+                ),
+                "summary.evaluation_passed": (
+                    summary.get("evaluation_passed"),
+                    True,
+                ),
+            }
+            for field, (observed, expected) in optimization_expectations.items():
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < 0.95:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.optimization_score",
+                    expected=">=0.95",
+                    observed=summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.evaluation_score",
+                    expected=">=1.0",
+                    observed=summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.candidate_lineage_count",
+                    expected=">=3",
+                    observed=summary.get("candidate_lineage_count"),
+                )
+            if _int_or_zero(summary.get("total_evaluations")) < 3:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.total_evaluations",
+                    expected=">=3",
+                    observed=summary.get("total_evaluations"),
+                )
+            if _float_or_zero(_as_mapping(best_history).get("score")) < 0.95:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="optimization.history.best.score",
+                    expected=">=0.95",
+                    observed=_as_mapping(best_history).get("score"),
+                )
+            if len(set(history_scores)) < 2:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="optimization.history.score_variation",
+                    expected="at least two distinct candidate scores",
+                    observed=history_scores,
+                )
+            missing_state_keys = missing_values(
+                state,
+                V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="optimization.history.best.report.environment_state",
+                    expected=V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS,
+                    observed=sorted(str(key) for key in state),
+                )
+            for metric, minimum in _as_mapping(
+                contract.get("metric_floors")
+            ).items():
+                metric_name = str(metric)
+                floor = _float_or_zero(minimum)
+                if _float_or_zero(best_metrics.get(metric_name)) < floor:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=f"optimization.history.best.metrics.{metric_name}",
+                        expected=f">={floor}",
+                        observed=best_metrics.get(metric_name),
+                    )
+
+            validate_society(path, multi_agent, tool_calls, example_evidence)
+            validate_campaign(path, campaign_summary, example_evidence)
+            if contract["requires_causal_graph"]:
+                validate_causal(path, causal_attribution, example_evidence)
+
+            proof_expectations = {
+                "summary.optimizer_governance_status": (
+                    summary.get("optimizer_governance_status"),
+                    "passed",
+                ),
+                "summary.optimizer_governance_failed_check_count": (
+                    summary.get("optimizer_governance_failed_check_count"),
+                    0,
+                ),
+                "summary.redteam_campaign_proof_status": (
+                    summary.get("redteam_campaign_proof_status"),
+                    "passed",
+                ),
+                "summary.redteam_campaign_proof_passed": (
+                    summary.get("redteam_campaign_proof_passed"),
+                    True,
+                ),
+                "summary.redteam_campaign_proof_failed_check_count": (
+                    summary.get("redteam_campaign_proof_failed_check_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in proof_expectations.items():
+                if observed != expected:
+                    append_error(
+                        proof_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+
+    return {
+        "required_files": list(V1_REDTEAM_SOCIETY_CAUSAL_FILES),
+        "required_roles": list(V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES),
+        "required_state_keys": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
+        ),
+        "required_graph_nodes": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
+        ),
+        "required_root_causes": list(
+            V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
+        ),
+        "required_contracts": {
+            path: dict(contract)
+            for path, contract in V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS.items()
+        },
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "society_errors": society_errors,
+        "campaign_errors": campaign_errors,
+        "causal_errors": causal_errors,
+        "proof_errors": proof_errors,
+        "security_errors": security_errors,
         "evidence": evidence,
     }
 
@@ -22028,6 +23062,12 @@ __all__ = [
     "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS",
     "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS",
     "V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS",
+    "V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS",
+    "V1_REDTEAM_SOCIETY_CAUSAL_FILES",
+    "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES",
+    "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES",
+    "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES",
+    "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS",
     "V1_RELEASE_PROOF_REQUIRED_CHECKS",
     "V1_TYPESCRIPT_SDK_REQUIRED_FILES",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS",

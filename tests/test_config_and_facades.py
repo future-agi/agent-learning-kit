@@ -15391,6 +15391,24 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_redteam_readiness_certification_min_counts"] == (
         trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
     )
+    assert payload["required_redteam_society_causal_files"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_FILES
+    )
+    assert payload["required_redteam_society_causal_roles"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES
+    )
+    assert payload["required_redteam_society_causal_state_keys"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_redteam_society_causal_graph_nodes"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
+    )
+    assert payload["required_redteam_society_causal_root_causes"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
+    )
+    assert payload["required_redteam_society_causal_contracts"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS
+    )
     assert payload["required_ui_action_report_artifacts"] == (
         trinity.V1_UI_ACTION_REPORT_ARTIFACTS
     )
@@ -15878,6 +15896,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "redteam_research_coverage",
         "redteam_corpus_execution_readiness",
         "redteam_readiness_certification",
+        "redteam_society_causal_readiness",
         "schema_kind_contract",
         "ui_action_report_readiness",
         "regression_artifact_readiness",
@@ -16598,6 +16617,119 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert readiness_campaign["missing_executed_cells"] == []
     assert readiness_campaign["missing_mitigation_cells"] == []
     assert readiness_campaign["missing_run_artifact_cells"] == []
+    redteam_society_causal = checks["redteam_society_causal_readiness"]
+    assert redteam_society_causal["passed"] is True
+    assert redteam_society_causal["milestone"] == "M4"
+    redteam_society_causal_evidence = redteam_society_causal["evidence"]
+    assert redteam_society_causal_evidence["required_files"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_FILES
+    )
+    assert redteam_society_causal_evidence["required_roles"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES
+    )
+    assert redteam_society_causal_evidence["required_state_keys"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
+    )
+    assert redteam_society_causal_evidence["required_graph_nodes"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
+    )
+    assert redteam_society_causal_evidence["required_root_causes"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
+    )
+    assert redteam_society_causal_evidence["required_contracts"] == (
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS
+    )
+    assert redteam_society_causal_evidence["missing_files"] == []
+    assert redteam_society_causal_evidence["execution_errors"] == []
+    assert redteam_society_causal_evidence["manifest_errors"] == []
+    assert redteam_society_causal_evidence["optimization_errors"] == []
+    assert redteam_society_causal_evidence["metric_errors"] == []
+    assert redteam_society_causal_evidence["society_errors"] == []
+    assert redteam_society_causal_evidence["campaign_errors"] == []
+    assert redteam_society_causal_evidence["causal_errors"] == []
+    assert redteam_society_causal_evidence["proof_errors"] == []
+    assert redteam_society_causal_evidence["security_errors"] == []
+    examples = redteam_society_causal_evidence["evidence"]["examples"]
+    assert set(examples) == set(trinity.V1_REDTEAM_SOCIETY_CAUSAL_FILES)
+    for path, example in examples.items():
+        contract = trinity.V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS[path]
+        manifest = example["manifest"]
+        assert manifest["version"] == "agent-learning.optimization.v1"
+        assert manifest["required_env"] == [contract["env_name"]]
+        assert manifest["task_kind"] == contract["task_kind"]
+        assert manifest["search_paths"] == ["simulation.environments"]
+        assert manifest["candidate_count"] == 3
+        assert manifest["candidate_environment_types"] == [
+            ["multi_agent_room"],
+            ["multi_agent_room"],
+            ["multi_agent_room"],
+        ]
+        assert set(manifest["metric_weights"]) >= set(
+            contract["required_metric_weights"]
+        )
+        optimization = example["optimization"]
+        assert optimization["kind"] == "agent-learning.optimization.v1"
+        assert optimization["schema_version"] == "agent-learning.cli.v1"
+        assert optimization["status"] == "passed"
+        assert optimization["output_roundtrip"] is True
+        assert optimization["optimization_passed"] is True
+        assert optimization["evaluation_passed"] is True
+        assert optimization["optimization_score"] >= 0.95
+        assert optimization["evaluation_score"] == pytest.approx(1.0)
+        assert optimization["best_score"] >= 0.95
+        assert optimization["candidate_lineage_count"] >= 3
+        assert optimization["total_evaluations"] >= 3
+        assert optimization["total_iterations"] >= 3
+        assert set(optimization["state_keys"]) == set(
+            trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
+        )
+        assert optimization["optimizer_governance_status"] == "passed"
+        assert optimization["redteam_campaign_proof_status"] == "passed"
+        for metric, floor in contract["metric_floors"].items():
+            assert optimization["best_metrics"][metric] >= floor
+        society = example["society"]
+        assert set(society["participants"]) == set(
+            trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES
+        )
+        assert society["contracted_handoff_count"] >= 3
+        assert set(society["handoff_targets"]) >= {
+            "memory_privacy_guard",
+            "orchestrator_leak_tester",
+            "tool_chain_attacker",
+        }
+        assert society["reviewers"] == ["vidura"]
+        assert society["reconciliation_source"] == "dharma_steward"
+        assert {"request_review", "reconcile"} <= set(society["tool_names"])
+        campaign = example["campaign"]
+        assert campaign["coverage_cell_count"] == 25
+        assert campaign["covered_cell_count"] == 25
+        assert campaign["executed_cell_count"] == 25
+        assert campaign["coverage_matrix_count"] == 25
+        assert campaign["artifact_count"] == 25
+        assert campaign["scenario_count"] == 25
+        assert campaign["implemented_mitigation_count"] == 25
+        assert campaign["passed_run_count"] >= 1
+        assert campaign["failed_run_count"] == 0
+        assert campaign["open_high_finding_count"] == 0
+    causal_example = examples[
+        "examples/sdk_redteam_causal_attribution_optimization.py"
+    ]
+    causal_summary = causal_example["causal"]
+    assert causal_summary["kind"] == "causal_attribution"
+    assert causal_summary["version"] == "agent-learning.causal-attribution.v1"
+    assert set(causal_summary["node_ids"]) == set(
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
+    )
+    assert causal_summary["edge_count"] >= 7
+    assert set(causal_summary["root_cause_ids"]) == set(
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
+    )
+    assert causal_summary["mitigation_count"] >= len(
+        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
+    )
+    assert causal_summary["evidence_count"] >= 5
+    assert causal_summary["unmapped_root_causes"] == 0
+    assert causal_summary["accepted_by"] == "dharma_steward"
     ui_readiness = checks["ui_action_report_readiness"]["evidence"]
     assert ui_readiness["missing_files"] == []
     assert ui_readiness["failing_reports"] == []
@@ -19937,6 +20069,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "world_hook_contract_quality": pytest.approx(1.0),
         "world_contract_quality": pytest.approx(1.0),
     }
+    milestones = {milestone["id"]: milestone for milestone in payload["milestones"]}
+    assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
     assert payload["findings"] == []
     assert {
