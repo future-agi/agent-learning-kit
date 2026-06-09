@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `trinity_stack_probe_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `realtime_stack_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `trinity_stack_probe_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -290,6 +290,11 @@ Current checkpoint:
   `examples/sdk_framework_adapter_browser_cua_trace.py` must run locally, select
   the local trace-capable adapter methods, emit realtime/browser state, events,
   and artifacts, and pass coverage, grounding, mutation, and quality metrics.
+- Realtime stack probe readiness is now an executable release-check gate:
+  `examples/sdk_realtime_stack_probe_optimization.py` must select the local
+  LiveKit-style support-route stack over weak realtime candidates, pass native
+  realtime-stack proof checks, promote to `agent-learning.run.v1`, and close
+  voice, timing, streaming, route/tool, no-drop/no-error, and run metrics.
 - Stateful framework adapter readiness is now an executable release-check gate:
   `examples/sdk_framework_adapter_memory_trace.py`,
   `examples/sdk_framework_adapter_workflow_trace.py`,

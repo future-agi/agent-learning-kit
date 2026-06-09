@@ -15220,6 +15220,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_browser_realtime_adapter_contracts"] == (
         trinity.V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
     )
+    assert payload["required_realtime_stack_probe_files"] == (
+        trinity.V1_REALTIME_STACK_PROBE_FILES
+    )
+    assert payload["required_realtime_stack_probe_framework"] == (
+        trinity.V1_REALTIME_STACK_PROBE_FRAMEWORK
+    )
+    assert payload["required_realtime_stack_probe_expected_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert payload["required_realtime_stack_probe_proof_kind"] == (
+        trinity.V1_REALTIME_STACK_PROBE_PROOF_KIND
+    )
+    assert payload["required_realtime_stack_probe_environment_types"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_realtime_stack_probe_metrics"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
+    )
+    assert payload["required_realtime_stack_probe_run_metrics"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_realtime_stack_probe_tools"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS
+    )
+    assert payload["required_realtime_stack_probe_streaming_signals"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
+    )
     assert payload["required_stateful_framework_adapter_files"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
     )
@@ -15349,6 +15376,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_adapter_probe_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
+        "realtime_stack_probe_readiness",
         "stateful_framework_adapter_readiness",
         "framework_adapter_trinity_suite_readiness",
         "trinity_stack_probe_readiness",
@@ -16659,6 +16687,149 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert browser_adapter["state_summary"]["layout_shift_present"] is True
     assert browser_adapter["state_summary"]["storage_present"] is True
     assert browser_adapter["state_summary"]["tool_names"] == ["browser_click"]
+    realtime_stack_probe = checks["realtime_stack_probe_readiness"]["evidence"]
+    assert realtime_stack_probe["required_files"] == (
+        trinity.V1_REALTIME_STACK_PROBE_FILES
+    )
+    assert realtime_stack_probe["required_framework"] == (
+        trinity.V1_REALTIME_STACK_PROBE_FRAMEWORK
+    )
+    assert realtime_stack_probe["required_expected_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_stack_probe["required_proof_kind"] == (
+        trinity.V1_REALTIME_STACK_PROBE_PROOF_KIND
+    )
+    assert realtime_stack_probe["required_environment_types"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert realtime_stack_probe["required_metrics"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
+    )
+    assert realtime_stack_probe["required_run_metrics"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert realtime_stack_probe["required_tools"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS
+    )
+    assert realtime_stack_probe["required_streaming_signals"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
+    )
+    assert realtime_stack_probe["missing_files"] == []
+    assert realtime_stack_probe["optimization_errors"] == []
+    assert realtime_stack_probe["proof_errors"] == []
+    assert realtime_stack_probe["manifest_errors"] == []
+    assert realtime_stack_probe["metric_errors"] == []
+    assert realtime_stack_probe["runtime_errors"] == []
+    assert realtime_stack_probe["errors"] == []
+    realtime_stack_evidence = realtime_stack_probe["evidence"]
+    realtime_optimization = realtime_stack_evidence["optimization"]
+    assert realtime_optimization["kind"] == "agent-learning.optimization.v1"
+    assert realtime_optimization["status"] == "passed"
+    assert realtime_optimization["optimization_passed"] is True
+    assert realtime_optimization["evaluation_passed"] is True
+    assert realtime_optimization["optimization_score"] == pytest.approx(1.0)
+    assert realtime_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert realtime_optimization["framework"] == (
+        trinity.V1_REALTIME_STACK_PROBE_FRAMEWORK
+    )
+    assert realtime_optimization["total_evaluations"] >= 3
+    assert realtime_optimization["candidate_lineage_count"] >= 3
+    assert realtime_optimization["candidate_lineage_selected_score_delta"] >= 0.9
+    assert realtime_optimization["best_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_optimization["best_sample_rate_hz"] == 16000
+    assert realtime_optimization["optimizer_governance_status"] == "passed"
+    assert realtime_optimization["optimizer_governance_failed_check_count"] == 0
+    assert set(realtime_optimization["history_routes"]) == {"billing", "support"}
+    assert realtime_optimization["history_routes"]["support"]["score"] == (
+        pytest.approx(1.0)
+    )
+    assert realtime_optimization["history_routes"]["billing"]["score"] < (
+        realtime_optimization["history_routes"]["support"]["score"]
+    )
+    realtime_proof = realtime_stack_evidence["proof"]
+    assert realtime_proof["kind"] == trinity.V1_REALTIME_STACK_PROBE_PROOF_KIND
+    assert realtime_proof["status"] == "passed"
+    assert realtime_proof["passed"] is True
+    assert realtime_proof["assurance_level"] == (
+        "l2_native_realtime_stack_probe_verified"
+    )
+    assert realtime_proof["failed_check_ids"] == []
+    assert realtime_proof["requires_external_service"] is False
+    assert realtime_proof["contract_framework"] == (
+        trinity.V1_REALTIME_STACK_PROBE_FRAMEWORK
+    )
+    assert realtime_proof["contract_runtime"] == "in_process"
+    assert realtime_proof["contract_local_executable_fixture"] is True
+    assert realtime_proof["contract_requires_external_service"] is False
+    assert realtime_proof["contract_external_sources"] == []
+    assert realtime_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
+    }
+    realtime_selected_summary = realtime_proof["selected_summary"]
+    assert realtime_selected_summary["current_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_selected_summary["expected_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_selected_summary["route_match"] is True
+    assert realtime_selected_summary["sample_rate_hz"] == 16000
+    assert realtime_selected_summary["frame_count"] >= 2
+    assert realtime_selected_summary["timing_stage_count"] >= 4
+    assert realtime_selected_summary["streaming_chunk_count"] >= 2
+    assert realtime_selected_summary["streaming_tool_delta_count"] >= 1
+    assert realtime_selected_summary["streaming_completion_status"] == "completed"
+    assert realtime_selected_summary["streaming_error_count"] == 0
+    assert realtime_selected_summary["streaming_dropped_event_count"] == 0
+    assert set(trinity.V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        realtime_selected_summary["observed_tool_names"]
+    )
+    assert set(trinity.V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS) <= set(
+        realtime_selected_summary["streaming_signals"]
+    )
+    realtime_manifest = realtime_stack_evidence["manifest"]
+    assert realtime_manifest["version"] == "agent-learning.run.v1"
+    assert realtime_manifest["required_env"] == []
+    assert realtime_manifest["promoted_from_realtime_stack_probe"] is True
+    assert realtime_manifest["realtime_stack_probe_proof_status"] == "passed"
+    assert realtime_manifest["simulation_modality"] == "voice"
+    assert realtime_manifest["environment_types"] == (
+        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert realtime_manifest["expected_voice_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert set(trinity.V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        realtime_manifest["required_tools"]
+    )
+    assert set(trinity.V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS) <= set(
+        realtime_manifest["metric_weights"]
+    )
+    realtime_run = realtime_stack_evidence["run"]
+    assert realtime_run["kind"] == "agent-learning.run.v1"
+    assert realtime_run["status"] == "passed"
+    assert realtime_run["evaluation_passed"] is True
+    assert realtime_run["evaluation_score"] >= 0.95
+    assert realtime_run["metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS
+    }
+    assert realtime_run["voice_current_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_run["voice_sample_rate_hz"] == 16000
+    assert realtime_run["streaming_route"] == (
+        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+    )
+    assert realtime_run["streaming_completion_status"] == "completed"
+    assert realtime_run["streaming_tool_delta_count"] >= 1
+    assert realtime_run["streaming_error_count"] == 0
+    assert realtime_run["streaming_dropped_event_count"] == 0
+    assert set(realtime_run["state_keys"]) == {"streaming_trace", "voice"}
     stateful_adapter = checks["stateful_framework_adapter_readiness"]["evidence"]
     assert stateful_adapter["required_files"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES

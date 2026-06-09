@@ -58,6 +58,12 @@ Keep realtime support local-first:
   `browser_realtime_adapter_readiness`; the gate requires local
   `run_session(dict)` selection, `realtime_trace` state, realtime events, trace
   artifacts, tool-call evidence, and passing coverage/quality metrics.
+- `agent-learn release-check` also runs
+  `examples/sdk_realtime_stack_probe_optimization.py` as
+  `realtime_stack_probe_readiness`; the gate requires the local LiveKit-style
+  support-route stack to beat weak realtime candidates, pass the native
+  realtime-stack proof, promote into `agent-learning.run.v1`, and close voice,
+  timing, streaming, route/tool, completion, no-drop/no-error, and run metrics.
 - Require transcript, route call, TTS, audio frames, sample-rate closure, timing
   stages, audio quality, stream chunks, stream tool deltas, completion, and no
   dropped/error stream events before a probe is considered closed.

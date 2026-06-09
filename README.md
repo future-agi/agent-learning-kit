@@ -92,13 +92,16 @@ and simulation cookbooks for autonomous-agent trust boundaries, approval gates,
 budgets, rollback, kill switches, containment, drift detection, and audit
 evidence. Adapter probe readiness exercises raw probe, discovery, optimization,
 auto-discovery, promotion, and one-call run cookbooks so BYO framework objects
-can become evaluated run manifests locally. Framework adapter trinity suite
+can become evaluated run manifests locally. Realtime stack probe readiness
+optimizes the local LiveKit-style voice+streaming stack, promotes it to a run
+manifest, and requires route/tool, timing, audio, stream chunk/tool-delta,
+completion, and no-drop/no-error evidence. Framework adapter trinity suite
 readiness executes the run+redteam suite cookbook and the suite-optimization
 cookbook, requiring the optimizer to select the nested full-trinity suite job
 with framework runtime, adapter-contract, adversarial, campaign, and optimizer
-governance evidence. The composed trinity-stack probe readiness gate proves
-that the selected orchestration stack agent can pass a localhost task evaluator
-and promote into one run manifest with world, framework, retrieval, memory,
+governance evidence. The composed trinity-stack probe readiness gate proves that
+the selected orchestration stack agent can pass a localhost task evaluator and
+promote into one run manifest with world, framework, retrieval, memory,
 multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
@@ -1201,7 +1204,11 @@ delta, completion, and no-drop/no-error evidence.
 `optimize.build_realtime_run_manifest_from_probe_optimization(...)` promotes the
 selected stack into the normal realtime simulation path. See
 `examples/sdk_realtime_stack_probe_optimization.py` for an end-to-end probe,
-promotion, and evaluated run cookbook.
+promotion, and evaluated run cookbook. `agent-learn release-check` gates this
+path as `realtime_stack_probe_readiness`: the optimizer must select the local
+LiveKit support-route stack, pass native realtime-stack proof checks, promote to
+`agent-learning.run.v1`, and close voice, timing, streaming, route/tool,
+completion, no-drop/no-error, and run metrics.
 
 Runnable SDK cookbook:
 

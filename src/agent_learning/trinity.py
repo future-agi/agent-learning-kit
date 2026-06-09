@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import importlib
 import json
@@ -617,6 +618,64 @@ V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS = [
     "has_rollback",
     "has_locality",
     "has_steward",
+]
+
+V1_REALTIME_STACK_PROBE_FILES = [
+    "examples/sdk_realtime_stack_probe_optimization.py",
+    "examples/sdk_realtime_voice_optimization.py",
+    "internal-docs/realtime-stack-probe-research.md",
+]
+
+V1_REALTIME_STACK_PROBE_FRAMEWORK = "livekit"
+
+V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE = "support"
+
+V1_REALTIME_STACK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.realtime-stack-probe-proof.v1"
+)
+
+V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
+    "voice",
+    "streaming_trace",
+]
+
+V1_REALTIME_STACK_PROBE_REQUIRED_METRICS = [
+    "realtime_stack_probe_pass_rate",
+    "realtime_stack_probe_local_contract_quality",
+    "realtime_stack_probe_voice_quality",
+    "realtime_stack_probe_streaming_quality",
+    "realtime_stack_probe_routing_quality",
+    "realtime_stack_probe_tool_evidence",
+    "realtime_stack_probe_score",
+]
+
+V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS = [
+    "voice_interaction_quality",
+    "voice_timing_distribution_quality",
+    "streaming_interaction_quality",
+    "voice_trace_coverage",
+    "streaming_trace_coverage",
+]
+
+V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS = [
+    "voice_status",
+    "voice_timing",
+    "transcribe_audio",
+    "route_call",
+    "speak",
+    "streaming_trace_status",
+    "list_stream_events",
+    "inspect_stream_event",
+]
+
+V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS = [
+    "chunk",
+    "final",
+    "gap",
+    "latency",
+    "livekit",
+    "stream",
+    "tool_delta",
 ]
 
 V1_OPENENV_OPTIMIZER_FILES = [
@@ -2042,6 +2101,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=browser_realtime_adapter,
     )
+    realtime_stack_probe = _release_realtime_stack_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="realtime_stack_probe_readiness",
+        passed=(
+            not realtime_stack_probe["missing_files"]
+            and not realtime_stack_probe["optimization_errors"]
+            and not realtime_stack_probe["proof_errors"]
+            and not realtime_stack_probe["manifest_errors"]
+            and not realtime_stack_probe["metric_errors"]
+            and not realtime_stack_probe["runtime_errors"]
+            and not realtime_stack_probe["errors"]
+        ),
+        milestone="M6",
+        evidence=realtime_stack_probe,
+    )
     stateful_framework_adapter = _release_stateful_framework_adapter_status(root)
     _append_release_check(
         checks,
@@ -2285,6 +2360,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_browser_realtime_adapter_contracts": copy.deepcopy(
             V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
+        ),
+        "required_realtime_stack_probe_files": list(V1_REALTIME_STACK_PROBE_FILES),
+        "required_realtime_stack_probe_framework": V1_REALTIME_STACK_PROBE_FRAMEWORK,
+        "required_realtime_stack_probe_expected_route": (
+            V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
+        ),
+        "required_realtime_stack_probe_proof_kind": V1_REALTIME_STACK_PROBE_PROOF_KIND,
+        "required_realtime_stack_probe_environment_types": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_realtime_stack_probe_metrics": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
+        ),
+        "required_realtime_stack_probe_run_metrics": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_realtime_stack_probe_tools": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS
+        ),
+        "required_realtime_stack_probe_streaming_signals": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
         ),
         "required_stateful_framework_adapter_files": list(
             V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
@@ -8568,6 +8664,586 @@ def _release_adapter_state_value(
         if current is not None:
             return current
     return None
+
+
+def _release_realtime_stack_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_REALTIME_STACK_PROBE_FILES)
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    result: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    run_result: dict[str, Any] = {}
+    if not missing_files:
+        example_path = root / "examples/sdk_realtime_stack_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_realtime_stack_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            from agent_learning import optimize, simulate
+
+            realtime_example = module._realtime_example()
+            result = module.build_probe_optimization()
+            manifest = optimize.build_realtime_run_manifest_from_probe_optimization(
+                result,
+                name="release-realtime-stack-probe-readiness",
+                evaluation_config=realtime_example.evaluation_config(),
+                metadata={"release_check": "realtime_stack_probe_readiness"},
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-realtime-stack-probe-"
+            ) as tmpdir:
+                manifest_path = simulate.write_manifest_file(
+                    manifest,
+                    Path(tmpdir) / "realtime-stack-probe-run.json",
+                )
+                run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        realtime_stack = _as_mapping(best_config.get("realtime_stack"))
+        best_realtime = _as_mapping(realtime_stack.get("realtime"))
+        best_voice = _as_mapping(best_realtime.get("voice"))
+        best_streaming = _as_mapping(best_realtime.get("streaming_trace"))
+        best_streaming_state = _as_mapping(best_streaming.get("state"))
+        proof = _as_mapping(result.get("realtime_stack_probe_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        selected_summary = _as_mapping(proof_evidence.get("selected_report_summary"))
+        contract = _as_mapping(proof_evidence.get("realtime_stack_contract"))
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        history_routes: dict[str, dict[str, Any]] = {}
+        for history in histories:
+            candidate = _as_mapping(history.get("candidate_config"))
+            candidate_stack = _as_mapping(
+                candidate.get("realtime_stack") or candidate
+            )
+            candidate_realtime = _as_mapping(candidate_stack.get("realtime"))
+            candidate_streaming = _as_mapping(
+                candidate_realtime.get("streaming_trace")
+            )
+            route = str(_as_mapping(candidate_streaming.get("state")).get("route") or "")
+            if route:
+                history_routes[route] = {
+                    "score": history.get("score"),
+                    "metrics": {
+                        metric: _as_mapping(history.get("metrics")).get(metric)
+                        for metric in V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
+                    },
+                }
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "framework": summary.get("framework"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "candidate_lineage_selected_score_delta": summary.get(
+                "candidate_lineage_selected_score_delta"
+            ),
+            "best_route": best_streaming_state.get("route"),
+            "best_sample_rate_hz": best_voice.get("sample_rate_hz"),
+            "history_routes": history_routes,
+            "optimizer_governance_status": summary.get("optimizer_governance_status"),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "failed_check_ids": proof.get("failed_check_ids") or [],
+            "warning_check_ids": proof.get("warning_check_ids") or [],
+            "check_count": proof.get("check_count"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "contract_framework": contract.get("framework"),
+            "contract_runtime": contract.get("runtime"),
+            "contract_local_executable_fixture": contract.get(
+                "local_executable_fixture"
+            ),
+            "contract_requires_external_service": contract.get(
+                "requires_external_service"
+            ),
+            "contract_external_sources": contract.get("external_sources") or [],
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
+            },
+            "selected_summary": {
+                "current_route": selected_summary.get("current_route"),
+                "expected_route": selected_summary.get("expected_route"),
+                "route_match": selected_summary.get("route_match"),
+                "sample_rate_hz": selected_summary.get("sample_rate_hz"),
+                "frame_count": selected_summary.get("frame_count"),
+                "timing_stage_count": selected_summary.get("timing_stage_count"),
+                "timing_sample_count": selected_summary.get("timing_sample_count"),
+                "mos": selected_summary.get("mos"),
+                "snr_db": selected_summary.get("snr_db"),
+                "jitter_ms": selected_summary.get("jitter_ms"),
+                "streaming_chunk_count": selected_summary.get(
+                    "streaming_chunk_count"
+                ),
+                "streaming_tool_delta_count": selected_summary.get(
+                    "streaming_tool_delta_count"
+                ),
+                "streaming_completion_status": selected_summary.get(
+                    "streaming_completion_status"
+                ),
+                "streaming_error_count": selected_summary.get(
+                    "streaming_error_count"
+                ),
+                "streaming_dropped_event_count": selected_summary.get(
+                    "streaming_dropped_event_count"
+                ),
+                "observed_tool_names": selected_summary.get(
+                    "observed_tool_names"
+                )
+                or [],
+                "streaming_signals": selected_summary.get("streaming_signals")
+                or [],
+            },
+        }
+
+        optimization_expectations = {
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "summary.optimization_passed": (summary.get("optimization_passed"), True),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "summary.framework": (summary.get("framework"), V1_REALTIME_STACK_PROBE_FRAMEWORK),
+            "best_config.realtime_stack.realtime.streaming_trace.state.route": (
+                best_streaming_state.get("route"),
+                V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            ),
+            "best_config.realtime_stack.realtime.voice.sample_rate_hz": (
+                best_voice.get("sample_rate_hz"),
+                16000,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=1.0,
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=1.0,
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.total_evaluations",
+                expected=">=3",
+                observed=summary.get("total_evaluations"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_count",
+                expected=">=3",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _float_or_zero(
+            summary.get("candidate_lineage_selected_score_delta")
+        ) < 0.9:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_selected_score_delta",
+                expected=">=0.9",
+                observed=summary.get("candidate_lineage_selected_score_delta"),
+            )
+        if V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE not in history_routes:
+            append_error(
+                optimization_errors,
+                field="optimization.history.routes",
+                expected=V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+                observed=sorted(history_routes),
+            )
+
+        proof_expectations = {
+            "kind": (proof.get("kind"), V1_REALTIME_STACK_PROBE_PROOF_KIND),
+            "status": (proof.get("status"), "passed"),
+            "passed": (proof.get("passed"), True),
+            "assurance_level": (
+                proof.get("assurance_level"),
+                "l2_native_realtime_stack_probe_verified",
+            ),
+            "failed_check_ids": (proof.get("failed_check_ids") or [], []),
+            "requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "contract.framework": (contract.get("framework"), V1_REALTIME_STACK_PROBE_FRAMEWORK),
+            "contract.runtime": (contract.get("runtime"), "in_process"),
+            "contract.local_executable_fixture": (
+                contract.get("local_executable_fixture"),
+                True,
+            ),
+            "contract.requires_external_service": (
+                contract.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.current_route": (
+                selected_summary.get("current_route"),
+                V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            ),
+            "selected_summary.expected_route": (
+                selected_summary.get("expected_route"),
+                V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            ),
+            "selected_summary.route_match": (selected_summary.get("route_match"), True),
+            "selected_summary.streaming_completion_status": (
+                selected_summary.get("streaming_completion_status"),
+                "completed",
+            ),
+            "selected_summary.streaming_error_count": (
+                selected_summary.get("streaming_error_count"),
+                0,
+            ),
+            "selected_summary.streaming_dropped_event_count": (
+                selected_summary.get("streaming_dropped_event_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(proof.get("check_count")) < 8:
+            append_error(
+                proof_errors,
+                field="check_count",
+                expected=">=8",
+                observed=proof.get("check_count"),
+            )
+        if _int_or_zero(selected_summary.get("frame_count")) < 2:
+            append_error(
+                proof_errors,
+                field="selected_summary.frame_count",
+                expected=">=2",
+                observed=selected_summary.get("frame_count"),
+            )
+        if _int_or_zero(selected_summary.get("timing_stage_count")) < 4:
+            append_error(
+                proof_errors,
+                field="selected_summary.timing_stage_count",
+                expected=">=4",
+                observed=selected_summary.get("timing_stage_count"),
+            )
+        if _int_or_zero(selected_summary.get("streaming_chunk_count")) < 2:
+            append_error(
+                proof_errors,
+                field="selected_summary.streaming_chunk_count",
+                expected=">=2",
+                observed=selected_summary.get("streaming_chunk_count"),
+            )
+        if _int_or_zero(selected_summary.get("streaming_tool_delta_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.streaming_tool_delta_count",
+                expected=">=1",
+                observed=selected_summary.get("streaming_tool_delta_count"),
+            )
+        missing_tools = missing_values(
+            selected_summary.get("observed_tool_names"),
+            V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS,
+        )
+        if missing_tools:
+            append_error(
+                proof_errors,
+                field="selected_summary.observed_tool_names",
+                expected=V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS,
+                observed=selected_summary.get("observed_tool_names"),
+            )
+        missing_signals = missing_values(
+            selected_summary.get("streaming_signals"),
+            V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS,
+        )
+        if missing_signals:
+            append_error(
+                proof_errors,
+                field="selected_summary.streaming_signals",
+                expected=V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS,
+                observed=selected_summary.get("streaming_signals"),
+            )
+        for metric in V1_REALTIME_STACK_PROBE_REQUIRED_METRICS:
+            if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"proof.selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=selected_metrics.get(metric),
+                )
+
+    if manifest:
+        metadata = _as_mapping(manifest.get("metadata"))
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            env for env in _as_list(simulation.get("environments")) if isinstance(env, Mapping)
+        ]
+        env_types = [str(env.get("type") or "") for env in environments]
+        evaluation_config = _as_mapping(
+            _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+                "config"
+            )
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "promoted_from_realtime_stack_probe": metadata.get(
+                "promoted_from_realtime_stack_probe"
+            ),
+            "realtime_stack_probe_proof_status": metadata.get(
+                "realtime_stack_probe_proof_status"
+            ),
+            "simulation_modality": simulation.get("modality"),
+            "environment_types": env_types,
+            "expected_voice_route": evaluation_config.get("expected_voice_route"),
+            "required_tools": evaluation_config.get("required_tools") or [],
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.run.v1"),
+            "required_env": (manifest.get("required_env") or [], []),
+            "metadata.promoted_from_realtime_stack_probe": (
+                metadata.get("promoted_from_realtime_stack_probe"),
+                True,
+            ),
+            "metadata.realtime_stack_probe_proof_status": (
+                metadata.get("realtime_stack_probe_proof_status"),
+                "passed",
+            ),
+            "simulation.modality": (simulation.get("modality"), "voice"),
+            "evaluation.agent_report.config.expected_voice_route": (
+                evaluation_config.get("expected_voice_route"),
+                V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_env_types = missing_values(
+            env_types,
+            V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_env_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments",
+                expected=V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+                observed=env_types,
+            )
+        missing_manifest_tools = missing_values(
+            evaluation_config.get("required_tools"),
+            V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS,
+        )
+        if missing_manifest_tools:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.required_tools",
+                expected=V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS,
+                observed=evaluation_config.get("required_tools"),
+            )
+        missing_run_metric_weights = missing_values(
+            metric_weights,
+            V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS,
+        )
+        if missing_run_metric_weights:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS,
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+
+    if run_result:
+        run_summary = _as_mapping(run_result.get("summary"))
+        run_metrics = _as_mapping(run_summary.get("metric_averages"))
+        report = _as_mapping(run_result.get("report"))
+        cases = [case for case in _as_list(report.get("results")) if isinstance(case, Mapping)]
+        case = _as_mapping(cases[0]) if cases else {}
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        voice_state = _as_mapping(state.get("voice"))
+        streaming_state = _as_mapping(state.get("streaming_trace"))
+        streaming_summary = _as_mapping(streaming_state.get("summary"))
+        evidence["run"] = {
+            "kind": run_result.get("kind"),
+            "status": run_result.get("status"),
+            "evaluation_passed": run_summary.get("evaluation_passed"),
+            "evaluation_score": run_summary.get("evaluation_score"),
+            "metrics": {
+                metric: run_metrics.get(metric)
+                for metric in V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS
+            },
+            "voice_current_route": voice_state.get("current_route"),
+            "voice_sample_rate_hz": voice_state.get("sample_rate_hz"),
+            "streaming_route": _as_mapping(streaming_state.get("state")).get("route"),
+            "streaming_completion_status": streaming_summary.get(
+                "completion_status"
+            ),
+            "streaming_tool_delta_count": streaming_summary.get("tool_delta_count"),
+            "streaming_error_count": streaming_summary.get("error_count"),
+            "streaming_dropped_event_count": streaming_summary.get(
+                "dropped_event_count"
+            ),
+            "state_keys": sorted(str(key) for key in state),
+        }
+        runtime_expectations = {
+            "kind": (run_result.get("kind"), "agent-learning.run.v1"),
+            "status": (run_result.get("status"), "passed"),
+            "summary.evaluation_passed": (run_summary.get("evaluation_passed"), True),
+            "voice.current_route": (
+                voice_state.get("current_route"),
+                V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            ),
+            "streaming_trace.state.route": (
+                _as_mapping(streaming_state.get("state")).get("route"),
+                V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+            ),
+            "streaming_trace.summary.completion_status": (
+                streaming_summary.get("completion_status"),
+                "completed",
+            ),
+            "streaming_trace.summary.error_count": (
+                streaming_summary.get("error_count"),
+                0,
+            ),
+            "streaming_trace.summary.dropped_event_count": (
+                streaming_summary.get("dropped_event_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(run_summary.get("evaluation_score")) < 0.95:
+            append_error(
+                runtime_errors,
+                field="summary.evaluation_score",
+                expected=">=0.95",
+                observed=run_summary.get("evaluation_score"),
+            )
+        if _int_or_zero(streaming_summary.get("tool_delta_count")) < 1:
+            append_error(
+                runtime_errors,
+                field="streaming_trace.summary.tool_delta_count",
+                expected=">=1",
+                observed=streaming_summary.get("tool_delta_count"),
+            )
+        for metric in V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS:
+            if _float_or_zero(run_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"run.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=run_metrics.get(metric),
+                )
+
+    return {
+        "required_files": list(V1_REALTIME_STACK_PROBE_FILES),
+        "required_framework": V1_REALTIME_STACK_PROBE_FRAMEWORK,
+        "required_expected_route": V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE,
+        "required_proof_kind": V1_REALTIME_STACK_PROBE_PROOF_KIND,
+        "required_environment_types": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_metrics": list(V1_REALTIME_STACK_PROBE_REQUIRED_METRICS),
+        "required_run_metrics": list(V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS),
+        "required_tools": list(V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS),
+        "required_streaming_signals": list(
+            V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
+        ),
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "manifest_errors": manifest_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
 
 
 def _release_framework_adapter_trinity_suite_status(root: Path) -> dict[str, Any]:
