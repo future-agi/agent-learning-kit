@@ -15147,6 +15147,48 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_task_world_optimizer_source_urls"] == (
         trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
     )
+    assert payload["required_world_hooks_readiness_files"] == (
+        trinity.V1_WORLD_HOOKS_READINESS_FILES
+    )
+    assert payload["required_world_hooks_environment_types"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_world_hooks_search_paths"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["required_world_hooks_target_layers"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS
+    )
+    assert payload["required_world_hooks_contract_hooks"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
+    )
+    assert payload["required_world_hooks_contract_surfaces"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
+    )
+    assert payload["required_world_hooks_replay_semantics"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
+    )
+    assert payload["required_world_hooks_metrics"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_METRICS
+    )
+    assert payload["required_world_hooks_proof_checks"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS
+    )
+    assert payload["required_world_hooks_actions"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ACTIONS
+    )
+    assert payload["required_world_hooks_assurance_level"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
+    )
+    assert payload["required_world_hooks_candidate_profile"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
+    )
+    assert payload["forbidden_world_hooks_external_keys"] == (
+        trinity.V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS
+    )
+    assert payload["required_world_hooks_source_urls"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS
+    )
     assert payload["required_evaluation_hook_probe_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES
     )
@@ -15614,6 +15656,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "evaluation_hook_probe_readiness",
         "native_optimizer_evidence_components",
         "optimizer_governance_readiness",
+        "world_hooks_readiness",
         "redteam_core_examples_present",
         "redteam_research_coverage",
         "redteam_corpus_execution_readiness",
@@ -18904,6 +18947,218 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS) <= set(
         governance["check_ids"]
     )
+    world_hooks = checks["world_hooks_readiness"]["evidence"]
+    assert world_hooks["required_files"] == trinity.V1_WORLD_HOOKS_READINESS_FILES
+    assert world_hooks["required_environment_types"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert world_hooks["required_search_paths"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
+    )
+    assert world_hooks["required_target_layers"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS
+    )
+    assert world_hooks["required_contract_hooks"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
+    )
+    assert world_hooks["required_contract_surfaces"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
+    )
+    assert world_hooks["required_replay_semantics"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
+    )
+    assert world_hooks["required_metrics"] == trinity.V1_WORLD_HOOKS_REQUIRED_METRICS
+    assert world_hooks["required_proof_checks"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS
+    )
+    assert world_hooks["required_actions"] == trinity.V1_WORLD_HOOKS_REQUIRED_ACTIONS
+    assert world_hooks["required_assurance_level"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
+    )
+    assert world_hooks["required_candidate_profile"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
+    )
+    assert world_hooks["forbidden_external_keys"] == (
+        trinity.V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS
+    )
+    assert world_hooks["required_source_urls"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS
+    )
+    assert world_hooks["missing_files"] == []
+    assert world_hooks["execution_errors"] == []
+    assert world_hooks["manifest_errors"] == []
+    assert world_hooks["optimization_errors"] == []
+    assert world_hooks["proof_errors"] == []
+    assert world_hooks["metric_errors"] == []
+    assert world_hooks["report_errors"] == []
+    assert world_hooks["promotion_errors"] == []
+    assert world_hooks["replay_errors"] == []
+    assert world_hooks["security_errors"] == []
+    world_hooks_evidence = world_hooks["evidence"]
+    world_manifest = world_hooks_evidence["manifest"]
+    assert world_manifest["version"] == "agent-learning.optimization.v1"
+    assert world_manifest["required_env"] == ["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"]
+    assert world_manifest["task_kind"] == "world_hooks"
+    assert world_manifest["target_task_kind"] == "world_hooks"
+    assert world_manifest["target_layers"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS
+    )
+    assert world_manifest["search_paths"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
+    )
+    assert world_manifest["world_hooks"]["mode"] == "native_world_state_hooks"
+    assert world_manifest["world_hooks"]["requires_external_service"] is False
+    assert set(world_manifest["research_source_urls"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS
+    )
+    assert world_manifest["forbidden_external_keys_present"] == []
+    world_optimization = world_hooks_evidence["optimization"]
+    assert world_optimization["kind"] == "agent-learning.optimization.v1"
+    assert world_optimization["schema_version"] == "agent-learning.cli.v1"
+    assert world_optimization["status"] == "passed"
+    assert world_optimization["output_roundtrip"] is True
+    assert world_optimization["optimization_passed"] is True
+    assert world_optimization["evaluation_passed"] is True
+    assert world_optimization["optimization_score"] == pytest.approx(1.0)
+    assert world_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert world_optimization["total_evaluations"] >= 3
+    assert world_optimization["total_iterations"] >= 3
+    assert world_optimization["candidate_lineage_count"] >= 3
+    assert world_optimization["best_history_score"] == pytest.approx(1.0)
+    assert world_optimization["selected_patch_paths"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
+    )
+    assert world_optimization["selected_environment_types"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert world_optimization["candidate_profile"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
+    )
+    assert world_optimization["world_model_level"] == "l3_evolver"
+    world_proof = world_hooks_evidence["proof"]
+    assert world_proof["kind"] == "agent-learning.optimization.world-hook-proof.v1"
+    assert world_proof["task_kind"] == "world_hooks"
+    assert world_proof["status"] == "passed"
+    assert world_proof["passed"] is True
+    assert world_proof["assurance_level"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
+    )
+    assert world_proof["candidate_profile"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
+    )
+    assert world_proof["world_model_level"] == "l3_evolver"
+    assert world_proof["requires_external_service"] is False
+    assert world_proof["failed_check_ids"] == []
+    assert world_proof["warning_check_ids"] == []
+    assert set(world_proof["passed_check_ids"]) == set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS
+    )
+    world_contract = world_hooks_evidence["contract"]
+    assert world_contract["kind"] == "agent-learning.world-hooks-contract.v1"
+    assert world_contract["mode"] == "native_world_state_hooks"
+    assert world_contract["runtime"] == "in_process"
+    assert world_contract["requires_external_service"] is False
+    assert set(world_contract["hook_names"]) == set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
+    )
+    assert set(world_contract["callable_hook_names"]) == set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
+    )
+    assert set(world_contract["surfaces"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
+    )
+    assert set(world_contract["replay_semantics"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
+    )
+    world_metrics = world_hooks_evidence["metrics"]
+    assert world_metrics["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_WORLD_HOOKS_REQUIRED_METRICS
+    }
+    simulation_score = world_hooks_evidence["simulation_evidence_score"]
+    assert simulation_score["score"] == pytest.approx(1.0)
+    assert "world_hooks" in simulation_score["component_names"]
+    world_component = {
+        component["name"]: component
+        for component in simulation_score["components"]
+    }["world_hooks"]
+    assert world_component["score"] == pytest.approx(1.0)
+    assert world_component["missing"] == []
+    assert world_component["summary"]["modes"] == ["native_world_state_hooks"]
+    assert world_component["summary"]["runtimes"] == ["in_process"]
+    assert world_component["summary"]["requires_external_service_values"] == [
+        False
+    ]
+    world_report = world_hooks_evidence["report"]
+    assert "world_hooks" in world_report["sections"]
+    assert world_report["kind"] == "world_hooks_evidence"
+    assert world_report["status"] == "verified"
+    assert world_report["local_only"] is True
+    assert world_report["requires_external_service"] is False
+    assert world_report["assurance_level"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
+    )
+    assert world_report["failed_check_ids"] == []
+    assert set(world_report["action_ids"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_ACTIONS
+    )
+    assert set(world_report["research_source_urls"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS
+    )
+    assert world_report["contract_mode"] == "native_world_state_hooks"
+    assert world_report["contract_runtime"] == "in_process"
+    assert world_report["contract_requires_external_service"] is False
+    assert world_report["replay_lock_local_only"] is True
+    assert world_report["replay_lock_requires_external_service"] is False
+    world_actions = world_hooks_evidence["actions"]
+    assert set(world_actions["action_ids"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_ACTIONS
+    )
+    assert world_actions["export_contract"] == {
+        "kind": "agent-learning.action-run.v1",
+        "status": "passed",
+        "artifact_ref": "report.world_hooks.artifacts.contract",
+        "contract_mode": "native_world_state_hooks",
+        "contract_requires_external_service": False,
+    }
+    world_promotion = world_hooks_evidence["promotion"]
+    assert world_promotion["status"] == "passed"
+    assert world_promotion["promotion_kind"] == "world_hooks_optimization"
+    assert world_promotion["source_status"] == "passed"
+    assert world_promotion["promoted_manifest_count"] >= 1
+    assert world_promotion["promoted_finding_count"] == 0
+    assert world_promotion["requires_external_service"] is False
+    assert world_promotion["world_hook_proof_status"] == "passed"
+    assert world_promotion["world_hook_proof_assurance_level"] == (
+        trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
+    )
+    assert world_promotion["manifest_version"] == "agent-learning.run.v1"
+    assert world_promotion["manifest_required_env"] == [
+        "AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"
+    ]
+    assert world_promotion["manifest_promotion_kind"] == "world_hooks_optimization"
+    assert world_promotion["replay_lock_local_only"] is True
+    assert world_promotion["replay_lock_requires_external_service"] is False
+    assert set(world_promotion["environment_types"]) >= set(
+        trinity.V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert world_promotion["world_hook_quality"] == {
+        "require_no_external_service": True,
+        "runtime": "in_process",
+        "mode": "native_world_state_hooks",
+    }
+    assert world_promotion["metric_weights"]["world_hook_contract_quality"] == (
+        pytest.approx(8.0)
+    )
+    world_replay = world_hooks_evidence["replay"]
+    assert world_replay["status"] == "passed"
+    assert world_replay["score"] == pytest.approx(1.0)
+    assert world_replay["passed_count"] >= 1
+    assert world_replay["failed_count"] == 0
+    assert world_replay["metrics"] == {
+        "world_hook_contract_quality": pytest.approx(1.0),
+        "world_contract_quality": pytest.approx(1.0),
+    }
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
     assert payload["findings"] == []
     assert {

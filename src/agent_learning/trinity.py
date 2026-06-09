@@ -398,6 +398,98 @@ V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS = [
     "https://arxiv.org/abs/2308.03688",
 ]
 
+V1_WORLD_HOOKS_READINESS_FILES = [
+    "examples/sdk_world_hooks_optimization.py",
+    "internal-docs/world-hooks-readiness-research.md",
+]
+
+V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES = [
+    "stateful_tool_world",
+    "world_contract",
+]
+
+V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments",
+]
+
+V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS = [
+    "model",
+    "harness",
+    "world",
+    "tools",
+    "security",
+    "planner",
+    "evaluator",
+]
+
+V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS = [
+    "stateful_tool_world_status",
+    "localize_temporal_takeover",
+    "apply_world_transition",
+]
+
+V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES = [
+    "state_transitions",
+    "world_contracts",
+    "adversarial_pressure",
+    "memory_provenance",
+    "verifier_contracts",
+]
+
+V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS = [
+    "deterministic_state_replay",
+    "world_contract_replay",
+    "adversarial_pressure_replay",
+    "memory_provenance_replay",
+]
+
+V1_WORLD_HOOKS_REQUIRED_METRICS = [
+    "world_hook_contract_quality",
+    "world_contract_quality",
+    "tool_selection_accuracy",
+    "state_goal_accuracy",
+    "environment_injection_resistance",
+]
+
+V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS = [
+    "native_no_external_hook",
+    "world_model_verifier_present",
+    "world_hooks_contract_closed",
+    "state_transitions_closed",
+    "world_contract_invariants_closed",
+    "adversarial_pressure_closed",
+    "memory_provenance_contained",
+    "metric_evidence_closed",
+]
+
+V1_WORLD_HOOKS_REQUIRED_ACTIONS = [
+    "report_world_hooks",
+    "promote_world_hooks_regression",
+    "rerun_world_hooks_optimization",
+    "export_world_hooks_proof",
+    "export_world_hooks_contract",
+    "export_world_hooks_replay_lock",
+]
+
+V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL = "l3_verified_native_world_hooks"
+
+V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE = "l3_evolver_verifiable_world_model"
+
+V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS = [
+    "endpoint",
+    "auth",
+    "api_key",
+    "secret",
+    "token",
+]
+
+V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS = [
+    "https://arxiv.org/abs/2606.05558",
+    "https://arxiv.org/abs/2606.03892",
+    "https://arxiv.org/abs/2606.02372",
+    "https://arxiv.org/abs/2605.30880",
+]
+
 V1_EVALUATION_HOOK_PROBE_FILES = [
     "examples/sdk_evaluation_hook_probe_optimization.py",
     "internal-docs/evaluation-hook-probe-research.md",
@@ -2514,6 +2606,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=optimizer_governance,
     )
+    world_hooks_readiness = _release_world_hooks_readiness_status(root)
+    _append_release_check(
+        checks,
+        check_id="world_hooks_readiness",
+        passed=(
+            not world_hooks_readiness["missing_files"]
+            and not world_hooks_readiness["execution_errors"]
+            and not world_hooks_readiness["manifest_errors"]
+            and not world_hooks_readiness["optimization_errors"]
+            and not world_hooks_readiness["proof_errors"]
+            and not world_hooks_readiness["metric_errors"]
+            and not world_hooks_readiness["report_errors"]
+            and not world_hooks_readiness["promotion_errors"]
+            and not world_hooks_readiness["replay_errors"]
+            and not world_hooks_readiness["security_errors"]
+        ),
+        milestone="M3",
+        evidence=world_hooks_readiness,
+    )
     missing_redteam = _missing_relative_paths(root, V1_REDTEAM_EXAMPLES)
     _append_release_check(
         checks,
@@ -3029,6 +3140,44 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_task_world_optimizer_source_urls": list(
             V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
+        ),
+        "required_world_hooks_readiness_files": list(
+            V1_WORLD_HOOKS_READINESS_FILES
+        ),
+        "required_world_hooks_environment_types": list(
+            V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_world_hooks_search_paths": list(
+            V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
+        ),
+        "required_world_hooks_target_layers": list(
+            V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS
+        ),
+        "required_world_hooks_contract_hooks": list(
+            V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
+        ),
+        "required_world_hooks_contract_surfaces": list(
+            V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
+        ),
+        "required_world_hooks_replay_semantics": list(
+            V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
+        ),
+        "required_world_hooks_metrics": list(V1_WORLD_HOOKS_REQUIRED_METRICS),
+        "required_world_hooks_proof_checks": list(
+            V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS
+        ),
+        "required_world_hooks_actions": list(V1_WORLD_HOOKS_REQUIRED_ACTIONS),
+        "required_world_hooks_assurance_level": (
+            V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
+        ),
+        "required_world_hooks_candidate_profile": (
+            V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
+        ),
+        "forbidden_world_hooks_external_keys": list(
+            V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS
+        ),
+        "required_world_hooks_source_urls": list(
+            V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS
         ),
         "required_evaluation_hook_probe_files": list(
             V1_EVALUATION_HOOK_PROBE_FILES
@@ -4780,6 +4929,1107 @@ def _release_task_world_optimizer_status(root: Path) -> dict[str, Any]:
         "optimization_errors": optimization_errors,
         "metric_errors": metric_errors,
         "world_errors": world_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_world_hooks_readiness_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_WORLD_HOOKS_READINESS_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    promotion_errors: list[dict[str, Any]] = []
+    replay_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+    catalog: dict[str, Any] = {}
+    export_run: dict[str, Any] = {}
+    exported_contract: dict[str, Any] = {}
+    promotion: dict[str, Any] = {}
+    replay: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def nested_key_names(value: Any) -> set[str]:
+        names: set[str] = set()
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                names.add(str(key))
+                names.update(nested_key_names(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                names.update(nested_key_names(item))
+        return names
+
+    def forbidden_key_names(value: Any) -> list[str]:
+        return sorted(
+            set(V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS) & nested_key_names(value)
+        )
+
+    def selected_history(
+        optimization: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        return _as_mapping(
+            max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+        )
+
+    if not missing_files:
+        from . import actions as agent_actions
+        from . import config as agent_config
+        from . import optimize as agent_optimize
+        from . import simulate as agent_simulate
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_world_hooks_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_world_hooks_readiness",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = "release-check-world-hooks-key"
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-world-hooks-readiness-"
+            ) as tmpdir:
+                tmp_root = Path(tmpdir)
+                output_path = tmp_root / "sdk-world-hooks-optimization.json"
+                result = module.run(output_path)
+                serialized = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized)
+
+                report = agent_simulate.render_report(
+                    result,
+                    source_path=output_path,
+                )
+                catalog = agent_actions.action_catalog(
+                    result,
+                    source_path=output_path,
+                )
+                export_path = tmp_root / "world-hooks-contract.json"
+                export_run = agent_actions.run_action(
+                    result,
+                    "export_world_hooks_contract",
+                    source_path=output_path,
+                    cwd=tmp_root,
+                    artifact_output_path=export_path,
+                )
+                exported_contract = json.loads(
+                    export_path.read_text(encoding="utf-8")
+                )
+                promotion = agent_simulate.promote_to_regression(
+                    result,
+                    source_path=output_path,
+                    name="release-world-hooks-regression",
+                    min_level="note",
+                    max_findings=1,
+                    required_env=[example_env],
+                )
+                regression_manifest_path = tmp_root / "world-hooks-regression.json"
+                regression_manifest_path.write_text(
+                    json.dumps(
+                        promotion.get("manifest"),
+                        indent=2,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                replay = agent_simulate.replay_manifests(
+                    [regression_manifest_path],
+                    name="release-world-hooks-regression-replay",
+                )
+
+                if "release-check-world-hooks-key" in serialized:
+                    append_error(
+                        security_errors,
+                        field="serialized_result",
+                        expected="api key redacted",
+                        observed="api key present",
+                    )
+
+                optimization = _as_mapping(result.get("optimization"))
+                best_history = selected_history(optimization)
+                target = _as_mapping(_as_mapping(manifest.get("optimization")).get("target"))
+                candidate = agent_optimize.AgentCandidate.from_config(
+                    _as_mapping(optimization.get("best_config")),
+                    target_name=str(target.get("name") or ""),
+                    metadata=_as_mapping(target.get("metadata")),
+                    layers=_as_list(target.get("layers")),
+                )
+                score = agent_optimize.score_simulation_evidence(
+                    _as_mapping(best_history.get("report")),
+                    manifest=manifest,
+                    candidate=candidate,
+                    config=_as_mapping(
+                        _as_mapping(
+                            _as_mapping(manifest.get("evaluation")).get(
+                                "agent_report"
+                            )
+                        ).get("config")
+                    ),
+                )
+                evidence["simulation_evidence_score"] = {
+                    "score": score.score,
+                    "components": [
+                        {
+                            "name": _as_mapping(component).get("name"),
+                            "score": _as_mapping(component).get("score"),
+                            "missing": _as_mapping(
+                                _as_mapping(component).get("details")
+                            ).get("missing")
+                            or [],
+                            "summary": _as_mapping(
+                                _as_mapping(component).get("details")
+                            ).get("summary"),
+                        }
+                        for component in _as_list(
+                            _as_mapping(
+                                score.metadata.get("simulation_evidence_score")
+                            ).get("components")
+                        )
+                        if isinstance(component, Mapping)
+                    ],
+                }
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_manifest = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_manifest.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        manifest_metadata = _as_mapping(manifest.get("metadata"))
+        target_search_space = _as_mapping(target.get("search_space"))
+        world_hooks_metadata = _as_mapping(manifest_metadata.get("world_hooks"))
+        research_sources = [
+            str(_as_mapping(source).get("url"))
+            for source in _as_list(manifest_metadata.get("research_sources"))
+            if _as_mapping(source).get("url")
+        ]
+        eval_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "task_kind": manifest_metadata.get("task_kind"),
+            "target_task_kind": target_metadata.get("task_kind"),
+            "target_layers": list(target.get("layers") or []),
+            "search_paths": sorted(str(path) for path in target_search_space),
+            "world_hooks": dict(world_hooks_metadata),
+            "research_source_urls": sorted(research_sources),
+            "metric_weights": {
+                metric: _as_mapping(eval_config.get("metric_weights")).get(metric)
+                for metric in V1_WORLD_HOOKS_REQUIRED_METRICS
+            },
+            "forbidden_external_keys_present": forbidden_key_names(manifest),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"],
+            ),
+            "metadata.task_kind": (manifest_metadata.get("task_kind"), "world_hooks"),
+            "optimization.target.metadata.task_kind": (
+                target_metadata.get("task_kind"),
+                "world_hooks",
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS,
+            ),
+            "metadata.world_hooks.mode": (
+                world_hooks_metadata.get("mode"),
+                "native_world_state_hooks",
+            ),
+            "metadata.world_hooks.requires_external_service": (
+                world_hooks_metadata.get("requires_external_service"),
+                False,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_paths = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS) - set(target_search_space)
+        )
+        if missing_paths:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space",
+                expected=V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS,
+                observed=sorted(target_search_space),
+            )
+        missing_sources = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS) - set(research_sources)
+        )
+        if missing_sources:
+            append_error(
+                manifest_errors,
+                field="metadata.research_sources.url",
+                expected=V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS,
+                observed=sorted(research_sources),
+            )
+        if forbidden_key_names(manifest):
+            append_error(
+                security_errors,
+                field="manifest.forbidden_external_keys",
+                expected=[],
+                observed=forbidden_key_names(manifest),
+            )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(best_simulation.get("environments"))
+        ]
+        best_environment_types = [
+            str(environment.get("type"))
+            for environment in best_environments
+            if environment.get("type")
+        ]
+        stateful_environment = next(
+            (
+                environment
+                for environment in best_environments
+                if environment.get("type") == "stateful_tool_world"
+            ),
+            {},
+        )
+        stateful_data = _as_mapping(stateful_environment.get("data"))
+        contract = _as_mapping(stateful_data.get("world_hooks_contract"))
+        hook_names = sorted(
+            str(_as_mapping(hook).get("name"))
+            for hook in _as_list(contract.get("hooks"))
+            if _as_mapping(hook).get("name")
+        )
+        callable_hook_names = sorted(
+            str(_as_mapping(hook).get("name"))
+            for hook in _as_list(contract.get("hooks"))
+            if _as_mapping(hook).get("name")
+            and _as_mapping(hook).get("callable") is True
+        )
+        proof = _as_mapping(result.get("world_hook_proof"))
+        passed_check_ids = sorted(
+            str(_as_mapping(check).get("id"))
+            for check in _as_list(proof.get("checks"))
+            if _as_mapping(check).get("passed") is True
+            and _as_mapping(check).get("id")
+        )
+        best_history = selected_history(optimization)
+        best_metrics = _as_mapping(best_history.get("metrics"))
+        best_patch = _as_mapping(best_history.get("patch"))
+        proof_selected_metrics = _as_mapping(
+            _as_mapping(proof.get("evidence")).get("selected_metrics")
+        )
+        summary_metrics = _as_mapping(summary.get("metric_averages"))
+        selected_metrics = {
+            metric: (
+                best_metrics.get(metric)
+                if best_metrics.get(metric) is not None
+                else (
+                    proof_selected_metrics.get(metric)
+                    if proof_selected_metrics.get(metric) is not None
+                    else summary_metrics.get(metric)
+                )
+            )
+            for metric in V1_WORLD_HOOKS_REQUIRED_METRICS
+        }
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "best_history_score": best_history.get("score"),
+            "selected_patch_paths": sorted(str(path) for path in best_patch),
+            "selected_environment_types": best_environment_types,
+            "candidate_profile": proof.get("candidate_profile"),
+            "world_model_level": proof.get("world_model_level"),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "task_kind": proof.get("task_kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "candidate_profile": proof.get("candidate_profile"),
+            "world_model_level": proof.get("world_model_level"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "failed_check_ids": list(proof.get("failed_check_ids") or []),
+            "warning_check_ids": list(proof.get("warning_check_ids") or []),
+            "passed_check_ids": passed_check_ids,
+            "check_count": proof.get("check_count"),
+        }
+        evidence["contract"] = {
+            "kind": contract.get("kind"),
+            "mode": contract.get("mode"),
+            "runtime": contract.get("runtime"),
+            "requires_external_service": contract.get(
+                "requires_external_service"
+            ),
+            "hook_names": hook_names,
+            "callable_hook_names": callable_hook_names,
+            "surfaces": sorted(str(item) for item in _as_list(contract.get("surfaces"))),
+            "replay_semantics": sorted(
+                str(item) for item in _as_list(contract.get("replay_semantics"))
+            ),
+            "evidence_requirements": sorted(
+                str(item) for item in _as_list(contract.get("evidence_requirements"))
+            ),
+        }
+        evidence["metrics"] = {
+            "selected_metrics": selected_metrics,
+            "summary_metric_averages": {
+                metric: summary_metrics.get(metric)
+                for metric in V1_WORLD_HOOKS_REQUIRED_METRICS
+            },
+            "best_history_metrics": {
+                metric: best_metrics.get(metric)
+                for metric in V1_WORLD_HOOKS_REQUIRED_METRICS
+            },
+            "proof_selected_metrics": {
+                metric: proof_selected_metrics.get(metric)
+                for metric in V1_WORLD_HOOKS_REQUIRED_METRICS
+            },
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field in (
+            "optimization_score",
+            "evaluation_score",
+        ):
+            observed = summary.get(field)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    optimization_errors,
+                    field=f"summary.{field}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        if _float_or_zero(best_history.get("score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="best_history.score",
+                expected=1.0,
+                observed=best_history.get("score"),
+            )
+        for field in (
+            "total_evaluations",
+            "total_iterations",
+            "candidate_lineage_count",
+        ):
+            observed = summary.get(field)
+            if _int_or_zero(observed) < 3:
+                append_error(
+                    optimization_errors,
+                    field=f"summary.{field}",
+                    expected=">=3",
+                    observed=observed,
+                )
+        missing_environment_types = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES)
+            - set(best_environment_types)
+        )
+        if missing_environment_types:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.simulation.environments.type",
+                expected=V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES,
+                observed=best_environment_types,
+            )
+        missing_patch_paths = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS) - set(best_patch)
+        )
+        if missing_patch_paths:
+            append_error(
+                optimization_errors,
+                field="best_history.patch",
+                expected=V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS,
+                observed=sorted(best_patch),
+            )
+
+        proof_expectations = {
+            "world_hook_proof.kind": (
+                proof.get("kind"),
+                "agent-learning.optimization.world-hook-proof.v1",
+            ),
+            "world_hook_proof.task_kind": (
+                proof.get("task_kind"),
+                "world_hooks",
+            ),
+            "world_hook_proof.status": (proof.get("status"), "passed"),
+            "world_hook_proof.passed": (proof.get("passed"), True),
+            "world_hook_proof.assurance_level": (
+                proof.get("assurance_level"),
+                V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL,
+            ),
+            "world_hook_proof.candidate_profile": (
+                proof.get("candidate_profile"),
+                V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE,
+            ),
+            "world_hook_proof.world_model_level": (
+                proof.get("world_model_level"),
+                "l3_evolver",
+            ),
+            "world_hook_proof.requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "world_hook_proof.failed_check_ids": (
+                proof.get("failed_check_ids") or [],
+                [],
+            ),
+            "world_hook_proof.warning_check_ids": (
+                proof.get("warning_check_ids") or [],
+                [],
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_proof_checks = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS) - set(passed_check_ids)
+        )
+        if missing_proof_checks:
+            append_error(
+                proof_errors,
+                field="world_hook_proof.checks",
+                expected=V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS,
+                observed=passed_check_ids,
+            )
+
+        contract_expectations = {
+            "world_hooks_contract.kind": (
+                contract.get("kind"),
+                "agent-learning.world-hooks-contract.v1",
+            ),
+            "world_hooks_contract.mode": (
+                contract.get("mode"),
+                "native_world_state_hooks",
+            ),
+            "world_hooks_contract.runtime": (
+                contract.get("runtime"),
+                "in_process",
+            ),
+            "world_hooks_contract.requires_external_service": (
+                contract.get("requires_external_service"),
+                False,
+            ),
+        }
+        for field, (observed, expected) in contract_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        contract_sets = {
+            "world_hooks_contract.hooks.name": (
+                set(hook_names),
+                set(V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS),
+            ),
+            "world_hooks_contract.callable_hooks.name": (
+                set(callable_hook_names),
+                set(V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS),
+            ),
+            "world_hooks_contract.surfaces": (
+                set(contract.get("surfaces") or []),
+                set(V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES),
+            ),
+            "world_hooks_contract.replay_semantics": (
+                set(contract.get("replay_semantics") or []),
+                set(V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS),
+            ),
+        }
+        for field, (observed, required) in contract_sets.items():
+            missing = sorted(required - observed)
+            if missing:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=sorted(required),
+                    observed=sorted(observed),
+                )
+        for metric in V1_WORLD_HOOKS_REQUIRED_METRICS:
+            if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=selected_metrics.get(metric),
+                )
+        if forbidden_key_names(best_config):
+            append_error(
+                security_errors,
+                field="optimization.best_config.forbidden_external_keys",
+                expected=[],
+                observed=forbidden_key_names(best_config),
+            )
+
+    if "simulation_evidence_score" in evidence:
+        score_evidence = _as_mapping(evidence.get("simulation_evidence_score"))
+        components = [
+            _as_mapping(component)
+            for component in _as_list(score_evidence.get("components"))
+        ]
+        component_names = {str(component.get("name")) for component in components}
+        world_component = next(
+            (
+                component
+                for component in components
+                if component.get("name") == "world_hooks"
+            ),
+            {},
+        )
+        evidence["simulation_evidence_score"]["component_names"] = sorted(
+            component_names
+        )
+        if _float_or_zero(score_evidence.get("score")) < 1.0:
+            append_error(
+                metric_errors,
+                field="simulation_evidence_score.score",
+                expected=1.0,
+                observed=score_evidence.get("score"),
+            )
+        if "world_hooks" not in component_names:
+            append_error(
+                metric_errors,
+                field="simulation_evidence_score.components.name",
+                expected="world_hooks",
+                observed=sorted(component_names),
+            )
+        if _float_or_zero(world_component.get("score")) < 1.0:
+            append_error(
+                metric_errors,
+                field="simulation_evidence_score.components.world_hooks.score",
+                expected=1.0,
+                observed=world_component.get("score"),
+            )
+        if world_component.get("missing"):
+            append_error(
+                metric_errors,
+                field="simulation_evidence_score.components.world_hooks.missing",
+                expected=[],
+                observed=world_component.get("missing"),
+            )
+
+    if report:
+        world_card = _as_mapping(_as_mapping(report.get("report")).get("world_hooks"))
+        action_ids = sorted(
+            str(_as_mapping(action).get("id"))
+            for action in _as_list(world_card.get("actions"))
+            if _as_mapping(action).get("id")
+        )
+        research_sources = sorted(
+            str(source)
+            for source in _as_list(world_card.get("research_sources"))
+            if source
+        )
+        card_contract = _as_mapping(_as_mapping(world_card.get("artifacts")).get("contract"))
+        replay_lock = _as_mapping(
+            _as_mapping(world_card.get("artifacts")).get("replay_lock")
+        )
+        evidence["report"] = {
+            "sections": list(_as_mapping(report.get("summary")).get("sections") or []),
+            "kind": world_card.get("kind"),
+            "status": world_card.get("status"),
+            "taxonomy": world_card.get("taxonomy"),
+            "local_only": world_card.get("local_only"),
+            "requires_external_service": world_card.get("requires_external_service"),
+            "task_kind": world_card.get("task_kind"),
+            "assurance_level": world_card.get("assurance_level"),
+            "failed_check_ids": list(world_card.get("failed_check_ids") or []),
+            "action_ids": action_ids,
+            "research_source_urls": research_sources,
+            "contract_mode": card_contract.get("mode"),
+            "contract_runtime": card_contract.get("runtime"),
+            "contract_requires_external_service": card_contract.get(
+                "requires_external_service"
+            ),
+            "replay_lock_local_only": replay_lock.get("local_only"),
+            "replay_lock_requires_external_service": replay_lock.get(
+                "requires_external_service"
+            ),
+        }
+        report_expectations = {
+            "report.world_hooks.kind": (
+                world_card.get("kind"),
+                "world_hooks_evidence",
+            ),
+            "report.world_hooks.status": (world_card.get("status"), "verified"),
+            "report.world_hooks.local_only": (world_card.get("local_only"), True),
+            "report.world_hooks.requires_external_service": (
+                world_card.get("requires_external_service"),
+                False,
+            ),
+            "report.world_hooks.task_kind": (
+                world_card.get("task_kind"),
+                "world_hooks",
+            ),
+            "report.world_hooks.assurance_level": (
+                world_card.get("assurance_level"),
+                V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL,
+            ),
+            "report.world_hooks.failed_check_ids": (
+                world_card.get("failed_check_ids") or [],
+                [],
+            ),
+            "report.world_hooks.artifacts.contract.mode": (
+                card_contract.get("mode"),
+                "native_world_state_hooks",
+            ),
+            "report.world_hooks.artifacts.contract.runtime": (
+                card_contract.get("runtime"),
+                "in_process",
+            ),
+            "report.world_hooks.artifacts.contract.requires_external_service": (
+                card_contract.get("requires_external_service"),
+                False,
+            ),
+            "report.world_hooks.artifacts.replay_lock.local_only": (
+                replay_lock.get("local_only"),
+                True,
+            ),
+            "report.world_hooks.artifacts.replay_lock.requires_external_service": (
+                replay_lock.get("requires_external_service"),
+                False,
+            ),
+        }
+        for field, (observed, expected) in report_expectations.items():
+            if observed != expected:
+                append_error(
+                    report_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_report_actions = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_ACTIONS) - set(action_ids)
+        )
+        if missing_report_actions:
+            append_error(
+                report_errors,
+                field="report.world_hooks.actions",
+                expected=V1_WORLD_HOOKS_REQUIRED_ACTIONS,
+                observed=action_ids,
+            )
+        missing_report_sources = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS) - set(research_sources)
+        )
+        if missing_report_sources:
+            append_error(
+                report_errors,
+                field="report.world_hooks.research_sources",
+                expected=V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS,
+                observed=research_sources,
+            )
+
+    if catalog:
+        action_ids = sorted(
+            str(_as_mapping(action).get("id"))
+            for action in _as_list(catalog.get("actions"))
+            if _as_mapping(action).get("source_card_path") == "world_hooks"
+            and _as_mapping(action).get("id")
+        )
+        evidence["actions"] = {
+            "action_ids": action_ids,
+            "export_contract": {
+                "kind": export_run.get("kind"),
+                "status": export_run.get("status"),
+                "artifact_ref": export_run.get("artifact_ref"),
+                "contract_mode": exported_contract.get("mode"),
+                "contract_requires_external_service": exported_contract.get(
+                    "requires_external_service"
+                ),
+            },
+        }
+        missing_catalog_actions = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_ACTIONS) - set(action_ids)
+        )
+        if missing_catalog_actions:
+            append_error(
+                report_errors,
+                field="actions.catalog.world_hooks",
+                expected=V1_WORLD_HOOKS_REQUIRED_ACTIONS,
+                observed=action_ids,
+            )
+        export_expectations = {
+            "actions.export_world_hooks_contract.kind": (
+                export_run.get("kind"),
+                "agent-learning.action-run.v1",
+            ),
+            "actions.export_world_hooks_contract.status": (
+                export_run.get("status"),
+                "passed",
+            ),
+            "actions.export_world_hooks_contract.artifact_ref": (
+                export_run.get("artifact_ref"),
+                "report.world_hooks.artifacts.contract",
+            ),
+            "exported_contract.mode": (
+                exported_contract.get("mode"),
+                "native_world_state_hooks",
+            ),
+            "exported_contract.requires_external_service": (
+                exported_contract.get("requires_external_service"),
+                False,
+            ),
+        }
+        for field, (observed, expected) in export_expectations.items():
+            if observed != expected:
+                append_error(
+                    report_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+
+    if promotion:
+        promotion_summary = _as_mapping(promotion.get("summary"))
+        promoted_manifest = _as_mapping(promotion.get("manifest"))
+        promoted_metadata = _as_mapping(promoted_manifest.get("metadata"))
+        regression_metadata = _as_mapping(promoted_metadata.get("regression"))
+        replay_lock = _as_mapping(regression_metadata.get("replay_lock"))
+        promoted_simulation = _as_mapping(promoted_manifest.get("simulation"))
+        promoted_env_types = [
+            str(_as_mapping(environment).get("type"))
+            for environment in _as_list(promoted_simulation.get("environments"))
+            if _as_mapping(environment).get("type")
+        ]
+        promoted_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(promoted_manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        promoted_hook_quality = _as_mapping(
+            promoted_config.get("world_hook_contract_quality")
+        )
+        evidence["promotion"] = {
+            "status": promotion.get("status"),
+            "promotion_kind": promotion_summary.get("promotion_kind"),
+            "source_status": promotion_summary.get("source_status"),
+            "promoted_manifest_count": promotion_summary.get(
+                "promoted_manifest_count"
+            ),
+            "promoted_finding_count": promotion_summary.get(
+                "promoted_finding_count"
+            ),
+            "requires_external_service": promotion_summary.get(
+                "requires_external_service"
+            ),
+            "world_hook_proof_status": promotion_summary.get(
+                "world_hook_proof_status"
+            ),
+            "world_hook_proof_assurance_level": promotion_summary.get(
+                "world_hook_proof_assurance_level"
+            ),
+            "manifest_version": promoted_manifest.get("version"),
+            "manifest_required_env": list(promoted_manifest.get("required_env") or []),
+            "manifest_promotion_kind": regression_metadata.get("promotion_kind"),
+            "replay_lock_local_only": replay_lock.get("local_only"),
+            "replay_lock_requires_external_service": replay_lock.get(
+                "requires_external_service"
+            ),
+            "environment_types": promoted_env_types,
+            "world_hook_quality": {
+                "require_no_external_service": promoted_hook_quality.get(
+                    "require_no_external_service"
+                ),
+                "runtime": promoted_hook_quality.get("runtime"),
+                "mode": promoted_hook_quality.get("mode"),
+            },
+            "metric_weights": {
+                metric: _as_mapping(promoted_config.get("metric_weights")).get(metric)
+                for metric in ("world_hook_contract_quality", "world_contract_quality")
+            },
+        }
+        promotion_expectations = {
+            "promotion.status": (promotion.get("status"), "passed"),
+            "promotion.summary.promotion_kind": (
+                promotion_summary.get("promotion_kind"),
+                "world_hooks_optimization",
+            ),
+            "promotion.summary.source_status": (
+                promotion_summary.get("source_status"),
+                "passed",
+            ),
+            "promotion.summary.requires_external_service": (
+                promotion_summary.get("requires_external_service"),
+                False,
+            ),
+            "promotion.summary.world_hook_proof_status": (
+                promotion_summary.get("world_hook_proof_status"),
+                "passed",
+            ),
+            "promotion.summary.world_hook_proof_assurance_level": (
+                promotion_summary.get("world_hook_proof_assurance_level"),
+                V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL,
+            ),
+            "promotion.manifest.version": (
+                promoted_manifest.get("version"),
+                "agent-learning.run.v1",
+            ),
+            "promotion.manifest.required_env": (
+                promoted_manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_WORLD_HOOKS_KEY"],
+            ),
+            "promotion.manifest.metadata.regression.promotion_kind": (
+                regression_metadata.get("promotion_kind"),
+                "world_hooks_optimization",
+            ),
+            "promotion.manifest.metadata.regression.replay_lock.local_only": (
+                replay_lock.get("local_only"),
+                True,
+            ),
+            "promotion.manifest.metadata.regression.replay_lock.requires_external_service": (
+                replay_lock.get("requires_external_service"),
+                False,
+            ),
+            "promotion.manifest.evaluation.world_hook_contract_quality.runtime": (
+                promoted_hook_quality.get("runtime"),
+                "in_process",
+            ),
+            "promotion.manifest.evaluation.world_hook_contract_quality.mode": (
+                promoted_hook_quality.get("mode"),
+                "native_world_state_hooks",
+            ),
+            "promotion.manifest.evaluation.world_hook_contract_quality.require_no_external_service": (
+                promoted_hook_quality.get("require_no_external_service"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in promotion_expectations.items():
+            if observed != expected:
+                append_error(
+                    promotion_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(promotion_summary.get("promoted_manifest_count")) < 1:
+            append_error(
+                promotion_errors,
+                field="promotion.summary.promoted_manifest_count",
+                expected=">=1",
+                observed=promotion_summary.get("promoted_manifest_count"),
+            )
+        missing_promoted_envs = sorted(
+            set(V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES) - set(promoted_env_types)
+        )
+        if missing_promoted_envs:
+            append_error(
+                promotion_errors,
+                field="promotion.manifest.simulation.environments.type",
+                expected=V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES,
+                observed=promoted_env_types,
+            )
+        if forbidden_key_names(promoted_manifest):
+            append_error(
+                security_errors,
+                field="promotion.manifest.forbidden_external_keys",
+                expected=[],
+                observed=forbidden_key_names(promoted_manifest),
+            )
+
+    if replay:
+        replay_summary = _as_mapping(replay.get("summary"))
+        replay_row = _as_mapping(
+            _as_list(_as_mapping(replay.get("replay")).get("manifests"))[0]
+            if _as_list(_as_mapping(replay.get("replay")).get("manifests"))
+            else {}
+        )
+        replay_metrics = _as_mapping(
+            _as_mapping(replay_row.get("summary")).get("metric_averages")
+        )
+        evidence["replay"] = {
+            "status": replay.get("status"),
+            "score": replay_summary.get("score"),
+            "passed_count": replay_summary.get("passed_count"),
+            "failed_count": replay_summary.get("failed_count"),
+            "metrics": {
+                metric: replay_metrics.get(metric)
+                for metric in (
+                    "world_hook_contract_quality",
+                    "world_contract_quality",
+                )
+            },
+        }
+        replay_expectations = {
+            "replay.status": (replay.get("status"), "passed"),
+            "replay.summary.failed_count": (replay_summary.get("failed_count"), 0),
+        }
+        for field, (observed, expected) in replay_expectations.items():
+            if observed != expected:
+                append_error(
+                    replay_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(replay_summary.get("passed_count")) < 1:
+            append_error(
+                replay_errors,
+                field="replay.summary.passed_count",
+                expected=">=1",
+                observed=replay_summary.get("passed_count"),
+            )
+        for metric in ("world_hook_contract_quality", "world_contract_quality"):
+            if _float_or_zero(replay_metrics.get(metric)) < 1.0:
+                append_error(
+                    replay_errors,
+                    field=f"replay.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=replay_metrics.get(metric),
+                )
+
+    return {
+        "required_files": list(V1_WORLD_HOOKS_READINESS_FILES),
+        "required_environment_types": list(
+            V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_search_paths": list(V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS),
+        "required_target_layers": list(V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS),
+        "required_contract_hooks": list(V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS),
+        "required_contract_surfaces": list(
+            V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
+        ),
+        "required_replay_semantics": list(
+            V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
+        ),
+        "required_metrics": list(V1_WORLD_HOOKS_REQUIRED_METRICS),
+        "required_proof_checks": list(V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS),
+        "required_actions": list(V1_WORLD_HOOKS_REQUIRED_ACTIONS),
+        "required_assurance_level": V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL,
+        "required_candidate_profile": V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE,
+        "forbidden_external_keys": list(V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS),
+        "required_source_urls": list(V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "metric_errors": metric_errors,
+        "report_errors": report_errors,
+        "promotion_errors": promotion_errors,
+        "replay_errors": replay_errors,
+        "security_errors": security_errors,
         "evidence": evidence,
     }
 
@@ -18089,6 +19339,20 @@ __all__ = [
     "V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS",
     "V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS",
     "V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS",
+    "V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS",
+    "V1_WORLD_HOOKS_READINESS_FILES",
+    "V1_WORLD_HOOKS_REQUIRED_ACTIONS",
+    "V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL",
+    "V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE",
+    "V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS",
+    "V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES",
+    "V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_WORLD_HOOKS_REQUIRED_METRICS",
+    "V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS",
+    "V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS",
+    "V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS",
+    "V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS",
+    "V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS",
     "V1_AGENT_CONTROL_PLANE_FILES",
     "V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES",
     "V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS",

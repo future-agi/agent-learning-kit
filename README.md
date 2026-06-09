@@ -1858,6 +1858,10 @@ ai-evaluation (`mode`, `runtime`, callable hooks, output channels, state scopes,
 surfaces, replay semantics, evidence requirements, and no external dependency).
 That gives AgentOptimizer metric-based diagnosis for executable world hooks
 without turning `optimize_world_hooks()` into an HTTP-hook integration.
+`agent-learn release-check` gates this native surface as
+`world_hooks_readiness`: the SDK cookbook must pass L3 world-hook proof, emit
+the report/action card, export the hook contract, promote a local-only
+regression, and replay it with world-hook and world-contract metrics closed.
 The same scorer now treats `framework_lifecycle_trace` as a native
 `framework_lifecycle` component. Framework certification and migration runs can
 diagnose setup, tool registration, sessions, invocation, streaming, checkpoints,
