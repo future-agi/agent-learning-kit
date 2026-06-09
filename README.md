@@ -1970,6 +1970,10 @@ framework traces. Run `agent-learn report <artifact>` on either artifact to get
 the `agent_integration_readiness` card with provider/channel/framework gaps,
 credential/session/observability/eval counts, provider matrix rows, Markdown,
 and actions for report, rerun, and optimization.
+`agent-learn release-check` gates this path as `agent_integration_readiness` by
+running both SDK examples locally, requiring the 16-provider and 22-channel
+matrix to close with verified credentials, replayable sessions, TraceAI
+framework coverage, no gaps, and passing integration/voice/streaming metrics.
 
 The `sdk_external_http_agent_optimization.py` example adds the first external
 target-agent adapter cookbook. It starts from a real HTTP/OpenAI-compatible

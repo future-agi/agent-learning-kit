@@ -15199,6 +15199,42 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
+    assert payload["required_agent_integration_files"] == (
+        trinity.V1_AGENT_INTEGRATION_FILES
+    )
+    assert payload["required_agent_integration_providers"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
+    )
+    assert payload["required_agent_integration_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_CHANNELS
+    )
+    assert payload["required_agent_integration_trace_frameworks"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
+    )
+    assert payload["required_agent_integration_layers"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_LAYERS
+    )
+    assert payload["required_agent_integration_provider_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS
+    )
+    assert payload["required_agent_integration_manifest_provider_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+    )
+    assert payload["required_agent_integration_metrics"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_METRICS
+    )
+    assert payload["required_agent_integration_run_metrics"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_agent_integration_events"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_EVENTS
+    )
+    assert payload["required_agent_integration_action_ids"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS
+    )
+    assert payload["required_agent_integration_min_counts"] == (
+        trinity.V1_AGENT_INTEGRATION_MIN_COUNTS
+    )
     assert payload["required_openenv_optimizer_files"] == (
         trinity.V1_OPENENV_OPTIMIZER_FILES
     )
@@ -15511,6 +15547,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "agent_control_plane_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
+        "agent_integration_readiness",
         "openenv_optimizer_readiness",
         "framework_openenv_adapter_readiness",
         "framework_optimizer_readiness",
@@ -16222,6 +16259,154 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_manifest["agent_type"] == "scripted"
     assert realtime_manifest["frameworks"] == ["livekit"]
     assert realtime_manifest["missing_environment_types"] == []
+    agent_integration = checks["agent_integration_readiness"]["evidence"]
+    assert agent_integration["required_files"] == trinity.V1_AGENT_INTEGRATION_FILES
+    assert agent_integration["required_providers"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
+    )
+    assert agent_integration["required_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_CHANNELS
+    )
+    assert agent_integration["required_trace_frameworks"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
+    )
+    assert agent_integration["required_layers"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_LAYERS
+    )
+    assert agent_integration["required_provider_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS
+    )
+    assert agent_integration["required_manifest_provider_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+    )
+    assert agent_integration["required_metrics"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_METRICS
+    )
+    assert agent_integration["required_run_metrics"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS
+    )
+    assert agent_integration["required_events"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_EVENTS
+    )
+    assert agent_integration["required_action_ids"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS
+    )
+    assert agent_integration["required_min_counts"] == (
+        trinity.V1_AGENT_INTEGRATION_MIN_COUNTS
+    )
+    assert agent_integration["missing_files"] == []
+    assert agent_integration["execution_errors"] == []
+    assert agent_integration["manifest_errors"] == []
+    assert agent_integration["optimization_errors"] == []
+    assert agent_integration["simulation_errors"] == []
+    assert agent_integration["metric_errors"] == []
+    assert agent_integration["readiness_errors"] == []
+
+    def assert_agent_integration_summary(summary):
+        assert set(summary["observed_providers"]) >= set(
+            trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
+        )
+        assert set(summary["observed_channels"]) >= set(
+            trinity.V1_AGENT_INTEGRATION_REQUIRED_CHANNELS
+        )
+        assert set(summary["trace_frameworks"]) >= set(
+            trinity.V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
+        )
+        for field, minimum in trinity.V1_AGENT_INTEGRATION_MIN_COUNTS.items():
+            assert summary[field] >= minimum
+        assert summary["failed_session_count"] == 0
+        assert summary["missing_required_providers"] == []
+        assert summary["missing_required_channels"] == []
+        assert summary["missing_required_trace_frameworks"] == []
+        assert summary["providers_without_verified_credentials"] == []
+        assert summary["has_agent_definition"] is True
+
+    agent_integration_evidence = agent_integration["evidence"]
+    optimization_manifest = agent_integration_evidence["optimization_manifest"]
+    assert optimization_manifest["version"] == "agent-learning.optimization.v1"
+    assert optimization_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY"
+    ]
+    assert optimization_manifest["target_layers"] == [
+        "integration",
+        "framework",
+        "voice",
+        "environment",
+        "evaluator",
+    ]
+    assert optimization_manifest["search_paths"] == ["simulation.environments"]
+    assert optimization_manifest["candidate_count"] == 2
+    assert optimization_manifest["verified_environment_types"] == [
+        "agent_integration"
+    ]
+    assert optimization_manifest["scoring_method"] == "simulation_evidence"
+    assert optimization_manifest["scoring_layers"] == ["agent_integration"]
+    assert optimization_manifest["required_manifest_provider_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+    )
+    assert set(optimization_manifest["metric_weights"]) >= set(
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_METRICS
+    )
+    simulation_manifest = agent_integration_evidence["simulation_manifest"]
+    assert simulation_manifest["version"] == "agent-learning.run.v1"
+    assert simulation_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_AGENT_INTEGRATION_SIMULATION_KEY"
+    ]
+    assert simulation_manifest["environment_types"] == ["agent_integration"]
+    assert simulation_manifest["min_turns"] == 4
+    assert simulation_manifest["max_turns"] == 4
+    assert simulation_manifest["auto_execute_tools"] is True
+    assert simulation_manifest["generated_manifest_roundtrip"] is True
+    assert simulation_manifest["required_manifest_provider_channels"] == (
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+    )
+    assert set(simulation_manifest["metric_weights"]) >= set(
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_METRICS
+    )
+    optimization = agent_integration_evidence["optimization"]
+    assert optimization["schema_version"] == "agent-learning.cli.v1"
+    assert optimization["status"] == "passed"
+    assert optimization["output_roundtrip"] is True
+    assert optimization["optimization_score"] >= 0.98
+    assert optimization["evaluation_score"] == pytest.approx(1.0)
+    assert optimization["total_evaluations"] >= 2
+    assert optimization["total_iterations"] >= 2
+    assert optimization["candidate_lineage_count"] >= 2
+    assert optimization["best_environment_types"] == ["agent_integration"]
+    assert optimization["best_score"] >= 0.98
+    assert optimization["best_patch_keys"] == ["simulation.environments"]
+    for metric in trinity.V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS:
+        assert optimization["best_metrics"][metric] == pytest.approx(1.0)
+    assert optimization["state_summary"]["state_keys"] == [
+        "agent_integration_manifest"
+    ]
+    assert_agent_integration_summary(optimization["state_summary"]["summary"])
+    assert set(optimization["readiness_action_ids"]) >= {
+        *trinity.V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS,
+        "rerun_agent_integration_optimization",
+    }
+    assert optimization["readiness_status"] == "ready"
+    simulation = agent_integration_evidence["simulation"]
+    assert simulation["schema_version"] == "agent-learning.cli.v1"
+    assert simulation["kind"] == "agent-learning.run.v1"
+    assert simulation["status"] == "passed"
+    assert simulation["output_roundtrip"] is True
+    assert simulation["evaluation_passed"] is True
+    assert simulation["evaluation_score"] >= 0.98
+    for metric in trinity.V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS:
+        assert simulation["metric_averages"][metric] == pytest.approx(1.0)
+    assert simulation["state_summary"]["state_keys"] == [
+        "agent_integration_manifest"
+    ]
+    assert set(simulation["state_summary"]["event_names"]) >= set(
+        trinity.V1_AGENT_INTEGRATION_REQUIRED_EVENTS
+    )
+    assert_agent_integration_summary(simulation["state_summary"]["summary"])
+    assert set(simulation["readiness_action_ids"]) >= {
+        *trinity.V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS,
+        "rerun_agent_integration_simulation",
+    }
+    assert simulation["readiness_status"] == "ready"
     openenv_optimizer = checks["openenv_optimizer_readiness"]["evidence"]
     assert openenv_optimizer["required_files"] == trinity.V1_OPENENV_OPTIMIZER_FILES
     assert openenv_optimizer["required_profiles"] == (

@@ -590,6 +590,169 @@ V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
     },
 ]
 
+V1_AGENT_INTEGRATION_FILES = [
+    "examples/agent_integration_optimization.json",
+    "examples/sdk_agent_integration_optimization.py",
+    "examples/sdk_agent_integration_simulation.py",
+    "internal-docs/agent-integration-readiness-research.md",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS = [
+    "agora",
+    "autogen",
+    "bland",
+    "crewai",
+    "deepgram",
+    "elevenlabs",
+    "langchain",
+    "langgraph",
+    "livekit",
+    "llamaindex",
+    "openai_agents",
+    "pipecat",
+    "pydantic_ai",
+    "retell",
+    "twilio",
+    "vapi",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_CHANNELS = [
+    "agent_api",
+    "agent_workflow",
+    "analysis",
+    "chat",
+    "livekit",
+    "media_stream",
+    "multimodal",
+    "pathways",
+    "phone",
+    "realtime_state",
+    "sip",
+    "sms",
+    "stt",
+    "system_engine",
+    "transport",
+    "tts",
+    "twilio",
+    "voice",
+    "webhook",
+    "webrtc",
+    "websocket",
+    "whatsapp",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS = [
+    "autogen",
+    "crewai",
+    "langchain",
+    "langgraph",
+    "livekit",
+    "llamaindex",
+    "openai_agents",
+    "pipecat",
+    "pydantic_ai",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_LAYERS = [
+    "provider",
+    "channel",
+    "credential",
+    "session",
+    "observability",
+    "evaluation",
+    "trace_framework",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS = {
+    "agora": ["multimodal", "realtime_state", "tts", "voice", "webrtc"],
+    "autogen": ["chat"],
+    "bland": [
+        "analysis",
+        "pathways",
+        "phone",
+        "sip",
+        "voice",
+        "webhook",
+        "webrtc",
+        "websocket",
+    ],
+    "crewai": ["chat"],
+    "deepgram": ["agent_api", "livekit", "stt", "tts", "voice", "websocket"],
+    "elevenlabs": ["agent_workflow", "phone", "sip", "twilio", "voice", "websocket"],
+    "langchain": ["chat"],
+    "langgraph": ["chat"],
+    "livekit": ["phone", "sip", "system_engine", "transport", "webrtc"],
+    "llamaindex": ["chat"],
+    "openai_agents": ["chat"],
+    "pipecat": ["livekit", "phone", "sip", "twilio", "voice", "webrtc", "websocket"],
+    "pydantic_ai": ["chat"],
+    "retell": ["analysis", "chat", "phone", "voice", "webhook", "webrtc"],
+    "twilio": ["media_stream", "phone", "sip", "sms", "websocket", "whatsapp"],
+    "vapi": [
+        "analysis",
+        "chat",
+        "phone",
+        "sip",
+        "voice",
+        "webhook",
+        "webrtc",
+        "websocket",
+    ],
+}
+
+V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS = {
+    "agora": ["voice", "webrtc"],
+    "bland": ["voice", "phone", "sip", "web_call", "websocket"],
+    "deepgram": ["voice", "websocket"],
+    "elevenlabs": ["voice", "phone", "sip", "websocket"],
+    "livekit": ["webrtc", "phone", "sip"],
+    "pipecat": ["voice", "webrtc", "sip"],
+    "retell": ["chat", "voice", "phone"],
+    "twilio": ["phone", "sip", "media_stream"],
+    "vapi": ["chat", "voice", "webrtc", "phone", "sip", "websocket"],
+}
+
+V1_AGENT_INTEGRATION_REQUIRED_METRICS = [
+    "agent_integration_coverage",
+    "agent_integration_quality",
+    "tool_selection_accuracy",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS = [
+    "agent_integration_coverage",
+    "agent_integration_quality",
+    "tool_selection_accuracy",
+    "framework_trace_coverage",
+    "voice_interaction_quality",
+    "streaming_interaction_quality",
+    "voice_turn_taking",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_EVENTS = [
+    "agent_integration_manifest_ready",
+    "agent_integration_status",
+    "agent_integration_providers_listed",
+    "agent_integration_provider_inspected",
+    "agent_integration_sessions_listed",
+    "agent_integration_gaps_listed",
+]
+
+V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS = [
+    "report_agent_integration_readiness",
+    "optimize_agent_integration_readiness",
+]
+
+V1_AGENT_INTEGRATION_MIN_COUNTS = {
+    "provider_count": 16,
+    "verified_provider_count": 16,
+    "session_count": 17,
+    "trace_session_count": 17,
+    "transcript_session_count": 17,
+    "simulation_count": 9,
+    "observability_hook_count": 12,
+    "eval_metric_count": 6,
+}
+
 V1_ORCHESTRATION_STACK_PROBE_FILES = [
     "examples/sdk_orchestration_stack_probe_optimization.py",
     "examples/sdk_orchestration_optimization.py",
@@ -2300,6 +2463,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_provider_contract,
     )
+    agent_integration = _release_agent_integration_status(root)
+    _append_release_check(
+        checks,
+        check_id="agent_integration_readiness",
+        passed=(
+            not agent_integration["missing_files"]
+            and not agent_integration["execution_errors"]
+            and not agent_integration["manifest_errors"]
+            and not agent_integration["optimization_errors"]
+            and not agent_integration["simulation_errors"]
+            and not agent_integration["metric_errors"]
+            and not agent_integration["readiness_errors"]
+        ),
+        milestone="M6",
+        evidence=agent_integration,
+    )
     openenv_optimizer = _release_openenv_optimizer_status(root)
     _append_release_check(
         checks,
@@ -2698,6 +2877,40 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_provider_manifest_contracts": copy.deepcopy(
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+        ),
+        "required_agent_integration_files": list(V1_AGENT_INTEGRATION_FILES),
+        "required_agent_integration_providers": list(
+            V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
+        ),
+        "required_agent_integration_channels": list(
+            V1_AGENT_INTEGRATION_REQUIRED_CHANNELS
+        ),
+        "required_agent_integration_trace_frameworks": list(
+            V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
+        ),
+        "required_agent_integration_layers": list(
+            V1_AGENT_INTEGRATION_REQUIRED_LAYERS
+        ),
+        "required_agent_integration_provider_channels": copy.deepcopy(
+            V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS
+        ),
+        "required_agent_integration_manifest_provider_channels": copy.deepcopy(
+            V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+        ),
+        "required_agent_integration_metrics": list(
+            V1_AGENT_INTEGRATION_REQUIRED_METRICS
+        ),
+        "required_agent_integration_run_metrics": list(
+            V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS
+        ),
+        "required_agent_integration_events": list(
+            V1_AGENT_INTEGRATION_REQUIRED_EVENTS
+        ),
+        "required_agent_integration_action_ids": list(
+            V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS
+        ),
+        "required_agent_integration_min_counts": dict(
+            V1_AGENT_INTEGRATION_MIN_COUNTS
         ),
         "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
         "required_framework_openenv_adapter_files": list(
@@ -6957,6 +7170,833 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
         "manifest_errors": manifest_errors,
         "external_value_findings": external_value_findings,
         "errors": errors,
+    }
+
+
+def _release_agent_integration_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_AGENT_INTEGRATION_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    simulation_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    readiness_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def load_module(path: Path, name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def first_case(result: Mapping[str, Any]) -> Mapping[str, Any]:
+        report = _as_mapping(result.get("report"))
+        if not report and result.get("results") is not None:
+            report = result
+        cases = [
+            item for item in _as_list(report.get("results")) if isinstance(item, Mapping)
+        ]
+        return _as_mapping(cases[0]) if cases else {}
+
+    def integration_state_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+        case = first_case(result)
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        integration = _as_mapping(state.get("agent_integration_manifest"))
+        summary = _as_mapping(integration.get("summary"))
+        events = [
+            event for event in _as_list(case.get("events")) if isinstance(event, Mapping)
+        ]
+        return {
+            "state_keys": sorted(str(key) for key in state),
+            "summary": summary,
+            "event_names": sorted(
+                {str(event.get("name")) for event in events if event.get("name")}
+            ),
+        }
+
+    def readiness_action_ids(readiness: Mapping[str, Any]) -> list[str]:
+        return sorted(
+            str(_as_mapping(action).get("id"))
+            for action in _as_list(readiness.get("actions"))
+            if _as_mapping(action).get("id")
+        )
+
+    def provider_matrix_by_provider(
+        readiness: Mapping[str, Any],
+    ) -> dict[str, Mapping[str, Any]]:
+        matrix: dict[str, Mapping[str, Any]] = {}
+        for item in _as_list(readiness.get("provider_matrix")):
+            entry = _as_mapping(item)
+            provider = str(entry.get("provider") or "")
+            if provider:
+                matrix[provider] = entry
+        return matrix
+
+    def validate_integration_summary(
+        summary: Mapping[str, Any],
+        *,
+        path: str,
+        prefix: str,
+    ) -> None:
+        for field, required_values in (
+            ("observed_providers", V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS),
+            ("observed_channels", V1_AGENT_INTEGRATION_REQUIRED_CHANNELS),
+            ("trace_frameworks", V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS),
+        ):
+            missing = missing_values(summary.get(field), required_values)
+            if missing:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=required_values,
+                    observed=summary.get(field) or [],
+                )
+        for field, minimum in V1_AGENT_INTEGRATION_MIN_COUNTS.items():
+            observed = summary.get(field)
+            if field == "trace_session_count":
+                observed = summary.get("trace_session_count")
+            if field == "transcript_session_count":
+                observed = summary.get("transcript_session_count")
+            if _int_or_zero(observed) < minimum:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=f">={minimum}",
+                    observed=observed,
+                )
+        for field in (
+            "missing_required_providers",
+            "missing_required_channels",
+            "missing_required_trace_frameworks",
+            "providers_without_verified_credentials",
+            "failed_sessions",
+        ):
+            if summary.get(field):
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=[],
+                    observed=summary.get(field),
+                )
+        if _int_or_zero(summary.get("failed_session_count")) != 0:
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.failed_session_count",
+                expected=0,
+                observed=summary.get("failed_session_count"),
+            )
+        if summary.get("has_agent_definition") is not True:
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.has_agent_definition",
+                expected=True,
+                observed=summary.get("has_agent_definition"),
+            )
+
+    def validate_readiness(
+        readiness: Mapping[str, Any],
+        *,
+        path: str,
+        prefix: str,
+        rerun_action_id: str,
+    ) -> None:
+        expectations = {
+            "kind": (readiness.get("kind"), "agent_integration_readiness_map"),
+            "status": (readiness.get("status"), "ready"),
+            "gap_summary.total_gap_count": (
+                _as_mapping(readiness.get("gap_summary")).get("total_gap_count"),
+                0,
+            ),
+            "session_summary.failed_session_count": (
+                _as_mapping(readiness.get("session_summary")).get(
+                    "failed_session_count"
+                ),
+                0,
+            ),
+        }
+        for field, (observed, expected) in expectations.items():
+            if observed != expected:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=expected,
+                    observed=observed,
+                )
+        for field, required_values in (
+            ("providers", V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS),
+            ("channels", V1_AGENT_INTEGRATION_REQUIRED_CHANNELS),
+            ("trace_frameworks", V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS),
+            ("present_layers", V1_AGENT_INTEGRATION_REQUIRED_LAYERS),
+        ):
+            missing = missing_values(readiness.get(field), required_values)
+            if missing:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=required_values,
+                    observed=readiness.get(field) or [],
+                )
+        for field, minimum in V1_AGENT_INTEGRATION_MIN_COUNTS.items():
+            observed = readiness.get(field)
+            if field == "trace_session_count":
+                observed = _as_mapping(readiness.get("session_summary")).get(
+                    "trace_session_count"
+                )
+            if field == "transcript_session_count":
+                observed = _as_mapping(readiness.get("session_summary")).get(
+                    "transcript_session_count"
+                )
+            if _int_or_zero(observed) < minimum:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.{field}",
+                    expected=f">={minimum}",
+                    observed=observed,
+                )
+        if readiness.get("weak_layers"):
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.weak_layers",
+                expected=[],
+                observed=readiness.get("weak_layers"),
+            )
+        if readiness.get("weak_metrics"):
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.weak_metrics",
+                expected=[],
+                observed=readiness.get("weak_metrics"),
+            )
+        action_ids = readiness_action_ids(readiness)
+        missing_actions = missing_values(
+            action_ids,
+            [*V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS, rerun_action_id],
+        )
+        if missing_actions:
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.actions.id",
+                expected=[*V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS, rerun_action_id],
+                observed=action_ids,
+            )
+        matrix = provider_matrix_by_provider(readiness)
+        missing_providers = missing_values(
+            matrix,
+            V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS,
+        )
+        if missing_providers:
+            append_error(
+                readiness_errors,
+                path=path,
+                field=f"{prefix}.provider_matrix.provider",
+                expected=V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS,
+                observed=sorted(matrix),
+            )
+        for provider, required_channels in (
+            V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS.items()
+        ):
+            row = _as_mapping(matrix.get(provider))
+            missing_channels = missing_values(row.get("channels"), required_channels)
+            if missing_channels:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.provider_matrix.{provider}.channels",
+                    expected=required_channels,
+                    observed=row.get("channels") or [],
+                )
+            if row.get("credential_status") not in {"verified", "live_verified"}:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.provider_matrix.{provider}.credential_status",
+                    expected=["verified", "live_verified"],
+                    observed=row.get("credential_status"),
+                )
+            if _int_or_zero(row.get("failed_session_count")) != 0:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.provider_matrix.{provider}.failed_session_count",
+                    expected=0,
+                    observed=row.get("failed_session_count"),
+                )
+        for provider in ("livekit", "pipecat"):
+            row = _as_mapping(matrix.get(provider))
+            if row.get("trace_framework") != provider:
+                append_error(
+                    readiness_errors,
+                    path=path,
+                    field=f"{prefix}.provider_matrix.{provider}.trace_framework",
+                    expected=provider,
+                    observed=row.get("trace_framework"),
+                )
+
+    def validate_metric_floor(
+        metrics: Mapping[str, Any],
+        required_metrics: Sequence[str],
+        *,
+        path: str,
+        prefix: str,
+        floor: float = 1.0,
+    ) -> None:
+        for metric in required_metrics:
+            if _float_or_zero(metrics.get(metric)) < floor:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field=f"{prefix}.{metric}",
+                    expected=f">={floor}",
+                    observed=metrics.get(metric),
+                )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        optimization_env = "AGENT_LEARNING_SDK_AGENT_INTEGRATION_EXAMPLE_KEY"
+        simulation_env = "AGENT_LEARNING_SDK_AGENT_INTEGRATION_SIMULATION_KEY"
+        previous_example_env = {
+            optimization_env: os.environ.get(optimization_env),
+            simulation_env: os.environ.get(simulation_env),
+        }
+        try:
+            optimization_path = root / "examples/sdk_agent_integration_optimization.py"
+            simulation_path = root / "examples/sdk_agent_integration_simulation.py"
+            optimization_module = load_module(
+                optimization_path,
+                "agent_learning_release_agent_integration_optimization",
+            )
+            simulation_module = load_module(
+                simulation_path,
+                "agent_learning_release_agent_integration_simulation",
+            )
+            os.environ[optimization_env] = "release-check-agent-integration-key"
+            os.environ[simulation_env] = (
+                "release-check-agent-integration-simulation-key"
+            )
+            optimization_manifest = optimization_module.build_manifest()
+            simulation_manifest = simulation_module.build_manifest()
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-agent-integration-"
+            ) as tmpdir:
+                output_root = Path(tmpdir)
+                optimization_output = output_root / "optimization.json"
+                simulation_output = output_root / "simulation.json"
+                optimization_result = optimization_module.run(optimization_output)
+                simulation_result = simulation_module.run(simulation_output)
+                optimization_saved = json.loads(
+                    optimization_output.read_text(encoding="utf-8")
+                )
+                simulation_saved = json.loads(
+                    simulation_output.read_text(encoding="utf-8")
+                )
+                generated_simulation_manifest = json.loads(
+                    simulation_output.with_suffix(".manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_agent_integration_optimization.py",
+                    "error": str(exc),
+                }
+            )
+            optimization_manifest = {}
+            simulation_manifest = {}
+            generated_simulation_manifest = {}
+            optimization_result = {}
+            simulation_result = {}
+            optimization_saved = {}
+            simulation_saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            for name, value in previous_example_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        if optimization_manifest:
+            optimization = _as_mapping(optimization_manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = _as_list(search_space.get("simulation.environments"))
+            verified_candidate = _as_list(candidates[-1]) if candidates else []
+            config = _as_mapping(
+                _as_mapping(
+                    _as_mapping(optimization_manifest.get("evaluation")).get(
+                        "agent_report"
+                    )
+                ).get("config")
+            )
+            quality = _as_mapping(config.get("agent_integration_quality"))
+            scoring = _as_mapping(optimization.get("scoring"))
+            provider_channels = _as_mapping(quality.get("required_provider_channels"))
+            evidence["optimization_manifest"] = {
+                "version": optimization_manifest.get("version"),
+                "required_env": list(optimization_manifest.get("required_env") or []),
+                "target_layers": list(target.get("layers") or []),
+                "search_paths": sorted(str(path) for path in search_space),
+                "candidate_count": len(candidates),
+                "verified_environment_types": [
+                    str(_as_mapping(item).get("type")) for item in verified_candidate
+                ],
+                "scoring_method": scoring.get("method"),
+                "scoring_layers": list(scoring.get("layers") or []),
+                "required_manifest_provider_channels": {
+                    provider: list(provider_channels.get(provider) or [])
+                    for provider in (
+                        V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+                    )
+                },
+                "metric_weights": sorted(
+                    str(metric)
+                    for metric in _as_mapping(config.get("metric_weights"))
+                ),
+            }
+            manifest_expectations = {
+                "version": "agent-learning.optimization.v1",
+                "required_env": [optimization_env],
+                "optimization.target.search_space": ["simulation.environments"],
+                "optimization.target.layers": [
+                    "integration",
+                    "framework",
+                    "voice",
+                    "environment",
+                    "evaluator",
+                ],
+                "optimization.target.candidate_count": 2,
+                "optimization.target.verified_environment_types": [
+                    "agent_integration"
+                ],
+                "optimization.scoring.method": "simulation_evidence",
+                "optimization.scoring.layers": ["agent_integration"],
+            }
+            observed_manifest = {
+                "version": optimization_manifest.get("version"),
+                "required_env": optimization_manifest.get("required_env"),
+                "optimization.target.search_space": sorted(str(path) for path in search_space),
+                "optimization.target.layers": list(target.get("layers") or []),
+                "optimization.target.candidate_count": len(candidates),
+                "optimization.target.verified_environment_types": [
+                    str(_as_mapping(item).get("type")) for item in verified_candidate
+                ],
+                "optimization.scoring.method": scoring.get("method"),
+                "optimization.scoring.layers": list(scoring.get("layers") or []),
+            }
+            for field, expected in manifest_expectations.items():
+                if observed_manifest[field] != expected:
+                    append_error(
+                        manifest_errors,
+                        path="examples/sdk_agent_integration_optimization.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed_manifest[field],
+                    )
+            for provider, required_channels in (
+                V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS.items()
+            ):
+                missing_channels = missing_values(
+                    provider_channels.get(provider),
+                    required_channels,
+                )
+                if missing_channels:
+                    append_error(
+                        manifest_errors,
+                        path="examples/sdk_agent_integration_optimization.py",
+                        field=(
+                            "evaluation.agent_report.config."
+                            f"agent_integration_quality.{provider}.channels"
+                        ),
+                        expected=required_channels,
+                        observed=provider_channels.get(provider) or [],
+                    )
+            missing_metric_weights = missing_values(
+                _as_mapping(config.get("metric_weights")),
+                V1_AGENT_INTEGRATION_REQUIRED_METRICS,
+            )
+            if missing_metric_weights:
+                append_error(
+                    manifest_errors,
+                    path="examples/sdk_agent_integration_optimization.py",
+                    field="evaluation.agent_report.config.metric_weights",
+                    expected=V1_AGENT_INTEGRATION_REQUIRED_METRICS,
+                    observed=sorted(
+                        str(metric)
+                        for metric in _as_mapping(config.get("metric_weights"))
+                    ),
+                )
+
+        if simulation_manifest:
+            simulation = _as_mapping(simulation_manifest.get("simulation"))
+            environments = [
+                item
+                for item in _as_list(simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            config = _as_mapping(
+                _as_mapping(
+                    _as_mapping(simulation_manifest.get("evaluation")).get(
+                        "agent_report"
+                    )
+                ).get("config")
+            )
+            quality = _as_mapping(config.get("agent_integration_quality"))
+            provider_channels = _as_mapping(quality.get("required_provider_channels"))
+            evidence["simulation_manifest"] = {
+                "version": simulation_manifest.get("version"),
+                "required_env": list(simulation_manifest.get("required_env") or []),
+                "environment_types": [
+                    str(_as_mapping(item).get("type")) for item in environments
+                ],
+                "min_turns": simulation.get("min_turns"),
+                "max_turns": simulation.get("max_turns"),
+                "auto_execute_tools": simulation.get("auto_execute_tools"),
+                "generated_manifest_roundtrip": (
+                    simulation_manifest == generated_simulation_manifest
+                ),
+                "required_manifest_provider_channels": {
+                    provider: list(provider_channels.get(provider) or [])
+                    for provider in (
+                        V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+                    )
+                },
+                "metric_weights": sorted(
+                    str(metric)
+                    for metric in _as_mapping(config.get("metric_weights"))
+                ),
+            }
+            simulation_manifest_expectations = {
+                "version": "agent-learning.run.v1",
+                "required_env": [simulation_env],
+                "simulation.environments.type": ["agent_integration"],
+                "simulation.min_turns": 4,
+                "simulation.max_turns": 4,
+                "simulation.auto_execute_tools": True,
+                "generated_manifest_roundtrip": True,
+            }
+            observed_manifest = {
+                "version": simulation_manifest.get("version"),
+                "required_env": simulation_manifest.get("required_env"),
+                "simulation.environments.type": [
+                    str(_as_mapping(item).get("type")) for item in environments
+                ],
+                "simulation.min_turns": simulation.get("min_turns"),
+                "simulation.max_turns": simulation.get("max_turns"),
+                "simulation.auto_execute_tools": simulation.get("auto_execute_tools"),
+                "generated_manifest_roundtrip": (
+                    simulation_manifest == generated_simulation_manifest
+                ),
+            }
+            for field, expected in simulation_manifest_expectations.items():
+                if observed_manifest[field] != expected:
+                    append_error(
+                        manifest_errors,
+                        path="examples/sdk_agent_integration_simulation.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed_manifest[field],
+                    )
+            missing_metric_weights = missing_values(
+                _as_mapping(config.get("metric_weights")),
+                V1_AGENT_INTEGRATION_REQUIRED_METRICS,
+            )
+            if missing_metric_weights:
+                append_error(
+                    manifest_errors,
+                    path="examples/sdk_agent_integration_simulation.py",
+                    field="evaluation.agent_report.config.metric_weights",
+                    expected=V1_AGENT_INTEGRATION_REQUIRED_METRICS,
+                    observed=sorted(
+                        str(metric)
+                        for metric in _as_mapping(config.get("metric_weights"))
+                    ),
+                )
+
+        if optimization_result:
+            summary = _as_mapping(optimization_result.get("summary"))
+            histories = [
+                item
+                for item in _as_list(_as_mapping(optimization_result.get("optimization")).get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history = max(
+                histories,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+                default={},
+            )
+            best_metrics = _as_mapping(_as_mapping(best_history).get("metrics"))
+            best_report = _as_mapping(_as_mapping(best_history).get("report"))
+            best_state_summary = integration_state_summary(best_report)
+            best_config = _as_mapping(
+                _as_mapping(optimization_result.get("optimization")).get("best_config")
+            )
+            best_simulation = _as_mapping(best_config.get("simulation"))
+            best_env_types = [
+                str(_as_mapping(item).get("type"))
+                for item in _as_list(best_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            readiness = _as_mapping(
+                optimization_result.get("agent_integration_readiness")
+            )
+            evidence["optimization"] = {
+                "schema_version": optimization_result.get("schema_version"),
+                "kind": optimization_result.get("kind"),
+                "status": optimization_result.get("status"),
+                "output_roundtrip": optimization_result == optimization_saved,
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "total_evaluations": summary.get("total_evaluations"),
+                "total_iterations": summary.get("total_iterations"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "best_environment_types": best_env_types,
+                "best_score": _as_mapping(best_history).get("score"),
+                "best_patch_keys": sorted(
+                    str(key) for key in _as_mapping(best_history.get("patch"))
+                ),
+                "best_metrics": {
+                    metric: best_metrics.get(metric)
+                    for metric in V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS
+                },
+                "state_summary": best_state_summary,
+                "readiness_status": readiness.get("status"),
+                "readiness_action_ids": readiness_action_ids(readiness),
+            }
+            for field, observed, expected in (
+                (
+                    "schema_version",
+                    optimization_result.get("schema_version"),
+                    "agent-learning.cli.v1",
+                ),
+                ("status", optimization_result.get("status"), "passed"),
+                ("output_roundtrip", optimization_result == optimization_saved, True),
+                ("optimization.best_config.simulation.environments.type", best_env_types, ["agent_integration"]),
+                ("optimization.history.best.patch", sorted(str(key) for key in _as_mapping(best_history.get("patch"))), ["simulation.environments"]),
+            ):
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        path="examples/sdk_agent_integration_optimization.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < 0.98:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_agent_integration_optimization.py",
+                    field="summary.optimization_score",
+                    expected=">=0.98",
+                    observed=summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_agent_integration_optimization.py",
+                    field="summary.evaluation_score",
+                    expected=">=1.0",
+                    observed=summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+                append_error(
+                    optimization_errors,
+                    path="examples/sdk_agent_integration_optimization.py",
+                    field="summary.candidate_lineage_count",
+                    expected=">=2",
+                    observed=summary.get("candidate_lineage_count"),
+                )
+            validate_metric_floor(
+                best_metrics,
+                V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS,
+                path="examples/sdk_agent_integration_optimization.py",
+                prefix="optimization.history.best.metrics",
+            )
+            validate_integration_summary(
+                _as_mapping(best_state_summary.get("summary")),
+                path="examples/sdk_agent_integration_optimization.py",
+                prefix="optimization.history.best.report.environment_state.summary",
+            )
+            validate_readiness(
+                readiness,
+                path="examples/sdk_agent_integration_optimization.py",
+                prefix="agent_integration_readiness",
+                rerun_action_id="rerun_agent_integration_optimization",
+            )
+
+        if simulation_result:
+            summary = _as_mapping(simulation_result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            state_summary = integration_state_summary(simulation_result)
+            readiness = _as_mapping(simulation_result.get("agent_integration_readiness"))
+            event_names = list(state_summary.get("event_names") or [])
+            evidence["simulation"] = {
+                "schema_version": simulation_result.get("schema_version"),
+                "kind": simulation_result.get("kind"),
+                "status": simulation_result.get("status"),
+                "output_roundtrip": simulation_result == simulation_saved,
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "metric_averages": {
+                    metric: metric_averages.get(metric)
+                    for metric in V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS
+                },
+                "state_summary": state_summary,
+                "readiness_status": readiness.get("status"),
+                "readiness_action_ids": readiness_action_ids(readiness),
+            }
+            for field, observed, expected in (
+                (
+                    "schema_version",
+                    simulation_result.get("schema_version"),
+                    "agent-learning.cli.v1",
+                ),
+                ("kind", simulation_result.get("kind"), "agent-learning.run.v1"),
+                ("status", simulation_result.get("status"), "passed"),
+                ("output_roundtrip", simulation_result == simulation_saved, True),
+                ("summary.evaluation_passed", summary.get("evaluation_passed"), True),
+            ):
+                if observed != expected:
+                    append_error(
+                        simulation_errors,
+                        path="examples/sdk_agent_integration_simulation.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("evaluation_score")) < 0.98:
+                append_error(
+                    simulation_errors,
+                    path="examples/sdk_agent_integration_simulation.py",
+                    field="summary.evaluation_score",
+                    expected=">=0.98",
+                    observed=summary.get("evaluation_score"),
+                )
+            if state_summary.get("state_keys") != ["agent_integration_manifest"]:
+                append_error(
+                    simulation_errors,
+                    path="examples/sdk_agent_integration_simulation.py",
+                    field="report.results.0.metadata.environment_state",
+                    expected=["agent_integration_manifest"],
+                    observed=state_summary.get("state_keys"),
+                )
+            missing_events = missing_values(
+                event_names,
+                V1_AGENT_INTEGRATION_REQUIRED_EVENTS,
+            )
+            if missing_events:
+                append_error(
+                    simulation_errors,
+                    path="examples/sdk_agent_integration_simulation.py",
+                    field="report.results.0.events.name",
+                    expected=V1_AGENT_INTEGRATION_REQUIRED_EVENTS,
+                    observed=event_names,
+                )
+            validate_metric_floor(
+                metric_averages,
+                V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS,
+                path="examples/sdk_agent_integration_simulation.py",
+                prefix="summary.metric_averages",
+            )
+            validate_integration_summary(
+                _as_mapping(state_summary.get("summary")),
+                path="examples/sdk_agent_integration_simulation.py",
+                prefix="report.results.environment_state.summary",
+            )
+            validate_readiness(
+                readiness,
+                path="examples/sdk_agent_integration_simulation.py",
+                prefix="agent_integration_readiness",
+                rerun_action_id="rerun_agent_integration_simulation",
+            )
+
+    return {
+        "required_files": list(V1_AGENT_INTEGRATION_FILES),
+        "required_providers": list(V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS),
+        "required_channels": list(V1_AGENT_INTEGRATION_REQUIRED_CHANNELS),
+        "required_trace_frameworks": list(
+            V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
+        ),
+        "required_layers": list(V1_AGENT_INTEGRATION_REQUIRED_LAYERS),
+        "required_provider_channels": copy.deepcopy(
+            V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS
+        ),
+        "required_manifest_provider_channels": copy.deepcopy(
+            V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
+        ),
+        "required_metrics": list(V1_AGENT_INTEGRATION_REQUIRED_METRICS),
+        "required_run_metrics": list(V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS),
+        "required_events": list(V1_AGENT_INTEGRATION_REQUIRED_EVENTS),
+        "required_action_ids": list(V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS),
+        "required_min_counts": dict(V1_AGENT_INTEGRATION_MIN_COUNTS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "simulation_errors": simulation_errors,
+        "metric_errors": metric_errors,
+        "readiness_errors": readiness_errors,
+        "evidence": evidence,
     }
 
 
@@ -14165,6 +15205,18 @@ __all__ = [
     "REJECTED_LEGACY_CONSOLE_SCRIPTS",
     "RESEARCH_SOURCES",
     "TYPESCRIPT_PUBLIC_PACKAGE",
+    "V1_AGENT_INTEGRATION_FILES",
+    "V1_AGENT_INTEGRATION_MIN_COUNTS",
+    "V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS",
+    "V1_AGENT_INTEGRATION_REQUIRED_CHANNELS",
+    "V1_AGENT_INTEGRATION_REQUIRED_EVENTS",
+    "V1_AGENT_INTEGRATION_REQUIRED_LAYERS",
+    "V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS",
+    "V1_AGENT_INTEGRATION_REQUIRED_METRICS",
+    "V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS",
+    "V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS",
+    "V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS",
+    "V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS",
     "V1_REQUIRED_CLI_COMMANDS",
     "V1_REQUIRED_DOCS",
     "V1_REQUIRED_EVIDENCE_COMPONENTS",
