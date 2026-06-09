@@ -1809,21 +1809,53 @@ V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS = [
     "list_memory_lineage_operations",
 ]
 
-V1_OPENENV_OPTIMIZER_FILES = [
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
     "internal-docs/openenv-environment-adapter-research.md",
 ]
 
-V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES = [
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES = [
+    "weak_environment_replay_reset_step_only",
+    "partial_environment_replay_no_failure_injection",
+    "verified_environment_replay",
+]
+
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES = [
     "weak_openenv_reset_step_only",
     "partial_openenv_no_failure_injection",
     "verified_openenv_replay",
 ]
 
-V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS = [
+    "environment_replay_coverage",
+    "environment_replay_quality",
+]
+
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS = [
     "openenv_coverage",
     "openenv_quality",
 ]
+
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_PROFILE_ALIASES = {
+    "weak_openenv_reset_step_only": "weak_environment_replay_reset_step_only",
+    "partial_openenv_no_failure_injection": (
+        "partial_environment_replay_no_failure_injection"
+    ),
+    "verified_openenv_replay": "verified_environment_replay",
+}
+
+V1_ENVIRONMENT_REPLAY_OPTIMIZER_METRIC_ALIASES = {
+    "openenv_coverage": "environment_replay_coverage",
+    "openenv_quality": "environment_replay_quality",
+}
+
+V1_OPENENV_OPTIMIZER_FILES = V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES
+V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES = (
+    V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
+)
+V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = (
+    V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
+)
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_evaluation_hook_optimization.py",
@@ -1846,7 +1878,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "local_websocket_framework_transport",
     "local_evaluation_gates",
     "adaptive_optimizer_recovery",
-    "framework_adapter_promotion",
+    "native_framework_adapter_probe_promotion",
     "protocol_tool_routing",
     "browser_cua_resilience",
     "realtime_voice_streaming",
@@ -1863,6 +1895,20 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT = 10
 
+V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
+    "probe_promotion",
+    "auto_discovery_promotion",
+    "one_call_promotion",
+    "one_call_run",
+]
+
+V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
+    "framework_adapter_contract_quality",
+    "framework_runtime_contract",
+    "framework_trace_coverage",
+    "tool_selection_accuracy",
+]
+
 V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS = [
     "https://huggingface.co/docs/openenv/index",
     "https://gymnasium.farama.org/api/env/",
@@ -1870,12 +1916,29 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS = [
     "https://a2a-protocol.org/latest/specification/",
 ]
 
-V1_FRAMEWORK_OPENENV_ADAPTER_FILES = [
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES = [
     "examples/sdk_framework_adapter_openenv_trace.py",
     "internal-docs/framework-openenv-adapter-readiness-research.md",
 ]
 
-V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV = [
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE = [
+    "environment_replay",
+    "state",
+    "observation",
+    "reset",
+    "step",
+    "action",
+    "reward",
+    "metadata",
+    "failure_injection",
+    "done",
+    "terminated",
+    "sandbox",
+    "in_process",
+    "local",
+]
+
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV = [
     "openenv",
     "state",
     "observation",
@@ -1892,14 +1955,26 @@ V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV = [
     "local",
 ]
 
-V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS = [
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS = [
+    "framework_runtime_contract",
+    "framework_adapter_contract_quality",
+    "environment_replay_coverage",
+    "environment_replay_quality",
+]
+
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS = [
     "framework_runtime_contract",
     "framework_adapter_contract_quality",
     "openenv_coverage",
     "openenv_quality",
 ]
 
-V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = {
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_METRIC_ALIASES = {
+    "openenv_coverage": "environment_replay_coverage",
+    "openenv_quality": "environment_replay_quality",
+}
+
+V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA = {
     "reset_count": 1,
     "step_count": 2,
     "action_route_count": 2,
@@ -1907,6 +1982,17 @@ V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = {
     "metadata_capture_count": 3,
     "reward_total": 1.0,
 }
+
+V1_FRAMEWORK_OPENENV_ADAPTER_FILES = V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES
+V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV = (
+    V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
+)
+V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS = (
+    V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
+)
+V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA = (
+    V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
+)
 
 V1_FRAMEWORK_TRACE_EXPORT_FILES = [
     "examples/sdk_framework_adapter_trace_export.py",
@@ -3338,7 +3424,7 @@ V1_REQUIRED_EVIDENCE_COMPONENTS = [
     "red_team_campaign",
     "red_team_readiness",
     "runtime_semantics",
-    "openenv",
+    "environment_replay",
     "stateful_tool_world",
     "world_hooks",
     "world_contract",
@@ -4083,33 +4169,35 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=external_agent_adapter,
     )
-    openenv_optimizer = _release_openenv_optimizer_status(root)
+    environment_replay_optimizer = _release_environment_replay_optimizer_status(root)
     _append_release_check(
         checks,
-        check_id="openenv_optimizer_readiness",
+        check_id="environment_replay_optimizer_readiness",
         passed=(
-            not openenv_optimizer["missing_files"]
-            and not openenv_optimizer["manifest_errors"]
-            and not openenv_optimizer["optimization_errors"]
-            and not openenv_optimizer["metric_errors"]
-            and not openenv_optimizer["errors"]
+            not environment_replay_optimizer["missing_files"]
+            and not environment_replay_optimizer["manifest_errors"]
+            and not environment_replay_optimizer["optimization_errors"]
+            and not environment_replay_optimizer["metric_errors"]
+            and not environment_replay_optimizer["errors"]
         ),
         milestone="M6",
-        evidence=openenv_optimizer,
+        evidence=environment_replay_optimizer,
     )
-    framework_openenv_adapter = _release_framework_openenv_adapter_status(root)
+    framework_environment_replay_adapter = (
+        _release_framework_environment_replay_adapter_status(root)
+    )
     _append_release_check(
         checks,
-        check_id="framework_openenv_adapter_readiness",
+        check_id="framework_environment_replay_adapter_readiness",
         passed=(
-            not framework_openenv_adapter["missing_files"]
-            and not framework_openenv_adapter["execution_errors"]
-            and not framework_openenv_adapter["manifest_errors"]
-            and not framework_openenv_adapter["contract_errors"]
-            and not framework_openenv_adapter["metric_errors"]
+            not framework_environment_replay_adapter["missing_files"]
+            and not framework_environment_replay_adapter["execution_errors"]
+            and not framework_environment_replay_adapter["manifest_errors"]
+            and not framework_environment_replay_adapter["contract_errors"]
+            and not framework_environment_replay_adapter["metric_errors"]
         ),
         milestone="M6",
-        evidence=framework_openenv_adapter,
+        evidence=framework_environment_replay_adapter,
     )
     framework_trace_export = _release_framework_trace_export_status(root)
     _append_release_check(
@@ -4416,8 +4504,8 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
     environment_10x_robustness = _release_environment_10x_robustness_status(
         root,
         framework_provider_contract=framework_provider_contract,
-        openenv_optimizer=openenv_optimizer,
-        framework_openenv_adapter=framework_openenv_adapter,
+        environment_replay_optimizer=environment_replay_optimizer,
+        framework_environment_replay_adapter=framework_environment_replay_adapter,
         protocol_adapter=protocol_adapter,
         browser_cua_probe=browser_cua_probe,
         realtime_stack_probe=realtime_stack_probe,
@@ -4431,6 +4519,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         framework_http_transport=framework_http_transport,
         framework_websocket_transport=framework_websocket_transport,
         framework_adapter_matrix_optimization=framework_adapter_matrix_optimization,
+        framework_adapter_probe=framework_adapter_probe,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -5000,18 +5089,38 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_external_agent_adapter_source_urls": list(
             V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
         ),
-        "required_openenv_optimizer_files": list(V1_OPENENV_OPTIMIZER_FILES),
-        "required_framework_openenv_adapter_files": list(
-            V1_FRAMEWORK_OPENENV_ADAPTER_FILES
+        "required_environment_replay_optimizer_files": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES
         ),
-        "required_framework_openenv_adapter_openenv": list(
-            V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+        "required_environment_replay_optimizer_profiles": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
         ),
-        "required_framework_openenv_adapter_metrics": list(
-            V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+        "required_environment_replay_optimizer_metrics": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS
         ),
-        "required_framework_openenv_adapter_quality_minima": dict(
-            V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+        "compatibility_openenv_optimizer_profiles": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
+        ),
+        "compatibility_openenv_optimizer_metrics": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
+        ),
+        "required_framework_environment_replay_adapter_files": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES
+        ),
+        "required_framework_environment_replay_adapter_evidence": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
+        ),
+        "required_framework_environment_replay_adapter_metrics": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS
+        ),
+        "required_framework_environment_replay_adapter_quality_minima": dict(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
+        ),
+        "compatibility_framework_openenv_adapter_openenv": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
+        ),
+        "compatibility_framework_openenv_adapter_metrics": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
         ),
         "required_framework_trace_export_files": list(
             V1_FRAMEWORK_TRACE_EXPORT_FILES
@@ -5657,11 +5766,19 @@ def _release_evidence_component_status() -> dict[str, Any]:
             "missing": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
             "error": str(exc),
         }
-    observed = sorted(DEFAULT_SIMULATION_EVIDENCE_WEIGHTS)
+    raw_observed = sorted(DEFAULT_SIMULATION_EVIDENCE_WEIGHTS)
+    observed = set(raw_observed)
+    compatibility_aliases = {"environment_replay": "openenv"}
+    for native, compatibility in compatibility_aliases.items():
+        if compatibility in observed:
+            observed.add(native)
+    observed_list = sorted(observed)
     missing = sorted(set(V1_REQUIRED_EVIDENCE_COMPONENTS) - set(observed))
     return {
         "available": True,
-        "observed": observed,
+        "observed": observed_list,
+        "compatibility_aliases": compatibility_aliases,
+        "raw_observed": raw_observed,
         "required": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "missing": missing,
     }
@@ -19151,8 +19268,11 @@ def _release_external_agent_adapter_status(root: Path) -> dict[str, Any]:
     }
 
 
-def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
-    missing_files = _missing_relative_paths(root, V1_OPENENV_OPTIMIZER_FILES)
+def _release_environment_replay_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES,
+    )
     manifest_errors: list[dict[str, Any]] = []
     optimization_errors: list[dict[str, Any]] = []
     metric_errors: list[dict[str, Any]] = []
@@ -19163,7 +19283,7 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
         example_path = root / "examples/sdk_openenv_environment_optimization.py"
         try:
             spec = importlib.util.spec_from_file_location(
-                "agent_learning_release_openenv_optimizer",
+                "agent_learning_release_environment_replay_optimizer",
                 example_path,
             )
             if spec is None or spec.loader is None:
@@ -19183,8 +19303,8 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
             scoring = _as_mapping(optimization.get("scoring"))
             search_space = _as_mapping(target.get("search_space"))
             candidates = _as_list(search_space.get("simulation.environments"))
-            profiles: list[str] = []
-            environment_types: list[str] = []
+            compatibility_profiles: list[str] = []
+            compatibility_environment_types: list[str] = []
             for candidate in candidates:
                 environments = [
                     item for item in _as_list(candidate) if isinstance(item, Mapping)
@@ -19195,9 +19315,25 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                 data = _as_mapping(environment.get("data"))
                 metadata = _as_mapping(data.get("metadata"))
                 if environment.get("type"):
-                    environment_types.append(str(environment.get("type")))
+                    compatibility_environment_types.append(str(environment.get("type")))
                 if metadata.get("candidate_profile"):
-                    profiles.append(str(metadata.get("candidate_profile")))
+                    compatibility_profiles.append(str(metadata.get("candidate_profile")))
+            profiles = [
+                V1_ENVIRONMENT_REPLAY_OPTIMIZER_PROFILE_ALIASES.get(
+                    profile,
+                    profile,
+                )
+                for profile in compatibility_profiles
+            ]
+            environment_types = [
+                "environment_replay" if item in {"openenv", "gymnasium"} else item
+                for item in compatibility_environment_types
+            ]
+            compatibility_scoring_layers = list(scoring.get("layers") or [])
+            scoring_layers = [
+                "environment_replay" if item == "openenv" else item
+                for item in compatibility_scoring_layers
+            ]
             target_metadata = _as_mapping(target.get("metadata"))
             research_urls = sorted(
                 str(source.get("url"))
@@ -19208,11 +19344,19 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                 {
                     "manifest_version": manifest.get("version"),
                     "manifest_required_env": list(manifest.get("required_env") or []),
-                    "manifest_scoring_layers": list(scoring.get("layers") or []),
+                    "manifest_scoring_layers": scoring_layers,
                     "manifest_candidate_count": len(candidates),
                     "manifest_candidate_environment_types": environment_types,
                     "manifest_candidate_profiles": profiles,
                     "manifest_research_urls": research_urls,
+                    "compatibility": {
+                        "wire_format": "openenv",
+                        "manifest_scoring_layers": compatibility_scoring_layers,
+                        "manifest_candidate_environment_types": (
+                            compatibility_environment_types
+                        ),
+                        "manifest_candidate_profiles": compatibility_profiles,
+                    },
                 }
             )
             if manifest.get("version") != "agent-learning.optimization.v1":
@@ -19240,23 +19384,26 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                     }
                 )
             missing_profiles = sorted(
-                set(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES) - set(profiles)
+                set(V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES)
+                - set(compatibility_profiles)
             )
             if missing_profiles:
                 manifest_errors.append(
                     {
                         "field": "optimization.target.search_space",
-                        "expected": list(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES),
-                        "observed": profiles,
+                        "expected": list(
+                            V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
+                        ),
+                        "observed": compatibility_profiles,
                         "missing": missing_profiles,
                     }
                 )
-            if "openenv" not in set(environment_types):
+            if "openenv" not in set(compatibility_environment_types):
                 manifest_errors.append(
                     {
                         "field": "optimization.target.search_space.environment.type",
                         "expected": "openenv",
-                        "observed": environment_types,
+                        "observed": compatibility_environment_types,
                     }
                 )
 
@@ -19286,7 +19433,24 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
             best_data = _as_mapping(best_environment.get("data"))
             best_metadata = _as_mapping(best_data.get("metadata"))
             best_metrics = _as_mapping(best_history.get("metrics"))
-            best_profile = str(best_metadata.get("candidate_profile") or "")
+            compatibility_best_profile = str(
+                best_metadata.get("candidate_profile") or ""
+            )
+            best_profile = V1_ENVIRONMENT_REPLAY_OPTIMIZER_PROFILE_ALIASES.get(
+                compatibility_best_profile,
+                compatibility_best_profile,
+            )
+            compatibility_best_environment_type = best_environment.get("type")
+            best_environment_type = (
+                "environment_replay"
+                if compatibility_best_environment_type in {"openenv", "gymnasium"}
+                else compatibility_best_environment_type
+            )
+            native_best_metrics = {
+                V1_ENVIRONMENT_REPLAY_OPTIMIZER_METRIC_ALIASES.get(metric, metric): value
+                for metric, value in best_metrics.items()
+            }
+            compatibility = _as_mapping(evidence.get("compatibility"))
             evidence.update(
                 {
                     "result_kind": result.get("kind"),
@@ -19302,10 +19466,21 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                     ),
                     "best_history_score": best_history.get("score"),
                     "best_candidate_profile": best_profile,
-                    "best_environment_type": best_environment.get("type"),
+                    "best_environment_type": best_environment_type,
                     "best_metrics": {
-                        metric: best_metrics.get(metric)
-                        for metric in V1_OPENENV_OPTIMIZER_REQUIRED_METRICS
+                        metric: native_best_metrics.get(metric)
+                        for metric in V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS
+                    },
+                    "compatibility": {
+                        **dict(compatibility),
+                        "best_candidate_profile": compatibility_best_profile,
+                        "best_environment_type": compatibility_best_environment_type,
+                        "best_metrics": {
+                            metric: best_metrics.get(metric)
+                            for metric in (
+                                V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
+                            )
+                        },
                     },
                 }
             )
@@ -19346,7 +19521,7 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                         "observed": best_environment.get("type"),
                     }
                 )
-            if best_profile != "verified_openenv_replay":
+            if compatibility_best_profile != "verified_openenv_replay":
                 optimization_errors.append(
                     {
                         "field": (
@@ -19354,20 +19529,22 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                             "data.metadata.candidate_profile"
                         ),
                         "expected": "verified_openenv_replay",
-                        "observed": best_profile,
+                        "observed": compatibility_best_profile,
                     }
                 )
             if _int_or_zero(summary.get("candidate_lineage_count")) < len(
-                V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+                V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
             ):
                 optimization_errors.append(
                     {
                         "field": "summary.candidate_lineage_count",
-                        "expected": f">={len(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES)}",
+                        "expected": (
+                            f">={len(V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES)}"
+                        ),
                         "observed": summary.get("candidate_lineage_count"),
                     }
                 )
-            for metric in V1_OPENENV_OPTIMIZER_REQUIRED_METRICS:
+            for metric in V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS:
                 if _float_or_zero(best_metrics.get(metric)) < 1.0:
                     metric_errors.append(
                         {
@@ -19378,9 +19555,15 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
                     )
 
     return {
-        "required_files": list(V1_OPENENV_OPTIMIZER_FILES),
-        "required_profiles": list(V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES),
-        "required_metrics": list(V1_OPENENV_OPTIMIZER_REQUIRED_METRICS),
+        "required_files": list(V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES),
+        "required_profiles": list(V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES),
+        "required_metrics": list(V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS),
+        "compatibility_profiles": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
+        ),
+        "compatibility_metrics": list(
+            V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
+        ),
         "missing_files": missing_files,
         "manifest_errors": manifest_errors,
         "optimization_errors": optimization_errors,
@@ -19390,10 +19573,14 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
     }
 
 
-def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
+def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
+    return _release_environment_replay_optimizer_status(root)
+
+
+def _release_framework_environment_replay_adapter_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(
         root,
-        V1_FRAMEWORK_OPENENV_ADAPTER_FILES,
+        V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES,
     )
     execution_errors: list[dict[str, Any]] = []
     manifest_errors: list[dict[str, Any]] = []
@@ -19420,7 +19607,7 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
         example_path = root / "examples/sdk_framework_adapter_openenv_trace.py"
         try:
             spec = importlib.util.spec_from_file_location(
-                "agent_learning_release_framework_openenv_adapter",
+                "agent_learning_release_framework_environment_replay_adapter",
                 example_path,
             )
             if spec is None or spec.loader is None:
@@ -19428,7 +19615,7 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             with tempfile.TemporaryDirectory(
-                prefix="agent-learning-framework-openenv-"
+                prefix="agent-learning-framework-environment-replay-"
             ) as tmpdir:
                 output_path = Path(tmpdir) / "framework-openenv-adapter.json"
                 result = module.run(output_path)
@@ -19482,6 +19669,83 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
             output_openenv_summary = _as_mapping(
                 invocation_output.get("openenv_summary")
             )
+            required_environment_replay = [
+                "environment_replay" if item == "openenv" else item
+                for item in required_openenv
+            ]
+            environment_replay_quality = {
+                "min_reset_count": openenv_quality.get("min_reset_count"),
+                "min_step_count": openenv_quality.get("min_step_count"),
+                "min_action_route_count": openenv_quality.get(
+                    "min_action_route_count"
+                ),
+                "min_failure_count": openenv_quality.get("min_failure_count"),
+                "min_metadata_capture_count": openenv_quality.get(
+                    "min_metadata_capture_count"
+                ),
+                "min_reward_total": openenv_quality.get("min_reward_total"),
+                "max_error_count": openenv_quality.get("max_error_count"),
+                "require_done": openenv_quality.get("require_done"),
+                "require_terminated": openenv_quality.get("require_terminated"),
+                "require_sandbox": openenv_quality.get("require_sandbox"),
+                "require_metadata_capture": openenv_quality.get(
+                    "require_metadata_capture"
+                ),
+                "require_no_external_service": openenv_quality.get(
+                    "require_no_external_service"
+                ),
+                "require_deterministic_reset": openenv_quality.get(
+                    "require_deterministic_reset"
+                ),
+                "required_runtime": openenv_quality.get("required_runtime"),
+                "required_transport": openenv_quality.get("required_transport"),
+                "required_isolation": openenv_quality.get("required_isolation"),
+            }
+            environment_replay_summary = {
+                "reset_count": openenv_summary.get("reset_count"),
+                "step_count": openenv_summary.get("step_count"),
+                "action_route_count": openenv_summary.get("action_route_count"),
+                "failure_count": openenv_summary.get("failure_count"),
+                "metadata_capture_count": openenv_summary.get(
+                    "metadata_capture_count"
+                ),
+                "reward_total": openenv_summary.get("reward_total"),
+                "error_count": openenv_summary.get("error_count"),
+                "done": openenv_summary.get("done"),
+                "terminated": openenv_summary.get("terminated"),
+                "sandbox_enabled": openenv_summary.get("sandbox_enabled"),
+                "requires_external_service": openenv_summary.get(
+                    "requires_external_service"
+                ),
+                "deterministic_reset": openenv_summary.get("deterministic_reset"),
+                "runtime": openenv_summary.get("runtime"),
+                "transport": openenv_summary.get("transport"),
+                "isolation": openenv_summary.get("isolation"),
+            }
+            native_metric_weights = {
+                "framework_runtime_contract": metric_weights.get(
+                    "framework_runtime_contract"
+                ),
+                "framework_adapter_contract_quality": metric_weights.get(
+                    "framework_adapter_contract_quality"
+                ),
+                "environment_replay_coverage": metric_weights.get(
+                    "openenv_coverage"
+                ),
+                "environment_replay_quality": metric_weights.get("openenv_quality"),
+            }
+            native_metric_averages = {
+                "framework_runtime_contract": metric_averages.get(
+                    "framework_runtime_contract"
+                ),
+                "framework_adapter_contract_quality": metric_averages.get(
+                    "framework_adapter_contract_quality"
+                ),
+                "environment_replay_coverage": metric_averages.get(
+                    "openenv_coverage"
+                ),
+                "environment_replay_quality": metric_averages.get("openenv_quality"),
+            }
             evidence.update(
                 {
                     "result_kind": result.get("kind"),
@@ -19494,47 +19758,8 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
                         "input_mode": agent.get("input_mode"),
                         "trace_runtime": agent.get("trace_runtime"),
                     },
-                    "required_openenv": required_openenv,
-                    "openenv_quality": {
-                        "min_reset_count": openenv_quality.get("min_reset_count"),
-                        "min_step_count": openenv_quality.get("min_step_count"),
-                        "min_action_route_count": openenv_quality.get(
-                            "min_action_route_count"
-                        ),
-                        "min_failure_count": openenv_quality.get(
-                            "min_failure_count"
-                        ),
-                        "min_metadata_capture_count": openenv_quality.get(
-                            "min_metadata_capture_count"
-                        ),
-                        "min_reward_total": openenv_quality.get(
-                            "min_reward_total"
-                        ),
-                        "max_error_count": openenv_quality.get("max_error_count"),
-                        "require_done": openenv_quality.get("require_done"),
-                        "require_terminated": openenv_quality.get(
-                            "require_terminated"
-                        ),
-                        "require_sandbox": openenv_quality.get("require_sandbox"),
-                        "require_metadata_capture": openenv_quality.get(
-                            "require_metadata_capture"
-                        ),
-                        "require_no_external_service": openenv_quality.get(
-                            "require_no_external_service"
-                        ),
-                        "require_deterministic_reset": openenv_quality.get(
-                            "require_deterministic_reset"
-                        ),
-                        "required_runtime": openenv_quality.get(
-                            "required_runtime"
-                        ),
-                        "required_transport": openenv_quality.get(
-                            "required_transport"
-                        ),
-                        "required_isolation": openenv_quality.get(
-                            "required_isolation"
-                        ),
-                    },
+                    "required_environment_replay": required_environment_replay,
+                    "environment_replay_quality": environment_replay_quality,
                     "runtime_contract": {
                         "required_state_keys": list(
                             runtime_contract.get("required_state_keys") or []
@@ -19546,14 +19771,8 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
                             runtime_contract.get("required_artifact_types") or []
                         ),
                     },
-                    "metric_weights": {
-                        metric: metric_weights.get(metric)
-                        for metric in V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
-                    },
-                    "metric_averages": {
-                        metric: metric_averages.get(metric)
-                        for metric in V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
-                    },
+                    "metric_weights": native_metric_weights,
+                    "metric_averages": native_metric_averages,
                     "state_keys": sorted(str(key) for key in environment_state),
                     "runtime_output": {
                         "state_keys": list(invocation_output.get("state_keys") or []),
@@ -19561,32 +19780,27 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
                             invocation_output.get("artifact_types") or []
                         ),
                         "event_types": list(invocation_output.get("event_types") or []),
-                        "openenv_summary": dict(output_openenv_summary),
+                        "environment_replay_summary": dict(output_openenv_summary),
                     },
-                    "openenv_summary": {
-                        "reset_count": openenv_summary.get("reset_count"),
-                        "step_count": openenv_summary.get("step_count"),
-                        "action_route_count": openenv_summary.get(
-                            "action_route_count"
-                        ),
-                        "failure_count": openenv_summary.get("failure_count"),
-                        "metadata_capture_count": openenv_summary.get(
-                            "metadata_capture_count"
-                        ),
-                        "reward_total": openenv_summary.get("reward_total"),
-                        "error_count": openenv_summary.get("error_count"),
-                        "done": openenv_summary.get("done"),
-                        "terminated": openenv_summary.get("terminated"),
-                        "sandbox_enabled": openenv_summary.get("sandbox_enabled"),
-                        "requires_external_service": openenv_summary.get(
-                            "requires_external_service"
-                        ),
-                        "deterministic_reset": openenv_summary.get(
-                            "deterministic_reset"
-                        ),
-                        "runtime": openenv_summary.get("runtime"),
-                        "transport": openenv_summary.get("transport"),
-                        "isolation": openenv_summary.get("isolation"),
+                    "environment_replay_summary": environment_replay_summary,
+                    "compatibility": {
+                        "wire_format": "openenv",
+                        "required_openenv": required_openenv,
+                        "openenv_quality": environment_replay_quality,
+                        "metric_weights": {
+                            metric: metric_weights.get(metric)
+                            for metric in (
+                                V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
+                            )
+                        },
+                        "metric_averages": {
+                            metric: metric_averages.get(metric)
+                            for metric in (
+                                V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
+                            )
+                        },
+                        "openenv_summary": environment_replay_summary,
+                        "runtime_output_openenv_summary": dict(output_openenv_summary),
                     },
                 }
             )
@@ -19770,10 +19984,22 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
                     )
 
     return {
-        "required_files": list(V1_FRAMEWORK_OPENENV_ADAPTER_FILES),
-        "required_openenv": list(V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV),
-        "required_metrics": list(V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS),
-        "quality_minima": dict(V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA),
+        "required_files": list(V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES),
+        "required_environment_replay": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
+        ),
+        "required_metrics": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS
+        ),
+        "quality_minima": dict(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
+        ),
+        "compatibility_openenv": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
+        ),
+        "compatibility_metrics": list(
+            V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
+        ),
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "manifest_errors": manifest_errors,
@@ -19781,6 +20007,10 @@ def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
         "metric_errors": metric_errors,
         "evidence": evidence,
     }
+
+
+def _release_framework_openenv_adapter_status(root: Path) -> dict[str, Any]:
+    return _release_framework_environment_replay_adapter_status(root)
 
 
 def _release_framework_trace_export_status(root: Path) -> dict[str, Any]:
@@ -22727,8 +22957,8 @@ def _release_environment_10x_robustness_status(
     root: Path,
     *,
     framework_provider_contract: Mapping[str, Any],
-    openenv_optimizer: Mapping[str, Any],
-    framework_openenv_adapter: Mapping[str, Any],
+    environment_replay_optimizer: Mapping[str, Any],
+    framework_environment_replay_adapter: Mapping[str, Any],
     protocol_adapter: Mapping[str, Any],
     browser_cua_probe: Mapping[str, Any],
     realtime_stack_probe: Mapping[str, Any],
@@ -22742,6 +22972,7 @@ def _release_environment_10x_robustness_status(
     framework_http_transport: Mapping[str, Any],
     framework_websocket_transport: Mapping[str, Any],
     framework_adapter_matrix_optimization: Mapping[str, Any],
+    framework_adapter_probe: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -23201,15 +23432,21 @@ def _release_environment_10x_robustness_status(
         },
     )
 
-    openenv_evidence = _as_mapping(framework_openenv_adapter.get("evidence"))
-    openenv_summary = _as_mapping(openenv_evidence.get("openenv_summary"))
-    required_openenv = _as_list(openenv_evidence.get("required_openenv"))
+    environment_replay_evidence = _as_mapping(
+        framework_environment_replay_adapter.get("evidence")
+    )
+    environment_replay_summary = _as_mapping(
+        environment_replay_evidence.get("environment_replay_summary")
+    )
+    required_environment_replay = _as_list(
+        environment_replay_evidence.get("required_environment_replay")
+    )
     append_axis(
         "environment_replay_contract",
-        source_check="framework_openenv_adapter_readiness",
+        source_check="framework_environment_replay_adapter_readiness",
         passed=(
             empty_buckets(
-                framework_openenv_adapter,
+                framework_environment_replay_adapter,
                 (
                     "missing_files",
                     "execution_errors",
@@ -23219,26 +23456,32 @@ def _release_environment_10x_robustness_status(
                 ),
             )
             and contains_all(
-                required_openenv,
-                V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV,
+                required_environment_replay,
+                V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE,
             )
-            and _int_or_zero(openenv_summary.get("reset_count")) >= 1
-            and _int_or_zero(openenv_summary.get("step_count")) >= 2
-            and _int_or_zero(openenv_summary.get("action_route_count")) >= 2
-            and _int_or_zero(openenv_summary.get("failure_count")) >= 1
-            and _float_or_zero(openenv_summary.get("reward_total")) >= 1.0
-            and _int_or_zero(openenv_summary.get("error_count")) == 0
-            and openenv_summary.get("done") is True
-            and openenv_summary.get("terminated") is True
-            and openenv_summary.get("sandbox_enabled") is True
-            and openenv_summary.get("requires_external_service") is False
-            and openenv_summary.get("deterministic_reset") is True
-            and openenv_summary.get("runtime") == "in_process"
-            and openenv_summary.get("transport") == "local"
-            and openenv_summary.get("isolation") == "process"
+            and _int_or_zero(environment_replay_summary.get("reset_count")) >= 1
+            and _int_or_zero(environment_replay_summary.get("step_count")) >= 2
+            and _int_or_zero(
+                environment_replay_summary.get("action_route_count")
+            )
+            >= 2
+            and _int_or_zero(environment_replay_summary.get("failure_count")) >= 1
+            and _float_or_zero(environment_replay_summary.get("reward_total"))
+            >= 1.0
+            and _int_or_zero(environment_replay_summary.get("error_count")) == 0
+            and environment_replay_summary.get("done") is True
+            and environment_replay_summary.get("terminated") is True
+            and environment_replay_summary.get("sandbox_enabled") is True
+            and environment_replay_summary.get("requires_external_service") is False
+            and environment_replay_summary.get("deterministic_reset") is True
+            and environment_replay_summary.get("runtime") == "in_process"
+            and environment_replay_summary.get("transport") == "local"
+            and environment_replay_summary.get("isolation") == "process"
         ),
         expected={
-            "required_openenv": V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV,
+            "required_environment_replay": (
+                V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
+            ),
             "reset_count": ">=1",
             "step_count": ">=2",
             "action_route_count": ">=2",
@@ -23255,20 +23498,23 @@ def _release_environment_10x_robustness_status(
             "isolation": "process",
         },
         evidence={
-            "required_openenv": required_openenv,
-            "openenv_summary": dict(openenv_summary),
+            "required_environment_replay": required_environment_replay,
+            "environment_replay_summary": dict(environment_replay_summary),
         },
     )
 
-    optimizer_evidence = _as_mapping(openenv_optimizer.get("evidence"))
+    optimizer_evidence = _as_mapping(environment_replay_optimizer.get("evidence"))
     optimizer_metrics = _as_mapping(optimizer_evidence.get("best_metrics"))
-    adapter_metrics = _as_mapping(openenv_evidence.get("metric_averages"))
+    adapter_metrics = _as_mapping(environment_replay_evidence.get("metric_averages"))
     append_axis(
         "local_evaluation_gates",
-        source_check="openenv_optimizer_readiness+framework_openenv_adapter_readiness",
+        source_check=(
+            "environment_replay_optimizer_readiness+"
+            "framework_environment_replay_adapter_readiness"
+        ),
         passed=(
             empty_buckets(
-                openenv_optimizer,
+                environment_replay_optimizer,
                 (
                     "missing_files",
                     "manifest_errors",
@@ -23278,7 +23524,7 @@ def _release_environment_10x_robustness_status(
                 ),
             )
             and empty_buckets(
-                framework_openenv_adapter,
+                framework_environment_replay_adapter,
                 (
                     "missing_files",
                     "execution_errors",
@@ -23289,16 +23535,18 @@ def _release_environment_10x_robustness_status(
             )
             and metrics_at_floor(
                 optimizer_metrics,
-                V1_OPENENV_OPTIMIZER_REQUIRED_METRICS,
+                V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS,
             )
             and metrics_at_floor(
                 adapter_metrics,
-                V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS,
+                V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS,
             )
         ),
         expected={
-            "optimizer_metrics": V1_OPENENV_OPTIMIZER_REQUIRED_METRICS,
-            "adapter_metrics": V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS,
+            "optimizer_metrics": V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS,
+            "adapter_metrics": (
+                V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS
+            ),
             "metric_floor": 1.0,
         },
         evidence={
@@ -23420,10 +23668,10 @@ def _release_environment_10x_robustness_status(
 
     append_axis(
         "adaptive_optimizer_recovery",
-        source_check="openenv_optimizer_readiness",
+        source_check="environment_replay_optimizer_readiness",
         passed=(
             empty_buckets(
-                openenv_optimizer,
+                environment_replay_optimizer,
                 (
                     "missing_files",
                     "manifest_errors",
@@ -23433,22 +23681,22 @@ def _release_environment_10x_robustness_status(
                 ),
             )
             and optimizer_evidence.get("best_candidate_profile")
-            == "verified_openenv_replay"
+            == "verified_environment_replay"
             and _int_or_zero(optimizer_evidence.get("manifest_candidate_count")) >= 3
             and _int_or_zero(optimizer_evidence.get("candidate_lineage_count")) >= 3
             and contains_all(
                 optimizer_evidence.get("manifest_candidate_profiles") or [],
-                V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES,
+                V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES,
             )
             and _float_or_zero(optimizer_evidence.get("best_history_score")) >= 1.0
             and _float_or_zero(optimizer_evidence.get("optimization_score")) >= 1.0
             and _float_or_zero(optimizer_evidence.get("evaluation_score")) >= 1.0
         ),
         expected={
-            "best_candidate_profile": "verified_openenv_replay",
+            "best_candidate_profile": "verified_environment_replay",
             "manifest_candidate_count": ">=3",
             "candidate_lineage_count": ">=3",
-            "candidate_profiles": V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES,
+            "candidate_profiles": V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES,
             "scores": ">=1.0",
         },
         evidence={
@@ -23471,55 +23719,81 @@ def _release_environment_10x_robustness_status(
         },
     )
 
-    runtime_output = _as_mapping(openenv_evidence.get("runtime_output"))
-    manifest_agent = _as_mapping(openenv_evidence.get("manifest_agent"))
+    adapter_probe_records = {
+        str(record.get("surface")): _as_mapping(record)
+        for record in _as_list(framework_adapter_probe.get("probes"))
+        if isinstance(record, Mapping)
+    }
+    adapter_probe_promotions = {
+        surface: adapter_probe_records.get(surface, {})
+        for surface in V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
+    }
+    adapter_probe_promotion_checks: dict[str, bool] = {}
+    for surface, record in adapter_probe_promotions.items():
+        manifest_metadata = _as_mapping(record.get("manifest_metadata"))
+        manifest_agent = _as_mapping(record.get("manifest_agent"))
+        metric_averages = _as_mapping(record.get("metric_averages"))
+        adapter_probe_promotion_checks[surface] = (
+            bool(record)
+            and record.get("result_kind") == "agent-learning.run.v1"
+            and record.get("result_status") == "passed"
+            and record.get("output_roundtrip") is True
+            and record.get("manifest_present") is True
+            and manifest_agent.get("framework") == "custom_refund_orchestrator"
+            and manifest_agent.get("method") == "execute_task"
+            and manifest_agent.get("input_mode") == "dict"
+            and manifest_agent.get("trace_runtime") is True
+            and manifest_metadata.get("promoted_from_framework_adapter_probe")
+            is True
+            and manifest_metadata.get("probe_proof_status") == "passed"
+            and metrics_at_floor(
+                metric_averages,
+                V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS,
+            )
+        )
     append_axis(
-        "framework_adapter_promotion",
-        source_check="framework_openenv_adapter_readiness",
+        "native_framework_adapter_probe_promotion",
+        source_check="framework_adapter_probe_readiness",
         passed=(
             empty_buckets(
-                framework_openenv_adapter,
+                framework_adapter_probe,
                 (
                     "missing_files",
                     "execution_errors",
-                    "manifest_errors",
                     "contract_errors",
+                    "manifest_errors",
                     "metric_errors",
                 ),
             )
-            and openenv_evidence.get("result_kind") == "agent-learning.run.v1"
-            and openenv_evidence.get("result_status") == "passed"
-            and openenv_evidence.get("output_roundtrip") is True
-            and manifest_agent.get("framework") == "openenv"
-            and manifest_agent.get("method") == "run"
-            and manifest_agent.get("input_mode") == "dict"
-            and manifest_agent.get("trace_runtime") is True
-            and "openenv" in set(_as_list(runtime_output.get("state_keys")))
-            and "trace" in set(_as_list(runtime_output.get("artifact_types")))
-            and "openenv" in set(_as_list(runtime_output.get("event_types")))
+            and contains_all(
+                adapter_probe_records,
+                V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES,
+            )
+            and all(adapter_probe_promotion_checks.values())
         ),
         expected={
+            "source_check": "framework_adapter_probe_readiness",
+            "surfaces": V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES,
             "result_kind": "agent-learning.run.v1",
             "result_status": "passed",
             "output_roundtrip": True,
-            "agent": {
-                "framework": "openenv",
-                "method": "run",
-                "input_mode": "dict",
-                "trace_runtime": True,
-            },
-            "runtime_output": {
-                "state_keys": ["openenv"],
-                "artifact_types": ["trace"],
-                "event_types": ["openenv"],
-            },
+            "manifest_present": True,
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "trace_runtime": True,
+            "promoted_from_framework_adapter_probe": True,
+            "probe_proof_status": "passed",
+            "metrics": V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS,
+            "metric_floor": 1.0,
         },
         evidence={
-            "result_kind": openenv_evidence.get("result_kind"),
-            "result_status": openenv_evidence.get("result_status"),
-            "output_roundtrip": openenv_evidence.get("output_roundtrip"),
-            "manifest_agent": dict(manifest_agent),
-            "runtime_output": dict(runtime_output),
+            "surfaces": list(adapter_probe_promotions),
+            "surface_checks": dict(adapter_probe_promotion_checks),
+            "promotions": {
+                surface: copy.deepcopy(dict(record))
+                for surface, record in adapter_probe_promotions.items()
+            },
         },
     )
 
@@ -32633,10 +32907,23 @@ __all__ = [
     "V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
+    "V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS",
+    "V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES",
+    "V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES",
+    "V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS",
+    "V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES",
     "V1_ENVIRONMENT_10X_ROBUSTNESS_AXES",
     "V1_ENVIRONMENT_10X_ROBUSTNESS_FILES",
     "V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT",
+    "V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS",
+    "V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES",
     "V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS",
+    "V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS",
+    "V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV",
+    "V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES",
+    "V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA",
+    "V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE",
+    "V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS",
     "V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL",
     "V1_MULTI_AGENT_ROOM_PROBE_FILES",
     "V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND",

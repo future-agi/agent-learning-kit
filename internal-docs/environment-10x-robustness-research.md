@@ -44,13 +44,14 @@ outputs and requires at least ten independent axes to pass:
 - `cross_framework_simulation_matrix`: local contracts for LangChain,
   LangGraph, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, A2A, and
   the rest of the V1 framework matrix.
-- `local_evaluation_gates`: `openenv_coverage`, `openenv_quality`, framework
-  runtime, and framework adapter metrics all score 1.0 for compatibility
-  fixtures.
-- `adaptive_optimizer_recovery`: agent-opt rejects weak/partial OpenEnv bundles
-  and selects the verified replay.
-- `framework_adapter_promotion`: a local framework adapter promotes
-  OpenEnv/Gymnasium-style output into a normal `agent-learning.run.v1` artifact.
+- `local_evaluation_gates`: environment replay coverage/quality, framework
+  runtime, and framework adapter metrics all score 1.0, with OpenEnv/Gymnasium
+  shapes kept as compatibility aliases.
+- `adaptive_optimizer_recovery`: agent-opt rejects weak/partial environment
+  replay bundles and selects the verified replay.
+- `native_framework_adapter_probe_promotion`: Agent Learning's adapter probe
+  optimizer promotes a custom framework adapter into normal
+  `agent-learning.run.v1` artifacts with proof metadata and metric floors.
 - `protocol_tool_routing`: MCP and A2A adapters preserve protocol state,
   events, artifacts, and tool/task records.
 - `browser_cua_resilience`: browser/CUA probes prove DOM/screenshot grounding,

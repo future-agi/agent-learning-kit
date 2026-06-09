@@ -15698,20 +15698,40 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_external_agent_adapter_source_urls"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
     )
-    assert payload["required_openenv_optimizer_files"] == (
-        trinity.V1_OPENENV_OPTIMIZER_FILES
+    assert payload["required_environment_replay_optimizer_files"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES
     )
-    assert payload["required_framework_openenv_adapter_files"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_FILES
+    assert payload["required_environment_replay_optimizer_profiles"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
     )
-    assert payload["required_framework_openenv_adapter_openenv"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    assert payload["required_environment_replay_optimizer_metrics"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS
     )
-    assert payload["required_framework_openenv_adapter_metrics"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+    assert payload["compatibility_openenv_optimizer_profiles"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
     )
-    assert payload["required_framework_openenv_adapter_quality_minima"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+    assert payload["compatibility_openenv_optimizer_metrics"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
+    )
+    assert payload["required_framework_environment_replay_adapter_files"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES
+    )
+    assert payload["required_framework_environment_replay_adapter_evidence"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
+    )
+    assert payload["required_framework_environment_replay_adapter_metrics"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS
+    )
+    assert payload[
+        "required_framework_environment_replay_adapter_quality_minima"
+    ] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
+    )
+    assert payload["compatibility_framework_openenv_adapter_openenv"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
+    )
+    assert payload["compatibility_framework_openenv_adapter_metrics"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
     )
     assert payload["required_framework_trace_export_files"] == (
         trinity.V1_FRAMEWORK_TRACE_EXPORT_FILES
@@ -16220,8 +16240,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_provider_contract_readiness",
         "agent_integration_readiness",
         "external_agent_adapter_readiness",
-        "openenv_optimizer_readiness",
-        "framework_openenv_adapter_readiness",
+        "environment_replay_optimizer_readiness",
+        "framework_environment_replay_adapter_readiness",
         "framework_trace_export_readiness",
         "framework_http_transport_readiness",
         "framework_websocket_transport_readiness",
@@ -18284,88 +18304,149 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "auth_redacted": True,
     }
 
-    openenv_optimizer = checks["openenv_optimizer_readiness"]["evidence"]
-    assert openenv_optimizer["required_files"] == trinity.V1_OPENENV_OPTIMIZER_FILES
-    assert openenv_optimizer["required_profiles"] == (
-        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+    environment_replay_optimizer = checks[
+        "environment_replay_optimizer_readiness"
+    ]["evidence"]
+    assert environment_replay_optimizer["required_files"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES
     )
-    assert openenv_optimizer["required_metrics"] == (
-        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_METRICS
+    assert environment_replay_optimizer["required_profiles"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
     )
-    assert openenv_optimizer["missing_files"] == []
-    assert openenv_optimizer["manifest_errors"] == []
-    assert openenv_optimizer["optimization_errors"] == []
-    assert openenv_optimizer["metric_errors"] == []
-    assert openenv_optimizer["errors"] == []
-    openenv_optimizer_evidence = openenv_optimizer["evidence"]
-    assert openenv_optimizer_evidence["manifest_version"] == (
+    assert environment_replay_optimizer["required_metrics"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert environment_replay_optimizer["compatibility_profiles"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
+    )
+    assert environment_replay_optimizer["compatibility_metrics"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
+    )
+    assert environment_replay_optimizer["missing_files"] == []
+    assert environment_replay_optimizer["manifest_errors"] == []
+    assert environment_replay_optimizer["optimization_errors"] == []
+    assert environment_replay_optimizer["metric_errors"] == []
+    assert environment_replay_optimizer["errors"] == []
+    environment_replay_optimizer_evidence = environment_replay_optimizer["evidence"]
+    assert environment_replay_optimizer_evidence["manifest_version"] == (
         "agent-learning.optimization.v1"
     )
-    assert openenv_optimizer_evidence["manifest_required_env"] == []
-    assert openenv_optimizer_evidence["manifest_scoring_layers"] == ["openenv"]
-    assert openenv_optimizer_evidence["manifest_candidate_count"] == 3
-    assert openenv_optimizer_evidence["manifest_candidate_profiles"] == (
-        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+    assert environment_replay_optimizer_evidence["manifest_required_env"] == []
+    assert environment_replay_optimizer_evidence["manifest_scoring_layers"] == [
+        "environment_replay"
+    ]
+    assert environment_replay_optimizer_evidence["manifest_candidate_count"] == 3
+    assert environment_replay_optimizer_evidence[
+        "manifest_candidate_environment_types"
+    ] == ["environment_replay"] * 3
+    assert environment_replay_optimizer_evidence["manifest_candidate_profiles"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
     )
-    assert openenv_optimizer_evidence["result_kind"] == (
+    assert environment_replay_optimizer_evidence["result_kind"] == (
         "agent-learning.optimization.v1"
     )
-    assert openenv_optimizer_evidence["result_status"] == "passed"
-    assert openenv_optimizer_evidence["optimization_score"] == pytest.approx(1.0)
-    assert openenv_optimizer_evidence["evaluation_score"] == pytest.approx(1.0)
-    assert openenv_optimizer_evidence["candidate_lineage_count"] == 3
-    assert openenv_optimizer_evidence["best_history_score"] == pytest.approx(1.0)
-    assert openenv_optimizer_evidence["best_environment_type"] == "openenv"
-    assert openenv_optimizer_evidence["best_candidate_profile"] == (
+    assert environment_replay_optimizer_evidence["result_status"] == "passed"
+    assert environment_replay_optimizer_evidence[
+        "optimization_score"
+    ] == pytest.approx(1.0)
+    assert environment_replay_optimizer_evidence[
+        "evaluation_score"
+    ] == pytest.approx(1.0)
+    assert environment_replay_optimizer_evidence["candidate_lineage_count"] == 3
+    assert environment_replay_optimizer_evidence[
+        "best_history_score"
+    ] == pytest.approx(1.0)
+    assert (
+        environment_replay_optimizer_evidence["best_environment_type"]
+        == "environment_replay"
+    )
+    assert environment_replay_optimizer_evidence["best_candidate_profile"] == (
+        "verified_environment_replay"
+    )
+    assert environment_replay_optimizer_evidence["best_metrics"] == {
+        "environment_replay_coverage": pytest.approx(1.0),
+        "environment_replay_quality": pytest.approx(1.0),
+    }
+    environment_replay_compatibility = environment_replay_optimizer_evidence[
+        "compatibility"
+    ]
+    assert environment_replay_compatibility["wire_format"] == "openenv"
+    assert environment_replay_compatibility["manifest_scoring_layers"] == ["openenv"]
+    assert environment_replay_compatibility[
+        "manifest_candidate_environment_types"
+    ] == ["openenv"] * 3
+    assert environment_replay_compatibility["manifest_candidate_profiles"] == (
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
+    )
+    assert environment_replay_compatibility["best_environment_type"] == "openenv"
+    assert environment_replay_compatibility["best_candidate_profile"] == (
         "verified_openenv_replay"
     )
-    assert openenv_optimizer_evidence["best_metrics"] == {
+    assert environment_replay_compatibility["best_metrics"] == {
         "openenv_coverage": pytest.approx(1.0),
         "openenv_quality": pytest.approx(1.0),
     }
-    framework_openenv_adapter = checks[
-        "framework_openenv_adapter_readiness"
+    framework_environment_replay_adapter = checks[
+        "framework_environment_replay_adapter_readiness"
     ]["evidence"]
-    assert framework_openenv_adapter["required_files"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_FILES
+    assert framework_environment_replay_adapter["required_files"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES
     )
-    assert framework_openenv_adapter["required_openenv"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    assert framework_environment_replay_adapter[
+        "required_environment_replay"
+    ] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
     )
-    assert framework_openenv_adapter["required_metrics"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS
+    assert framework_environment_replay_adapter["required_metrics"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS
     )
-    assert framework_openenv_adapter["quality_minima"] == (
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA
+    assert framework_environment_replay_adapter["quality_minima"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
     )
-    assert framework_openenv_adapter["missing_files"] == []
-    assert framework_openenv_adapter["execution_errors"] == []
-    assert framework_openenv_adapter["manifest_errors"] == []
-    assert framework_openenv_adapter["contract_errors"] == []
-    assert framework_openenv_adapter["metric_errors"] == []
-    framework_openenv_evidence = framework_openenv_adapter["evidence"]
-    assert framework_openenv_evidence["result_kind"] == "agent-learning.run.v1"
-    assert framework_openenv_evidence["result_status"] == "passed"
-    assert framework_openenv_evidence["output_roundtrip"] is True
-    assert framework_openenv_evidence["manifest_version"] == (
+    assert framework_environment_replay_adapter["compatibility_openenv"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
+    )
+    assert framework_environment_replay_adapter["compatibility_metrics"] == (
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
+    )
+    assert framework_environment_replay_adapter["missing_files"] == []
+    assert framework_environment_replay_adapter["execution_errors"] == []
+    assert framework_environment_replay_adapter["manifest_errors"] == []
+    assert framework_environment_replay_adapter["contract_errors"] == []
+    assert framework_environment_replay_adapter["metric_errors"] == []
+    framework_environment_replay_evidence = framework_environment_replay_adapter[
+        "evidence"
+    ]
+    assert framework_environment_replay_evidence["result_kind"] == (
         "agent-learning.run.v1"
     )
-    assert framework_openenv_evidence["manifest_agent"] == {
+    assert framework_environment_replay_evidence["result_status"] == "passed"
+    assert framework_environment_replay_evidence["output_roundtrip"] is True
+    assert framework_environment_replay_evidence["manifest_version"] == (
+        "agent-learning.run.v1"
+    )
+    assert framework_environment_replay_evidence["manifest_agent"] == {
         "framework": "openenv",
         "method": "run",
         "input_mode": "dict",
         "trace_runtime": True,
     }
-    assert set(framework_openenv_evidence["required_openenv"]) >= set(
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    assert set(
+        framework_environment_replay_evidence["required_environment_replay"]
+    ) >= set(
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
     )
-    assert framework_openenv_evidence["runtime_contract"][
+    assert framework_environment_replay_evidence["runtime_contract"][
         "required_state_keys"
     ] == ["openenv"]
     assert {"artifact", "event", "openenv", "state"} <= set(
-        framework_openenv_evidence["runtime_contract"]["required_signals"]
+        framework_environment_replay_evidence["runtime_contract"][
+            "required_signals"
+        ]
     )
-    assert framework_openenv_evidence["openenv_quality"] == {
+    assert framework_environment_replay_evidence[
+        "environment_replay_quality"
+    ] == {
         "min_reset_count": 1,
         "min_step_count": 2,
         "min_action_route_count": 2,
@@ -18383,22 +18464,24 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "required_transport": "local",
         "required_isolation": "process",
     }
-    assert framework_openenv_evidence["metric_weights"][
-        "openenv_coverage"
+    assert framework_environment_replay_evidence["metric_weights"][
+        "environment_replay_coverage"
     ] == pytest.approx(4.0)
-    assert framework_openenv_evidence["metric_weights"][
-        "openenv_quality"
+    assert framework_environment_replay_evidence["metric_weights"][
+        "environment_replay_quality"
     ] == pytest.approx(4.0)
-    assert framework_openenv_evidence["metric_averages"] == {
+    assert framework_environment_replay_evidence["metric_averages"] == {
         "framework_runtime_contract": pytest.approx(1.0),
         "framework_adapter_contract_quality": pytest.approx(1.0),
-        "openenv_coverage": pytest.approx(1.0),
-        "openenv_quality": pytest.approx(1.0),
+        "environment_replay_coverage": pytest.approx(1.0),
+        "environment_replay_quality": pytest.approx(1.0),
     }
     assert {"framework_runtime", "framework_trace", "openenv"} <= set(
-        framework_openenv_evidence["state_keys"]
+        framework_environment_replay_evidence["state_keys"]
     )
-    assert framework_openenv_evidence["openenv_summary"] == {
+    assert framework_environment_replay_evidence[
+        "environment_replay_summary"
+    ] == {
         "reset_count": 1,
         "step_count": 2,
         "action_route_count": 2,
@@ -18415,12 +18498,28 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "transport": "local",
         "isolation": "process",
     }
-    runtime_output = framework_openenv_evidence["runtime_output"]
+    runtime_output = framework_environment_replay_evidence["runtime_output"]
     assert "openenv" in runtime_output["state_keys"]
     assert "trace" in runtime_output["artifact_types"]
     assert "openenv" in runtime_output["event_types"]
-    assert runtime_output["openenv_summary"]["step_count"] == 2
-    assert runtime_output["openenv_summary"]["done"] is True
+    assert runtime_output["environment_replay_summary"]["step_count"] == 2
+    assert runtime_output["environment_replay_summary"]["done"] is True
+    framework_environment_replay_compatibility = (
+        framework_environment_replay_evidence["compatibility"]
+    )
+    assert framework_environment_replay_compatibility["wire_format"] == "openenv"
+    assert set(framework_environment_replay_compatibility["required_openenv"]) >= set(
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
+    )
+    assert framework_environment_replay_compatibility["metric_averages"] == {
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "openenv_coverage": pytest.approx(1.0),
+        "openenv_quality": pytest.approx(1.0),
+    }
+    assert framework_environment_replay_compatibility["openenv_summary"][
+        "step_count"
+    ] == 2
     framework_trace_export = checks["framework_trace_export_readiness"][
         "evidence"
     ]
@@ -19032,19 +19131,22 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
             pytest.approx(1.0)
         )
     runtime_axis = environment_10x_axes["environment_replay_contract"]["evidence"]
-    assert set(runtime_axis["required_openenv"]) >= set(
-        trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
+    assert set(runtime_axis["required_environment_replay"]) >= set(
+        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
     )
-    assert runtime_axis["openenv_summary"]["reset_count"] >= 1
-    assert runtime_axis["openenv_summary"]["step_count"] >= 2
-    assert runtime_axis["openenv_summary"]["failure_count"] >= 1
-    assert runtime_axis["openenv_summary"]["error_count"] == 0
-    assert runtime_axis["openenv_summary"]["sandbox_enabled"] is True
-    assert runtime_axis["openenv_summary"]["requires_external_service"] is False
+    assert runtime_axis["environment_replay_summary"]["reset_count"] >= 1
+    assert runtime_axis["environment_replay_summary"]["step_count"] >= 2
+    assert runtime_axis["environment_replay_summary"]["failure_count"] >= 1
+    assert runtime_axis["environment_replay_summary"]["error_count"] == 0
+    assert runtime_axis["environment_replay_summary"]["sandbox_enabled"] is True
+    assert (
+        runtime_axis["environment_replay_summary"]["requires_external_service"]
+        is False
+    )
     eval_axis = environment_10x_axes["local_evaluation_gates"]["evidence"]
-    for metric in trinity.V1_OPENENV_OPTIMIZER_REQUIRED_METRICS:
+    for metric in trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS:
         assert eval_axis["optimizer_metrics"][metric] == pytest.approx(1.0)
-    for metric in trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS:
+    for metric in trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS:
         assert eval_axis["adapter_metrics"][metric] == pytest.approx(1.0)
     assert environment_10x_axes["authenticated_evaluation_hooks"][
         "source_check"
@@ -19089,17 +19191,36 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         < 1.0
     )
     optimizer_axis = environment_10x_axes["adaptive_optimizer_recovery"]["evidence"]
-    assert optimizer_axis["best_candidate_profile"] == "verified_openenv_replay"
+    assert optimizer_axis["best_candidate_profile"] == "verified_environment_replay"
     assert optimizer_axis["candidate_lineage_count"] >= 3
     assert set(optimizer_axis["manifest_candidate_profiles"]) >= set(
-        trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
+        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
     )
-    adapter_axis = environment_10x_axes["framework_adapter_promotion"]["evidence"]
-    assert adapter_axis["result_kind"] == "agent-learning.run.v1"
-    assert adapter_axis["result_status"] == "passed"
-    assert adapter_axis["output_roundtrip"] is True
-    assert adapter_axis["manifest_agent"]["framework"] == "openenv"
-    assert "openenv" in adapter_axis["runtime_output"]["state_keys"]
+    adapter_axis = environment_10x_axes["native_framework_adapter_probe_promotion"]
+    assert adapter_axis["source_check"] == "framework_adapter_probe_readiness"
+    adapter_axis_evidence = adapter_axis["evidence"]
+    assert adapter_axis_evidence["surfaces"] == (
+        trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
+    )
+    assert all(adapter_axis_evidence["surface_checks"].values())
+    for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES:
+        promotion = adapter_axis_evidence["promotions"][surface]
+        assert promotion["result_kind"] == "agent-learning.run.v1"
+        assert promotion["result_status"] == "passed"
+        assert promotion["output_roundtrip"] is True
+        assert promotion["manifest_present"] is True
+        assert promotion["manifest_agent"] == {
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "trace_runtime": True,
+        }
+        assert promotion["manifest_metadata"][
+            "promoted_from_framework_adapter_probe"
+        ] is True
+        assert promotion["manifest_metadata"]["probe_proof_status"] == "passed"
+        for metric in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS:
+            assert promotion["metric_averages"][metric] == pytest.approx(1.0)
     protocol_axis = environment_10x_axes["protocol_tool_routing"]["evidence"]
     assert protocol_axis["protocols"] == ["a2a", "mcp"]
     assert protocol_axis["mcp_summary"]["tool_count"] >= 2

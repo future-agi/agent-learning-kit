@@ -53,7 +53,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
+| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `environment_replay_optimizer_readiness`, `framework_environment_replay_adapter_readiness`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -341,17 +341,18 @@ Current checkpoint:
   `openai_chat` adapter with `external_agent_status` evidence before external
   target-agent claims are release-ready.
 - Environment replay optimizer readiness is now an executable release-check
-  gate through the existing `openenv_optimizer_readiness` compatibility check:
+  gate through `environment_replay_optimizer_readiness`:
   `examples/sdk_openenv_environment_optimization.py` runs local AgentOptimizer
   bundle search over weak, partial, and verified OpenEnv/Gymnasium-shaped
   replays and must select the verified environment replay with
-  `openenv_coverage=1.0` and `openenv_quality=1.0`. The public API should lead
-  with `build_environment_replay_optimization_manifest()` and
-  `optimize_environment_replay()` while preserving `build_openenv_*` and
-  `optimize_openenv()` as compatibility names.
+  `environment_replay_coverage=1.0` and
+  `environment_replay_quality=1.0`. The public API should lead with
+  `build_environment_replay_optimization_manifest()` and
+  `optimize_environment_replay()` while preserving `build_openenv_*`,
+  `optimize_openenv()`, and OpenEnv metrics as compatibility aliases.
 - Framework environment replay adapter readiness is now an executable
-  release-check gate through the existing `framework_openenv_adapter_readiness`
-  compatibility check: `examples/sdk_framework_adapter_openenv_trace.py` must
+  release-check gate through `framework_environment_replay_adapter_readiness`:
+  `examples/sdk_framework_adapter_openenv_trace.py` must
   promote a local environment replay adapter, generate compatibility eval gates,
   normalize reset/step/reward/done/sandbox/failure evidence into `openenv` wire
   state, events, and trace artifacts, and pass environment replay coverage and
@@ -494,14 +495,15 @@ Current checkpoint:
   requires at least ten independent axes to pass across the Agent Learning
   replay contract, framework simulation, local HTTP framework transport,
   local WebSocket framework transport, framework matrix optimization, local
-  evals, optimizer recovery, adapter promotion, protocol routing, browser/CUA,
+  evals, optimizer recovery, native adapter probe promotion, protocol routing,
+  browser/CUA,
   realtime, memory, multi-agent coordination, authenticated
   evaluation/workflow/retrieval hooks, world orchestration, workspace import
   certification, red-team suite coverage, and regression replay. Workspace
   import certification, local HTTP framework transport, local WebSocket
-  framework transport, framework matrix optimization, and authenticated hooks
-  are counted as native proof-backed axes; OpenEnv/Gymnasium-shaped traces are
-  compatibility inputs inside that bar.
+  framework transport, framework matrix optimization, native adapter probe
+  promotion, and authenticated hooks are counted as native proof-backed axes;
+  OpenEnv/Gymnasium-shaped traces are compatibility inputs inside that bar.
 
 Acceptance gates:
 

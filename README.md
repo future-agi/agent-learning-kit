@@ -837,12 +837,14 @@ calls/results, resources, artifacts, and passing coverage/quality metrics.
 OpenEnv/Gymnasium-style framework outputs normalize into environment replay
 evidence. Local adapters can return `openenv`, `open_env`, reset/step
 trajectories, reward/done fields, sandbox metadata, or failure-injection
-records; the generic wrapper promotes them to `openenv` state, trace artifacts,
-`openenv` events, and generated `required_openenv` / `openenv_quality` gates.
+records; the generic wrapper promotes them to environment replay evidence with
+`openenv` wire state, trace artifacts, events, and compatibility aliases for
+`required_openenv` / `openenv_quality`.
 See `examples/sdk_framework_adapter_openenv_trace.py`. `agent-learn
-release-check` runs this cookbook as `framework_openenv_adapter_readiness` and
+release-check` runs this cookbook as
+`framework_environment_replay_adapter_readiness` and
 requires normalized reset/step/reward/done/sandbox/failure evidence plus passing
-OpenEnv coverage and quality metrics.
+environment replay coverage and quality metrics.
 
 Realtime framework exports are normalized from local session traces. Pipecat-like
 `frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
@@ -1917,25 +1919,27 @@ local optimizer path selects the verified environment replay bundle.
 
 The `sdk_framework_adapter_openenv_trace.py` example covers the adapter side of
 the same contract: a local framework returns a plain OpenEnv/Gymnasium-compatible
-trace dict, and adapter promotion derives `openenv` state, `openenv` events,
-trace artifacts, plus generated environment replay coverage and quality gates.
+trace dict, and compatibility adapter promotion derives `openenv` state,
+`openenv` events, trace artifacts, plus generated environment replay coverage
+and quality gates.
 `agent-learn release-check` now executes that adapter cookbook as
-`framework_openenv_adapter_readiness`; the static `framework_openenv_manifest.json`
-continues to carry the same compatibility contract into the manifest contract
-gate.
+`framework_environment_replay_adapter_readiness`; the static
+`framework_openenv_manifest.json` continues to carry the same compatibility
+contract into the manifest contract gate.
 
 `agent-learn release-check` also gates the broader Agent Learning environment
 bar as `environment_10x_robustness`. That check does not rely on wording alone:
 it requires the current release artifact to prove at least ten axes across the
 Agent Learning replay contract, framework simulation, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
-local evals, optimizer recovery, adapter promotion, protocol routing,
-browser/CUA, realtime voice, memory lineage, multi-agent coordination, world
-orchestration, workspace import certification, authenticated evaluation,
+local evals, optimizer recovery, native adapter probe promotion, protocol
+routing, browser/CUA, realtime voice, memory lineage, multi-agent coordination,
+world orchestration, workspace import certification, authenticated evaluation,
 workflow, and retrieval hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
-and authenticated hooks are counted as native proof-backed axes;
+native adapter probe promotion, and authenticated hooks are counted as native
+proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
