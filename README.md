@@ -85,11 +85,12 @@ synthesis, world/framework/memory stacks, multi-agent framework handoffs,
 framework certification, and framework import repair. OpenEnv adapter readiness
 executes a local framework adapter that returns OpenEnv/Gymnasium-style replay
 evidence and verifies generated OpenEnv gates, normalized state, events, and
-artifacts. OpenEnv 10x robustness is also executable: release-check aggregates
-the local OpenEnv, framework, eval, optimizer, adapter, protocol, browser/CUA,
-realtime, memory, multi-agent, red-team, orchestration, and regression proof
-outputs and requires at least ten independent axes to pass before the
-comparison is trusted. Regression artifact readiness runs the local baseline, compare,
+artifacts as compatibility coverage. Agent Learning environment robustness is
+also executable: release-check aggregates local replay, framework, eval,
+optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
+red-team, orchestration, and regression proof outputs and requires at least ten
+independent axes to pass. OpenEnv and Gymnasium are compatibility inputs, not
+the product center. Regression artifact readiness runs the local baseline, compare,
 report, promote-to-regression, and replay lifecycle so optimized or red-team
 evidence can become replayable CI artifacts. Optimizer governance readiness
 executes local governed optimizer-society search and verifies candidate lineage,
@@ -671,11 +672,12 @@ chunks, the generated eval config requires `framework_runtime_contract` to prove
 streaming and `streaming_trace_coverage` to score the normalized chunk/tool/final
 trace. See `examples/sdk_framework_adapter_streaming.py`.
 
-Typed-output framework results are normalized too. If a local adapter returns a
-Pydantic/dataclass/model-dump style object with `content`, `tool_calls`,
-`events`, `state`, or `metadata`, the generic wrapper preserves those fields in
-the run artifact instead of flattening them into text. Auto-generated eval gates
-then require the observed structured state keys, as shown in
+Typed-output framework results are normalized too. If a local adapter returns an
+object/dataclass, or a `model_dump()` payload, whose normalized form contains
+`content`, `tool_calls`, `events`, `state`, or `metadata`, the generic wrapper
+preserves those fields in the run artifact instead of flattening them into text.
+Auto-generated eval gates then require the observed structured state keys, as
+shown in
 `examples/sdk_framework_adapter_typed_output.py`.
 
 Keyword-only framework entrypoints are also supported. Discovery inspects local
@@ -724,6 +726,37 @@ contracts, review and reconciliation counts, participant coverage, and
 termination in the same report artifact. See
 `examples/sdk_framework_adapter_handoff_transcript.py`.
 
+`agent-learn release-check` now gates these advanced IO surfaces as
+`framework_adapter_io_readiness`. The gate runs the streaming, typed-output,
+keyword-input, side-kwargs, nested-method, provider-response, message-history,
+and handoff-transcript cookbooks locally and verifies their promoted manifests,
+runtime summaries, normalized state keys, event/artifact evidence, transcript
+state including `provider_response`, and required metric floors.
+
+Copy/paste the IO readiness cookbooks and gate:
+
+```bash
+mkdir -p artifacts
+PYTHONPATH=src python examples/sdk_framework_adapter_streaming.py \
+  artifacts/sdk-framework-adapter-streaming.json
+PYTHONPATH=src python examples/sdk_framework_adapter_typed_output.py \
+  artifacts/sdk-framework-adapter-typed-output.json
+PYTHONPATH=src python examples/sdk_framework_adapter_keyword_inputs.py \
+  artifacts/sdk-framework-adapter-keyword-inputs.json
+PYTHONPATH=src python examples/sdk_framework_adapter_side_kwargs.py \
+  artifacts/sdk-framework-adapter-side-kwargs.json
+PYTHONPATH=src python examples/sdk_framework_adapter_nested_method.py \
+  artifacts/sdk-framework-adapter-nested-method.json
+PYTHONPATH=src python examples/sdk_framework_adapter_provider_response.py \
+  artifacts/sdk-framework-adapter-provider-response.json
+PYTHONPATH=src python examples/sdk_framework_adapter_message_history.py \
+  artifacts/sdk-framework-adapter-message-history.json
+PYTHONPATH=src python examples/sdk_framework_adapter_handoff_transcript.py \
+  artifacts/sdk-framework-adapter-handoff-transcript.json
+agent-learn release-check --project-root . \
+  --output artifacts/framework-adapter-io-release-check.json --quiet
+```
+
 Framework trace exports normalize OpenTelemetry/TraceAI evidence directly from
 adapter outputs. OTLP-style `resourceSpans` / `scopeSpans`, TraceAI/Future AGI
 wrappers, and explicit `framework_trace` span/event records become
@@ -731,10 +764,11 @@ wrappers, and explicit `framework_trace` span/event records become
 tool-call evidence, adapter conformance summaries, and generated
 `framework_trace_coverage` / `framework_trace_quality` eval gates. See
 `examples/sdk_framework_adapter_trace_export.py`. `agent-learn release-check`
-runs this cookbook as `framework_trace_export_readiness` and requires the
-selected `execute_task(dict)` adapter to emit trace state, span events,
-framework trace artifacts, `policy_lookup` tool evidence, and passing runtime,
-adapter-contract, trace coverage, and trace quality metrics.
+runs this cookbook as `framework_trace_export_readiness`, a sibling gate rather
+than part of `framework_adapter_io_readiness`, and requires the selected
+`execute_task(dict)` adapter to emit trace state, span events, framework trace
+artifacts, `policy_lookup` tool evidence, and passing runtime, adapter-contract,
+trace coverage, and trace quality metrics.
 
 A2A/Agent2Agent protocol sessions normalize cross-agent task evidence. Outputs
 carrying agent cards, JSON-RPC `SendMessage` records, messages, tasks, task
@@ -1812,13 +1846,14 @@ trace artifacts, plus generated OpenEnv coverage and quality gates.
 continues to carry the same OpenEnv framework adapter contract into the manifest
 contract gate.
 
-`agent-learn release-check` also gates the broader comparison as
-`openenv_10x_robustness`. That check does not rely on wording alone: it requires
-the current release artifact to prove at least ten axes across OpenEnv replay,
-framework simulation, local evals, optimizer recovery, adapter promotion,
-protocol routing, browser/CUA, realtime voice, memory lineage, multi-agent
-coordination, world orchestration, red-team suite coverage, and regression
-promotion/replay.
+`agent-learn release-check` also gates the broader Agent Learning environment
+bar as `environment_10x_robustness`. That check does not rely on wording alone:
+it requires the current release artifact to prove at least ten axes across the
+Agent Learning replay contract, framework simulation, local evals, optimizer
+recovery, adapter promotion, protocol routing, browser/CUA, realtime voice,
+memory lineage, multi-agent coordination, world orchestration, red-team suite
+coverage, and regression promotion/replay. OpenEnv/Gymnasium-shaped traces are
+compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

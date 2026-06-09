@@ -2,10 +2,10 @@
 
 ## Purpose
 
-OpenEnv robustness has to apply to arbitrary framework adapters, not only to
-hand-authored OpenEnv environment manifests. A local framework can return a
-plain OpenEnv/Gymnasium-style payload, and the generic adapter path should turn
-that payload into evaluator-visible replay evidence.
+Agent Learning environment robustness has to apply to arbitrary framework
+adapters, not only to hand-authored environment manifests. A local framework can
+return a plain OpenEnv/Gymnasium-style payload, and the generic adapter path
+should turn that compatibility payload into evaluator-visible replay evidence.
 
 ## Local Contract
 

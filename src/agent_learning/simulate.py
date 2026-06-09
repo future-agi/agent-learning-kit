@@ -1890,10 +1890,11 @@ def build_openenv_run_manifest(
             "cookbook": "openenv-environment-replay",
             "research_sources": _openenv_research_sources(),
             "original_synthesis": (
-                "OpenEnv robustness should be tested as executable local "
-                "environment evidence: reset, step, state, reward, done, "
-                "metadata, sandbox/isolation, replay transport, and failure "
-                "injection are scored together."
+                "Agent Learning environment robustness should be tested as "
+                "executable local replay evidence. OpenEnv/Gymnasium-shaped "
+                "reset, step, state, reward, done, metadata, sandbox/isolation, "
+                "replay transport, and failure injection are compatibility "
+                "inputs scored under the Agent Learning contract."
             ),
             **copy.deepcopy(dict(metadata or {})),
         },

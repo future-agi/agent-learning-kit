@@ -25,6 +25,12 @@ V1 is releasable when a user can:
 9. Verify release readiness with `agent-learn doctor` and
    `agent-learn release-check`, then cut V1 with
    `agent-learn release-proof`.
+10. Prove the Agent Learning framework/environment layer is the primary
+   robustness surface by keeping at least ten independent local evidence axes
+   green across replay, simulation, evals, optimizer recovery, adapters,
+   protocols, browser/CUA, realtime, memory, multi-agent, red-team, and
+   regression workflows. OpenEnv and Gymnasium are compatibility inputs, not
+   the product center.
 
 ## Milestones
 
@@ -47,7 +53,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `openenv_10x_robustness` |
+| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -345,6 +351,12 @@ Current checkpoint:
   run SDK cookbooks must run locally, select `execute_task(dict)`, pass native
   probe proofs, preserve proof/discovery metadata in promoted manifests, and
   close framework runtime, adapter-contract, trace, and tool metrics.
+- Framework adapter IO readiness is now an executable release-check gate:
+  streaming, typed-output, keyword-input, side-kwargs, nested-method,
+  provider-envelope, message-history, and handoff-transcript cookbooks must run
+  locally, preserve the selected manifest/runtime contract, normalize state,
+  events, artifacts, and transcript evidence, and close the relevant runtime,
+  adapter-contract, streaming, transcript, and tool metrics.
 - Protocol adapter readiness is now an executable release-check gate:
   `examples/sdk_framework_adapter_mcp_tool_session.py` and
   `examples/sdk_framework_adapter_a2a_protocol_trace.py` must run locally,
@@ -403,16 +415,21 @@ Current checkpoint:
   `agent-learning.run.v1`, execute that promoted run, and close external
   task-quality, world, framework, retrieval, memory-lineage, multi-agent, tool,
   and task metrics.
-- OpenEnv 10x robustness is now an executable release-check gate:
-  `openenv_10x_robustness` aggregates the existing local proof outputs and
-  requires at least ten independent axes to pass across OpenEnv runtime replay,
-  framework simulation, local evals, optimizer recovery, adapter promotion,
-  protocol routing, browser/CUA, realtime, memory, multi-agent coordination,
-  world orchestration, red-team suite coverage, and regression replay.
+- Agent Learning environment 10x robustness is now an executable release-check gate:
+  `environment_10x_robustness` aggregates the existing local proof outputs and
+  requires at least ten independent axes to pass across the Agent Learning
+  replay contract, framework simulation, local evals, optimizer recovery,
+  adapter promotion, protocol routing, browser/CUA, realtime, memory,
+  multi-agent coordination, world orchestration, red-team suite coverage, and
+  regression replay. OpenEnv/Gymnasium-shaped traces are compatibility inputs
+  inside that bar.
 
 Acceptance gates:
 
 - Framework certification covers lifecycle, capability, probe, and portability.
+- Agent Learning Kit owns the framework/environment robustness target:
+  release-check must keep `environment_10x_robustness` green before V1 claims
+  material robustness beyond a single environment replay format.
 - Provider/transport simulation distinguishes agent platform, transport,
   simulator STT/TTS, system engine, and chat engine roles.
 - LiveKit/WebRTC/SIP/phone, Retell, ElevenLabs, Deepgram, Agora, Pipecat, and
@@ -427,24 +444,20 @@ Next implementation focus:
 - Avoid adding hosted optimizer/eval dependencies.
 - Add real-key live-target checks only for explicitly selected user workloads
   and keep those results out of release metadata.
-- Keep the explicit 10x OpenEnv robustness target executable: support
-  local-first OpenEnv adapter probes for Gymnasium-style `reset()`, `step()`,
-  and `state()` contracts; container/HTTP/WebSocket-backed environment replay;
-  MCP/tool action routing; reward/done/metadata capture; and sandbox/isolation
-  evidence. The Agent Learning Kit framework/provider surface should be
-  materially more robust than an OpenEnv-only baseline by keeping at least ten
-  independent resilience axes green in release-check evidence: cross-framework
-  simulation, eval, red-team, memory, browser/CUA, realtime, protocol,
-  multi-agent, replay, optimizer recovery, and regression promotion.
-- Treat "10x more robust than OpenEnv" as a measurable release bar, not wording
-  for marketing copy: every comparative claim must map to executable artifacts,
-  passing metrics, failure-injection coverage, adversarial state coverage,
-  sandbox evidence, and local reproducibility before it appears in release
-  notes.
-- Keep backing that target with the executable `OpenEnvEnvironment` adapter,
-  `openenv_quality`/`openenv_coverage` report gates, SDK cookbook manifests,
-  and the release-checked agent-opt OpenEnv bundle search before using the claim
-  in release notes.
+- Keep the explicit Agent Learning environment robustness target executable:
+  support local-first environment replay probes for our reset, step, state,
+  reward/done/metadata, sandbox/isolation, failure-injection, protocol/tool
+  routing, and container/HTTP/WebSocket replay contracts. OpenEnv/Gymnasium
+  shapes should stay compatible inputs, while the Agent Learning Kit
+  framework/provider surface remains the owned system of record.
+- Treat 10x robustness as a measurable release bar, not wording for marketing
+  copy: every claim must map to executable artifacts, passing metrics,
+  failure-injection coverage, adversarial state coverage, sandbox evidence, and
+  local reproducibility before it appears in release notes.
+- Keep backing that target with Agent Learning run/eval/optimization artifacts,
+  local environment replay gates, framework adapter cookbooks, and
+  release-checked agent-opt bundle search. OpenEnv-specific fixtures are
+  compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove
   best-candidate selection across custom adapters, social-memory synthesis,
   world/framework/memory stacks, multi-agent framework handoffs, framework
@@ -464,12 +477,12 @@ Next implementation focus:
   evaluator-visible `framework_trace` state, events, artifacts, ordinary tool
   evidence, adapter conformance, and generated trace coverage/quality gates
   before relying on hosted observability backends.
-- Treat the OpenEnv comparison as an executable roadmap bar, not a marketing
-  claim: V1 should exercise deterministic resets, failure-injection scenarios,
+- Treat environment compatibility comparisons as evidence, not positioning:
+  V1 should exercise deterministic resets, failure-injection scenarios,
   adversarial environment states, tool/action contract drift, transcript/replay
   fidelity, sandbox escape evidence, and optimizer recovery loops across
   representative framework, provider, protocol, browser, voice, and multi-agent
-  fixtures before calling the framework materially more robust.
+  fixtures before calling the Agent Learning framework materially more robust.
 - Keep protocol adapters on the same local-first bar: MCP and A2A release gates
   should prove protocol state, tool/task records, artifacts, generated eval
   gates, and no external service dependency before expanding to additional

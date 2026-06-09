@@ -1475,14 +1475,14 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
     "openenv_quality",
 ]
 
-V1_OPENENV_10X_ROBUSTNESS_FILES = [
+V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
-    "internal-docs/openenv-10x-robustness-research.md",
+    "internal-docs/environment-10x-robustness-research.md",
 ]
 
-V1_OPENENV_10X_ROBUSTNESS_AXES = [
-    "openenv_runtime_contract",
+V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
+    "environment_replay_contract",
     "cross_framework_simulation_matrix",
     "local_evaluation_gates",
     "adaptive_optimizer_recovery",
@@ -1497,9 +1497,9 @@ V1_OPENENV_10X_ROBUSTNESS_AXES = [
     "regression_promotion_replay",
 ]
 
-V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT = 10
+V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT = 10
 
-V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS = [
+V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS = [
     "https://huggingface.co/docs/openenv/index",
     "https://gymnasium.farama.org/api/env/",
     "https://modelcontextprotocol.io/docs/concepts/tools",
@@ -1598,6 +1598,327 @@ V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS = [
     "https://opentelemetry.io/docs/specs/semconv/gen-ai/",
     "https://arize-ai.github.io/openinference/spec/semantic_conventions.html",
     "https://www.w3.org/TR/trace-context/",
+]
+
+V1_FRAMEWORK_ADAPTER_IO_FILES = [
+    "examples/sdk_framework_adapter_streaming.py",
+    "examples/sdk_framework_adapter_typed_output.py",
+    "examples/sdk_framework_adapter_keyword_inputs.py",
+    "examples/sdk_framework_adapter_side_kwargs.py",
+    "examples/sdk_framework_adapter_nested_method.py",
+    "examples/sdk_framework_adapter_provider_response.py",
+    "examples/sdk_framework_adapter_message_history.py",
+    "examples/sdk_framework_adapter_handoff_transcript.py",
+    "internal-docs/framework-adapter-probe-research.md",
+]
+
+V1_FRAMEWORK_ADAPTER_IO_CONTRACTS = [
+    {
+        "surface": "streaming",
+        "path": "examples/sdk_framework_adapter_streaming.py",
+        "manifest_key": "framework_adapter_streaming_manifest",
+        "framework": "custom_streaming_graph",
+        "method": "astream",
+        "input_mode": "dict",
+        "call_style": "positional",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "streaming_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["streaming_trace"],
+        "required_tools": ["framework_trace_status"],
+        "required_artifact_types": ["trace"],
+        "required_events": ["message_delta", "tool_delta", "final"],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+            "streaming_trace",
+        ],
+        "require_streaming": True,
+        "runtime_summary": {"streamed": True, "error_count": 0},
+        "runtime_output": {
+            "streaming": True,
+            "state_keys": ["streaming_trace"],
+            "artifact_types": ["trace"],
+            "event_types": ["message_delta", "tool_delta", "final"],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_minimums": {
+            "streaming_trace.summary.chunk_count": 2,
+            "streaming_trace.summary.tool_delta_count": 1,
+            "streaming_trace.summary.event_count": 3,
+        },
+        "state_equals": {
+            "streaming_trace.summary.completion_status": "completed",
+            "streaming_trace.summary.error_count": 0,
+        },
+    },
+    {
+        "surface": "typed_output",
+        "path": "examples/sdk_framework_adapter_typed_output.py",
+        "manifest_key": "framework_adapter_typed_output_manifest",
+        "framework": "custom_typed_output_agent",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "call_style": "positional",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["typed_output"],
+        "required_tools": ["framework_trace_status"],
+        "required_events": ["framework_trace", "tool_calls", "state_update"],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["typed_output"],
+            "event_types": ["framework_trace"],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_equals": {
+            "typed_output.schema": "RefundDecision",
+            "typed_output.decision.verdict": "approved",
+        },
+    },
+    {
+        "surface": "keyword_inputs",
+        "path": "examples/sdk_framework_adapter_keyword_inputs.py",
+        "manifest_key": "framework_adapter_keyword_inputs_manifest",
+        "framework": "crewai",
+        "method": "kickoff",
+        "input_mode": "dict",
+        "input_key": "inputs",
+        "call_style": "keyword",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["crew_inputs"],
+        "required_tools": ["framework_trace_status"],
+        "required_events": ["framework_trace", "tool_calls", "state_update"],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["crew_inputs"],
+            "event_types": ["framework_trace"],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_minimums": {"crew_inputs.message_count": 1},
+        "state_contains": {"crew_inputs.input": ["crewai"]},
+    },
+    {
+        "surface": "side_kwargs",
+        "path": "examples/sdk_framework_adapter_side_kwargs.py",
+        "manifest_key": "framework_adapter_side_kwargs_manifest",
+        "framework": "pipecat",
+        "method": "process_frame",
+        "input_mode": "dict",
+        "input_key": "frame",
+        "input_kwargs": {"direction": "downstream"},
+        "required_input_kwargs": ["direction"],
+        "call_style": "keyword",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["pipecat_frame"],
+        "required_tools": ["framework_trace_status"],
+        "required_events": ["framework_trace", "tool_calls", "state_update"],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["pipecat_frame"],
+            "event_types": ["framework_trace"],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_minimums": {"pipecat_frame.message_count": 1},
+        "state_equals": {"pipecat_frame.direction": "downstream"},
+    },
+    {
+        "surface": "nested_method",
+        "path": "examples/sdk_framework_adapter_nested_method.py",
+        "manifest_key": "framework_adapter_nested_method_manifest",
+        "framework": "openai",
+        "method": "chat.completions.create",
+        "input_mode": "messages",
+        "input_key": "messages",
+        "call_style": "keyword",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["nested_client"],
+        "required_tools": ["framework_trace_status"],
+        "required_events": ["framework_trace", "tool_calls", "state_update"],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["nested_client"],
+            "event_types": ["framework_trace"],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_minimums": {"nested_client.message_count": 1},
+        "state_equals": {"nested_client.method_path": "chat.completions.create"},
+    },
+    {
+        "surface": "provider_response",
+        "path": "examples/sdk_framework_adapter_provider_response.py",
+        "manifest_key": "framework_adapter_provider_response_manifest",
+        "framework": "openai",
+        "method": "chat.completions.create",
+        "input_mode": "messages",
+        "input_key": "messages",
+        "input_kwargs": {"model": "local-provider-model"},
+        "required_input_kwargs": ["model"],
+        "call_style": "keyword",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["provider_response"],
+        "required_tools": ["framework_trace_status"],
+        "required_events": [
+            "provider_choice",
+            "provider_tool_call",
+            "framework_trace",
+            "tool_calls",
+        ],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["provider_response"],
+            "event_types": ["provider_choice", "provider_tool_call"],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_minimums": {
+            "provider_response.choice_count": 1,
+            "provider_response.tool_call_count": 1,
+        },
+        "state_equals": {
+            "provider_response.model": "local-provider-model",
+            "provider_response.usage.total_tokens": 19,
+        },
+        "state_contains": {
+            "provider_response.finish_reasons": ["tool_calls"],
+            "provider_response.tool_names": ["framework_trace_status"],
+        },
+    },
+    {
+        "surface": "message_history",
+        "path": "examples/sdk_framework_adapter_message_history.py",
+        "manifest_key": "framework_adapter_message_history_manifest",
+        "framework": "autogen",
+        "method": "run",
+        "input_mode": "text",
+        "input_key": "task",
+        "call_style": "keyword",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_transcript_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+        "required_state_keys": ["message_history"],
+        "required_tools": ["framework_trace_status"],
+        "required_events": [
+            "TextMessage",
+            "ToolCallRequestEvent",
+            "ToolCallExecutionEvent",
+            "tool_response",
+        ],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["message_history"],
+            "event_types": [
+                "TextMessage",
+                "ToolCallRequestEvent",
+                "ToolCallExecutionEvent",
+            ],
+            "tool_names": ["framework_trace_status"],
+        },
+        "state_minimums": {
+            "message_history.message_count": 4,
+            "message_history.tool_call_count": 1,
+            "message_history.tool_response_count": 1,
+        },
+        "state_equals": {"message_history.stop_reason": "completed"},
+        "state_contains": {
+            "message_history.tool_names": ["framework_trace_status"],
+            "message_history.types": [
+                "TextMessage",
+                "ToolCallRequestEvent",
+                "ToolCallExecutionEvent",
+            ],
+            "message_history.sources": ["planner", "tool", "reviewer"],
+        },
+    },
+    {
+        "surface": "handoff_transcript",
+        "path": "examples/sdk_framework_adapter_handoff_transcript.py",
+        "manifest_key": "framework_adapter_handoff_transcript_manifest",
+        "framework": "openai_agents",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "call_style": "positional",
+        "required_metrics": {
+            "framework_runtime_contract": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_transcript_quality": 1.0,
+        },
+        "required_state_keys": ["framework_handoffs", "message_history"],
+        "required_events": [
+            "framework_handoff",
+            "framework_review",
+            "framework_reconciliation",
+            "final_answer",
+        ],
+        "required_artifact_kinds": ["framework_runtime", "framework_trace"],
+        "runtime_summary": {"streamed": False, "error_count": 0},
+        "runtime_output": {
+            "state_keys": ["framework_handoffs", "message_history"],
+            "event_types": [
+                "framework_handoff",
+                "framework_review",
+                "framework_reconciliation",
+                "final_answer",
+            ],
+        },
+        "state_minimums": {
+            "framework_handoffs.handoff_count": 2,
+            "framework_handoffs.review_count": 1,
+            "framework_handoffs.reconciliation_count": 1,
+            "message_history.message_count": 5,
+            "message_history.handoff_count": 2,
+        },
+        "state_equals": {
+            "message_history.stop_reason": "completed",
+            "framework_handoffs.reviews.0.status": "passed",
+            "framework_handoffs.reconciliations.0.accepted_source": (
+                "retrieval_agent"
+            ),
+        },
+        "state_contains": {
+            "framework_handoffs.participants": [
+                "triage_agent",
+                "retrieval_agent",
+                "critic_agent",
+            ],
+            "message_history.types": [
+                "handoff",
+                "review",
+                "reconciliation",
+                "final_answer",
+            ],
+        },
+    },
 ]
 
 V1_FRAMEWORK_OPTIMIZER_FILES = [
@@ -3146,6 +3467,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_adapter_probe,
     )
+    framework_adapter_io = _release_framework_adapter_io_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_io_readiness",
+        passed=(
+            not framework_adapter_io["missing_files"]
+            and not framework_adapter_io["execution_errors"]
+            and not framework_adapter_io["manifest_errors"]
+            and not framework_adapter_io["contract_errors"]
+            and not framework_adapter_io["metric_errors"]
+        ),
+        milestone="M6",
+        evidence=framework_adapter_io,
+    )
     protocol_adapter = _release_protocol_adapter_status(root)
     _append_release_check(
         checks,
@@ -3288,7 +3623,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=trinity_stack_probe,
     )
-    openenv_10x_robustness = _release_openenv_10x_robustness_status(
+    environment_10x_robustness = _release_environment_10x_robustness_status(
         root,
         framework_provider_contract=framework_provider_contract,
         openenv_optimizer=openenv_optimizer,
@@ -3304,13 +3639,13 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
     )
     _append_release_check(
         checks,
-        check_id="openenv_10x_robustness",
+        check_id="environment_10x_robustness",
         passed=(
-            not openenv_10x_robustness["missing_files"]
-            and not openenv_10x_robustness["axis_errors"]
+            not environment_10x_robustness["missing_files"]
+            and not environment_10x_robustness["axis_errors"]
         ),
         milestone="M6",
-        evidence=openenv_10x_robustness,
+        evidence=environment_10x_robustness,
     )
     pyproject = _read_pyproject(root)
     _append_release_check(
@@ -3743,17 +4078,17 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_framework_trace_export_source_urls": list(
             V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
         ),
-        "required_openenv_10x_robustness_files": list(
-            V1_OPENENV_10X_ROBUSTNESS_FILES
+        "required_environment_10x_robustness_files": list(
+            V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
         ),
-        "required_openenv_10x_robustness_axes": list(
-            V1_OPENENV_10X_ROBUSTNESS_AXES
+        "required_environment_10x_robustness_axes": list(
+            V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
         ),
-        "required_openenv_10x_robustness_source_urls": list(
-            V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS
+        "required_environment_10x_robustness_source_urls": list(
+            V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS
         ),
-        "required_openenv_10x_robustness_min_axis_count": (
-            V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+        "required_environment_10x_robustness_min_axis_count": (
+            V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT
         ),
         "required_framework_optimizer_files": list(V1_FRAMEWORK_OPTIMIZER_FILES),
         "required_framework_optimizer_contracts": copy.deepcopy(
@@ -3764,6 +4099,12 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_adapter_probe_contracts": copy.deepcopy(
             V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+        ),
+        "required_framework_adapter_io_files": list(
+            V1_FRAMEWORK_ADAPTER_IO_FILES
+        ),
+        "required_framework_adapter_io_contracts": copy.deepcopy(
+            V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
         ),
         "required_protocol_adapter_files": list(V1_PROTOCOL_ADAPTER_FILES),
         "required_protocol_adapter_contracts": copy.deepcopy(
@@ -13698,7 +14039,516 @@ def _release_framework_trace_export_status(root: Path) -> dict[str, Any]:
     }
 
 
-def _release_openenv_10x_robustness_status(
+def _release_framework_adapter_io_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_FRAMEWORK_ADAPTER_IO_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    contract_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    surfaces: list[dict[str, Any]] = []
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        contract: Mapping[str, Any],
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "surface": contract.get("surface"),
+                "path": contract.get("path"),
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    if not missing_files:
+        for contract in V1_FRAMEWORK_ADAPTER_IO_CONTRACTS:
+            surface = str(contract["surface"])
+            relative_path = str(contract["path"])
+            example_path = root / relative_path
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"agent_learning_release_framework_adapter_io_{surface}",
+                    example_path,
+                )
+                if spec is None or spec.loader is None:
+                    raise RuntimeError(f"Unable to load {example_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                with tempfile.TemporaryDirectory(
+                    prefix=f"agent-learning-framework-adapter-io-{surface}-"
+                ) as tmpdir:
+                    output_path = Path(tmpdir) / f"{surface}.json"
+                    result = module.run(output_path)
+                    saved = json.loads(output_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                execution_errors.append(
+                    {"surface": surface, "path": relative_path, "error": str(exc)}
+                )
+                continue
+
+            manifest = _as_mapping(result.get(str(contract["manifest_key"])))
+            agent = _as_mapping(manifest.get("agent"))
+            evaluation = _as_mapping(manifest.get("evaluation"))
+            agent_report = _as_mapping(evaluation.get("agent_report"))
+            config = _as_mapping(agent_report.get("config"))
+            runtime_contract = _as_mapping(config.get("framework_runtime_contract"))
+            metric_weights = _as_mapping(config.get("metric_weights"))
+            summary = _as_mapping(result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report = _as_mapping(result.get("report"))
+            cases = [
+                item for item in _as_list(report.get("results"))
+                if isinstance(item, Mapping)
+            ]
+            case = _as_mapping(cases[0]) if cases else {}
+            metadata = _as_mapping(case.get("metadata"))
+            environment_state = _as_mapping(metadata.get("environment_state"))
+            framework_runtime = _as_mapping(environment_state.get("framework_runtime"))
+            runtime_summary = _as_mapping(framework_runtime.get("summary"))
+            invocations = [
+                item for item in _as_list(framework_runtime.get("invocations"))
+                if isinstance(item, Mapping)
+            ]
+            invocation = _as_mapping(invocations[0]) if invocations else {}
+            runtime_output = _as_mapping(invocation.get("output"))
+            events = [
+                item for item in _as_list(case.get("events"))
+                if isinstance(item, Mapping)
+            ]
+            event_types = sorted(
+                str(event.get("type"))
+                for event in events
+                if event.get("type")
+            )
+            artifacts = [
+                item for item in _as_list(case.get("artifacts"))
+                if isinstance(item, Mapping)
+            ]
+            artifact_kinds = sorted(
+                str(_as_mapping(artifact.get("metadata")).get("kind"))
+                for artifact in artifacts
+                if _as_mapping(artifact.get("metadata")).get("kind")
+            )
+            state_paths = sorted(
+                {
+                    *[str(key) for key in _as_mapping(contract.get("state_equals"))],
+                    *[str(key) for key in _as_mapping(contract.get("state_minimums"))],
+                    *[str(key) for key in _as_mapping(contract.get("state_contains"))],
+                }
+            )
+            state_observations = {
+                path: _release_path_value(environment_state, path)
+                for path in state_paths
+            }
+            required_metrics = _as_mapping(contract.get("required_metrics"))
+            record = {
+                "surface": surface,
+                "path": relative_path,
+                "result_kind": result.get("kind"),
+                "result_status": result.get("status"),
+                "output_roundtrip": result == saved,
+                "manifest_version": manifest.get("version"),
+                "manifest_key": contract.get("manifest_key"),
+                "manifest_agent": {
+                    field: agent.get(field)
+                    for field in (
+                        "framework",
+                        "method",
+                        "input_mode",
+                        "input_key",
+                        "input_kwargs",
+                        "trace_runtime",
+                    )
+                    if agent.get(field) is not None
+                },
+                "required_env": list(manifest.get("required_env") or []),
+                "runtime_contract": {
+                    field: runtime_contract.get(field)
+                    for field in (
+                        "framework",
+                        "method",
+                        "input_mode",
+                        "input_key",
+                        "call_style",
+                        "required_state_keys",
+                        "required_tools",
+                        "required_input_kwargs",
+                        "required_artifact_types",
+                        "require_streaming",
+                        "max_error_count",
+                    )
+                    if runtime_contract.get(field) is not None
+                },
+                "metric_weights": {
+                    metric: metric_weights.get(metric) for metric in required_metrics
+                },
+                "metric_averages": {
+                    metric: metric_averages.get(metric) for metric in required_metrics
+                },
+                "state_keys": sorted(str(key) for key in environment_state),
+                "event_types": event_types,
+                "artifact_kinds": artifact_kinds,
+                "runtime_summary": {
+                    field: runtime_summary.get(field)
+                    for field in (
+                        "framework",
+                        "methods",
+                        "input_modes",
+                        "input_keys",
+                        "input_kwargs_keys",
+                        "call_styles",
+                        "streamed",
+                        "error_count",
+                        "event_count",
+                        "state_key_count",
+                        "tool_call_count",
+                        "artifact_count",
+                    )
+                },
+                "runtime_output": {
+                    field: runtime_output.get(field)
+                    for field in (
+                        "state_keys",
+                        "artifact_types",
+                        "event_types",
+                        "tool_names",
+                        "streaming",
+                        "tool_call_count",
+                        "tool_response_count",
+                    )
+                },
+                "state_observations": state_observations,
+            }
+            surfaces.append(record)
+
+            expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.run.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "manifest.version": (manifest.get("version"), "agent-learning.run.v1"),
+                "manifest.required_env": (manifest.get("required_env") or [], []),
+                "agent.framework": (agent.get("framework"), contract.get("framework")),
+                "agent.method": (agent.get("method"), contract.get("method")),
+                "agent.input_mode": (
+                    agent.get("input_mode"),
+                    contract.get("input_mode"),
+                ),
+                "agent.trace_runtime": (agent.get("trace_runtime"), True),
+                "runtime_contract.framework": (
+                    runtime_contract.get("framework"),
+                    contract.get("framework"),
+                ),
+                "runtime_contract.method": (
+                    runtime_contract.get("method"),
+                    contract.get("method"),
+                ),
+                "runtime_contract.input_mode": (
+                    runtime_contract.get("input_mode"),
+                    contract.get("input_mode"),
+                ),
+                "runtime_contract.max_error_count": (
+                    runtime_contract.get("max_error_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        contract=contract,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            for field in ("input_key", "input_kwargs"):
+                if field in contract:
+                    observed = agent.get(field)
+                    expected = contract.get(field)
+                    if observed != expected:
+                        append_error(
+                            manifest_errors,
+                            contract=contract,
+                            field=f"agent.{field}",
+                            expected=expected,
+                            observed=observed,
+                        )
+
+            for field in ("input_key", "call_style", "require_streaming"):
+                if field in contract:
+                    observed = runtime_contract.get(field)
+                    expected = contract.get(field)
+                    if (
+                        field == "call_style"
+                        and expected == "positional"
+                        and observed is None
+                    ):
+                        continue
+                    if observed != expected:
+                        append_error(
+                            contract_errors,
+                            contract=contract,
+                            field=f"runtime_contract.{field}",
+                            expected=expected,
+                            observed=observed,
+                        )
+            for field in ("required_state_keys", "required_tools"):
+                expected_items = [str(item) for item in _as_list(contract.get(field))]
+                observed_items = [
+                    str(item) for item in _as_list(runtime_contract.get(field))
+                ]
+                if (
+                    field == "required_state_keys"
+                    and not observed_items
+                    and contract.get("require_streaming") is True
+                ):
+                    continue
+                missing_items = sorted(set(expected_items) - set(observed_items))
+                if missing_items:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"runtime_contract.{field}",
+                        expected=expected_items,
+                        observed=observed_items,
+                    )
+            for field in ("required_input_kwargs", "required_artifact_types"):
+                expected_items = [str(item) for item in _as_list(contract.get(field))]
+                if not expected_items:
+                    continue
+                observed_items = [
+                    str(item) for item in _as_list(runtime_contract.get(field))
+                ]
+                if sorted(observed_items) != sorted(expected_items):
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"runtime_contract.{field}",
+                        expected=expected_items,
+                        observed=observed_items,
+                    )
+
+            expected_state_keys = {
+                "framework_runtime",
+                "framework_trace",
+                *[str(item) for item in _as_list(contract.get("required_state_keys"))],
+            }
+            missing_state_keys = sorted(
+                expected_state_keys - set(str(key) for key in environment_state)
+            )
+            if missing_state_keys:
+                append_error(
+                    contract_errors,
+                    contract=contract,
+                    field="report.results.metadata.environment_state",
+                    expected=sorted(expected_state_keys),
+                    observed=sorted(str(key) for key in environment_state),
+                )
+
+            missing_events = sorted(
+                set(str(item) for item in _as_list(contract.get("required_events")))
+                - set(event_types)
+            )
+            if missing_events:
+                append_error(
+                    contract_errors,
+                    contract=contract,
+                    field="report.results.events.type",
+                    expected=contract.get("required_events"),
+                    observed=event_types,
+                )
+            missing_artifacts = sorted(
+                set(
+                    str(item)
+                    for item in _as_list(contract.get("required_artifact_kinds"))
+                )
+                - set(artifact_kinds)
+            )
+            if missing_artifacts:
+                append_error(
+                    contract_errors,
+                    contract=contract,
+                    field="report.results.artifacts.metadata.kind",
+                    expected=contract.get("required_artifact_kinds"),
+                    observed=artifact_kinds,
+                )
+
+            summary_expectations = _as_mapping(contract.get("runtime_summary"))
+            for field, expected in summary_expectations.items():
+                observed = runtime_summary.get(field)
+                if observed != expected:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"framework_runtime.summary.{field}",
+                        expected=expected,
+                        observed=observed,
+                    )
+            runtime_list_expectations = {
+                "methods": contract.get("method"),
+                "input_modes": contract.get("input_mode"),
+                "call_styles": contract.get("call_style"),
+                "input_keys": contract.get("input_key"),
+            }
+            for field, expected in runtime_list_expectations.items():
+                if expected is None:
+                    continue
+                observed_values = {
+                    str(item) for item in _as_list(runtime_summary.get(field))
+                }
+                if str(expected) not in observed_values:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"framework_runtime.summary.{field}",
+                        expected=expected,
+                        observed=sorted(observed_values),
+                    )
+            for expected in [
+                str(item) for item in _as_list(contract.get("required_input_kwargs"))
+            ]:
+                observed_values = {
+                    str(item)
+                    for item in _as_list(runtime_summary.get("input_kwargs_keys"))
+                }
+                if expected not in observed_values:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field="framework_runtime.summary.input_kwargs_keys",
+                        expected=expected,
+                        observed=sorted(observed_values),
+                    )
+
+            runtime_output_expectations = _as_mapping(contract.get("runtime_output"))
+            for field, expected in runtime_output_expectations.items():
+                observed = runtime_output.get(field)
+                if isinstance(expected, bool):
+                    if observed != expected:
+                        append_error(
+                            contract_errors,
+                            contract=contract,
+                            field=f"framework_runtime.invocations.output.{field}",
+                            expected=expected,
+                            observed=observed,
+                        )
+                    continue
+                expected_items = [str(item) for item in _as_list(expected)]
+                observed_items = [str(item) for item in _as_list(observed)]
+                missing_items = sorted(set(expected_items) - set(observed_items))
+                if missing_items:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"framework_runtime.invocations.output.{field}",
+                        expected=expected_items,
+                        observed=observed_items,
+                    )
+
+            for field, expected in _as_mapping(contract.get("state_equals")).items():
+                observed = _release_path_value(environment_state, str(field))
+                if observed != expected:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"environment_state.{field}",
+                        expected=expected,
+                        observed=observed,
+                    )
+            for field, minimum in _as_mapping(contract.get("state_minimums")).items():
+                observed = _release_path_value(environment_state, str(field))
+                if _float_or_zero(observed) < float(minimum):
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"environment_state.{field}",
+                        expected=f">={minimum}",
+                        observed=observed,
+                    )
+            for field, expected_items in _as_mapping(
+                contract.get("state_contains")
+            ).items():
+                observed = _release_path_value(environment_state, str(field))
+                missing_items = _release_missing_contains_items(
+                    observed,
+                    _as_list(expected_items),
+                )
+                if missing_items:
+                    append_error(
+                        contract_errors,
+                        contract=contract,
+                        field=f"environment_state.{field}",
+                        expected=expected_items,
+                        observed=observed,
+                    )
+
+            for metric, minimum in required_metrics.items():
+                if metric not in metric_weights:
+                    append_error(
+                        metric_errors,
+                        contract=contract,
+                        field="evaluation.agent_report.config.metric_weights",
+                        expected=metric,
+                        observed=sorted(str(key) for key in metric_weights),
+                    )
+                if _float_or_zero(metric_averages.get(metric)) < float(minimum):
+                    append_error(
+                        metric_errors,
+                        contract=contract,
+                        field=f"summary.metric_averages.{metric}",
+                        expected=f">={minimum}",
+                        observed=metric_averages.get(metric),
+                    )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_ADAPTER_IO_FILES),
+        "required_contracts": copy.deepcopy(V1_FRAMEWORK_ADAPTER_IO_CONTRACTS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "contract_errors": contract_errors,
+        "metric_errors": metric_errors,
+        "surfaces": surfaces,
+    }
+
+
+def _release_path_value(value: Any, path: str) -> Any:
+    current = value
+    for part in path.split("."):
+        if isinstance(current, Mapping):
+            current = current.get(part)
+        elif isinstance(current, Sequence) and not isinstance(current, str):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return current
+
+
+def _release_missing_contains_items(observed: Any, expected_items: Sequence[Any]) -> list[Any]:
+    if isinstance(observed, str):
+        haystack = observed.lower()
+        return [
+            item
+            for item in expected_items
+            if str(item).lower() not in haystack
+        ]
+    if isinstance(observed, Mapping):
+        observed_items = {str(key) for key in observed}
+    elif isinstance(observed, Sequence):
+        observed_items = {str(item) for item in observed}
+    else:
+        observed_items = {str(observed)}
+    return [item for item in expected_items if str(item) not in observed_items]
+
+
+def _release_environment_10x_robustness_status(
     root: Path,
     *,
     framework_provider_contract: Mapping[str, Any],
@@ -13715,7 +14565,7 @@ def _release_openenv_10x_robustness_status(
 ) -> dict[str, Any]:
     missing_files = _missing_relative_paths(
         root,
-        V1_OPENENV_10X_ROBUSTNESS_FILES,
+        V1_ENVIRONMENT_10X_ROBUSTNESS_FILES,
     )
     axes: list[dict[str, Any]] = []
     axis_errors: list[dict[str, Any]] = []
@@ -13844,7 +14694,7 @@ def _release_openenv_10x_robustness_status(
     openenv_summary = _as_mapping(openenv_evidence.get("openenv_summary"))
     required_openenv = _as_list(openenv_evidence.get("required_openenv"))
     append_axis(
-        "openenv_runtime_contract",
+        "environment_replay_contract",
         source_check="framework_openenv_adapter_readiness",
         passed=(
             empty_buckets(
@@ -14528,32 +15378,32 @@ def _release_openenv_10x_robustness_status(
     passed_axes = [axis["axis"] for axis in axes if axis["passed"]]
     missing_axes = [
         axis
-        for axis in V1_OPENENV_10X_ROBUSTNESS_AXES
+        for axis in V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
         if axis not in set(passed_axes)
     ]
     if missing_axes:
         axis_errors.append(
             {
                 "axis": "required_axes",
-                "expected": V1_OPENENV_10X_ROBUSTNESS_AXES,
+                "expected": V1_ENVIRONMENT_10X_ROBUSTNESS_AXES,
                 "observed": passed_axes,
                 "missing": missing_axes,
             }
         )
-    if len(passed_axes) < V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT:
+    if len(passed_axes) < V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT:
         axis_errors.append(
             {
                 "axis": "minimum_axis_count",
-                "expected": f">={V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT}",
+                "expected": f">={V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT}",
                 "observed": len(passed_axes),
             }
         )
 
     return {
-        "required_files": list(V1_OPENENV_10X_ROBUSTNESS_FILES),
-        "required_axes": list(V1_OPENENV_10X_ROBUSTNESS_AXES),
-        "required_source_urls": list(V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS),
-        "min_axis_count": V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT,
+        "required_files": list(V1_ENVIRONMENT_10X_ROBUSTNESS_FILES),
+        "required_axes": list(V1_ENVIRONMENT_10X_ROBUSTNESS_AXES),
+        "required_source_urls": list(V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS),
+        "min_axis_count": V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT,
         "missing_files": missing_files,
         "axis_errors": axis_errors,
         "evidence": {
@@ -21209,6 +22059,8 @@ __all__ = [
     "V1_BROWSER_CUA_PROBE_SELECTED_TYPE",
     "V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS",
     "V1_FRAMEWORK_ADAPTER_PROBE_FILES",
+    "V1_FRAMEWORK_ADAPTER_IO_CONTRACTS",
+    "V1_FRAMEWORK_ADAPTER_IO_FILES",
     "V1_FRAMEWORK_OPENENV_ADAPTER_FILES",
     "V1_FRAMEWORK_OPENENV_ADAPTER_QUALITY_MINIMA",
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS",
@@ -21224,10 +22076,10 @@ __all__ = [
     "V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
-    "V1_OPENENV_10X_ROBUSTNESS_AXES",
-    "V1_OPENENV_10X_ROBUSTNESS_FILES",
-    "V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT",
-    "V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS",
+    "V1_ENVIRONMENT_10X_ROBUSTNESS_AXES",
+    "V1_ENVIRONMENT_10X_ROBUSTNESS_FILES",
+    "V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT",
+    "V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS",
     "V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL",
     "V1_MULTI_AGENT_ROOM_PROBE_FILES",
     "V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND",

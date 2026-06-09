@@ -141,6 +141,12 @@ Keep framework support local-first:
   multi-agent framework handoffs can be scored without a separate parser.
   Generated transcript gates should also check handoff source/target/task specs,
   participant coverage, review counts, reconciliation counts, and termination.
+- `agent-learn release-check` now includes `framework_adapter_io_readiness` for
+  these advanced IO contracts. The gate executes the streaming, typed-output,
+  keyword-input, side-kwargs, nested-method, provider-envelope, message-history,
+  and handoff-transcript cookbooks locally, then verifies promoted manifest
+  fields, runtime summaries, normalized state, events, artifacts, transcript
+  evidence, and required metric floors.
 - Preserve framework trace export semantics. Local outputs carrying OTLP-style
   `resourceSpans` / `scopeSpans`, TraceAI/Future AGI wrappers, or explicit
   `framework_trace` span/event records should normalize into `framework_trace`

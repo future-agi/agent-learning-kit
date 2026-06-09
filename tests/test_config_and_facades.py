@@ -15550,17 +15550,17 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_trace_export_source_urls"] == (
         trinity.V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
     )
-    assert payload["required_openenv_10x_robustness_files"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_FILES
+    assert payload["required_environment_10x_robustness_files"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
     )
-    assert payload["required_openenv_10x_robustness_axes"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    assert payload["required_environment_10x_robustness_axes"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
     )
-    assert payload["required_openenv_10x_robustness_source_urls"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS
+    assert payload["required_environment_10x_robustness_source_urls"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS
     )
-    assert payload["required_openenv_10x_robustness_min_axis_count"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+    assert payload["required_environment_10x_robustness_min_axis_count"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT
     )
     assert payload["required_framework_optimizer_files"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_FILES
@@ -15573,6 +15573,12 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert payload["required_framework_adapter_probe_contracts"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
+    )
+    assert payload["required_framework_adapter_io_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_IO_FILES
+    )
+    assert payload["required_framework_adapter_io_contracts"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
     )
     assert payload["required_protocol_adapter_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES
@@ -15872,6 +15878,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_optimizer_readiness",
         "multi_agent_room_probe_readiness",
         "framework_adapter_probe_readiness",
+        "framework_adapter_io_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "browser_cua_probe_readiness",
@@ -15881,7 +15888,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_adapter_trinity_suite_readiness",
         "orchestration_stack_probe_readiness",
         "trinity_stack_probe_readiness",
-        "openenv_10x_robustness",
+        "environment_10x_robustness",
         "package_metadata",
     }
     assert all(check["status"] == "passed" for check in checks.values())
@@ -17621,40 +17628,40 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trace_runtime_output["event_types"]
     )
     assert trace_runtime_output["tool_names"] == ["policy_lookup"]
-    openenv_10x = checks["openenv_10x_robustness"]["evidence"]
-    assert openenv_10x["required_files"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_FILES
+    environment_10x = checks["environment_10x_robustness"]["evidence"]
+    assert environment_10x["required_files"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
     )
-    assert openenv_10x["required_axes"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    assert environment_10x["required_axes"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
     )
-    assert openenv_10x["required_source_urls"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_SOURCE_URLS
+    assert environment_10x["required_source_urls"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS
     )
-    assert openenv_10x["min_axis_count"] == (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+    assert environment_10x["min_axis_count"] == (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT
     )
-    assert openenv_10x["missing_files"] == []
-    assert openenv_10x["axis_errors"] == []
-    openenv_10x_evidence = openenv_10x["evidence"]
-    assert openenv_10x_evidence["axis_count"] == len(
-        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    assert environment_10x["missing_files"] == []
+    assert environment_10x["axis_errors"] == []
+    environment_10x_evidence = environment_10x["evidence"]
+    assert environment_10x_evidence["axis_count"] == len(
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
     )
-    assert openenv_10x_evidence["passed_axis_count"] >= (
-        trinity.V1_OPENENV_10X_ROBUSTNESS_MIN_AXIS_COUNT
+    assert environment_10x_evidence["passed_axis_count"] >= (
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT
     )
-    assert set(openenv_10x_evidence["passed_axes"]) == set(
-        trinity.V1_OPENENV_10X_ROBUSTNESS_AXES
+    assert set(environment_10x_evidence["passed_axes"]) == set(
+        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
     )
-    openenv_10x_axes = {
-        axis["axis"]: axis for axis in openenv_10x_evidence["axes"]
+    environment_10x_axes = {
+        axis["axis"]: axis for axis in environment_10x_evidence["axes"]
     }
-    assert set(openenv_10x_axes) == set(trinity.V1_OPENENV_10X_ROBUSTNESS_AXES)
-    assert all(axis["passed"] is True for axis in openenv_10x_axes.values())
-    assert openenv_10x_axes["cross_framework_simulation_matrix"][
+    assert set(environment_10x_axes) == set(trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES)
+    assert all(axis["passed"] is True for axis in environment_10x_axes.values())
+    assert environment_10x_axes["cross_framework_simulation_matrix"][
         "source_check"
     ] == "framework_provider_contract_readiness"
-    matrix_axis = openenv_10x_axes["cross_framework_simulation_matrix"]["evidence"]
+    matrix_axis = environment_10x_axes["cross_framework_simulation_matrix"]["evidence"]
     assert matrix_axis["contract_count"] >= 14
     assert matrix_axis["local_executable_fixture_count"] >= 14
     assert matrix_axis["trace_runtime_count"] >= 14
@@ -17665,7 +17672,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert {"text", "voice", "cua"} <= set(matrix_axis["modalities"])
     assert matrix_axis["transports"] == ["in_process"]
-    runtime_axis = openenv_10x_axes["openenv_runtime_contract"]["evidence"]
+    runtime_axis = environment_10x_axes["environment_replay_contract"]["evidence"]
     assert set(runtime_axis["required_openenv"]) >= set(
         trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV
     )
@@ -17675,61 +17682,61 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert runtime_axis["openenv_summary"]["error_count"] == 0
     assert runtime_axis["openenv_summary"]["sandbox_enabled"] is True
     assert runtime_axis["openenv_summary"]["requires_external_service"] is False
-    eval_axis = openenv_10x_axes["local_evaluation_gates"]["evidence"]
+    eval_axis = environment_10x_axes["local_evaluation_gates"]["evidence"]
     for metric in trinity.V1_OPENENV_OPTIMIZER_REQUIRED_METRICS:
         assert eval_axis["optimizer_metrics"][metric] == pytest.approx(1.0)
     for metric in trinity.V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_METRICS:
         assert eval_axis["adapter_metrics"][metric] == pytest.approx(1.0)
-    optimizer_axis = openenv_10x_axes["adaptive_optimizer_recovery"]["evidence"]
+    optimizer_axis = environment_10x_axes["adaptive_optimizer_recovery"]["evidence"]
     assert optimizer_axis["best_candidate_profile"] == "verified_openenv_replay"
     assert optimizer_axis["candidate_lineage_count"] >= 3
     assert set(optimizer_axis["manifest_candidate_profiles"]) >= set(
         trinity.V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES
     )
-    adapter_axis = openenv_10x_axes["framework_adapter_promotion"]["evidence"]
+    adapter_axis = environment_10x_axes["framework_adapter_promotion"]["evidence"]
     assert adapter_axis["result_kind"] == "agent-learning.run.v1"
     assert adapter_axis["result_status"] == "passed"
     assert adapter_axis["output_roundtrip"] is True
     assert adapter_axis["manifest_agent"]["framework"] == "openenv"
     assert "openenv" in adapter_axis["runtime_output"]["state_keys"]
-    protocol_axis = openenv_10x_axes["protocol_tool_routing"]["evidence"]
+    protocol_axis = environment_10x_axes["protocol_tool_routing"]["evidence"]
     assert protocol_axis["protocols"] == ["a2a", "mcp"]
     assert protocol_axis["mcp_summary"]["tool_count"] >= 2
     assert protocol_axis["a2a_summary"]["task_count"] >= 1
-    browser_axis = openenv_10x_axes["browser_cua_resilience"]["evidence"]
+    browser_axis = environment_10x_axes["browser_cua_resilience"]["evidence"]
     assert browser_axis["proof_passed"] is True
     assert browser_axis["requires_external_service"] is False
     assert browser_axis["selected_summary"]["mutation_count"] >= 2
     assert browser_axis["selected_summary"]["prompt_injection_touched_count"] == 0
-    realtime_axis = openenv_10x_axes["realtime_voice_streaming"]["evidence"]
+    realtime_axis = environment_10x_axes["realtime_voice_streaming"]["evidence"]
     assert realtime_axis["proof_passed"] is True
     assert realtime_axis["requires_external_service"] is False
     assert realtime_axis["selected_summary"]["current_route"] == (
         trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
     )
     assert realtime_axis["selected_summary"]["streaming_error_count"] == 0
-    memory_axis = openenv_10x_axes["memory_lineage_retrieval"]["evidence"]
+    memory_axis = environment_10x_axes["memory_lineage_retrieval"]["evidence"]
     assert memory_axis["proof_passed"] is True
     assert memory_axis["requires_external_service"] is False
     assert memory_axis["selected_summary"]["retrieval_citations_current"] is True
     assert memory_axis["selected_summary"]["open_poisoning_count"] == 0
-    room_axis = openenv_10x_axes["multi_agent_coordination"]["evidence"]
+    room_axis = environment_10x_axes["multi_agent_coordination"]["evidence"]
     assert room_axis["proof"]["passed"] is True
     assert set(room_axis["selected_report_summary"]["participants"]) >= set(
         trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
     )
     assert room_axis["selected_report_summary"]["terminal_state"] is True
-    orchestration_axis = openenv_10x_axes["world_orchestration_replay"]["evidence"]
+    orchestration_axis = environment_10x_axes["world_orchestration_replay"]["evidence"]
     assert orchestration_axis["proof_passed"] is True
     assert set(orchestration_axis["environment_types"]) >= set(
         trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
     )
-    redteam_axis = openenv_10x_axes["redteam_pen_test_suite"]["evidence"]
+    redteam_axis = environment_10x_axes["redteam_pen_test_suite"]["evidence"]
     assert redteam_axis["suite"]["status"] == "passed"
     assert {"run", "redteam"} <= set(redteam_axis["suite"]["child_commands"])
     assert redteam_axis["metrics"]["adversarial_resilience"] == pytest.approx(1.0)
     assert redteam_axis["metrics"]["red_team_campaign_quality"] == pytest.approx(1.0)
-    regression_axis = openenv_10x_axes["regression_promotion_replay"]["evidence"]
+    regression_axis = environment_10x_axes["regression_promotion_replay"]["evidence"]
     assert regression_axis["result_status"] == "passed"
     assert regression_axis["capability_gate_passed"] is True
     assert set(regression_axis["observed_commands"]) >= set(
@@ -18150,6 +18157,163 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         assert promoted["manifest_metadata"]["framework_adapter_discovery_status"] == (
             "passed"
         )
+    adapter_io = checks["framework_adapter_io_readiness"]["evidence"]
+    assert adapter_io["required_files"] == trinity.V1_FRAMEWORK_ADAPTER_IO_FILES
+    assert adapter_io["required_contracts"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
+    )
+    assert adapter_io["missing_files"] == []
+    assert adapter_io["execution_errors"] == []
+    assert adapter_io["manifest_errors"] == []
+    assert adapter_io["contract_errors"] == []
+    assert adapter_io["metric_errors"] == []
+    io_surfaces = {item["surface"]: item for item in adapter_io["surfaces"]}
+    assert set(io_surfaces) == {
+        contract["surface"]
+        for contract in trinity.V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
+    }
+    for contract in trinity.V1_FRAMEWORK_ADAPTER_IO_CONTRACTS:
+        surface = io_surfaces[contract["surface"]]
+        assert surface["result_kind"] == "agent-learning.run.v1"
+        assert surface["result_status"] == "passed"
+        assert surface["output_roundtrip"] is True
+        assert surface["manifest_version"] == "agent-learning.run.v1"
+        assert surface["required_env"] == []
+        assert surface["manifest_agent"]["framework"] == contract["framework"]
+        assert surface["manifest_agent"]["method"] == contract["method"]
+        assert surface["manifest_agent"]["input_mode"] == contract["input_mode"]
+        assert surface["manifest_agent"]["trace_runtime"] is True
+        if "input_key" in contract:
+            assert surface["manifest_agent"]["input_key"] == contract["input_key"]
+        if "input_kwargs" in contract:
+            assert surface["manifest_agent"]["input_kwargs"] == (
+                contract["input_kwargs"]
+            )
+        assert {"framework_runtime", "framework_trace"} <= set(
+            surface["state_keys"]
+        )
+        assert set(contract["required_state_keys"]) <= set(surface["state_keys"])
+        assert surface["runtime_summary"]["framework"] == contract["framework"]
+        assert surface["runtime_summary"]["error_count"] == 0
+        assert contract["method"] in surface["runtime_summary"]["methods"]
+        assert contract["input_mode"] in surface["runtime_summary"]["input_modes"]
+        assert contract["call_style"] in surface["runtime_summary"]["call_styles"]
+        if "input_key" in contract:
+            assert contract["input_key"] in surface["runtime_summary"]["input_keys"]
+        for key in contract.get("required_input_kwargs", []):
+            assert key in surface["runtime_summary"]["input_kwargs_keys"]
+        assert set(contract["required_state_keys"]) <= set(
+            surface["runtime_output"]["state_keys"]
+        )
+        assert set(contract.get("required_artifact_types", [])) <= set(
+            surface["runtime_output"]["artifact_types"]
+        )
+        assert set(contract.get("required_events", [])) <= set(
+            surface["event_types"]
+        )
+        assert set(contract["required_artifact_kinds"]) <= set(
+            surface["artifact_kinds"]
+        )
+        for metric in contract["required_metrics"]:
+            assert surface["metric_weights"][metric] is not None
+            assert surface["metric_averages"][metric] == pytest.approx(1.0)
+
+    streaming = io_surfaces["streaming"]
+    assert streaming["runtime_contract"]["require_streaming"] is True
+    assert streaming["runtime_output"]["streaming"] is True
+    assert streaming["state_observations"][
+        "streaming_trace.summary.completion_status"
+    ] == "completed"
+    assert streaming["state_observations"]["streaming_trace.summary.chunk_count"] == 2
+    assert streaming["state_observations"][
+        "streaming_trace.summary.tool_delta_count"
+    ] == 1
+
+    typed_output = io_surfaces["typed_output"]
+    assert typed_output["state_observations"]["typed_output.schema"] == (
+        "RefundDecision"
+    )
+    assert typed_output["state_observations"][
+        "typed_output.decision.verdict"
+    ] == "approved"
+
+    keyword_inputs = io_surfaces["keyword_inputs"]
+    assert keyword_inputs["runtime_contract"]["call_style"] == "keyword"
+    assert keyword_inputs["runtime_contract"]["input_key"] == "inputs"
+    assert keyword_inputs["state_observations"]["crew_inputs.message_count"] == 1
+    assert "crewai" in keyword_inputs["state_observations"][
+        "crew_inputs.input"
+    ].lower()
+
+    side_kwargs = io_surfaces["side_kwargs"]
+    assert side_kwargs["manifest_agent"]["input_kwargs"] == {
+        "direction": "downstream"
+    }
+    assert side_kwargs["runtime_contract"]["required_input_kwargs"] == [
+        "direction"
+    ]
+    assert side_kwargs["state_observations"]["pipecat_frame.direction"] == (
+        "downstream"
+    )
+
+    nested_method = io_surfaces["nested_method"]
+    assert nested_method["manifest_agent"]["method"] == "chat.completions.create"
+    assert nested_method["state_observations"][
+        "nested_client.method_path"
+    ] == "chat.completions.create"
+
+    provider_response = io_surfaces["provider_response"]
+    assert provider_response["manifest_agent"]["input_kwargs"] == {
+        "model": "local-provider-model"
+    }
+    assert provider_response["state_observations"][
+        "provider_response.usage.total_tokens"
+    ] == 19
+    assert provider_response["state_observations"][
+        "provider_response.finish_reasons"
+    ] == ["tool_calls"]
+    assert provider_response["state_observations"][
+        "provider_response.tool_names"
+    ] == ["framework_trace_status"]
+    assert {"provider_choice", "provider_tool_call"} <= set(
+        provider_response["runtime_output"]["event_types"]
+    )
+
+    message_history = io_surfaces["message_history"]
+    assert message_history["state_observations"][
+        "message_history.message_count"
+    ] == 4
+    assert message_history["state_observations"][
+        "message_history.stop_reason"
+    ] == "completed"
+    assert {"TextMessage", "ToolCallRequestEvent", "ToolCallExecutionEvent"} <= set(
+        message_history["state_observations"]["message_history.types"]
+    )
+    assert {"planner", "tool", "reviewer"} <= set(
+        message_history["state_observations"]["message_history.sources"]
+    )
+
+    handoff_transcript = io_surfaces["handoff_transcript"]
+    assert handoff_transcript["state_observations"][
+        "framework_handoffs.handoff_count"
+    ] == 2
+    assert handoff_transcript["state_observations"][
+        "framework_handoffs.review_count"
+    ] == 1
+    assert handoff_transcript["state_observations"][
+        "framework_handoffs.reconciliation_count"
+    ] == 1
+    assert {"triage_agent", "retrieval_agent", "critic_agent"} <= set(
+        handoff_transcript["state_observations"][
+            "framework_handoffs.participants"
+        ]
+    )
+    assert handoff_transcript["state_observations"][
+        "framework_handoffs.reviews.0.status"
+    ] == "passed"
+    assert handoff_transcript["state_observations"][
+        "framework_handoffs.reconciliations.0.accepted_source"
+    ] == "retrieval_agent"
     protocol_adapter = checks["protocol_adapter_readiness"]["evidence"]
     assert protocol_adapter["required_files"] == (
         trinity.V1_PROTOCOL_ADAPTER_FILES

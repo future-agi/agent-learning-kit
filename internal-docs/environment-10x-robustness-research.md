@@ -1,15 +1,19 @@
-# OpenEnv 10x Robustness Gate
+# Agent Learning Environment 10x Robustness Gate
 
 Date: 2026-06-09
 
 ## Why This Exists
 
-The roadmap target "10x more robust than OpenEnv" is not a marketing phrase. In
-V1 it means Agent Learning Kit must prove a broader local contract than an
-OpenEnv-only replay: the same release artifact has to cover environment replay,
-simulation, evaluation, optimization, framework adapters, protocol/tool routing,
-browser/CUA, realtime voice, memory, multi-agent coordination, red-team
-execution, orchestration replay, and regression promotion.
+Agent Learning Kit owns the framework and environment robustness contract. In
+V1, `environment_10x_robustness` means the release artifact must prove a broad
+local contract across environment replay, simulation, evaluation, optimization,
+framework adapters, protocol/tool routing, browser/CUA, realtime voice, memory,
+multi-agent coordination, red-team execution, orchestration replay, and
+regression promotion.
+
+OpenEnv and Gymnasium are compatibility inputs for reset/step/state-shaped
+traces. They are not runtime dependencies and should not be positioned as the
+product center.
 
 ## Research Inputs
 
@@ -30,18 +34,19 @@ execution, orchestration replay, and regression promotion.
 
 ## Release Gate
 
-`agent-learn release-check` now includes `openenv_10x_robustness`. The gate
+`agent-learn release-check` now includes `environment_10x_robustness`. The gate
 does not rerun separate workloads. Instead, it aggregates existing local proof
 outputs and requires at least ten independent axes to pass:
 
-- `openenv_runtime_contract`: reset, step, action routing, reward/done,
+- `environment_replay_contract`: reset, step, action routing, reward/done,
   metadata, sandbox/isolation, deterministic reset, no external service, and
-  failure injection.
+  failure injection, including OpenEnv/Gymnasium-shaped compatibility traces.
 - `cross_framework_simulation_matrix`: local contracts for LangChain,
   LangGraph, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, A2A, and
   the rest of the V1 framework matrix.
 - `local_evaluation_gates`: `openenv_coverage`, `openenv_quality`, framework
-  runtime, and framework adapter metrics all score 1.0.
+  runtime, and framework adapter metrics all score 1.0 for compatibility
+  fixtures.
 - `adaptive_optimizer_recovery`: agent-opt rejects weak/partial OpenEnv bundles
   and selects the verified replay.
 - `framework_adapter_promotion`: a local framework adapter promotes
@@ -65,7 +70,7 @@ outputs and requires at least ten independent axes to pass:
 
 ## Implementation Rule
 
-Do not use the 10x claim unless `openenv_10x_robustness` is green. New live
-environment shortcuts can be added later, but the comparison bar must stay
-local-first and evidence-backed: every claimed robustness axis needs an
+Do not use the 10x claim unless `environment_10x_robustness` is green. New live
+environment shortcuts can be added later, but the Agent Learning contract must
+stay local-first and evidence-backed: every claimed robustness axis needs an
 executable release-check source, metric floor, and reproducible artifact.
