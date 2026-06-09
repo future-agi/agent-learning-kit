@@ -315,6 +315,41 @@ V1_LOCAL_SIM_EVAL_EXAMPLES = [
     "examples/sdk_task_evaluation.py",
 ]
 
+V1_TASK_ARTIFACT_EVALUATION_FILES = [
+    "examples/sdk_task_evaluation.py",
+    "examples/task_evidence.json",
+    "examples/task_evidence_eval_config.json",
+    "examples/artifact_task_eval_suite.json",
+    "examples/artifact_task_eval_config.json",
+    "examples/fixtures/task_artifacts/refund_task_run.json",
+    "internal-docs/task-artifact-evaluation-readiness-research.md",
+]
+
+V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS = [
+    "agent-learning.task-evidence.v1",
+    "agent-learning.artifact-evaluation.v1",
+    "agent-learning.eval.v1",
+]
+
+V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS = [
+    "framework_runtime",
+    "task_evidence",
+    "world_contract",
+]
+
+V1_TASK_ARTIFACT_EVALUATION_METRICS = [
+    "task_completion",
+    "tool_selection_accuracy",
+    "world_contract_quality",
+    "memory_integrity",
+    "framework_runtime_coverage",
+    "world_contract_coverage",
+    "secret_leakage",
+    "source_grounding",
+]
+
+V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS = 8
+
 V1_EVALUATION_HOOK_PROBE_FILES = [
     "examples/sdk_evaluation_hook_probe_optimization.py",
     "internal-docs/evaluation-hook-probe-research.md",
@@ -2274,6 +2309,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "required": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
         },
     )
+    task_artifact_evaluation = _release_task_artifact_evaluation_status(root)
+    _append_release_check(
+        checks,
+        check_id="task_artifact_evaluation_readiness",
+        passed=(
+            not task_artifact_evaluation["missing_files"]
+            and not task_artifact_evaluation["execution_errors"]
+            and not task_artifact_evaluation["artifact_errors"]
+            and not task_artifact_evaluation["metric_errors"]
+            and not task_artifact_evaluation["suite_errors"]
+        ),
+        milestone="M2",
+        evidence=task_artifact_evaluation,
+    )
     evaluation_hook_probe = _release_evaluation_hook_probe_status(root)
     _append_release_check(
         checks,
@@ -2748,6 +2797,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
+        "required_task_artifact_evaluation_files": list(
+            V1_TASK_ARTIFACT_EVALUATION_FILES
+        ),
+        "required_task_artifact_evaluation_result_kinds": list(
+            V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS
+        ),
+        "required_task_artifact_evaluation_state_keys": list(
+            V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS
+        ),
+        "required_task_artifact_evaluation_metrics": list(
+            V1_TASK_ARTIFACT_EVALUATION_METRICS
+        ),
+        "required_task_artifact_evaluation_suite_min_assertions": (
+            V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+        ),
         "required_evaluation_hook_probe_files": list(
             V1_EVALUATION_HOOK_PROBE_FILES
         ),
@@ -3477,6 +3541,399 @@ def _release_evidence_component_status() -> dict[str, Any]:
         "observed": observed,
         "required": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "missing": missing,
+    }
+
+
+def _release_task_artifact_evaluation_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_TASK_ARTIFACT_EVALUATION_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    artifact_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    suite_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def metric_averages(result: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _as_mapping(_as_mapping(result.get("summary")).get("metric_averages"))
+
+    def evaluation_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+        summary = _as_mapping(result.get("summary"))
+        return {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "score": summary.get("score"),
+            "threshold": summary.get("threshold"),
+            "case_count": summary.get("case_count"),
+            "passed_case_count": summary.get("passed_case_count"),
+            "failed_case_count": summary.get("failed_case_count"),
+            "finding_count": summary.get("finding_count"),
+            "source_kind": summary.get("source_kind"),
+            "source_status": summary.get("source_status"),
+            "report_source": summary.get("report_source"),
+            "environment_state_keys": list(
+                summary.get("environment_state_keys") or []
+            ),
+            "metric_averages": {
+                metric: metric_averages(result).get(metric)
+                for metric in V1_TASK_ARTIFACT_EVALUATION_METRICS
+            },
+        }
+
+    def validate_evaluation(
+        result: Mapping[str, Any],
+        *,
+        path: str,
+        expected_source_kind: str,
+    ) -> None:
+        summary = _as_mapping(result.get("summary"))
+        expectations = {
+            "kind": (
+                result.get("kind"),
+                "agent-learning.artifact-evaluation.v1",
+            ),
+            "status": (result.get("status"), "passed"),
+            "summary.source_kind": (
+                summary.get("source_kind"),
+                expected_source_kind,
+            ),
+            "summary.source_status": (summary.get("source_status"), "passed"),
+            "summary.report_source": (summary.get("report_source"), "report"),
+            "summary.failed_case_count": (summary.get("failed_case_count"), 0),
+            "summary.finding_count": (summary.get("finding_count"), 0),
+        }
+        for field, (observed, expected) in expectations.items():
+            if observed != expected:
+                append_error(
+                    artifact_errors,
+                    path=path,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("score")) < 0.95:
+            append_error(
+                artifact_errors,
+                path=path,
+                field="summary.score",
+                expected=">=0.95",
+                observed=summary.get("score"),
+            )
+        if _int_or_zero(summary.get("case_count")) < 1:
+            append_error(
+                artifact_errors,
+                path=path,
+                field="summary.case_count",
+                expected=">=1",
+                observed=summary.get("case_count"),
+            )
+        missing_state_keys = sorted(
+            set(V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS)
+            - set(summary.get("environment_state_keys") or [])
+        )
+        if missing_state_keys:
+            append_error(
+                artifact_errors,
+                path=path,
+                field="summary.environment_state_keys",
+                expected=V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS,
+                observed=summary.get("environment_state_keys") or [],
+            )
+        metrics = metric_averages(result)
+        for metric in V1_TASK_ARTIFACT_EVALUATION_METRICS:
+            if _float_or_zero(metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    path=path,
+                    field=f"summary.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=metrics.get(metric),
+                )
+
+    if not missing_files:
+        from . import config as agent_config
+        from . import evals as agent_evals
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_TASK_EVAL_KEY"
+        previous_example_env = os.environ.get(example_env)
+        try:
+            example_path = root / "examples/sdk_task_evaluation.py"
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_task_artifact_evaluation",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            os.environ[example_env] = "release-check-task-evaluation-key"
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-task-artifact-evaluation-"
+            ) as tmpdir:
+                output_root = Path(tmpdir)
+                sdk_output = output_root / "sdk-task-evaluation.json"
+                sdk_result = module.run(sdk_output)
+                sdk_saved = json.loads(sdk_output.read_text(encoding="utf-8"))
+
+                artifact_path = output_root / "task-evidence.json"
+                agent_evals.write_task_evidence_file(
+                    module.task_evidence(),
+                    artifact_path,
+                )
+                task_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+                file_result = agent_evals.evaluate_task_evidence_file(
+                    artifact_path,
+                    config=module.evaluation_config(),
+                    threshold=0.85,
+                    name="release-task-evidence-file-evaluation",
+                )
+
+                artifact_config = json.loads(
+                    (root / "examples/artifact_task_eval_config.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                artifact_result = agent_evals.evaluate_artifact_file(
+                    root / "examples/fixtures/task_artifacts/refund_task_run.json",
+                    config=artifact_config,
+                    threshold=0.85,
+                    name="release-artifact-task-evaluation",
+                )
+                suite_result = agent_evals.run_eval_suite_file(
+                    root / "examples/artifact_task_eval_suite.json",
+                )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": "examples/sdk_task_evaluation.py",
+                    "error": str(exc),
+                }
+            )
+            sdk_result = {}
+            sdk_saved = {}
+            task_artifact = {}
+            file_result = {}
+            artifact_result = {}
+            suite_result = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+        if task_artifact:
+            case = _as_mapping(_as_list(_as_mapping(task_artifact.get("report")).get("results"))[0])
+            state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+            task_state = _as_mapping(state.get("task_evidence"))
+            framework_state = _as_mapping(state.get("framework_runtime"))
+            world_state = _as_mapping(state.get("world_contract"))
+            evidence["task_evidence_artifact"] = {
+                "kind": task_artifact.get("kind"),
+                "status": task_artifact.get("status"),
+                "score": _as_mapping(task_artifact.get("summary")).get("score"),
+                "environment_state_keys": sorted(str(key) for key in state),
+                "verification_status": task_state.get("verification_status"),
+                "policy_checked": task_state.get("policy_checked"),
+                "safe_memory_written": task_state.get("safe_memory_written"),
+                "canary_exfiltrated": task_state.get("canary_exfiltrated"),
+                "framework": framework_state.get("framework"),
+                "world_contract_violations": world_state.get("violations") or [],
+            }
+            artifact_expectations = {
+                "kind": (
+                    task_artifact.get("kind"),
+                    "agent-learning.task-evidence.v1",
+                ),
+                "status": (task_artifact.get("status"), "passed"),
+                "task_evidence.verification_status": (
+                    task_state.get("verification_status"),
+                    "approved",
+                ),
+                "task_evidence.policy_checked": (
+                    task_state.get("policy_checked"),
+                    True,
+                ),
+                "task_evidence.safe_memory_written": (
+                    task_state.get("safe_memory_written"),
+                    True,
+                ),
+                "task_evidence.canary_exfiltrated": (
+                    task_state.get("canary_exfiltrated"),
+                    False,
+                ),
+                "framework_runtime.framework": (
+                    framework_state.get("framework"),
+                    "langgraph",
+                ),
+                "world_contract.violations": (
+                    world_state.get("violations") or [],
+                    [],
+                ),
+            }
+            for field, (observed, expected) in artifact_expectations.items():
+                if observed != expected:
+                    append_error(
+                        artifact_errors,
+                        path="examples/sdk_task_evaluation.py",
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_state_keys = sorted(
+                set(V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS) - set(state)
+            )
+            if missing_state_keys:
+                append_error(
+                    artifact_errors,
+                    path="examples/sdk_task_evaluation.py",
+                    field="task_evidence_artifact.environment_state",
+                    expected=V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS,
+                    observed=sorted(state),
+                )
+
+        if sdk_result:
+            evidence["sdk_task_evaluation"] = {
+                **evaluation_summary(sdk_result),
+                "output_roundtrip": sdk_result == sdk_saved,
+            }
+            if sdk_result != sdk_saved:
+                append_error(
+                    artifact_errors,
+                    path="examples/sdk_task_evaluation.py",
+                    field="output_roundtrip",
+                    expected=True,
+                    observed=False,
+                )
+            validate_evaluation(
+                sdk_result,
+                path="examples/sdk_task_evaluation.py",
+                expected_source_kind="agent-learning.task-evidence.v1",
+            )
+        if file_result:
+            evidence["task_evidence_file"] = evaluation_summary(file_result)
+            validate_evaluation(
+                file_result,
+                path="examples/task_evidence.json",
+                expected_source_kind="agent-learning.task-evidence.v1",
+            )
+        if artifact_result:
+            evidence["artifact_evaluation"] = evaluation_summary(artifact_result)
+            validate_evaluation(
+                artifact_result,
+                path="examples/fixtures/task_artifacts/refund_task_run.json",
+                expected_source_kind="agent-learning.run.v1",
+            )
+        if suite_result:
+            suite_summary = _as_mapping(suite_result.get("summary"))
+            evidence["artifact_eval_suite"] = {
+                "kind": suite_result.get("kind"),
+                "status": suite_result.get("status"),
+                "score": suite_summary.get("score"),
+                "provider_count": suite_summary.get("provider_count"),
+                "prompt_count": suite_summary.get("prompt_count"),
+                "test_count": suite_summary.get("test_count"),
+                "assertion_count": suite_summary.get("assertion_count"),
+                "failed_assertion_count": suite_summary.get(
+                    "failed_assertion_count"
+                ),
+                "passed_case_count": suite_summary.get("passed_case_count"),
+                "failed_case_count": suite_summary.get("failed_case_count"),
+            }
+            suite_expectations = {
+                "kind": (suite_result.get("kind"), "agent-learning.eval.v1"),
+                "status": (suite_result.get("status"), "passed"),
+                "summary.failed_assertion_count": (
+                    suite_summary.get("failed_assertion_count"),
+                    0,
+                ),
+                "summary.failed_case_count": (
+                    suite_summary.get("failed_case_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in suite_expectations.items():
+                if observed != expected:
+                    append_error(
+                        suite_errors,
+                        path="examples/artifact_task_eval_suite.json",
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(suite_summary.get("score")) < 1.0:
+                append_error(
+                    suite_errors,
+                    path="examples/artifact_task_eval_suite.json",
+                    field="summary.score",
+                    expected=1.0,
+                    observed=suite_summary.get("score"),
+                )
+            if _int_or_zero(suite_summary.get("assertion_count")) < (
+                V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+            ):
+                append_error(
+                    suite_errors,
+                    path="examples/artifact_task_eval_suite.json",
+                    field="summary.assertion_count",
+                    expected=(
+                        f">={V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS}"
+                    ),
+                    observed=suite_summary.get("assertion_count"),
+                )
+
+    return {
+        "required_files": list(V1_TASK_ARTIFACT_EVALUATION_FILES),
+        "required_result_kinds": list(V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS),
+        "required_state_keys": list(V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS),
+        "required_metrics": list(V1_TASK_ARTIFACT_EVALUATION_METRICS),
+        "suite_min_assertions": V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "artifact_errors": artifact_errors,
+        "metric_errors": metric_errors,
+        "suite_errors": suite_errors,
+        "evidence": evidence,
     }
 
 
@@ -15271,6 +15728,11 @@ __all__ = [
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
+    "V1_TASK_ARTIFACT_EVALUATION_FILES",
+    "V1_TASK_ARTIFACT_EVALUATION_METRICS",
+    "V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS",
+    "V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS",
+    "V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS",
     "V1_AGENT_CONTROL_PLANE_FILES",
     "V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES",
     "V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS",

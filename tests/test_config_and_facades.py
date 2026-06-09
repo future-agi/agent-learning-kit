@@ -15105,6 +15105,21 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_local_sim_eval_examples"] == (
         trinity.V1_LOCAL_SIM_EVAL_EXAMPLES
     )
+    assert payload["required_task_artifact_evaluation_files"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_FILES
+    )
+    assert payload["required_task_artifact_evaluation_result_kinds"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS
+    )
+    assert payload["required_task_artifact_evaluation_state_keys"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS
+    )
+    assert payload["required_task_artifact_evaluation_metrics"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_METRICS
+    )
+    assert payload["required_task_artifact_evaluation_suite_min_assertions"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+    )
     assert payload["required_evaluation_hook_probe_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES
     )
@@ -15534,6 +15549,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "release_docs_present",
         "v1_examples_present",
         "local_sim_eval_examples_present",
+        "task_artifact_evaluation_readiness",
         "evaluation_hook_probe_readiness",
         "native_optimizer_evidence_components",
         "optimizer_governance_readiness",
@@ -15574,6 +15590,86 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert checks["release_docs_present"]["evidence"]["missing"] == []
     assert checks["v1_examples_present"]["evidence"]["missing"] == []
     assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []
+    task_artifact_eval = checks["task_artifact_evaluation_readiness"]["evidence"]
+    assert task_artifact_eval["required_files"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_FILES
+    )
+    assert task_artifact_eval["required_result_kinds"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS
+    )
+    assert task_artifact_eval["required_state_keys"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS
+    )
+    assert task_artifact_eval["required_metrics"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_METRICS
+    )
+    assert task_artifact_eval["suite_min_assertions"] == (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+    )
+    assert task_artifact_eval["missing_files"] == []
+    assert task_artifact_eval["execution_errors"] == []
+    assert task_artifact_eval["artifact_errors"] == []
+    assert task_artifact_eval["metric_errors"] == []
+    assert task_artifact_eval["suite_errors"] == []
+
+    def assert_task_artifact_evaluation(result, source_kind):
+        assert result["kind"] == "agent-learning.artifact-evaluation.v1"
+        assert result["status"] == "passed"
+        assert result["score"] >= 0.95
+        assert result["source_kind"] == source_kind
+        assert result["source_status"] == "passed"
+        assert result["report_source"] == "report"
+        assert result["case_count"] >= 1
+        assert result["passed_case_count"] >= 1
+        assert result["failed_case_count"] == 0
+        assert result["finding_count"] == 0
+        assert set(result["environment_state_keys"]) >= set(
+            trinity.V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS
+        )
+        for metric in trinity.V1_TASK_ARTIFACT_EVALUATION_METRICS:
+            assert result["metric_averages"][metric] == pytest.approx(1.0)
+
+    task_artifact_evidence = task_artifact_eval["evidence"]
+    normalized_task_artifact = task_artifact_evidence["task_evidence_artifact"]
+    assert normalized_task_artifact["kind"] == "agent-learning.task-evidence.v1"
+    assert normalized_task_artifact["status"] == "passed"
+    assert normalized_task_artifact["score"] == pytest.approx(1.0)
+    assert set(normalized_task_artifact["environment_state_keys"]) == set(
+        trinity.V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS
+    )
+    assert normalized_task_artifact["verification_status"] == "approved"
+    assert normalized_task_artifact["policy_checked"] is True
+    assert normalized_task_artifact["safe_memory_written"] is True
+    assert normalized_task_artifact["canary_exfiltrated"] is False
+    assert normalized_task_artifact["framework"] == "langgraph"
+    assert normalized_task_artifact["world_contract_violations"] == []
+    sdk_task_eval = task_artifact_evidence["sdk_task_evaluation"]
+    assert sdk_task_eval["output_roundtrip"] is True
+    assert_task_artifact_evaluation(
+        sdk_task_eval,
+        "agent-learning.task-evidence.v1",
+    )
+    assert_task_artifact_evaluation(
+        task_artifact_evidence["task_evidence_file"],
+        "agent-learning.task-evidence.v1",
+    )
+    assert_task_artifact_evaluation(
+        task_artifact_evidence["artifact_evaluation"],
+        "agent-learning.run.v1",
+    )
+    artifact_eval_suite = task_artifact_evidence["artifact_eval_suite"]
+    assert artifact_eval_suite["kind"] == "agent-learning.eval.v1"
+    assert artifact_eval_suite["status"] == "passed"
+    assert artifact_eval_suite["score"] == pytest.approx(1.0)
+    assert artifact_eval_suite["provider_count"] == 1
+    assert artifact_eval_suite["prompt_count"] == 1
+    assert artifact_eval_suite["test_count"] == 1
+    assert artifact_eval_suite["assertion_count"] >= (
+        trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+    )
+    assert artifact_eval_suite["failed_assertion_count"] == 0
+    assert artifact_eval_suite["passed_case_count"] == 1
+    assert artifact_eval_suite["failed_case_count"] == 0
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES

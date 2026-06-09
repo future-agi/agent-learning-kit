@@ -1166,7 +1166,9 @@ The SDK normalizes messages, tool calls, metrics, environment state, artifacts,
 and events into the same agent-report shape used by `agent-learn eval-artifact`.
 The same path is available from the CLI and suite runner with
 `agent-learn eval-task`, so CI can score arbitrary task transcripts or tool
-run exports without writing Python glue.
+run exports without writing Python glue. The same readiness gate keeps this
+raw-evidence path executable in release-check, including `task_evidence`,
+`framework_runtime`, and `world_contract` state coverage.
 
 Behavior entropy is a native local agent-report metric for loop detection and
 action-pattern quality. `behavior_entropy_quality` measures action entropy,
@@ -1576,6 +1578,12 @@ completion, verification status, framework runtime, and world-contract metrics,
 then runs structured promptfoo-style JSON-path assertions through
 `agent-learn eval`. This is the CI path for evaluating task/world artifacts
 without rerunning the agent.
+`agent-learn release-check` gates this surface as
+`task_artifact_evaluation_readiness`: the SDK raw task evaluator, normalized
+task-evidence file evaluation, direct saved artifact evaluation, and artifact
+eval suite must all pass locally with task/framework/world state and required
+task, tool, world-contract, memory, source-grounding, and secret-leakage metrics
+closed.
 `evals.build_eval_suite_manifest()` and `evals.write_eval_suite_file()` provide
 the same promptfoo-style eval-suite path from Python; the
 `sdk_eval_suite.py` cookbook writes an eval manifest plus a one-job
