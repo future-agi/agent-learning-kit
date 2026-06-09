@@ -808,6 +808,70 @@ V1_FRAMEWORK_OPTIMIZER_CONTRACTS = [
     },
 ]
 
+V1_MULTI_AGENT_ROOM_PROBE_FILES = [
+    "examples/sdk_multi_agent_room_probe_optimization.py",
+    "examples/sdk_multi_agent_optimization.py",
+    "internal-docs/multi-agent-room-probe-research.md",
+]
+
+V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.multi-agent-room-probe-proof.v1"
+)
+
+V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL = (
+    "l2_native_multi_agent_room_probe_verified"
+)
+
+V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS = [
+    "multi_agent_room_probe_pass_rate",
+    "multi_agent_room_probe_local_contract_quality",
+    "multi_agent_room_probe_role_boundary",
+    "multi_agent_room_probe_handoff_contract",
+    "multi_agent_room_probe_coordination_quality",
+    "multi_agent_room_probe_finding_quality",
+    "multi_agent_room_probe_score",
+]
+
+V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS = [
+    "multi_agent_coordination_quality",
+    "multi_agent_trace_coverage",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS = [
+    "multi_agent_room_probe_report_present",
+    "multi_agent_room_probe_local_contract_closed",
+    "multi_agent_room_probe_role_boundary_closed",
+    "multi_agent_room_probe_coordination_closed",
+    "multi_agent_room_probe_metric_evidence_closed",
+    "multi_agent_room_probe_patch_surface_present",
+    "multi_agent_room_probe_optimizer_governance_passed",
+]
+
+V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS = [
+    "planner",
+    "retriever",
+    "critic",
+]
+
+V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE = [
+    "trace",
+    "role",
+    "contract",
+    "handoff",
+    "review",
+    "reconciliation",
+    "state",
+]
+
+V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS = [
+    "room_status",
+    "handoff",
+    "review_requested",
+    "reconciled",
+]
+
 V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_probe.py",
     "examples/sdk_framework_adapter_discovery.py",
@@ -1872,6 +1936,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_optimizer,
     )
+    multi_agent_room_probe = _release_multi_agent_room_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="multi_agent_room_probe_readiness",
+        passed=(
+            not multi_agent_room_probe["missing_files"]
+            and not multi_agent_room_probe["execution_errors"]
+            and not multi_agent_room_probe["optimization_errors"]
+            and not multi_agent_room_probe["proof_errors"]
+            and not multi_agent_room_probe["promotion_errors"]
+            and not multi_agent_room_probe["metric_errors"]
+            and not multi_agent_room_probe["coordination_errors"]
+        ),
+        milestone="M6",
+        evidence=multi_agent_room_probe,
+    )
     framework_adapter_probe = _release_framework_adapter_probe_status(root)
     _append_release_check(
         checks,
@@ -2070,6 +2150,33 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_agent_control_plane_events": list(
             V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
+        ),
+        "required_multi_agent_room_probe_files": list(
+            V1_MULTI_AGENT_ROOM_PROBE_FILES
+        ),
+        "required_multi_agent_room_probe_proof_kind": (
+            V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
+        ),
+        "required_multi_agent_room_probe_assurance_level": (
+            V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL
+        ),
+        "required_multi_agent_room_probe_metrics": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS
+        ),
+        "required_multi_agent_room_probe_run_metrics": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_multi_agent_room_probe_checks": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
+        ),
+        "required_multi_agent_room_probe_participants": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+        ),
+        "required_multi_agent_room_probe_trace": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE
+        ),
+        "required_multi_agent_room_probe_run_events": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS
         ),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_framework_provider_frameworks": list(
@@ -6315,6 +6422,679 @@ def _release_framework_optimizer_status(root: Path) -> dict[str, Any]:
     }
 
 
+def _release_multi_agent_room_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_MULTI_AGENT_ROOM_PROBE_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    promotion_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    coordination_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        errors: list[dict[str, Any]],
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        errors.append(
+            {
+                "path": "examples/sdk_multi_agent_room_probe_optimization.py",
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    if not missing_files:
+        example_path = root / "examples/sdk_multi_agent_room_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_multi_agent_room_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            raw_optimization = module.build_probe_optimization()
+            promoted_manifest = module.build_manifest()
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-multi-agent-room-probe-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "multi-agent-room-probe.json"
+                promoted_result = module.run(output_path)
+                saved_result = json.loads(output_path.read_text(encoding="utf-8"))
+                generated_manifest = json.loads(
+                    output_path.with_suffix(".manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            raw_optimization = {}
+            promoted_manifest = {}
+            generated_manifest = {}
+            promoted_result = {}
+            saved_result = {}
+
+        if raw_optimization:
+            summary = _as_mapping(raw_optimization.get("summary"))
+            optimization = _as_mapping(raw_optimization.get("optimization"))
+            histories = [
+                item for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history: Mapping[str, Any] = {}
+            best_score = -1.0
+            for history in histories:
+                score = _float_or_zero(history.get("score"))
+                if score > best_score:
+                    best_score = score
+                    best_history = history
+            best_patch = _as_mapping(best_history.get("patch"))
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            proof = _as_mapping(raw_optimization.get("multi_agent_room_probe_proof"))
+            proof_checks = [
+                item for item in _as_list(proof.get("checks"))
+                if isinstance(item, Mapping)
+            ]
+            proof_check_ids = [
+                str(check.get("id")) for check in proof_checks if check.get("id")
+            ]
+            proof_evidence = _as_mapping(proof.get("evidence"))
+            selected_report_summary = _as_mapping(
+                proof_evidence.get("selected_report_summary")
+            )
+            selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+            contract = _as_mapping(proof_evidence.get("multi_agent_room_contract"))
+            governance = _as_mapping(raw_optimization.get("optimization_governance"))
+            evidence["optimization"] = {
+                "kind": raw_optimization.get("kind"),
+                "status": raw_optimization.get("status"),
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "candidate_lineage_content_addressed_count": summary.get(
+                    "candidate_lineage_content_addressed_count"
+                ),
+                "candidate_lineage_selected_score_delta": summary.get(
+                    "candidate_lineage_selected_score_delta"
+                ),
+                "total_iterations": summary.get("total_iterations"),
+                "total_evaluations": summary.get("total_evaluations"),
+                "search_paths": list(summary.get("search_paths") or []),
+                "optimizer_governance_status": summary.get(
+                    "optimizer_governance_status"
+                ),
+                "optimizer_governance_passed": summary.get(
+                    "optimizer_governance_passed"
+                ),
+                "best_history": {
+                    "score": best_history.get("score"),
+                    "patch_keys": sorted(str(key) for key in best_patch),
+                    "metrics": {
+                        metric: best_metrics.get(metric)
+                        for metric in V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS
+                    },
+                },
+                "proof": {
+                    "kind": proof.get("kind"),
+                    "status": proof.get("status"),
+                    "passed": proof.get("passed"),
+                    "assurance_level": proof.get("assurance_level"),
+                    "check_count": proof.get("check_count"),
+                    "failed_check_ids": list(proof.get("failed_check_ids") or []),
+                    "warning_check_ids": list(proof.get("warning_check_ids") or []),
+                    "requires_external_service": proof.get(
+                        "requires_external_service"
+                    ),
+                    "check_ids": proof_check_ids,
+                },
+                "selected_report_summary": {
+                    "participant_count": selected_report_summary.get(
+                        "participant_count"
+                    ),
+                    "participants": list(
+                        selected_report_summary.get("participants") or []
+                    ),
+                    "allow_unknown_roles": selected_report_summary.get(
+                        "allow_unknown_roles"
+                    ),
+                    "case_status": selected_report_summary.get("case_status"),
+                    "terminal_state": selected_report_summary.get("terminal_state"),
+                    "case_count": selected_report_summary.get("case_count"),
+                    "passed_case_count": selected_report_summary.get(
+                        "passed_case_count"
+                    ),
+                    "failed_case_count": selected_report_summary.get(
+                        "failed_case_count"
+                    ),
+                    "finding_count": selected_report_summary.get("finding_count"),
+                    "handoff_count": selected_report_summary.get("handoff_count"),
+                    "known_handoff_count": selected_report_summary.get(
+                        "known_handoff_count"
+                    ),
+                    "handoff_contract_count": selected_report_summary.get(
+                        "handoff_contract_count"
+                    ),
+                    "handoff_contract_matched_count": selected_report_summary.get(
+                        "handoff_contract_matched_count"
+                    ),
+                    "expected_handoff_count": selected_report_summary.get(
+                        "expected_handoff_count"
+                    ),
+                    "review_count": selected_report_summary.get("review_count"),
+                    "known_review_count": selected_report_summary.get(
+                        "known_review_count"
+                    ),
+                    "expected_review_count": selected_report_summary.get(
+                        "expected_review_count"
+                    ),
+                    "reconciliation_count": selected_report_summary.get(
+                        "reconciliation_count"
+                    ),
+                    "expected_reconciliation_present": selected_report_summary.get(
+                        "expected_reconciliation_present"
+                    ),
+                    "reconciliation_conflict_count": selected_report_summary.get(
+                        "reconciliation_conflict_count"
+                    ),
+                    "coordination_check_count": selected_report_summary.get(
+                        "coordination_check_count"
+                    ),
+                    "matched_coordination_check_count": selected_report_summary.get(
+                        "matched_coordination_check_count"
+                    ),
+                    "unmatched_coordination_check_count": selected_report_summary.get(
+                        "unmatched_coordination_check_count"
+                    ),
+                    "local_executable_fixture": selected_report_summary.get(
+                        "local_executable_fixture"
+                    ),
+                    "requires_external_service": selected_report_summary.get(
+                        "requires_external_service"
+                    ),
+                },
+                "selected_metrics": {
+                    metric: selected_metrics.get(metric)
+                    for metric in V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS
+                },
+                "contract": {
+                    "kind": contract.get("kind"),
+                    "local_executable_fixture": contract.get(
+                        "local_executable_fixture"
+                    ),
+                    "requires_external_service": contract.get(
+                        "requires_external_service"
+                    ),
+                    "runtime": contract.get("runtime"),
+                    "target": contract.get("target"),
+                    "target_scheme": contract.get("target_scheme"),
+                    "min_participant_count": contract.get("min_participant_count"),
+                    "evidence_requirements": list(
+                        contract.get("evidence_requirements") or []
+                    ),
+                },
+                "governance": {
+                    "kind": governance.get("kind"),
+                    "status": governance.get("status"),
+                    "passed": governance.get("passed"),
+                    "failed_check_ids": list(governance.get("failed_check_ids") or []),
+                    "warning_check_ids": list(
+                        governance.get("warning_check_ids") or []
+                    ),
+                },
+            }
+            for field, observed, expected in (
+                (
+                    "kind",
+                    raw_optimization.get("kind"),
+                    "agent-learning.optimization.v1",
+                ),
+                ("status", raw_optimization.get("status"), "passed"),
+            ):
+                if observed != expected:
+                    append_error(optimization_errors, field, expected, observed)
+            if _float_or_zero(summary.get("optimization_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    "summary.optimization_score",
+                    ">=1.0",
+                    summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    "summary.evaluation_score",
+                    ">=1.0",
+                    summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 5:
+                append_error(
+                    optimization_errors,
+                    "summary.candidate_lineage_count",
+                    ">=5",
+                    summary.get("candidate_lineage_count"),
+                )
+            if _int_or_zero(summary.get("total_evaluations")) < 5:
+                append_error(
+                    optimization_errors,
+                    "summary.total_evaluations",
+                    ">=5",
+                    summary.get("total_evaluations"),
+                )
+            if "agent_room" not in set(_as_list(summary.get("search_paths"))):
+                append_error(
+                    optimization_errors,
+                    "summary.search_paths",
+                    ["agent_room"],
+                    summary.get("search_paths"),
+                )
+            if set(best_patch) != {"agent_room"}:
+                append_error(
+                    optimization_errors,
+                    "optimization.history.best.patch",
+                    ["agent_room"],
+                    sorted(str(key) for key in best_patch),
+                )
+            if governance.get("status") != "passed" or governance.get(
+                "failed_check_ids"
+            ):
+                append_error(
+                    optimization_errors,
+                    "optimization_governance",
+                    "passed with no failed checks",
+                    {
+                        "status": governance.get("status"),
+                        "failed_check_ids": governance.get("failed_check_ids"),
+                    },
+                )
+
+            proof_expectations = {
+                "kind": V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND,
+                "status": "passed",
+                "passed": True,
+                "assurance_level": V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL,
+                "requires_external_service": False,
+            }
+            for field, expected in proof_expectations.items():
+                observed = proof.get(field)
+                if observed != expected:
+                    append_error(
+                        proof_errors,
+                        f"multi_agent_room_probe_proof.{field}",
+                        expected,
+                        observed,
+                    )
+            if _int_or_zero(proof.get("check_count")) < len(
+                V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
+            ):
+                append_error(
+                    proof_errors,
+                    "multi_agent_room_probe_proof.check_count",
+                    f">={len(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS)}",
+                    proof.get("check_count"),
+                )
+            if proof.get("failed_check_ids") or proof.get("warning_check_ids"):
+                append_error(
+                    proof_errors,
+                    "multi_agent_room_probe_proof.failed_or_warning_check_ids",
+                    [],
+                    {
+                        "failed": proof.get("failed_check_ids"),
+                        "warning": proof.get("warning_check_ids"),
+                    },
+                )
+            missing_checks = sorted(
+                set(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS)
+                - set(proof_check_ids)
+            )
+            if missing_checks:
+                append_error(
+                    proof_errors,
+                    "multi_agent_room_probe_proof.checks",
+                    V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS,
+                    proof_check_ids,
+                )
+
+            for metric in V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        f"optimization.history.best.metrics.{metric}",
+                        ">=1.0",
+                        best_metrics.get(metric),
+                    )
+                if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        f"multi_agent_room_probe_proof.evidence.selected_metrics.{metric}",
+                        ">=1.0",
+                        selected_metrics.get(metric),
+                    )
+
+            _append_multi_agent_room_probe_summary_errors(
+                coordination_errors,
+                append_error,
+                selected_report_summary,
+                prefix="multi_agent_room_probe_proof.evidence.selected_report_summary",
+            )
+            if contract.get("kind") != "agent-learning.multi-agent-room-contract.v1":
+                append_error(
+                    coordination_errors,
+                    "multi_agent_room_probe_proof.evidence.multi_agent_room_contract.kind",
+                    "agent-learning.multi-agent-room-contract.v1",
+                    contract.get("kind"),
+                )
+            contract_expectations = {
+                "local_executable_fixture": True,
+                "requires_external_service": False,
+                "runtime": "in_process",
+                "target": "",
+                "target_scheme": "",
+            }
+            for field, expected in contract_expectations.items():
+                observed = contract.get(field)
+                if observed != expected:
+                    append_error(
+                        coordination_errors,
+                        f"multi_agent_room_probe_proof.evidence.multi_agent_room_contract.{field}",
+                        expected,
+                        observed,
+                    )
+
+        if promoted_manifest:
+            metadata = _as_mapping(promoted_manifest.get("metadata"))
+            simulation = _as_mapping(promoted_manifest.get("simulation"))
+            environments = [
+                item for item in _as_list(simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            evaluation_config = _as_mapping(
+                _as_mapping(
+                    _as_mapping(promoted_manifest.get("evaluation")).get(
+                        "agent_report"
+                    )
+                ).get("config")
+            )
+            manifest_proof = _as_mapping(metadata.get("multi_agent_room_probe_proof"))
+            evidence["promoted_manifest"] = {
+                "version": promoted_manifest.get("version"),
+                "name": promoted_manifest.get("name"),
+                "required_env": list(promoted_manifest.get("required_env") or []),
+                "environment_types": [
+                    str(_as_mapping(item).get("type")) for item in environments
+                ],
+                "promoted_from_multi_agent_room_probe": metadata.get(
+                    "promoted_from_multi_agent_room_probe"
+                ),
+                "multi_agent_room_probe_proof_status": metadata.get(
+                    "multi_agent_room_probe_proof_status"
+                ),
+                "generated_manifest_roundtrip": promoted_manifest
+                == generated_manifest,
+                "proof_kind": manifest_proof.get("kind"),
+                "proof_status": manifest_proof.get("status"),
+                "proof_failed_check_ids": list(
+                    manifest_proof.get("failed_check_ids") or []
+                ),
+                "required_multi_agent_roles": list(
+                    evaluation_config.get("required_multi_agent_roles") or []
+                ),
+                "required_multi_agent_trace": list(
+                    evaluation_config.get("required_multi_agent_trace") or []
+                ),
+                "required_tools": list(evaluation_config.get("required_tools") or []),
+                "metric_weights": {
+                    metric: _as_mapping(
+                        evaluation_config.get("metric_weights")
+                    ).get(metric)
+                    for metric in V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS
+                },
+            }
+            promoted_expectations = {
+                "version": "agent-learning.run.v1",
+                "required_env": [],
+                "environment_types": ["multi_agent_room"],
+                "promoted_from_multi_agent_room_probe": True,
+                "multi_agent_room_probe_proof_status": "passed",
+                "generated_manifest_roundtrip": True,
+                "proof_kind": V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND,
+                "proof_status": "passed",
+                "proof_failed_check_ids": [],
+            }
+            observed_promoted = {
+                "version": promoted_manifest.get("version"),
+                "required_env": list(promoted_manifest.get("required_env") or []),
+                "environment_types": evidence["promoted_manifest"][
+                    "environment_types"
+                ],
+                "promoted_from_multi_agent_room_probe": metadata.get(
+                    "promoted_from_multi_agent_room_probe"
+                ),
+                "multi_agent_room_probe_proof_status": metadata.get(
+                    "multi_agent_room_probe_proof_status"
+                ),
+                "generated_manifest_roundtrip": evidence["promoted_manifest"][
+                    "generated_manifest_roundtrip"
+                ],
+                "proof_kind": manifest_proof.get("kind"),
+                "proof_status": manifest_proof.get("status"),
+                "proof_failed_check_ids": list(
+                    manifest_proof.get("failed_check_ids") or []
+                ),
+            }
+            for field, expected in promoted_expectations.items():
+                if observed_promoted[field] != expected:
+                    append_error(
+                        promotion_errors,
+                        f"promoted_manifest.{field}",
+                        expected,
+                        observed_promoted[field],
+                    )
+            missing_roles = sorted(
+                set(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS)
+                - set(evidence["promoted_manifest"]["required_multi_agent_roles"])
+            )
+            if missing_roles:
+                append_error(
+                    promotion_errors,
+                    "promoted_manifest.evaluation.agent_report.config.required_multi_agent_roles",
+                    V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS,
+                    evidence["promoted_manifest"]["required_multi_agent_roles"],
+                )
+            missing_trace = sorted(
+                set(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE)
+                - set(evidence["promoted_manifest"]["required_multi_agent_trace"])
+            )
+            if missing_trace:
+                append_error(
+                    promotion_errors,
+                    "promoted_manifest.evaluation.agent_report.config.required_multi_agent_trace",
+                    V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE,
+                    evidence["promoted_manifest"]["required_multi_agent_trace"],
+                )
+
+        if promoted_result:
+            summary = _as_mapping(promoted_result.get("summary"))
+            metric_averages = _as_mapping(summary.get("metric_averages"))
+            report_results = [
+                item for item in _as_list(
+                    _as_mapping(promoted_result.get("report")).get("results")
+                )
+                if isinstance(item, Mapping)
+            ]
+            report_result = _as_mapping(report_results[0]) if report_results else {}
+            report_state = _as_mapping(
+                _as_mapping(report_result.get("metadata")).get("environment_state")
+            )
+            multi_agent_state = _as_mapping(report_state.get("multi_agent"))
+            events = [
+                item for item in _as_list(report_result.get("events"))
+                if isinstance(item, Mapping)
+            ]
+            event_names = sorted(
+                {str(event.get("name")) for event in events if event.get("name")}
+            )
+            evidence["promoted_run"] = {
+                "kind": promoted_result.get("kind"),
+                "status": promoted_result.get("status"),
+                "output_roundtrip": promoted_result == saved_result,
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "metric_averages": {
+                    metric: metric_averages.get(metric)
+                    for metric in V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS
+                },
+                "state_keys": sorted(str(key) for key in report_state),
+                "multi_agent_summary": dict(_as_mapping(multi_agent_state.get("summary"))),
+                "event_names": event_names,
+            }
+            run_expectations = {
+                "kind": "agent-learning.run.v1",
+                "status": "passed",
+                "output_roundtrip": True,
+                "evaluation_passed": True,
+            }
+            observed_run = {
+                "kind": promoted_result.get("kind"),
+                "status": promoted_result.get("status"),
+                "output_roundtrip": promoted_result == saved_result,
+                "evaluation_passed": summary.get("evaluation_passed"),
+            }
+            for field, expected in run_expectations.items():
+                if observed_run[field] != expected:
+                    append_error(
+                        promotion_errors,
+                        f"promoted_run.{field}",
+                        expected,
+                        observed_run[field],
+                    )
+            if _float_or_zero(summary.get("evaluation_score")) < 0.98:
+                append_error(
+                    promotion_errors,
+                    "promoted_run.summary.evaluation_score",
+                    ">=0.98",
+                    summary.get("evaluation_score"),
+                )
+            if "multi_agent" not in report_state:
+                append_error(
+                    promotion_errors,
+                    "promoted_run.report.results.metadata.environment_state",
+                    "multi_agent",
+                    sorted(str(key) for key in report_state),
+                )
+            for metric in V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS:
+                if _float_or_zero(metric_averages.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        f"promoted_run.summary.metric_averages.{metric}",
+                        ">=1.0",
+                        metric_averages.get(metric),
+                    )
+            missing_events = sorted(
+                set(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS)
+                - set(event_names)
+            )
+            if missing_events:
+                append_error(
+                    promotion_errors,
+                    "promoted_run.report.results.events.name",
+                    V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS,
+                    event_names,
+                )
+
+    return {
+        "required_files": list(V1_MULTI_AGENT_ROOM_PROBE_FILES),
+        "required_proof_kind": V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND,
+        "required_assurance_level": V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL,
+        "required_metrics": list(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS),
+        "required_run_metrics": list(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS),
+        "required_checks": list(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS),
+        "required_participants": list(
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+        ),
+        "required_trace": list(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE),
+        "required_run_events": list(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "promotion_errors": promotion_errors,
+        "metric_errors": metric_errors,
+        "coordination_errors": coordination_errors,
+        "evidence": evidence,
+    }
+
+
+def _append_multi_agent_room_probe_summary_errors(
+    errors: list[dict[str, Any]],
+    append_error: Any,
+    summary: Mapping[str, Any],
+    *,
+    prefix: str,
+) -> None:
+    minima = {
+        "participant_count": 3,
+        "case_count": 1,
+        "passed_case_count": 1,
+        "handoff_count": 1,
+        "known_handoff_count": 1,
+        "handoff_contract_count": 1,
+        "handoff_contract_matched_count": 1,
+        "expected_handoff_count": 1,
+        "review_count": 1,
+        "known_review_count": 1,
+        "expected_review_count": 1,
+        "reconciliation_count": 1,
+        "coordination_check_count": 6,
+        "matched_coordination_check_count": 6,
+    }
+    for field, expected in minima.items():
+        observed = summary.get(field)
+        if _float_or_zero(observed) < float(expected):
+            append_error(
+                errors,
+                f"{prefix}.{field}",
+                f">={expected}",
+                observed,
+            )
+    exact = {
+        "allow_unknown_roles": False,
+        "case_status": "resolved",
+        "terminal_state": True,
+        "failed_case_count": 0,
+        "finding_count": 0,
+        "expected_reconciliation_present": True,
+        "reconciliation_conflict_count": 0,
+        "unmatched_coordination_check_count": 0,
+        "local_executable_fixture": True,
+        "requires_external_service": False,
+    }
+    for field, expected in exact.items():
+        observed = summary.get(field)
+        if observed != expected:
+            append_error(errors, f"{prefix}.{field}", expected, observed)
+    participants = set(str(item) for item in _as_list(summary.get("participants")))
+    missing_participants = sorted(
+        set(V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS) - participants
+    )
+    if missing_participants:
+        append_error(
+            errors,
+            f"{prefix}.participants",
+            V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS,
+            sorted(participants),
+        )
+
+
 def _release_run_with_local_env(
     required_env: Sequence[Any],
     callback: Any,
@@ -8229,6 +9009,15 @@ __all__ = [
     "V1_FRAMEWORK_OPENENV_ADAPTER_REQUIRED_OPENENV",
     "V1_FRAMEWORK_OPTIMIZER_CONTRACTS",
     "V1_FRAMEWORK_OPTIMIZER_FILES",
+    "V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL",
+    "V1_MULTI_AGENT_ROOM_PROBE_FILES",
+    "V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND",
+    "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS",
+    "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS",
+    "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS",
+    "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS",
+    "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS",
+    "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",

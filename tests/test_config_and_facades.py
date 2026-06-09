@@ -15271,6 +15271,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_agent_control_plane_events"] == (
         trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
     )
+    assert payload["required_multi_agent_room_probe_files"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_FILES
+    )
+    assert payload["required_multi_agent_room_probe_proof_kind"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
+    )
+    assert payload["required_multi_agent_room_probe_assurance_level"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL
+    )
+    assert payload["required_multi_agent_room_probe_metrics"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS
+    )
+    assert payload["required_multi_agent_room_probe_run_metrics"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_multi_agent_room_probe_checks"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
+    )
+    assert payload["required_multi_agent_room_probe_participants"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+    )
+    assert payload["required_multi_agent_room_probe_trace"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE
+    )
+    assert payload["required_multi_agent_room_probe_run_events"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS
+    )
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == {
         "single_public_boundary",
@@ -15294,6 +15321,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "openenv_optimizer_readiness",
         "framework_openenv_adapter_readiness",
         "framework_optimizer_readiness",
+        "multi_agent_room_probe_readiness",
         "framework_adapter_probe_readiness",
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
@@ -16142,6 +16170,184 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_import_quality": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    room_probe = checks["multi_agent_room_probe_readiness"]["evidence"]
+    assert room_probe["required_files"] == trinity.V1_MULTI_AGENT_ROOM_PROBE_FILES
+    assert room_probe["required_proof_kind"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
+    )
+    assert room_probe["required_assurance_level"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL
+    )
+    assert room_probe["required_metrics"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS
+    )
+    assert room_probe["required_run_metrics"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert room_probe["required_checks"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
+    )
+    assert room_probe["required_participants"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+    )
+    assert room_probe["required_trace"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE
+    )
+    assert room_probe["required_run_events"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS
+    )
+    assert room_probe["missing_files"] == []
+    assert room_probe["execution_errors"] == []
+    assert room_probe["optimization_errors"] == []
+    assert room_probe["proof_errors"] == []
+    assert room_probe["promotion_errors"] == []
+    assert room_probe["metric_errors"] == []
+    assert room_probe["coordination_errors"] == []
+    room_probe_evidence = room_probe["evidence"]
+    room_optimization = room_probe_evidence["optimization"]
+    assert room_optimization["kind"] == "agent-learning.optimization.v1"
+    assert room_optimization["status"] == "passed"
+    assert room_optimization["optimization_score"] == pytest.approx(1.0)
+    assert room_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert room_optimization["candidate_lineage_count"] == 5
+    assert room_optimization["candidate_lineage_content_addressed_count"] == 5
+    assert room_optimization["candidate_lineage_selected_score_delta"] >= 0.0
+    assert room_optimization["total_iterations"] == 5
+    assert room_optimization["total_evaluations"] == 5
+    assert room_optimization["search_paths"] == ["agent_room"]
+    assert room_optimization["optimizer_governance_status"] == "passed"
+    assert room_optimization["optimizer_governance_passed"] is True
+    assert room_optimization["best_history"] == {
+        "score": pytest.approx(1.0),
+        "patch_keys": ["agent_room"],
+        "metrics": {
+            "multi_agent_room_probe_pass_rate": pytest.approx(1.0),
+            "multi_agent_room_probe_local_contract_quality": pytest.approx(1.0),
+            "multi_agent_room_probe_role_boundary": pytest.approx(1.0),
+            "multi_agent_room_probe_handoff_contract": pytest.approx(1.0),
+            "multi_agent_room_probe_coordination_quality": pytest.approx(1.0),
+            "multi_agent_room_probe_finding_quality": pytest.approx(1.0),
+            "multi_agent_room_probe_score": pytest.approx(1.0),
+        },
+    }
+    room_proof = room_optimization["proof"]
+    assert room_proof["kind"] == trinity.V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
+    assert room_proof["status"] == "passed"
+    assert room_proof["passed"] is True
+    assert room_proof["assurance_level"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL
+    )
+    assert room_proof["check_count"] == 7
+    assert room_proof["failed_check_ids"] == []
+    assert room_proof["warning_check_ids"] == []
+    assert room_proof["requires_external_service"] is False
+    assert room_proof["check_ids"] == trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
+    room_summary = room_optimization["selected_report_summary"]
+    assert room_summary["participants"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+    )
+    assert room_summary["participant_count"] == 3
+    assert room_summary["allow_unknown_roles"] is False
+    assert room_summary["case_status"] == "resolved"
+    assert room_summary["terminal_state"] is True
+    assert room_summary["case_count"] == 1
+    assert room_summary["passed_case_count"] == 1
+    assert room_summary["failed_case_count"] == 0
+    assert room_summary["finding_count"] == 0
+    assert room_summary["handoff_count"] == 1
+    assert room_summary["known_handoff_count"] == 1
+    assert room_summary["handoff_contract_count"] == 1
+    assert room_summary["handoff_contract_matched_count"] == 1
+    assert room_summary["expected_handoff_count"] == 1
+    assert room_summary["review_count"] == 1
+    assert room_summary["known_review_count"] == 1
+    assert room_summary["expected_review_count"] == 1
+    assert room_summary["reconciliation_count"] == 1
+    assert room_summary["expected_reconciliation_present"] is True
+    assert room_summary["reconciliation_conflict_count"] == 0
+    assert room_summary["coordination_check_count"] == 6
+    assert room_summary["matched_coordination_check_count"] == 6
+    assert room_summary["unmatched_coordination_check_count"] == 0
+    assert room_summary["local_executable_fixture"] is True
+    assert room_summary["requires_external_service"] is False
+    assert room_optimization["selected_metrics"] == {
+        "multi_agent_room_probe_pass_rate": pytest.approx(1.0),
+        "multi_agent_room_probe_local_contract_quality": pytest.approx(1.0),
+        "multi_agent_room_probe_role_boundary": pytest.approx(1.0),
+        "multi_agent_room_probe_handoff_contract": pytest.approx(1.0),
+        "multi_agent_room_probe_coordination_quality": pytest.approx(1.0),
+        "multi_agent_room_probe_finding_quality": pytest.approx(1.0),
+        "multi_agent_room_probe_score": pytest.approx(1.0),
+    }
+    assert room_optimization["contract"] == {
+        "kind": "agent-learning.multi-agent-room-contract.v1",
+        "local_executable_fixture": True,
+        "requires_external_service": False,
+        "runtime": "in_process",
+        "target": "",
+        "target_scheme": "",
+        "min_participant_count": 2,
+        "evidence_requirements": [
+            "multi_agent_room",
+            "role_boundary",
+            "handoff_contract",
+            "expected_handoff",
+            "expected_review",
+            "expected_reconciliation",
+            "room_state",
+            "trace_artifact",
+        ],
+    }
+    assert room_optimization["governance"]["status"] == "passed"
+    assert room_optimization["governance"]["passed"] is True
+    assert room_optimization["governance"]["failed_check_ids"] == []
+    promoted_manifest = room_probe_evidence["promoted_manifest"]
+    assert promoted_manifest["version"] == "agent-learning.run.v1"
+    assert promoted_manifest["name"] == "sdk-multi-agent-room-probe-promotion-run"
+    assert promoted_manifest["required_env"] == []
+    assert promoted_manifest["environment_types"] == ["multi_agent_room"]
+    assert promoted_manifest["promoted_from_multi_agent_room_probe"] is True
+    assert promoted_manifest["multi_agent_room_probe_proof_status"] == "passed"
+    assert promoted_manifest["generated_manifest_roundtrip"] is True
+    assert promoted_manifest["proof_kind"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
+    )
+    assert promoted_manifest["proof_status"] == "passed"
+    assert promoted_manifest["proof_failed_check_ids"] == []
+    assert promoted_manifest["required_multi_agent_roles"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
+    )
+    assert promoted_manifest["required_multi_agent_trace"] == (
+        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE
+    )
+    assert promoted_manifest["required_tools"] == [
+        "room_status",
+        "handoff",
+        "request_review",
+        "reconcile",
+    ]
+    assert promoted_manifest["metric_weights"] == {
+        "multi_agent_coordination_quality": pytest.approx(8.0),
+        "multi_agent_trace_coverage": pytest.approx(4.0),
+        "tool_selection_accuracy": pytest.approx(3.0),
+        "task_completion": pytest.approx(1.0),
+    }
+    promoted_run = room_probe_evidence["promoted_run"]
+    assert promoted_run["kind"] == "agent-learning.run.v1"
+    assert promoted_run["status"] == "passed"
+    assert promoted_run["output_roundtrip"] is True
+    assert promoted_run["evaluation_passed"] is True
+    assert promoted_run["evaluation_score"] >= 0.98
+    assert promoted_run["metric_averages"] == {
+        "multi_agent_coordination_quality": pytest.approx(1.0),
+        "multi_agent_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+        "task_completion": pytest.approx(1.0),
+    }
+    assert promoted_run["state_keys"] == ["multi_agent"]
+    assert set(trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS) <= set(
+        promoted_run["event_names"]
+    )
     adapter_probe = checks["framework_adapter_probe_readiness"]["evidence"]
     assert adapter_probe["required_files"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES

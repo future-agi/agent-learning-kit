@@ -1160,6 +1160,11 @@ accepted-source reconciliation, and terminal room state.
 the selected pair into the normal multi-agent simulation path. See
 `examples/sdk_multi_agent_room_probe_optimization.py` for an end-to-end probe,
 promotion, and evaluated run cookbook.
+`agent-learn release-check` gates this path as
+`multi_agent_room_probe_readiness`: the raw probe optimization must select the
+local planner/retriever/critic room, pass the native room-probe proof, preserve
+optimizer governance, promote into a normal run manifest, and close multi-agent
+coordination/trace metrics.
 Multi-agent coordination optimization artifacts also emit
 `agent-learning.optimization.multi-agent-coordination-proof.v1`, a native proof
 derived from the selected candidate and selected report. It checks that the

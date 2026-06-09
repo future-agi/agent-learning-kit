@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `stateful_framework_adapter_readiness`, `trinity_stack_probe_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -268,6 +268,12 @@ Current checkpoint:
   the expected best adapter/world/framework/memory/multi-agent/certification/
   import-repair candidates, preserve candidate lineage, pass required optimizer
   metrics, and emit native optimizer proofs where available.
+- Multi-agent room probe readiness is now an executable release-check gate:
+  `examples/sdk_multi_agent_room_probe_optimization.py` must select a local
+  planner/retriever/critic room, close role boundaries, handoff contracts,
+  review, accepted-source reconciliation, terminal room state, native probe
+  proof checks, optimizer governance, promoted run metrics, and the normal
+  `agent-learning.run.v1` multi-agent simulation artifact.
 - Framework adapter probe readiness is now an executable release-check gate:
   the raw probe, discovery, probe-optimization, auto-discovery optimization,
   explicit promotion, auto-discovery promotion, one-call promotion, and one-call
