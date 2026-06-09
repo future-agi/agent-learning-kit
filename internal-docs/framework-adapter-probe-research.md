@@ -106,10 +106,11 @@ Keep framework support local-first:
   local adapter candidates. If a selected candidate emits chunks, the probe
   should preserve normalized streaming signals and promotion should require both
   framework-runtime streaming and streaming-trace coverage.
-- Preserve structured typed outputs from Pydantic/dataclass/model-dump response
-  objects. Promotion should include observed typed state keys in the generated
-  `framework_runtime_contract` so typed output cannot silently degrade into
-  plain text.
+- Preserve structured typed outputs from objects/dataclasses or `model_dump()`
+  payloads whose normalized form contains `content`, `tool_calls`, `events`,
+  `state`, or `metadata`. Promotion should include observed typed state keys in
+  the generated `framework_runtime_contract` so typed output cannot silently
+  degrade into plain text.
 - Preserve keyword-input call contracts from method signatures. If discovery
   selects `kickoff(inputs=...)`, `run(task=...)`, or `run(user_prompt=...)`, the
   adapter candidate, probe proof, promoted manifest, runtime trace, and
@@ -123,9 +124,9 @@ Keep framework support local-first:
   `chat.completions.create` or `messages.create`, the adapter candidate, probe
   proof, promoted manifest, runtime trace, and generated eval config should
   carry the full dotted method path instead of only the leaf method name.
-- Preserve provider response envelopes. `choices[].message.tool_calls`,
-  finish reasons, usage blocks, and content `tool_use` blocks should normalize
-  into ordinary `AgentResponse.tool_calls`, `provider_choice` /
+- Preserve provider response objects. `choices[].message.tool_calls`, finish
+  reasons, usage blocks, and content `tool_use` blocks should normalize into
+  ordinary `AgentResponse.tool_calls`, `provider_choice` /
   `provider_tool_call` events, provider metadata, and `provider_response` state.
 - Preserve framework transcript histories. `TaskResult(messages=[...])`,
   message-history objects, tool-call request events, and tool-call execution
@@ -143,16 +144,18 @@ Keep framework support local-first:
   participant coverage, review counts, reconciliation counts, and termination.
 - `agent-learn release-check` now includes `framework_adapter_io_readiness` for
   these advanced IO contracts. The gate executes the streaming, typed-output,
-  keyword-input, side-kwargs, nested-method, provider-envelope, message-history,
+  keyword-input, side-kwargs, nested-method, provider-response, message-history,
   and handoff-transcript cookbooks locally, then verifies promoted manifest
   fields, runtime summaries, normalized state, events, artifacts, transcript
-  evidence, and required metric floors.
+  evidence, `provider_response` state, and required metric floors.
 - Preserve framework trace export semantics. Local outputs carrying OTLP-style
   `resourceSpans` / `scopeSpans`, TraceAI/Future AGI wrappers, or explicit
   `framework_trace` span/event records should normalize into `framework_trace`
   state, trace artifacts, `framework_trace_*` events, tool calls extracted from
   tool spans, adapter conformance summaries, and selected-output-derived
-  `framework_trace_coverage` gates.
+  `framework_trace_coverage` gates. This is a sibling release-check gate,
+  `framework_trace_export_readiness`, not part of
+  `framework_adapter_io_readiness`.
 - Preserve realtime framework trace semantics. Local Pipecat-style frame exports
   and LiveKit-style session event exports should normalize into
   `realtime_trace` state, trace artifacts, `realtime_frame`,
