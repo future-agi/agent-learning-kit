@@ -315,6 +315,41 @@ V1_LOCAL_SIM_EVAL_EXAMPLES = [
     "examples/sdk_task_evaluation.py",
 ]
 
+V1_EVALUATION_HOOK_PROBE_FILES = [
+    "examples/sdk_evaluation_hook_probe_optimization.py",
+    "internal-docs/evaluation-hook-probe-research.md",
+]
+
+V1_EVALUATION_HOOK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.evaluation-hook-probe-proof.v1"
+)
+
+V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE = (
+    "policy_grounded_external_eval_candidate"
+)
+
+V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE = (
+    "generic_candidate_without_eval_alignment"
+)
+
+V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS = [
+    "evaluation_hook_probe_pass_rate",
+    "evaluation_hook_probe_local_contract_quality",
+    "evaluation_hook_probe_metric_response_quality",
+    "evaluation_hook_probe_auth_redaction",
+    "evaluation_hook_probe_task_evidence",
+    "evaluation_hook_probe_agent_report_quality",
+    "evaluation_hook_probe_score",
+]
+
+V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS = [
+    "external_task_quality",
+    "task_completion",
+    "source_grounding",
+    "secret_leakage",
+    "tool_argument_schema",
+]
+
 V1_REDTEAM_EXAMPLES = [
     "examples/redteam_manifest.json",
     "examples/long_horizon_redteam_manifest.json",
@@ -1898,6 +1933,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "required": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
         },
     )
+    evaluation_hook_probe = _release_evaluation_hook_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="evaluation_hook_probe_readiness",
+        passed=(
+            not evaluation_hook_probe["missing_files"]
+            and not evaluation_hook_probe["optimization_errors"]
+            and not evaluation_hook_probe["proof_errors"]
+            and not evaluation_hook_probe["manifest_errors"]
+            and not evaluation_hook_probe["metric_errors"]
+            and not evaluation_hook_probe["runtime_errors"]
+            and not evaluation_hook_probe["errors"]
+        ),
+        milestone="M2",
+        evidence=evaluation_hook_probe,
+    )
     component_status = _release_evidence_component_status()
     missing_components = component_status["missing"]
     _append_release_check(
@@ -2308,6 +2359,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         "required_schema_kinds": list(V1_REQUIRED_SCHEMA_KINDS),
         "required_examples": list(V1_REQUIRED_EXAMPLES),
         "required_local_sim_eval_examples": list(V1_LOCAL_SIM_EVAL_EXAMPLES),
+        "required_evaluation_hook_probe_files": list(
+            V1_EVALUATION_HOOK_PROBE_FILES
+        ),
+        "required_evaluation_hook_probe_proof_kind": (
+            V1_EVALUATION_HOOK_PROBE_PROOF_KIND
+        ),
+        "required_evaluation_hook_probe_profile": (
+            V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
+        ),
+        "rejected_evaluation_hook_probe_profile": (
+            V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE
+        ),
+        "required_evaluation_hook_probe_metrics": list(
+            V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
+        ),
+        "required_evaluation_hook_probe_run_metrics": list(
+            V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+        ),
         "required_redteam_examples": list(V1_REDTEAM_EXAMPLES),
         "required_redteam_research_corpus_file": V1_REDTEAM_RESEARCH_CORPUS_FILE,
         "required_redteam_research_files": list(V1_REDTEAM_RESEARCH_FILES),
@@ -2905,6 +2974,594 @@ def _release_evidence_component_status() -> dict[str, Any]:
         "observed": observed,
         "required": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "missing": missing,
+    }
+
+
+def _release_evaluation_hook_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_EVALUATION_HOOK_PROBE_FILES)
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    run_result: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def collect_evaluation_hook_traces(value: Any) -> list[dict[str, Any]]:
+        traces: list[dict[str, Any]] = []
+        if isinstance(value, Mapping):
+            trace = value.get("evaluation_hook_trace")
+            if isinstance(trace, Mapping):
+                traces.append(dict(trace))
+            for item in value.values():
+                traces.extend(collect_evaluation_hook_traces(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                traces.extend(collect_evaluation_hook_traces(item))
+        return traces
+
+    def endpoint_hosts_are_local(hosts: Iterable[Any]) -> bool:
+        observed_hosts = [str(host) for host in hosts if host]
+        return bool(observed_hosts) and all(
+            host.startswith("127.0.0.1:") or host.startswith("localhost:")
+            for host in observed_hosts
+        )
+
+    if not missing_files:
+        example_path = root / "examples/sdk_evaluation_hook_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_evaluation_hook_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            from agent_learning import optimize, simulate
+
+            with module._local_evaluation_hook() as endpoint:
+                result = module.build_probe_optimization(endpoint)
+                manifest = (
+                    optimize.build_evaluation_hook_run_manifest_from_probe_optimization(
+                        result,
+                        endpoint=endpoint,
+                        name="release-evaluation-hook-probe-readiness",
+                        metadata={"release_check": "evaluation_hook_probe_readiness"},
+                    )
+                )
+                with tempfile.TemporaryDirectory(
+                    prefix="agent-learning-evaluation-hook-probe-"
+                ) as tmpdir:
+                    manifest_path = simulate.write_manifest_file(
+                        manifest,
+                        Path(tmpdir) / "evaluation-hook-probe-run.json",
+                    )
+                    run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_pair = _as_mapping(best_config.get("evaluation_hook_agent"))
+        best_agent = _as_mapping(best_pair.get("agent"))
+        selected_profile = _as_mapping(best_agent.get("metadata")).get(
+            "candidate_profile"
+        )
+        proof = _as_mapping(result.get("evaluation_hook_probe_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        selected_summary = _as_mapping(proof_evidence.get("selected_report_summary"))
+        selected_hook_hosts = selected_summary.get("hook_endpoint_hosts") or []
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        history_profiles: dict[str, dict[str, Any]] = {}
+        for history in histories:
+            candidate = _as_mapping(history.get("candidate_config"))
+            pair = _as_mapping(candidate.get("evaluation_hook_agent") or candidate)
+            agent = _as_mapping(pair.get("agent"))
+            profile = str(
+                _as_mapping(agent.get("metadata")).get("candidate_profile") or ""
+            )
+            if profile:
+                history_profiles[profile] = {
+                    "score": history.get("score"),
+                    "metrics": {
+                        metric: _as_mapping(history.get("metrics")).get(metric)
+                        for metric in V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
+                    },
+                }
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "candidate_lineage_selected_score_delta": summary.get(
+                "candidate_lineage_selected_score_delta"
+            ),
+            "selected_profile": selected_profile,
+            "history_profiles": history_profiles,
+            "optimizer_governance_status": summary.get("optimizer_governance_status"),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "failed_check_ids": proof.get("failed_check_ids") or [],
+            "warning_check_ids": proof.get("warning_check_ids") or [],
+            "check_count": proof.get("check_count"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
+            },
+            "selected_summary": {
+                "hook_trace_count": selected_summary.get("hook_trace_count"),
+                "hook_success_trace_count": selected_summary.get(
+                    "hook_success_trace_count"
+                ),
+                "hook_metric_count": selected_summary.get("hook_metric_count"),
+                "hook_score": selected_summary.get("hook_score"),
+                "hook_status_codes": selected_summary.get("hook_status_codes") or [],
+                "hook_endpoint_hosts_local": endpoint_hosts_are_local(
+                    selected_hook_hosts
+                ),
+                "auth_redacted": selected_summary.get("auth_redacted"),
+                "local_executable_fixture": selected_summary.get(
+                    "local_executable_fixture"
+                ),
+                "evaluation_passed": selected_summary.get("evaluation_passed"),
+                "evaluation_score": selected_summary.get("evaluation_score"),
+                "requires_external_service": selected_summary.get(
+                    "requires_external_service"
+                ),
+                "passed_case_count": selected_summary.get("passed_case_count"),
+                "failed_case_count": selected_summary.get("failed_case_count"),
+                "finding_count": selected_summary.get("finding_count"),
+                "output_present": selected_summary.get("output_present"),
+            },
+        }
+
+        optimization_expectations = {
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "summary.optimization_passed": (summary.get("optimization_passed"), True),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "selected_profile": (
+                selected_profile,
+                V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=1.0,
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=1.0,
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.total_evaluations",
+                expected=">=3",
+                observed=summary.get("total_evaluations"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_count",
+                expected=">=3",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _float_or_zero(
+            summary.get("candidate_lineage_selected_score_delta")
+        ) < 0.7:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_selected_score_delta",
+                expected=">=0.7",
+                observed=summary.get("candidate_lineage_selected_score_delta"),
+            )
+        if V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE not in history_profiles:
+            append_error(
+                optimization_errors,
+                field="optimization.history.profiles",
+                expected=V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE,
+                observed=sorted(history_profiles),
+            )
+        if V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE not in history_profiles:
+            append_error(
+                optimization_errors,
+                field="optimization.history.profiles",
+                expected=V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE,
+                observed=sorted(history_profiles),
+            )
+        selected_history = history_profiles.get(
+            V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE,
+            {},
+        )
+        rejected_history = history_profiles.get(
+            V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE,
+            {},
+        )
+        if selected_history and rejected_history and not (
+            _float_or_zero(selected_history.get("score"))
+            > _float_or_zero(rejected_history.get("score"))
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.history.score_delta",
+                expected="selected profile score > rejected profile score",
+                observed={
+                    "selected": selected_history.get("score"),
+                    "rejected": rejected_history.get("score"),
+                },
+            )
+
+        proof_expectations = {
+            "kind": (proof.get("kind"), V1_EVALUATION_HOOK_PROBE_PROOF_KIND),
+            "status": (proof.get("status"), "passed"),
+            "passed": (proof.get("passed"), True),
+            "assurance_level": (
+                proof.get("assurance_level"),
+                "l2_native_evaluation_hook_probe_verified",
+            ),
+            "failed_check_ids": (proof.get("failed_check_ids") or [], []),
+            "warning_check_ids": (proof.get("warning_check_ids") or [], []),
+            "requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.auth_redacted": (
+                selected_summary.get("auth_redacted"),
+                True,
+            ),
+            "selected_summary.local_executable_fixture": (
+                selected_summary.get("local_executable_fixture"),
+                True,
+            ),
+            "selected_summary.evaluation_passed": (
+                selected_summary.get("evaluation_passed"),
+                True,
+            ),
+            "selected_summary.requires_external_service": (
+                selected_summary.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.output_present": (
+                selected_summary.get("output_present"),
+                True,
+            ),
+            "selected_summary.failed_case_count": (
+                selected_summary.get("failed_case_count"),
+                0,
+            ),
+            "selected_summary.finding_count": (
+                selected_summary.get("finding_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(proof.get("check_count")) < 8:
+            append_error(
+                proof_errors,
+                field="check_count",
+                expected=">=8",
+                observed=proof.get("check_count"),
+            )
+        if _int_or_zero(selected_summary.get("hook_trace_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.hook_trace_count",
+                expected=">=1",
+                observed=selected_summary.get("hook_trace_count"),
+            )
+        if _int_or_zero(selected_summary.get("hook_success_trace_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.hook_success_trace_count",
+                expected=">=1",
+                observed=selected_summary.get("hook_success_trace_count"),
+            )
+        if _int_or_zero(selected_summary.get("hook_metric_count")) < 1:
+            append_error(
+                proof_errors,
+                field="selected_summary.hook_metric_count",
+                expected=">=1",
+                observed=selected_summary.get("hook_metric_count"),
+            )
+        if _float_or_zero(selected_summary.get("hook_score")) < 1.0:
+            append_error(
+                proof_errors,
+                field="selected_summary.hook_score",
+                expected=1.0,
+                observed=selected_summary.get("hook_score"),
+            )
+        if selected_summary.get("hook_status_codes") != [200]:
+            append_error(
+                proof_errors,
+                field="selected_summary.hook_status_codes",
+                expected=[200],
+                observed=selected_summary.get("hook_status_codes"),
+            )
+        if not endpoint_hosts_are_local(selected_hook_hosts):
+            append_error(
+                proof_errors,
+                field="selected_summary.hook_endpoint_hosts",
+                expected="localhost or 127.0.0.1",
+                observed=selected_hook_hosts,
+            )
+        if _float_or_zero(selected_summary.get("evaluation_score")) < 0.99:
+            append_error(
+                proof_errors,
+                field="selected_summary.evaluation_score",
+                expected=">=0.99",
+                observed=selected_summary.get("evaluation_score"),
+            )
+        for metric in V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS:
+            if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"proof.selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=selected_metrics.get(metric),
+                )
+
+    if manifest:
+        metadata = _as_mapping(manifest.get("metadata"))
+        evaluation_config = _as_mapping(
+            _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+                "config"
+            )
+        )
+        hooks = [
+            hook
+            for hook in _as_list(evaluation_config.get("evaluation_hooks"))
+            if isinstance(hook, Mapping)
+        ]
+        hook = _as_mapping(hooks[0]) if hooks else {}
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "promoted_from_evaluation_hook_probe": metadata.get(
+                "promoted_from_evaluation_hook_probe"
+            ),
+            "evaluation_hook_probe_proof_status": metadata.get(
+                "evaluation_hook_probe_proof_status"
+            ),
+            "evaluation_hook_count": len(hooks),
+            "metric_name": hook.get("metric_name") or hook.get("name"),
+            "auth": hook.get("auth") or {},
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.run.v1"),
+            "required_env": (manifest.get("required_env") or [], []),
+            "metadata.promoted_from_evaluation_hook_probe": (
+                metadata.get("promoted_from_evaluation_hook_probe"),
+                True,
+            ),
+            "metadata.evaluation_hook_probe_proof_status": (
+                metadata.get("evaluation_hook_probe_proof_status"),
+                "passed",
+            ),
+            "evaluation_hooks.0.metric_name": (
+                hook.get("metric_name") or hook.get("name"),
+                "external_task_quality",
+            ),
+            "evaluation_hooks.0.auth": (hook.get("auth") or {}, {}),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if len(hooks) < 1:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.evaluation_hooks",
+                expected=">=1",
+                observed=len(hooks),
+            )
+        required_manifest_metric_weights = [
+            "external_task_quality",
+            "task_completion",
+            "secret_leakage",
+        ]
+        missing_metric_weights = sorted(
+            set(required_manifest_metric_weights) - set(metric_weights)
+        )
+        if missing_metric_weights:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.metric_weights",
+                expected=required_manifest_metric_weights,
+                observed=sorted(str(metric) for metric in metric_weights),
+            )
+
+    if run_result:
+        run_summary = _as_mapping(run_result.get("summary"))
+        run_metrics = _as_mapping(run_summary.get("metric_averages"))
+        hook_traces = collect_evaluation_hook_traces(run_result)
+        hook_success_count = sum(
+            1 for trace in hook_traces if trace.get("success") is True
+        )
+        hook_status_codes = sorted(
+            {
+                int(trace.get("status_code"))
+                for trace in hook_traces
+                if isinstance(trace.get("status_code"), int)
+            }
+        )
+        hook_endpoint_hosts = sorted(
+            {
+                str(trace.get("endpoint_host") or "")
+                for trace in hook_traces
+                if trace.get("endpoint_host")
+            }
+        )
+        evidence["run"] = {
+            "kind": run_result.get("kind"),
+            "status": run_result.get("status"),
+            "evaluation_passed": run_summary.get("evaluation_passed"),
+            "evaluation_score": run_summary.get("evaluation_score"),
+            "metrics": {
+                metric: run_metrics.get(metric)
+                for metric in V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+            },
+            "evaluation_hook_trace_count": len(hook_traces),
+            "evaluation_hook_success_trace_count": hook_success_count,
+            "evaluation_hook_status_codes": hook_status_codes,
+            "evaluation_hook_endpoint_host_count": len(hook_endpoint_hosts),
+            "evaluation_hook_endpoint_hosts_local": endpoint_hosts_are_local(
+                hook_endpoint_hosts
+            ),
+        }
+        runtime_expectations = {
+            "kind": (run_result.get("kind"), "agent-learning.run.v1"),
+            "status": (run_result.get("status"), "passed"),
+            "summary.evaluation_passed": (
+                run_summary.get("evaluation_passed"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(run_summary.get("evaluation_score")) < 0.99:
+            append_error(
+                runtime_errors,
+                field="summary.evaluation_score",
+                expected=">=0.99",
+                observed=run_summary.get("evaluation_score"),
+            )
+        for metric in V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS:
+            if _float_or_zero(run_metrics.get(metric)) < 1.0:
+                append_error(
+                    runtime_errors,
+                    field=f"summary.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=run_metrics.get(metric),
+                )
+        if not hook_traces:
+            append_error(
+                runtime_errors,
+                field="evaluation_hook_trace",
+                expected="non-empty",
+                observed=0,
+            )
+        elif hook_success_count != len(hook_traces):
+            append_error(
+                runtime_errors,
+                field="evaluation_hook_trace.success",
+                expected=f"{len(hook_traces)}/{len(hook_traces)}",
+                observed=f"{hook_success_count}/{len(hook_traces)}",
+            )
+        if hook_status_codes != [200]:
+            append_error(
+                runtime_errors,
+                field="evaluation_hook_trace.status_code",
+                expected=[200],
+                observed=hook_status_codes,
+            )
+        if not endpoint_hosts_are_local(hook_endpoint_hosts):
+            append_error(
+                runtime_errors,
+                field="evaluation_hook_trace.endpoint_host",
+                expected="localhost or 127.0.0.1",
+                observed=hook_endpoint_hosts,
+            )
+
+    return {
+        "required_files": list(V1_EVALUATION_HOOK_PROBE_FILES),
+        "required_proof_kind": V1_EVALUATION_HOOK_PROBE_PROOF_KIND,
+        "required_profile": V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE,
+        "rejected_profile": V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE,
+        "required_metrics": list(V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS),
+        "required_run_metrics": list(
+            V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "manifest_errors": manifest_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "errors": errors,
+        "evidence": evidence,
     }
 
 

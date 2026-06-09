@@ -43,3 +43,9 @@ Keep evaluation-hook support local-first:
   candidate cheaply, then use
   `optimize.build_evaluation_hook_run_manifest_from_probe_optimization()` when
   the selected candidate should become a normal evaluated simulation.
+- `agent-learn release-check` runs the SDK cookbook as
+  `evaluation_hook_probe_readiness`; the gate requires local hook execution,
+  policy-grounded candidate selection, native proof, promoted
+  `agent-learning.run.v1`, successful local hook traces, and passing
+  `external_task_quality`, source-grounding, secret-leakage, task-completion,
+  and tool-schema metrics.

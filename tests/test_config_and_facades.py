@@ -15105,6 +15105,24 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_local_sim_eval_examples"] == (
         trinity.V1_LOCAL_SIM_EVAL_EXAMPLES
     )
+    assert payload["required_evaluation_hook_probe_files"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_FILES
+    )
+    assert payload["required_evaluation_hook_probe_proof_kind"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_PROOF_KIND
+    )
+    assert payload["required_evaluation_hook_probe_profile"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
+    )
+    assert payload["rejected_evaluation_hook_probe_profile"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE
+    )
+    assert payload["required_evaluation_hook_probe_metrics"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
+    )
+    assert payload["required_evaluation_hook_probe_run_metrics"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+    )
     assert payload["required_redteam_examples"] == trinity.V1_REDTEAM_EXAMPLES
     assert payload["required_redteam_research_corpus_file"] == (
         trinity.V1_REDTEAM_RESEARCH_CORPUS_FILE
@@ -15390,6 +15408,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "release_docs_present",
         "v1_examples_present",
         "local_sim_eval_examples_present",
+        "evaluation_hook_probe_readiness",
         "native_optimizer_evidence_components",
         "optimizer_governance_readiness",
         "redteam_core_examples_present",
@@ -15426,6 +15445,130 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert checks["release_docs_present"]["evidence"]["missing"] == []
     assert checks["v1_examples_present"]["evidence"]["missing"] == []
     assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []
+    evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
+    assert evaluation_hook_probe["required_files"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_FILES
+    )
+    assert evaluation_hook_probe["required_proof_kind"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_PROOF_KIND
+    )
+    assert evaluation_hook_probe["required_profile"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
+    )
+    assert evaluation_hook_probe["rejected_profile"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE
+    )
+    assert evaluation_hook_probe["required_metrics"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
+    )
+    assert evaluation_hook_probe["required_run_metrics"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert evaluation_hook_probe["missing_files"] == []
+    assert evaluation_hook_probe["optimization_errors"] == []
+    assert evaluation_hook_probe["proof_errors"] == []
+    assert evaluation_hook_probe["manifest_errors"] == []
+    assert evaluation_hook_probe["metric_errors"] == []
+    assert evaluation_hook_probe["runtime_errors"] == []
+    assert evaluation_hook_probe["errors"] == []
+    evaluation_hook_evidence = evaluation_hook_probe["evidence"]
+    evaluation_hook_optimization = evaluation_hook_evidence["optimization"]
+    assert evaluation_hook_optimization["kind"] == "agent-learning.optimization.v1"
+    assert evaluation_hook_optimization["status"] == "passed"
+    assert evaluation_hook_optimization["optimization_passed"] is True
+    assert evaluation_hook_optimization["evaluation_passed"] is True
+    assert evaluation_hook_optimization["optimization_score"] == pytest.approx(1.0)
+    assert evaluation_hook_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert evaluation_hook_optimization["total_evaluations"] >= 3
+    assert evaluation_hook_optimization["total_iterations"] >= 3
+    assert evaluation_hook_optimization["candidate_lineage_count"] >= 3
+    assert (
+        evaluation_hook_optimization["candidate_lineage_selected_score_delta"] >= 0.7
+    )
+    assert evaluation_hook_optimization["selected_profile"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
+    )
+    assert evaluation_hook_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        evaluation_hook_optimization["optimizer_governance_failed_check_count"] == 0
+    )
+    assert set(evaluation_hook_optimization["history_profiles"]) >= {
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE,
+        trinity.V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE,
+    }
+    selected_eval_profile = evaluation_hook_optimization["history_profiles"][
+        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
+    ]
+    rejected_eval_profile = evaluation_hook_optimization["history_profiles"][
+        trinity.V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE
+    ]
+    assert selected_eval_profile["score"] == pytest.approx(1.0)
+    assert selected_eval_profile["score"] > rejected_eval_profile["score"]
+
+    evaluation_hook_proof = evaluation_hook_evidence["proof"]
+    assert evaluation_hook_proof["kind"] == (
+        trinity.V1_EVALUATION_HOOK_PROBE_PROOF_KIND
+    )
+    assert evaluation_hook_proof["status"] == "passed"
+    assert evaluation_hook_proof["passed"] is True
+    assert evaluation_hook_proof["assurance_level"] == (
+        "l2_native_evaluation_hook_probe_verified"
+    )
+    assert evaluation_hook_proof["failed_check_ids"] == []
+    assert evaluation_hook_proof["warning_check_ids"] == []
+    assert evaluation_hook_proof["check_count"] >= 8
+    assert evaluation_hook_proof["requires_external_service"] is False
+    assert evaluation_hook_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
+    }
+    evaluation_hook_selected_summary = evaluation_hook_proof["selected_summary"]
+    assert evaluation_hook_selected_summary["hook_trace_count"] >= 1
+    assert evaluation_hook_selected_summary["hook_success_trace_count"] >= 1
+    assert evaluation_hook_selected_summary["hook_metric_count"] >= 1
+    assert evaluation_hook_selected_summary["hook_score"] == pytest.approx(1.0)
+    assert evaluation_hook_selected_summary["hook_status_codes"] == [200]
+    assert evaluation_hook_selected_summary["hook_endpoint_hosts_local"] is True
+    assert evaluation_hook_selected_summary["auth_redacted"] is True
+    assert evaluation_hook_selected_summary["local_executable_fixture"] is True
+    assert evaluation_hook_selected_summary["evaluation_passed"] is True
+    assert evaluation_hook_selected_summary["evaluation_score"] >= 0.99
+    assert evaluation_hook_selected_summary["requires_external_service"] is False
+    assert evaluation_hook_selected_summary["passed_case_count"] >= 1
+    assert evaluation_hook_selected_summary["failed_case_count"] == 0
+    assert evaluation_hook_selected_summary["finding_count"] == 0
+    assert evaluation_hook_selected_summary["output_present"] is True
+
+    evaluation_hook_manifest = evaluation_hook_evidence["manifest"]
+    assert evaluation_hook_manifest["version"] == "agent-learning.run.v1"
+    assert evaluation_hook_manifest["required_env"] == []
+    assert evaluation_hook_manifest["promoted_from_evaluation_hook_probe"] is True
+    assert (
+        evaluation_hook_manifest["evaluation_hook_probe_proof_status"] == "passed"
+    )
+    assert evaluation_hook_manifest["evaluation_hook_count"] >= 1
+    assert evaluation_hook_manifest["metric_name"] == "external_task_quality"
+    assert evaluation_hook_manifest["auth"] == {}
+    assert {"external_task_quality", "task_completion", "secret_leakage"} <= set(
+        evaluation_hook_manifest["metric_weights"]
+    )
+    evaluation_hook_run = evaluation_hook_evidence["run"]
+    assert evaluation_hook_run["kind"] == "agent-learning.run.v1"
+    assert evaluation_hook_run["status"] == "passed"
+    assert evaluation_hook_run["evaluation_passed"] is True
+    assert evaluation_hook_run["evaluation_score"] >= 0.99
+    assert evaluation_hook_run["metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
+    }
+    assert evaluation_hook_run["evaluation_hook_trace_count"] >= 1
+    assert (
+        evaluation_hook_run["evaluation_hook_success_trace_count"]
+        == evaluation_hook_run["evaluation_hook_trace_count"]
+    )
+    assert evaluation_hook_run["evaluation_hook_status_codes"] == [200]
+    assert evaluation_hook_run["evaluation_hook_endpoint_host_count"] >= 1
+    assert evaluation_hook_run["evaluation_hook_endpoint_hosts_local"] is True
     assert checks["redteam_core_examples_present"]["evidence"]["missing"] == []
     redteam_research = checks["redteam_research_coverage"]["evidence"]
     assert redteam_research["missing_files"] == []

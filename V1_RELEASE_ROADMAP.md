@@ -43,7 +43,7 @@ evidence in `agent-learning.release-proof.v1`.
 | --- | --- | --- |
 | M0 | One public SDK boundary | `single_public_boundary`, `typescript_sdk_consolidation_boundary` |
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
-| M2 | Local simulation and evaluation | `local_sim_eval_examples_present` |
+| M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `evaluation_hook_probe_readiness` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
@@ -96,6 +96,16 @@ Verification:
 ### M2: Local Simulation And Evaluation
 
 Status: mostly complete.
+
+Current checkpoint:
+
+- Evaluation hook probe readiness is now an executable release-check gate:
+  `examples/sdk_evaluation_hook_probe_optimization.py` must run a localhost
+  task evaluator, select the policy-grounded candidate over the generic
+  candidate, pass native evaluation-hook proof checks, promote to
+  `agent-learning.run.v1`, execute the promoted run, and close
+  `external_task_quality`, source-grounding, secret-leakage, task-completion,
+  and tool-schema metrics without external evaluator credentials.
 
 Acceptance gates:
 

@@ -87,7 +87,10 @@ report, promote-to-regression, and replay lifecycle so optimized or red-team
 evidence can become replayable CI artifacts. Optimizer governance readiness
 executes local governed optimizer-society search and verifies candidate lineage,
 role credit, top-ranked selection, rollback, locality, dependency audit, and
-optimizer trace metrics. Agent control-plane readiness executes local optimizer
+optimizer trace metrics. Evaluation hook probe readiness executes a localhost
+task evaluator, requires AgentOptimizer to select the policy-grounded candidate,
+promotes it to `agent-learning.run.v1`, and reruns it through simulate with
+`external_task_quality` closed. Agent control-plane readiness executes local optimizer
 and simulation cookbooks for autonomous-agent trust boundaries, approval gates,
 budgets, rollback, kill switches, containment, drift detection, and audit
 evidence. Adapter probe readiness exercises raw probe, discovery, optimization,
@@ -1134,6 +1137,13 @@ rejected by default. The selected probe can be promoted with
 `optimize.build_evaluation_hook_run_manifest_from_probe_optimization(...)`.
 See `examples/sdk_evaluation_hook_probe_optimization.py` for a local probe,
 promotion, and evaluated run cookbook that does not require an API key.
+`agent-learn release-check` gates this as
+`evaluation_hook_probe_readiness`: the optimizer must select the
+`policy_grounded_external_eval_candidate` over the generic candidate, pass
+native evaluation-hook proof checks, promote to `agent-learning.run.v1`, and
+execute the promoted run with local evaluation-hook traces, `external_task_quality`,
+source-grounding, secret-leakage, task-completion, and tool-schema metrics
+closed.
 
 For saved task/run artifacts, pass artifact field-extraction candidates and
 fixed structured assertions. The SDK builds a promptfoo-style optimization
