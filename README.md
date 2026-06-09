@@ -1598,6 +1598,13 @@ task-evidence file evaluation, direct saved artifact evaluation, and artifact
 eval suite must all pass locally with task/framework/world state and required
 task, tool, world-contract, memory, source-grounding, and secret-leakage metrics
 closed.
+When a user does not have a hand-written evaluation config,
+`evals.synthesize_task_evaluation_config()` derives one from arbitrary task
+evidence and `evals.evaluate_task_evidence_auto()` runs it. The
+`sdk_task_evaluation_synthesis.py` cookbook proves the SDK can infer success
+criteria, tools, forbidden patterns, source grounding, and world/framework/
+retrieval/memory metric weights from the artifact itself; release-check gates
+this as `task_evaluation_synthesis_readiness`.
 `evals.build_eval_suite_manifest()` and `evals.write_eval_suite_file()` provide
 the same promptfoo-style eval-suite path from Python; the
 `sdk_eval_suite.py` cookbook writes an eval manifest plus a one-job

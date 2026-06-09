@@ -314,6 +314,7 @@ V1_LOCAL_SIM_EVAL_EXAMPLES = [
     "examples/task_evidence_eval_config.json",
     "examples/sdk_task_simulation.py",
     "examples/sdk_task_evaluation.py",
+    "examples/sdk_task_evaluation_synthesis.py",
 ]
 
 V1_TASK_ARTIFACT_EVALUATION_FILES = [
@@ -350,6 +351,80 @@ V1_TASK_ARTIFACT_EVALUATION_METRICS = [
 ]
 
 V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS = 8
+
+V1_TASK_EVALUATION_SYNTHESIS_FILES = [
+    "examples/sdk_task_evaluation_synthesis.py",
+    "internal-docs/task-evaluation-synthesis-readiness-research.md",
+]
+
+V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS = [
+    "task_description",
+    "expected_result",
+    "success_criteria",
+    "required_tools",
+    "available_tools",
+    "forbidden_patterns",
+    "metric_weights",
+    "require_source_grounding",
+    "required_retrieval_memory_trace",
+    "required_agent_memory_lineage",
+    "agent_memory_lineage_quality",
+    "synthesized_from_evidence",
+]
+
+V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS = [
+    "agent_memory_lineage",
+    "framework_runtime",
+    "retrieval_memory",
+    "task_evidence",
+    "world_contract",
+]
+
+V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS = [
+    "read_service_policy",
+    "schedule_replacement_visit",
+    "write_governed_memory",
+]
+
+V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS = [
+    "task_completion",
+    "tool_selection_accuracy",
+    "tool_argument_schema",
+    "framework_runtime_coverage",
+    "world_contract_coverage",
+    "world_contract_quality",
+    "retrieval_memory_attribution",
+    "agent_memory_lineage_coverage",
+    "agent_memory_lineage_quality",
+    "memory_integrity",
+    "source_grounding",
+    "secret_leakage",
+]
+
+V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA = {
+    "task_completion": 0.9,
+    "source_grounding": 0.8,
+    "tool_selection_accuracy": 1.0,
+    "tool_argument_schema": 1.0,
+    "framework_runtime_coverage": 1.0,
+    "world_contract_coverage": 1.0,
+    "world_contract_quality": 1.0,
+    "retrieval_memory_attribution": 1.0,
+    "agent_memory_lineage_coverage": 1.0,
+    "agent_memory_lineage_quality": 1.0,
+    "memory_integrity": 1.0,
+    "secret_leakage": 1.0,
+}
+
+V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM = 0.95
+
+V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS = [
+    "https://arxiv.org/abs/2303.16634",
+    "https://arxiv.org/abs/2410.10934",
+    "https://arxiv.org/abs/2602.08672",
+    "https://arxiv.org/abs/2605.30568",
+    "https://platform.openai.com/docs/guides/evals",
+]
 
 V1_TASK_WORLD_OPTIMIZER_FILES = [
     "examples/sdk_task_world_optimization.py",
@@ -2639,6 +2714,20 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M2",
         evidence=task_artifact_evaluation,
     )
+    task_evaluation_synthesis = _release_task_evaluation_synthesis_status(root)
+    _append_release_check(
+        checks,
+        check_id="task_evaluation_synthesis_readiness",
+        passed=(
+            not task_evaluation_synthesis["missing_files"]
+            and not task_evaluation_synthesis["execution_errors"]
+            and not task_evaluation_synthesis["config_errors"]
+            and not task_evaluation_synthesis["metric_errors"]
+            and not task_evaluation_synthesis["source_errors"]
+        ),
+        milestone="M2",
+        evidence=task_evaluation_synthesis,
+    )
     task_world_optimizer = _release_task_world_optimizer_status(root)
     _append_release_check(
         checks,
@@ -3219,6 +3308,30 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_task_artifact_evaluation_suite_min_assertions": (
             V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
+        ),
+        "required_task_evaluation_synthesis_files": list(
+            V1_TASK_EVALUATION_SYNTHESIS_FILES
+        ),
+        "required_task_evaluation_synthesis_config_keys": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
+        ),
+        "required_task_evaluation_synthesis_state_keys": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
+        ),
+        "required_task_evaluation_synthesis_tools": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
+        ),
+        "required_task_evaluation_synthesis_metrics": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
+        ),
+        "required_task_evaluation_synthesis_metric_minima": dict(
+            V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA
+        ),
+        "required_task_evaluation_synthesis_score_minimum": (
+            V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
+        ),
+        "required_task_evaluation_synthesis_source_urls": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
         ),
         "required_task_world_optimizer_files": list(
             V1_TASK_WORLD_OPTIMIZER_FILES
@@ -4487,6 +4600,362 @@ def _release_task_artifact_evaluation_status(root: Path) -> dict[str, Any]:
         "artifact_errors": artifact_errors,
         "metric_errors": metric_errors,
         "suite_errors": suite_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_task_evaluation_synthesis_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_TASK_EVALUATION_SYNTHESIS_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    config_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    source = "examples/sdk_task_evaluation_synthesis.py"
+    research_doc = "internal-docs/task-evaluation-synthesis-readiness-research.md"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        path: str = source,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        return sorted({str(item) for item in required} - {str(item) for item in observed})
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_TASK_EVAL_SYNTHESIS_KEY"
+        previous_example_env = os.environ.get(example_env)
+        try:
+            example_path = root / source
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_task_evaluation_synthesis",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            os.environ[example_env] = "release-check-task-eval-synthesis-key"
+            task_evidence = module.task_evidence()
+            synthesized_config = module.synthesized_config()
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-task-eval-synthesis-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "task-evaluation-synthesis.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append({"path": source, "error": str(exc)})
+            task_evidence = {}
+            synthesized_config = {}
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+        if task_evidence:
+            state = _as_mapping(task_evidence.get("environment_state"))
+            evidence["task_evidence"] = {
+                "id": task_evidence.get("id"),
+                "environment_state_keys": sorted(str(key) for key in state),
+                "tool_names": [
+                    str(_as_mapping(tool).get("name"))
+                    for tool in _as_list(task_evidence.get("tool_calls"))
+                    if _as_mapping(tool).get("name")
+                ],
+            }
+
+        if synthesized_config:
+            synthesis = _as_mapping(
+                synthesized_config.get("synthesized_from_evidence")
+            )
+            metric_weights = _as_mapping(synthesized_config.get("metric_weights"))
+            config_keys = sorted(str(key) for key in synthesized_config)
+            evidence["synthesized_config"] = {
+                "config_keys": config_keys,
+                "task_description_present": bool(
+                    synthesized_config.get("task_description")
+                ),
+                "expected_result_present": bool(
+                    synthesized_config.get("expected_result")
+                ),
+                "success_criteria_count": len(
+                    _as_list(synthesized_config.get("success_criteria"))
+                ),
+                "required_tools": list(
+                    synthesized_config.get("required_tools") or []
+                ),
+                "available_tools": list(
+                    synthesized_config.get("available_tools") or []
+                ),
+                "forbidden_patterns": list(
+                    synthesized_config.get("forbidden_patterns") or []
+                ),
+                "require_source_grounding": synthesized_config.get(
+                    "require_source_grounding"
+                ),
+                "required_retrieval_memory_trace": list(
+                    synthesized_config.get("required_retrieval_memory_trace") or []
+                ),
+                "required_agent_memory_lineage": list(
+                    synthesized_config.get("required_agent_memory_lineage") or []
+                ),
+                "agent_memory_lineage_quality": dict(
+                    _as_mapping(
+                        synthesized_config.get("agent_memory_lineage_quality")
+                    )
+                ),
+                "metric_weights": {
+                    metric: metric_weights.get(metric)
+                    for metric in V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
+                },
+                "synthesis": dict(synthesis),
+            }
+            missing_config_keys = missing_values(
+                config_keys,
+                V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS,
+            )
+            if missing_config_keys:
+                append_error(
+                    config_errors,
+                    field="synthesized_config.keys",
+                    expected=V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS,
+                    observed=config_keys,
+                )
+            missing_tools = missing_values(
+                synthesized_config.get("required_tools") or [],
+                V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS,
+            )
+            if missing_tools:
+                append_error(
+                    config_errors,
+                    field="synthesized_config.required_tools",
+                    expected=V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS,
+                    observed=synthesized_config.get("required_tools") or [],
+                )
+            missing_metrics = missing_values(
+                metric_weights,
+                V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS,
+            )
+            if missing_metrics:
+                append_error(
+                    config_errors,
+                    field="synthesized_config.metric_weights",
+                    expected=V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS,
+                    observed=sorted(metric_weights),
+                )
+            for field, observed, expected in (
+                (
+                    "synthesized_from_evidence.kind",
+                    synthesis.get("kind"),
+                    "agent-learning.task-evaluation-synthesis.v1",
+                ),
+                ("synthesized_from_evidence.local_only", synthesis.get("local_only"), True),
+                (
+                    "synthesized_from_evidence.requires_external_service",
+                    synthesis.get("requires_external_service"),
+                    False,
+                ),
+                (
+                    "require_source_grounding",
+                    synthesized_config.get("require_source_grounding"),
+                    True,
+                ),
+            ):
+                if observed != expected:
+                    append_error(
+                        config_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if len(_as_list(synthesized_config.get("success_criteria"))) < 6:
+                append_error(
+                    config_errors,
+                    field="synthesized_config.success_criteria",
+                    expected=">=6 inferred criteria",
+                    observed=synthesized_config.get("success_criteria") or [],
+                )
+            missing_state_keys = missing_values(
+                synthesis.get("environment_state_keys") or [],
+                V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    config_errors,
+                    field="synthesized_from_evidence.environment_state_keys",
+                    expected=V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS,
+                    observed=synthesis.get("environment_state_keys") or [],
+                )
+
+        if result:
+            summary = _as_mapping(result.get("summary"))
+            metrics = _as_mapping(summary.get("metric_averages"))
+            result_config = _as_mapping(result.get("synthesized_config"))
+            evidence["evaluation"] = {
+                "kind": result.get("kind"),
+                "schema_version": result.get("schema_version"),
+                "status": result.get("status"),
+                "output_roundtrip": result == saved,
+                "score": summary.get("score"),
+                "threshold": summary.get("threshold"),
+                "config_synthesized": summary.get("config_synthesized"),
+                "synthesized_config_kind": summary.get("synthesized_config_kind"),
+                "source_kind": summary.get("source_kind"),
+                "failed_case_count": summary.get("failed_case_count"),
+                "finding_count": summary.get("finding_count"),
+                "environment_state_keys": list(
+                    summary.get("environment_state_keys") or []
+                ),
+                "metric_averages": {
+                    metric: metrics.get(metric)
+                    for metric in V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
+                },
+                "result_config_matches_example": result_config == synthesized_config,
+            }
+            for field, observed, expected in (
+                ("kind", result.get("kind"), "agent-learning.artifact-evaluation.v1"),
+                ("status", result.get("status"), "passed"),
+                ("output_roundtrip", result == saved, True),
+                ("summary.config_synthesized", summary.get("config_synthesized"), True),
+                (
+                    "summary.synthesized_config_kind",
+                    summary.get("synthesized_config_kind"),
+                    "agent-learning.task-evaluation-synthesis.v1",
+                ),
+                (
+                    "summary.source_kind",
+                    summary.get("source_kind"),
+                    "agent-learning.task-evidence.v1",
+                ),
+                (
+                    "synthesized_config",
+                    result_config == synthesized_config,
+                    True,
+                ),
+            ):
+                if observed != expected:
+                    append_error(
+                        config_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("score")) < (
+                V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
+            ):
+                append_error(
+                    metric_errors,
+                    field="summary.score",
+                    expected=f">={V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM}",
+                    observed=summary.get("score"),
+                )
+            missing_result_state = missing_values(
+                summary.get("environment_state_keys") or [],
+                V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS,
+            )
+            if missing_result_state:
+                append_error(
+                    config_errors,
+                    field="summary.environment_state_keys",
+                    expected=V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS,
+                    observed=summary.get("environment_state_keys") or [],
+                )
+            for metric, minimum in (
+                V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA.items()
+            ):
+                if _float_or_zero(metrics.get(metric)) < float(minimum):
+                    append_error(
+                        metric_errors,
+                        field=f"summary.metric_averages.{metric}",
+                        expected=f">={minimum}",
+                        observed=metrics.get(metric),
+                    )
+
+        doc_path = root / research_doc
+        doc_text = doc_path.read_text(encoding="utf-8") if doc_path.exists() else ""
+        documented_urls = [
+            url
+            for url in V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
+            if url in doc_text
+        ]
+        evidence["source_urls"] = {
+            "research_doc": research_doc,
+            "documented_urls": documented_urls,
+        }
+        missing_doc_urls = missing_values(
+            documented_urls,
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS,
+        )
+        if missing_doc_urls:
+            append_error(
+                source_errors,
+                path=research_doc,
+                field="source_urls",
+                expected=V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS,
+                observed=documented_urls,
+            )
+
+    return {
+        "required_files": list(V1_TASK_EVALUATION_SYNTHESIS_FILES),
+        "required_config_keys": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
+        ),
+        "required_state_keys": list(V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS),
+        "required_tools": list(V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS),
+        "required_metrics": list(V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS),
+        "metric_minima": dict(V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA),
+        "score_minimum": V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM,
+        "required_source_urls": list(
+            V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
+        ),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "config_errors": config_errors,
+        "metric_errors": metric_errors,
+        "source_errors": source_errors,
         "evidence": evidence,
     }
 
@@ -20202,6 +20671,14 @@ __all__ = [
     "V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS",
     "V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS",
     "V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS",
+    "V1_TASK_EVALUATION_SYNTHESIS_FILES",
+    "V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA",
+    "V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS",
+    "V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS",
+    "V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS",
+    "V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS",
+    "V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS",
+    "V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM",
     "V1_TASK_WORLD_OPTIMIZER_FILES",
     "V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
     "V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE",

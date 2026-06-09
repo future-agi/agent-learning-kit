@@ -7015,6 +7015,102 @@ def test_sdk_task_evaluation_example_runs(monkeypatch, tmp_path):
     assert metrics["memory_integrity"] == pytest.approx(1.0)
 
 
+def test_sdk_task_evaluation_synthesis_example_runs(monkeypatch, tmp_path):
+    from agent_learning import evals
+
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_TASK_EVAL_SYNTHESIS_KEY",
+        "real-local-sdk-task-eval-synthesis-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_task_evaluation_synthesis.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_task_evaluation_synthesis",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    config = module.synthesized_config()
+    assert config["synthesized_from_evidence"]["kind"] == (
+        "agent-learning.task-evaluation-synthesis.v1"
+    )
+    assert config["synthesized_from_evidence"]["local_only"] is True
+    assert config["synthesized_from_evidence"]["requires_external_service"] is False
+    assert set(config["required_tools"]) == {
+        "read_service_policy",
+        "schedule_replacement_visit",
+        "write_governed_memory",
+    }
+    assert config["require_source_grounding"] is True
+    assert set(config["required_retrieval_memory_trace"]) == {
+        "query",
+        "document",
+        "citation",
+    }
+    assert set(config["required_agent_memory_lineage"]) >= {
+        "target",
+        "store",
+        "memory_record",
+        "operation",
+        "audit",
+    }
+    assert config["agent_memory_lineage_quality"]["require_source_attribution"] is True
+    assert set(config["metric_weights"]) >= {
+        "task_completion",
+        "tool_selection_accuracy",
+        "tool_argument_schema",
+        "framework_runtime_coverage",
+        "world_contract_coverage",
+        "world_contract_quality",
+        "retrieval_memory_attribution",
+        "agent_memory_lineage_coverage",
+        "agent_memory_lineage_quality",
+        "memory_integrity",
+        "source_grounding",
+        "secret_leakage",
+    }
+
+    direct = evals.evaluate_task_evidence_auto(
+        module.task_evidence(),
+        threshold=0.9,
+        name="direct-task-evaluation-synthesis",
+    )
+    assert direct["status"] == "passed"
+    assert direct["summary"]["config_synthesized"] is True
+    assert direct["summary"]["synthesized_config_kind"] == (
+        "agent-learning.task-evaluation-synthesis.v1"
+    )
+    assert direct["summary"]["score"] >= 0.95
+    metrics = direct["summary"]["metric_averages"]
+    assert metrics["task_completion"] >= 0.9
+    assert metrics["source_grounding"] >= 0.8
+    for metric in (
+        "tool_selection_accuracy",
+        "tool_argument_schema",
+        "framework_runtime_coverage",
+        "world_contract_coverage",
+        "world_contract_quality",
+        "retrieval_memory_attribution",
+        "agent_memory_lineage_coverage",
+        "agent_memory_lineage_quality",
+        "memory_integrity",
+        "secret_leakage",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    output_path = tmp_path / "sdk-task-evaluation-synthesis-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "passed"
+    assert result["status"] == "passed"
+    assert result["synthesized_config"] == config
+    assert result["summary"]["score"] >= 0.95
+
+
 def test_sdk_task_simulation_example_runs(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_TASK_SIMULATION_KEY",
@@ -15120,6 +15216,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_task_artifact_evaluation_suite_min_assertions"] == (
         trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
     )
+    assert payload["required_task_evaluation_synthesis_files"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_FILES
+    )
+    assert payload["required_task_evaluation_synthesis_config_keys"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
+    )
+    assert payload["required_task_evaluation_synthesis_state_keys"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_task_evaluation_synthesis_tools"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
+    )
+    assert payload["required_task_evaluation_synthesis_metrics"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
+    )
+    assert payload["required_task_evaluation_synthesis_metric_minima"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA
+    )
+    assert payload["required_task_evaluation_synthesis_score_minimum"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
+    )
+    assert payload["required_task_evaluation_synthesis_source_urls"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
+    )
     assert payload["required_task_world_optimizer_files"] == (
         trinity.V1_TASK_WORLD_OPTIMIZER_FILES
     )
@@ -15700,6 +15820,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "v1_examples_present",
         "local_sim_eval_examples_present",
         "task_artifact_evaluation_readiness",
+        "task_evaluation_synthesis_readiness",
         "task_world_optimizer_readiness",
         "evaluation_hook_probe_readiness",
         "native_optimizer_evidence_components",
@@ -15825,6 +15946,109 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert artifact_eval_suite["failed_assertion_count"] == 0
     assert artifact_eval_suite["passed_case_count"] == 1
     assert artifact_eval_suite["failed_case_count"] == 0
+
+    task_eval_synthesis = checks["task_evaluation_synthesis_readiness"]["evidence"]
+    assert task_eval_synthesis["required_files"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_FILES
+    )
+    assert task_eval_synthesis["required_config_keys"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
+    )
+    assert task_eval_synthesis["required_state_keys"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
+    )
+    assert task_eval_synthesis["required_tools"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
+    )
+    assert task_eval_synthesis["required_metrics"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
+    )
+    assert task_eval_synthesis["metric_minima"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA
+    )
+    assert task_eval_synthesis["score_minimum"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
+    )
+    assert task_eval_synthesis["required_source_urls"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
+    )
+    assert task_eval_synthesis["missing_files"] == []
+    assert task_eval_synthesis["execution_errors"] == []
+    assert task_eval_synthesis["config_errors"] == []
+    assert task_eval_synthesis["metric_errors"] == []
+    assert task_eval_synthesis["source_errors"] == []
+    task_eval_synthesis_evidence = task_eval_synthesis["evidence"]
+    synthesis_task = task_eval_synthesis_evidence["task_evidence"]
+    assert synthesis_task["id"] == "arbitrary-field-service-task"
+    assert set(synthesis_task["environment_state_keys"]) == set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
+    )
+    assert synthesis_task["tool_names"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
+    )
+    synthesis_config = task_eval_synthesis_evidence["synthesized_config"]
+    assert set(synthesis_config["config_keys"]) >= set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
+    )
+    assert synthesis_config["task_description_present"] is True
+    assert synthesis_config["expected_result_present"] is True
+    assert synthesis_config["success_criteria_count"] >= 6
+    assert synthesis_config["required_tools"] == (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
+    )
+    assert set(synthesis_config["available_tools"]) >= set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
+    )
+    assert 'canary_exfiltrated": true' in synthesis_config["forbidden_patterns"]
+    assert synthesis_config["require_source_grounding"] is True
+    assert synthesis_config["required_retrieval_memory_trace"] == [
+        "query",
+        "document",
+        "citation",
+    ]
+    assert set(synthesis_config["required_agent_memory_lineage"]) >= {
+        "target",
+        "store",
+        "memory_record",
+        "operation",
+        "audit",
+    }
+    assert synthesis_config["agent_memory_lineage_quality"][
+        "require_source_attribution"
+    ] is True
+    assert synthesis_config["synthesis"]["kind"] == (
+        "agent-learning.task-evaluation-synthesis.v1"
+    )
+    assert synthesis_config["synthesis"]["local_only"] is True
+    assert synthesis_config["synthesis"]["requires_external_service"] is False
+    assert set(synthesis_config["synthesis"]["environment_state_keys"]) == set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
+    )
+    assert set(synthesis_config["metric_weights"]) == set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
+    )
+    synthesis_eval = task_eval_synthesis_evidence["evaluation"]
+    assert synthesis_eval["kind"] == "agent-learning.artifact-evaluation.v1"
+    assert synthesis_eval["status"] == "passed"
+    assert synthesis_eval["output_roundtrip"] is True
+    assert synthesis_eval["config_synthesized"] is True
+    assert synthesis_eval["synthesized_config_kind"] == (
+        "agent-learning.task-evaluation-synthesis.v1"
+    )
+    assert synthesis_eval["source_kind"] == "agent-learning.task-evidence.v1"
+    assert synthesis_eval["result_config_matches_example"] is True
+    assert synthesis_eval["score"] >= (
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
+    )
+    assert set(synthesis_eval["environment_state_keys"]) == set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
+    )
+    for metric, minimum in trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA.items():
+        assert synthesis_eval["metric_averages"][metric] >= minimum
+    assert set(task_eval_synthesis_evidence["source_urls"]["documented_urls"]) >= set(
+        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
+    )
+
     task_world_optimizer = checks["task_world_optimizer_readiness"]["evidence"]
     assert task_world_optimizer["required_files"] == (
         trinity.V1_TASK_WORLD_OPTIMIZER_FILES

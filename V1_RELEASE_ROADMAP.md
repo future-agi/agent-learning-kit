@@ -43,7 +43,7 @@ evidence in `agent-learning.release-proof.v1`.
 | --- | --- | --- |
 | M0 | One public SDK boundary | `single_public_boundary`, `typescript_sdk_consolidation_boundary` |
 | M1 | Promptfoo-style CLI and examples | `cli_command_surface`, `v1_examples_present` |
-| M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `task_artifact_evaluation_readiness`, `task_world_optimizer_readiness`, `evaluation_hook_probe_readiness` |
+| M2 | Local simulation and evaluation | `local_sim_eval_examples_present`, `task_artifact_evaluation_readiness`, `task_evaluation_synthesis_readiness`, `task_world_optimizer_readiness`, `evaluation_hook_probe_readiness` |
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
@@ -107,6 +107,11 @@ Current checkpoint:
   and `agent-learning.eval.v1` evidence, preserve task/framework/world state,
   and close task-completion, tool, world-contract, framework-runtime, memory,
   source-grounding, and secret-leakage metrics.
+- Task evaluation synthesis readiness is now an executable release-check gate:
+  `examples/sdk_task_evaluation_synthesis.py` must evaluate arbitrary task
+  evidence without a hand-written config by inferring task criteria, required
+  tools, forbidden patterns, source grounding, world/framework/retrieval/memory
+  state requirements, and metric weights from the evidence itself.
 - Task/world optimizer readiness is now an executable release-check gate:
   `examples/sdk_task_world_optimization.py` must run locally, start from a
   world contract with no transitions, search both
