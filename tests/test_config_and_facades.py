@@ -15650,6 +15650,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workspace_import_certification_contracts"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
     )
+    assert payload["required_workflow_hook_files"] == (
+        trinity.V1_WORKFLOW_HOOK_FILES
+    )
+    assert payload["required_workflow_hook_environment_types"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_workflow_hook_state_keys"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_workflow_hook_metrics"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_METRICS
+    )
+    assert payload["required_workflow_hook_proof_kind"] == (
+        trinity.V1_WORKFLOW_HOOK_PROOF_KIND
+    )
+    assert payload["required_workflow_hook_proof_assurance_level"] == (
+        trinity.V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_workflow_hook_proof_checks"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert payload["required_workflow_hook_selected_profile"] == (
+        trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
+    )
     assert payload["required_framework_adapter_probe_files"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES
     )
@@ -15989,6 +16013,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "realtime_stack_probe_readiness",
         "memory_layer_probe_readiness",
         "stateful_framework_adapter_readiness",
+        "workflow_hook_readiness",
         "framework_adapter_trinity_suite_readiness",
         "orchestration_stack_probe_readiness",
         "trinity_stack_probe_readiness",
@@ -18156,6 +18181,35 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert set(trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS) <= set(
         workspace_axis["passed_check_ids"]
     )
+    assert environment_10x_axes["authenticated_workflow_hooks"][
+        "source_check"
+    ] == "workflow_hook_readiness"
+    workflow_axis = environment_10x_axes["authenticated_workflow_hooks"]["evidence"]
+    assert workflow_axis["proof_passed"] is True
+    assert workflow_axis["proof_kind"] == trinity.V1_WORKFLOW_HOOK_PROOF_KIND
+    assert workflow_axis["proof_assurance_level"] == (
+        trinity.V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert workflow_axis["requires_external_service"] is False
+    assert workflow_axis["selected_profile"] == trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
+    assert workflow_axis["selected_environment_types"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(workflow_axis["selected_state_keys"]) == set(
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
+    )
+    for metric in trinity.V1_WORKFLOW_HOOK_REQUIRED_METRICS:
+        assert workflow_axis["selected_metrics"][metric] == pytest.approx(1.0)
+    assert workflow_axis["workflow_summary"]["call_count"] == 1
+    assert workflow_axis["workflow_summary"]["success_count"] == 1
+    assert workflow_axis["refund_workflow"]["approval_id"] == "wf_refund_2026"
+    assert workflow_axis["trace"]["status_code"] == 200
+    assert workflow_axis["trace"]["success"] is True
+    assert workflow_axis["trace"]["auth"]["redacted"] is True
+    assert workflow_axis["serialized_secret_absent"] is True
+    assert set(trinity.V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS) <= set(
+        workflow_axis["passed_check_ids"]
+    )
     redteam_axis = environment_10x_axes["redteam_pen_test_suite"]["evidence"]
     assert redteam_axis["suite"]["status"] == "passed"
     assert {"run", "redteam"} <= set(redteam_axis["suite"]["child_commands"])
@@ -19652,6 +19706,104 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert {"agent_memory_lineage", "retrieval_memory"} <= set(
         memory_run["state_keys"]
     )
+
+    workflow_hook = checks["workflow_hook_readiness"]["evidence"]
+    assert workflow_hook["required_files"] == trinity.V1_WORKFLOW_HOOK_FILES
+    assert workflow_hook["required_environment_types"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert workflow_hook["required_state_keys"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert workflow_hook["required_metrics"] == trinity.V1_WORKFLOW_HOOK_REQUIRED_METRICS
+    assert workflow_hook["required_proof_kind"] == trinity.V1_WORKFLOW_HOOK_PROOF_KIND
+    assert workflow_hook["required_assurance_level"] == (
+        trinity.V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert workflow_hook["required_proof_checks"] == (
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert workflow_hook["selected_profile"] == trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
+    assert workflow_hook["missing_files"] == []
+    assert workflow_hook["execution_errors"] == []
+    assert workflow_hook["manifest_errors"] == []
+    assert workflow_hook["optimization_errors"] == []
+    assert workflow_hook["proof_errors"] == []
+    assert workflow_hook["runtime_errors"] == []
+    assert workflow_hook["metric_errors"] == []
+    assert workflow_hook["security_errors"] == []
+    workflow_example = workflow_hook["evidence"]["examples"][
+        "examples/sdk_workflow_hook_optimization.py"
+    ]
+    workflow_manifest = workflow_example["manifest"]
+    assert workflow_manifest["version"] == "agent-learning.optimization.v1"
+    assert workflow_manifest["required_env"] == ["AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"]
+    assert workflow_manifest["task_kind"] == "workflow_hook"
+    assert workflow_manifest["candidate_search_paths"] == ["simulation.environments"]
+    assert workflow_manifest["candidate_count"] == 3
+    assert workflow_manifest["candidate_profiles"] == [
+        "mocked_without_http_execution",
+        "http_workflow_hook_missing_auth",
+        "verified_authenticated_workflow_hook",
+    ]
+    workflow_optimization = workflow_example["optimization"]
+    assert workflow_optimization["status"] == "passed"
+    assert workflow_optimization["output_roundtrip"] is True
+    assert workflow_optimization["optimization_passed"] is True
+    assert workflow_optimization["evaluation_passed"] is True
+    assert workflow_optimization["optimization_score"] >= workflow_optimization["threshold"]
+    assert workflow_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert workflow_optimization["candidate_lineage_count"] >= 3
+    assert workflow_optimization["best_environment_types"] == ["workflow_hook"]
+    assert workflow_optimization["selected_profile"] == (
+        trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
+    )
+    assert workflow_optimization["best_patch_keys"] == ["simulation.environments"]
+    for metric in trinity.V1_WORKFLOW_HOOK_REQUIRED_METRICS:
+        assert workflow_optimization["best_metrics"][metric] == pytest.approx(1.0)
+    workflow_proof = workflow_example["proof"]
+    assert workflow_proof["kind"] == trinity.V1_WORKFLOW_HOOK_PROOF_KIND
+    assert workflow_proof["status"] == "passed"
+    assert workflow_proof["passed"] is True
+    assert workflow_proof["assurance_level"] == (
+        trinity.V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
+    )
+    assert workflow_proof["requires_external_service"] is False
+    assert workflow_proof["failed_check_ids"] == []
+    assert workflow_proof["warning_check_ids"] == []
+    assert set(workflow_proof["passed_check_ids"]) >= set(
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS
+    )
+    assert workflow_proof["selected_environment_types"] == ["workflow_hook"]
+    assert set(workflow_proof["selected_state_keys"]) == set(
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert workflow_proof["selected_profile"] == (
+        trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
+    )
+    for metric in trinity.V1_WORKFLOW_HOOK_REQUIRED_METRICS:
+        assert workflow_proof["selected_metrics"][metric] == pytest.approx(1.0)
+    assert workflow_proof["summary"] == {
+        "workflow_hook_proof_status": "passed",
+        "workflow_hook_proof_passed": True,
+        "workflow_hook_proof_failed_check_count": 0,
+    }
+    workflow_runtime = workflow_example["runtime"]
+    assert set(workflow_runtime["state_keys"]) == set(
+        trinity.V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
+    )
+    assert workflow_runtime["workflow_summary"]["call_count"] == 1
+    assert workflow_runtime["workflow_summary"]["success_count"] == 1
+    assert workflow_runtime["refund_workflow"]["status"] == "completed"
+    assert workflow_runtime["refund_workflow"]["approval_id"] == "wf_refund_2026"
+    workflow_trace = workflow_runtime["trace"]
+    assert workflow_trace["tool"] == "execute_refund_workflow"
+    assert workflow_trace["status_code"] == 200
+    assert workflow_trace["success"] is True
+    assert workflow_trace["auth"]["redacted"] is True
+    assert workflow_trace["auth"]["token_env"] == "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"
+    assert workflow_runtime["serialized_secret_absent"] is True
+
     stateful_adapter = checks["stateful_framework_adapter_readiness"]["evidence"]
     assert stateful_adapter["required_files"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
@@ -19665,6 +19817,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert stateful_adapter["artifact_errors"] == []
     assert stateful_adapter["metric_errors"] == []
     assert stateful_adapter["state_errors"] == []
+    assert stateful_adapter["proof_surface_errors"] == []
     assert stateful_adapter["errors"] == []
     stateful_adapters = {
         adapter["surface"]: adapter for adapter in stateful_adapter["adapters"]
@@ -19738,6 +19891,59 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_adapter["state_summary"]["tool_names"] == ["policy_lookup"]
     assert workflow_adapter["state_summary"]["topology.entry_nodes"] == ["intake"]
     assert workflow_adapter["state_summary"]["topology.terminal_nodes"] == ["finalize"]
+    required_workflow_proof_actions = {
+        "report_stateful_framework_adapter",
+        "promote_stateful_framework_adapter_regression",
+        "replay_stateful_framework_adapter_regression",
+        "export_stateful_framework_adapter_trace",
+        "export_stateful_framework_adapter_replay_lock",
+    }
+    workflow_proof_surface = workflow_adapter["proof_surface"]
+    workflow_report = workflow_proof_surface["report"]
+    assert "stateful_framework_adapter" in workflow_report["sections"]
+    assert workflow_report["surface"] == "workflow_trace"
+    assert workflow_report["status"] == "verified"
+    assert workflow_report["local_only"] is True
+    assert workflow_report["requires_external_service"] is False
+    assert workflow_report["replay_lock_local_only"] is True
+    assert workflow_report["replay_lock_requires_external_service"] is False
+    assert set(workflow_report["action_ids"]) >= required_workflow_proof_actions
+    workflow_actions = workflow_proof_surface["actions"]
+    assert workflow_actions["kind"] == "agent-learning.actions.v1"
+    assert workflow_actions["status"] == "passed"
+    assert set(workflow_actions["action_ids"]) >= required_workflow_proof_actions
+    workflow_promotion = workflow_proof_surface["promotion"]
+    assert workflow_promotion["status"] == "passed"
+    assert workflow_promotion["promotion_kind"] == (
+        "stateful_framework_adapter_workflow_trace"
+    )
+    assert workflow_promotion["source_status"] == "passed"
+    assert workflow_promotion["promoted_manifest_count"] >= 1
+    assert workflow_promotion["requires_external_service"] is False
+    assert workflow_promotion["manifest_version"] == "agent-learning.run.v1"
+    assert workflow_promotion["manifest_promotion_kind"] == (
+        "stateful_framework_adapter_workflow_trace"
+    )
+    assert workflow_promotion["agent_framework"] == "langgraph"
+    assert workflow_promotion["agent_method"] == "execute_task"
+    assert workflow_promotion["agent_input_mode"] == "dict"
+    assert workflow_promotion["replay_lock_local_only"] is True
+    assert workflow_promotion["replay_lock_requires_external_service"] is False
+    assert workflow_promotion["metric_weights"]["workflow_trace_coverage"] == (
+        pytest.approx(4.0)
+    )
+    assert workflow_promotion["metric_weights"]["workflow_graph_quality"] == (
+        pytest.approx(4.0)
+    )
+    workflow_replay = workflow_proof_surface["replay"]
+    assert workflow_replay["status"] == "passed"
+    assert workflow_replay["passed_count"] >= 1
+    assert workflow_replay["failed_count"] == 0
+    assert workflow_replay["metrics"] == {
+        "workflow_trace_coverage": pytest.approx(1.0),
+        "workflow_graph_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+    }
 
     orchestration_adapter = stateful_adapters["orchestration_trace"]
     assert orchestration_adapter["result_kind"] == "agent-learning.run.v1"
@@ -21670,6 +21876,12 @@ def test_sdk_workflow_hook_optimization_example_runs(monkeypatch, tmp_path):
     assert result["status"] == "passed"
     assert result["summary"]["optimization_score"] >= result["summary"]["threshold"]
     assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["workflow_hook_proof_status"] == "passed"
+    assert result["summary"]["workflow_hook_proof_passed"] is True
+    assert result["summary"]["workflow_hook_proof_assurance_level"] == (
+        "l3_authenticated_workflow_hook_verified"
+    )
+    assert result["summary"]["workflow_hook_proof_failed_check_count"] == 0
 
     best_history = max(
         result["optimization"]["history"],
@@ -21700,6 +21912,46 @@ def test_sdk_workflow_hook_optimization_example_runs(monkeypatch, tmp_path):
     assert [call["name"] for call in case["tool_calls"]] == [
         "execute_refund_workflow"
     ]
+    proof = result["workflow_hook_proof"]
+    assert saved["workflow_hook_proof"] == proof
+    assert result["optimization"]["workflow_hook_proof"] == proof
+    assert proof["kind"] == "agent-learning.optimization.workflow-hook-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["passed"] is True
+    assert proof["requires_external_service"] is False
+    assert proof["candidate_profile"] == "verified_authenticated_workflow_hook"
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+    assert set(proof["passed_check_ids"]) >= {
+        "workflow_hook_source_manifest_contract_closed",
+        "local_authenticated_workflow_hook_selected",
+        "workflow_hook_execution_state_closed",
+        "workflow_hook_auth_redaction_closed",
+        "workflow_hook_metric_evidence_closed",
+        "workflow_hook_patch_surface_present",
+        "workflow_hook_candidate_lineage_gate_passed",
+    }
+    proof_evidence = proof["evidence"]
+    assert proof_evidence["selected_environment_types"] == ["workflow_hook"]
+    assert proof_evidence["selected_profile"] == "verified_authenticated_workflow_hook"
+    assert set(proof_evidence["selected_state_keys"]) == {
+        "workflow_hooks",
+        "refund_workflow",
+    }
+    assert proof_evidence["workflow_summary"]["call_count"] == 1
+    assert proof_evidence["workflow_summary"]["success_count"] == 1
+    assert proof_evidence["refund_workflow"]["approval_id"] == "wf_refund_2026"
+    assert proof_evidence["selected_trace"]["auth"]["redacted"] is True
+    assert proof_evidence["selected_trace"]["auth"]["token_env"] == (
+        "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"
+    )
+    for metric in (
+        "tool_selection_accuracy",
+        "tool_argument_schema",
+        "workflow_trace_coverage",
+        "secret_leakage",
+    ):
+        assert proof_evidence["selected_metrics"][metric] == pytest.approx(1.0)
 
 
 def test_sdk_retrieval_hook_optimization_example_runs(monkeypatch, tmp_path):

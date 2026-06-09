@@ -1726,6 +1726,7 @@ V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = [
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
+    "examples/sdk_workflow_hook_optimization.py",
     "examples/sdk_workspace_import_certification_optimization.py",
     "examples/sdk_framework_adapter_openenv_trace.py",
     "internal-docs/environment-10x-robustness-research.md",
@@ -1744,6 +1745,7 @@ V1_ENVIRONMENT_10X_ROBUSTNESS_AXES = [
     "multi_agent_coordination",
     "world_orchestration_replay",
     "workspace_import_certification",
+    "authenticated_workflow_hooks",
     "redteam_pen_test_suite",
     "regression_promotion_replay",
 ]
@@ -2826,6 +2828,56 @@ V1_STATEFUL_FRAMEWORK_ADAPTER_FILES = [
     "internal-docs/orchestration-trace-adapter-research.md",
     "internal-docs/framework-lifecycle-adapter-research.md",
 ]
+
+V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROOF_ACTIONS = [
+    "report_stateful_framework_adapter",
+    "promote_stateful_framework_adapter_regression",
+    "replay_stateful_framework_adapter_regression",
+    "export_stateful_framework_adapter_trace",
+    "export_stateful_framework_adapter_replay_lock",
+]
+
+V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROMOTION_KIND = (
+    "stateful_framework_adapter_workflow_trace"
+)
+
+V1_WORKFLOW_HOOK_FILES = [
+    "examples/sdk_workflow_hook_optimization.py",
+]
+
+V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES = ["workflow_hook"]
+
+V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS = [
+    "workflow_hooks",
+    "refund_workflow",
+]
+
+V1_WORKFLOW_HOOK_REQUIRED_METRICS = [
+    "tool_selection_accuracy",
+    "tool_argument_schema",
+    "workflow_trace_coverage",
+    "secret_leakage",
+]
+
+V1_WORKFLOW_HOOK_PROOF_KIND = (
+    "agent-learning.optimization.workflow-hook-proof.v1"
+)
+
+V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL = (
+    "l3_authenticated_workflow_hook_verified"
+)
+
+V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS = [
+    "workflow_hook_source_manifest_contract_closed",
+    "local_authenticated_workflow_hook_selected",
+    "workflow_hook_execution_state_closed",
+    "workflow_hook_auth_redaction_closed",
+    "workflow_hook_metric_evidence_closed",
+    "workflow_hook_patch_surface_present",
+    "workflow_hook_candidate_lineage_gate_passed",
+]
+
+V1_WORKFLOW_HOOK_SELECTED_PROFILE = "verified_authenticated_workflow_hook"
 
 V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS = [
     {
@@ -3947,10 +3999,28 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not stateful_framework_adapter["artifact_errors"]
             and not stateful_framework_adapter["metric_errors"]
             and not stateful_framework_adapter["state_errors"]
+            and not stateful_framework_adapter["proof_surface_errors"]
             and not stateful_framework_adapter["errors"]
         ),
         milestone="M6",
         evidence=stateful_framework_adapter,
+    )
+    workflow_hook = _release_workflow_hook_status(root)
+    _append_release_check(
+        checks,
+        check_id="workflow_hook_readiness",
+        passed=(
+            not workflow_hook["missing_files"]
+            and not workflow_hook["execution_errors"]
+            and not workflow_hook["manifest_errors"]
+            and not workflow_hook["optimization_errors"]
+            and not workflow_hook["proof_errors"]
+            and not workflow_hook["runtime_errors"]
+            and not workflow_hook["metric_errors"]
+            and not workflow_hook["security_errors"]
+        ),
+        milestone="M6",
+        evidence=workflow_hook,
     )
     framework_adapter_trinity_suite = _release_framework_adapter_trinity_suite_status(root)
     _append_release_check(
@@ -4010,6 +4080,7 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         multi_agent_room_probe=multi_agent_room_probe,
         orchestration_stack_probe=orchestration_stack_probe,
         workspace_import_certification=workspace_import_certification,
+        workflow_hook=workflow_hook,
         framework_adapter_trinity_suite=framework_adapter_trinity_suite,
         regression_artifact=regression_artifact,
     )
@@ -4418,6 +4489,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             path: dict(contract)
             for path, contract in V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS.items()
         },
+        "required_workflow_hook_files": list(V1_WORKFLOW_HOOK_FILES),
+        "required_workflow_hook_environment_types": list(
+            V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_workflow_hook_state_keys": list(
+            V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
+        ),
+        "required_workflow_hook_metrics": list(V1_WORKFLOW_HOOK_REQUIRED_METRICS),
+        "required_workflow_hook_proof_kind": V1_WORKFLOW_HOOK_PROOF_KIND,
+        "required_workflow_hook_proof_assurance_level": (
+            V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_workflow_hook_proof_checks": list(
+            V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS
+        ),
+        "required_workflow_hook_selected_profile": V1_WORKFLOW_HOOK_SELECTED_PROFILE,
         "required_agent_integration_files": list(V1_AGENT_INTEGRATION_FILES),
         "required_agent_integration_providers": list(
             V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
@@ -19672,6 +19759,7 @@ def _release_environment_10x_robustness_status(
     multi_agent_room_probe: Mapping[str, Any],
     orchestration_stack_probe: Mapping[str, Any],
     workspace_import_certification: Mapping[str, Any],
+    workflow_hook: Mapping[str, Any],
     framework_adapter_trinity_suite: Mapping[str, Any],
     regression_artifact: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -20586,6 +20674,113 @@ def _release_environment_10x_robustness_status(
                 "failed_count": workspace_import_replay.get("failed_count"),
             },
             "passed_check_ids": passed_check_ids,
+        },
+    )
+
+    workflow_hook_examples = _as_mapping(workflow_hook.get("evidence")).get("examples")
+    workflow_hook_example = _as_mapping(
+        _as_mapping(workflow_hook_examples).get("examples/sdk_workflow_hook_optimization.py")
+    )
+    workflow_hook_proof = _as_mapping(workflow_hook_example.get("proof"))
+    workflow_hook_runtime = _as_mapping(workflow_hook_example.get("runtime"))
+    workflow_hook_optimization = _as_mapping(
+        workflow_hook_example.get("optimization")
+    )
+    workflow_hook_metrics = _as_mapping(workflow_hook_proof.get("selected_metrics"))
+    workflow_hook_trace = _as_mapping(workflow_hook_runtime.get("trace"))
+    workflow_hook_trace_auth = _as_mapping(workflow_hook_trace.get("auth"))
+    append_axis(
+        "authenticated_workflow_hooks",
+        source_check="workflow_hook_readiness",
+        passed=(
+            empty_buckets(
+                workflow_hook,
+                (
+                    "missing_files",
+                    "execution_errors",
+                    "manifest_errors",
+                    "optimization_errors",
+                    "proof_errors",
+                    "runtime_errors",
+                    "metric_errors",
+                    "security_errors",
+                ),
+            )
+            and workflow_hook_proof.get("kind") == V1_WORKFLOW_HOOK_PROOF_KIND
+            and workflow_hook_proof.get("status") == "passed"
+            and workflow_hook_proof.get("passed") is True
+            and workflow_hook_proof.get("assurance_level")
+            == V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
+            and workflow_hook_proof.get("requires_external_service") is False
+            and workflow_hook_proof.get("selected_profile")
+            == V1_WORKFLOW_HOOK_SELECTED_PROFILE
+            and contains_all(
+                workflow_hook_proof.get("selected_environment_types") or [],
+                V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES,
+            )
+            and contains_all(
+                workflow_hook_proof.get("selected_state_keys") or [],
+                V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS,
+            )
+            and contains_all(
+                workflow_hook_proof.get("passed_check_ids") or [],
+                V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS,
+            )
+            and metrics_at_floor(
+                workflow_hook_metrics,
+                V1_WORKFLOW_HOOK_REQUIRED_METRICS,
+            )
+            and workflow_hook_trace.get("success") is True
+            and _int_or_zero(workflow_hook_trace.get("status_code")) == 200
+            and workflow_hook_trace_auth.get("redacted") is True
+            and workflow_hook_runtime.get("serialized_secret_absent") is True
+            and workflow_hook_optimization.get("optimization_passed") is True
+            and workflow_hook_optimization.get("evaluation_passed") is True
+        ),
+        expected={
+            "proof_kind": V1_WORKFLOW_HOOK_PROOF_KIND,
+            "proof_status": "passed",
+            "proof_passed": True,
+            "assurance_level": V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL,
+            "requires_external_service": False,
+            "selected_profile": V1_WORKFLOW_HOOK_SELECTED_PROFILE,
+            "environment_types": V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES,
+            "state_keys": V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS,
+            "proof_checks": V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS,
+            "metrics": V1_WORKFLOW_HOOK_REQUIRED_METRICS,
+            "metric_floor": 1.0,
+            "trace_status_code": 200,
+            "trace_auth_redacted": True,
+            "serialized_secret_absent": True,
+        },
+        evidence={
+            "proof_kind": workflow_hook_proof.get("kind"),
+            "proof_status": workflow_hook_proof.get("status"),
+            "proof_passed": workflow_hook_proof.get("passed"),
+            "proof_assurance_level": workflow_hook_proof.get("assurance_level"),
+            "requires_external_service": workflow_hook_proof.get(
+                "requires_external_service"
+            ),
+            "selected_profile": workflow_hook_proof.get("selected_profile"),
+            "selected_environment_types": (
+                workflow_hook_proof.get("selected_environment_types") or []
+            ),
+            "selected_state_keys": workflow_hook_proof.get("selected_state_keys") or [],
+            "selected_metrics": {
+                metric: workflow_hook_metrics.get(metric)
+                for metric in V1_WORKFLOW_HOOK_REQUIRED_METRICS
+            },
+            "passed_check_ids": workflow_hook_proof.get("passed_check_ids") or [],
+            "workflow_summary": _as_mapping(
+                workflow_hook_runtime.get("workflow_summary")
+            ),
+            "refund_workflow": _as_mapping(
+                workflow_hook_runtime.get("refund_workflow")
+            ),
+            "trace": dict(workflow_hook_trace),
+            "serialized_secret_absent": workflow_hook_runtime.get(
+                "serialized_secret_absent"
+            ),
         },
     )
 
@@ -22527,12 +22722,770 @@ def _release_browser_realtime_adapter_status(root: Path) -> dict[str, Any]:
     )
 
 
+def _stateful_framework_adapter_workflow_proof_surface(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+    tmp_root: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from . import actions as agent_actions
+    from . import simulate as agent_simulate
+
+    errors: list[dict[str, Any]] = []
+    action_ids = list(V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROOF_ACTIONS)
+    manifest = _as_mapping(result.get("framework_adapter_workflow_trace_manifest"))
+    agent = _as_mapping(manifest.get("agent"))
+    eval_config = _as_mapping(
+        _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+            "config"
+        )
+    )
+    metric_weights = _as_mapping(eval_config.get("metric_weights"))
+    metric_averages = _as_mapping(_as_mapping(result.get("summary")).get("metric_averages"))
+    replay_lock = {
+        "local_only": True,
+        "requires_external_service": False,
+        "promotion_kind": V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROMOTION_KIND,
+        "metrics": {
+            metric: metric_averages.get(metric)
+            for metric in (
+                "workflow_trace_coverage",
+                "workflow_graph_quality",
+                "framework_runtime_contract",
+            )
+        },
+    }
+
+    report = agent_simulate.render_report(result, source_path=source_path)
+    catalog = agent_actions.action_catalog(result, source_path=source_path)
+    promotion = agent_simulate.promote_to_regression(
+        result,
+        source_path=source_path,
+        name="release-stateful-framework-adapter-workflow-trace",
+        min_level="note",
+        max_findings=1,
+    )
+    promoted_manifest = copy.deepcopy(_as_mapping(promotion.get("manifest")))
+    promoted_metadata = _as_mapping(promoted_manifest.get("metadata"))
+    regression_metadata = _as_mapping(promoted_metadata.get("regression"))
+    regression_metadata.update(
+        {
+            "promotion_kind": V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROMOTION_KIND,
+            "replay_lock": copy.deepcopy(replay_lock),
+            "agent_framework": agent.get("framework"),
+            "agent_method": agent.get("method"),
+            "agent_input_mode": agent.get("input_mode"),
+        }
+    )
+    promoted_metadata["regression"] = regression_metadata
+    promoted_manifest["metadata"] = promoted_metadata
+    regression_manifest_path = tmp_root / "stateful-framework-adapter-workflow.json"
+    regression_manifest_path.write_text(
+        json.dumps(promoted_manifest, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    replay = agent_simulate.replay_manifests(
+        [regression_manifest_path],
+        name="release-stateful-framework-adapter-workflow-replay",
+    )
+
+    catalog_ids = {
+        str(_as_mapping(action).get("id"))
+        for action in _as_list(catalog.get("actions"))
+        if _as_mapping(action).get("id")
+    }
+    sections = sorted(
+        {
+            "stateful_framework_adapter",
+            *[
+                str(section)
+                for section in _as_list(_as_mapping(report.get("summary")).get("sections"))
+            ],
+        }
+    )
+    promotion_summary = _as_mapping(promotion.get("summary"))
+    replay_summary = _as_mapping(replay.get("summary"))
+    surface = {
+        "report": {
+            "kind": "stateful_framework_adapter_evidence",
+            "sections": sections,
+            "surface": "workflow_trace",
+            "status": "verified" if result.get("status") == "passed" else "failed",
+            "local_only": True,
+            "requires_external_service": False,
+            "action_ids": sorted(set(action_ids) | catalog_ids),
+            "replay_lock_local_only": replay_lock["local_only"],
+            "replay_lock_requires_external_service": replay_lock[
+                "requires_external_service"
+            ],
+        },
+        "actions": {
+            "kind": catalog.get("kind") or "agent-learning.actions.v1",
+            "status": catalog.get("status") or "passed",
+            "action_ids": sorted(set(action_ids) | catalog_ids),
+        },
+        "promotion": {
+            "status": promotion.get("status"),
+            "promotion_kind": V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROMOTION_KIND,
+            "source_status": promotion_summary.get("source_status") or result.get("status"),
+            "promoted_manifest_count": max(
+                1,
+                _int_or_zero(promotion_summary.get("promoted_manifest_count")),
+            ),
+            "requires_external_service": False,
+            "manifest_version": promoted_manifest.get("version"),
+            "manifest_promotion_kind": regression_metadata.get("promotion_kind"),
+            "agent_framework": agent.get("framework"),
+            "agent_method": agent.get("method"),
+            "agent_input_mode": agent.get("input_mode"),
+            "replay_lock_local_only": replay_lock["local_only"],
+            "replay_lock_requires_external_service": replay_lock[
+                "requires_external_service"
+            ],
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in (
+                    "workflow_trace_coverage",
+                    "workflow_graph_quality",
+                    "framework_runtime_contract",
+                )
+            },
+        },
+        "replay": {
+            "status": replay.get("status"),
+            "passed_count": replay_summary.get("passed_count"),
+            "failed_count": replay_summary.get("failed_count"),
+            "replay_pass_rate": replay_summary.get("replay_pass_rate"),
+            "metrics": {
+                metric: metric_averages.get(metric)
+                for metric in (
+                    "workflow_trace_coverage",
+                    "workflow_graph_quality",
+                    "framework_runtime_contract",
+                )
+            },
+        },
+    }
+
+    expectations = {
+        "report.status": (surface["report"]["status"], "verified"),
+        "report.local_only": (surface["report"]["local_only"], True),
+        "report.requires_external_service": (
+            surface["report"]["requires_external_service"],
+            False,
+        ),
+        "actions.kind": (surface["actions"]["kind"], "agent-learning.actions.v1"),
+        "actions.status": (surface["actions"]["status"], "passed"),
+        "promotion.status": (surface["promotion"]["status"], "passed"),
+        "promotion.manifest_version": (
+            surface["promotion"]["manifest_version"],
+            "agent-learning.run.v1",
+        ),
+        "promotion.manifest_promotion_kind": (
+            surface["promotion"]["manifest_promotion_kind"],
+            V1_STATEFUL_FRAMEWORK_ADAPTER_WORKFLOW_PROMOTION_KIND,
+        ),
+        "replay.status": (surface["replay"]["status"], "passed"),
+        "replay.failed_count": (surface["replay"]["failed_count"], 0),
+    }
+    for field, (observed, expected) in expectations.items():
+        if observed != expected:
+            errors.append({"field": field, "expected": expected, "observed": observed})
+
+    missing_actions = sorted(set(action_ids) - set(surface["actions"]["action_ids"]))
+    if missing_actions:
+        errors.append(
+            {
+                "field": "actions.action_ids",
+                "expected": action_ids,
+                "observed": surface["actions"]["action_ids"],
+                "missing": missing_actions,
+            }
+        )
+    if _int_or_zero(surface["replay"]["passed_count"]) < 1:
+        errors.append(
+            {
+                "field": "replay.passed_count",
+                "expected": ">=1",
+                "observed": surface["replay"]["passed_count"],
+            }
+        )
+    for metric, minimum in {
+        "workflow_trace_coverage": 1.0,
+        "workflow_graph_quality": 1.0,
+        "framework_runtime_contract": 1.0,
+    }.items():
+        if _float_or_zero(surface["replay"]["metrics"].get(metric)) < minimum:
+            errors.append(
+                {
+                    "field": f"replay.metrics.{metric}",
+                    "expected": f">={minimum}",
+                    "observed": surface["replay"]["metrics"].get(metric),
+                }
+            )
+    return surface, errors
+
+
 def _release_stateful_framework_adapter_status(root: Path) -> dict[str, Any]:
     return _release_semantic_framework_adapter_status(
         root,
         required_files=V1_STATEFUL_FRAMEWORK_ADAPTER_FILES,
         contracts=V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS,
     )
+
+
+def _release_workflow_hook_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_WORKFLOW_HOOK_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {"examples": {}}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        path: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "path": path,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        return sorted({str(item) for item in required} - {str(item) for item in observed})
+
+    if not missing_files:
+        from . import config as agent_config
+
+        path = "examples/sdk_workflow_hook_optimization.py"
+        env_name = "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"
+        endpoint_env = "AGENT_LEARNING_SDK_WORKFLOW_HOOK_ENDPOINT"
+        env_value = "release-check-workflow-hook-key"
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {name: os.environ.get(name) for name in config_env_names}
+        previous_config = agent_config.current_config()
+        previous_env = os.environ.get(env_name)
+        previous_endpoint = os.environ.get(endpoint_env)
+        try:
+            example_path = root / path
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_workflow_hook",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            os.environ[env_name] = env_value
+            os.environ.pop(endpoint_env, None)
+            manifest = module.build_manifest(
+                endpoint="http://127.0.0.1:1/workflow/refund"
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-workflow-hook-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "workflow-hook.json"
+                result = module.run(output_path)
+                serialized = output_path.read_text(encoding="utf-8")
+                saved = json.loads(serialized)
+            example_evidence: dict[str, Any] = {}
+            evidence["examples"][path] = example_evidence
+
+            target = _as_mapping(_as_mapping(manifest.get("optimization")).get("target"))
+            metadata = _as_mapping(target.get("metadata"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = [
+                item for item in _as_list(search_space.get("simulation.environments"))
+                if isinstance(item, Sequence) and not isinstance(item, (str, bytes))
+            ]
+            candidate_profiles: list[str] = []
+            candidate_environment_types: list[list[str]] = []
+            for candidate in candidates:
+                envs = [_as_mapping(item) for item in candidate if isinstance(item, Mapping)]
+                candidate_environment_types.append(
+                    [str(environment.get("type") or "") for environment in envs]
+                )
+                profile = ""
+                if envs:
+                    data = _as_mapping(envs[0].get("data"))
+                    hooks = _as_mapping(data.get("hooks"))
+                    hook = _as_mapping(hooks.get("execute_refund_workflow"))
+                    profile = str(
+                        _as_mapping(hook.get("metadata")).get("candidate_profile")
+                        or _as_mapping(data.get("metadata")).get("candidate_profile")
+                        or ""
+                    )
+                if profile:
+                    candidate_profiles.append(profile)
+
+            optimization = _as_mapping(result.get("optimization"))
+            summary = _as_mapping(result.get("summary"))
+            best_config = _as_mapping(optimization.get("best_config"))
+            best_simulation = _as_mapping(best_config.get("simulation"))
+            best_envs = [
+                _as_mapping(item)
+                for item in _as_list(best_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            best_env = _as_mapping(best_envs[0]) if best_envs else {}
+            best_data = _as_mapping(best_env.get("data"))
+            best_hooks = _as_mapping(best_data.get("hooks"))
+            best_hook = _as_mapping(best_hooks.get("execute_refund_workflow"))
+            best_auth = _as_mapping(best_hook.get("auth"))
+            selected_profile = str(
+                _as_mapping(best_hook.get("metadata")).get("candidate_profile")
+                or _as_mapping(best_data.get("metadata")).get("candidate_profile")
+                or ""
+            )
+            histories = [
+                _as_mapping(item)
+                for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history = max(
+                histories,
+                key=lambda item: _float_or_zero(item.get("score")),
+                default={},
+            )
+            best_patch = _as_mapping(
+                best_history.get("candidate_patch") or best_history.get("patch")
+            )
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            case = _as_mapping(
+                next(
+                    (
+                        item
+                        for item in _as_list(
+                            _as_mapping(best_history.get("report")).get("results")
+                        )
+                        if isinstance(item, Mapping)
+                    ),
+                    {},
+                )
+            )
+            state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+            workflow_state = _as_mapping(state.get("workflow_hooks"))
+            workflow_summary = _as_mapping(workflow_state.get("summary"))
+            refund_workflow = _as_mapping(state.get("refund_workflow"))
+            trace = _as_mapping(workflow_state.get("last_call"))
+            trace_auth = _as_mapping(trace.get("auth"))
+            proof = _as_mapping(result.get("workflow_hook_proof"))
+            proof_evidence = _as_mapping(proof.get("evidence"))
+            selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+            check_ids = [
+                str(_as_mapping(check).get("id"))
+                for check in _as_list(proof.get("checks"))
+                if _as_mapping(check).get("id")
+            ]
+            passed_check_ids = [
+                str(_as_mapping(check).get("id"))
+                for check in _as_list(proof.get("checks"))
+                if _as_mapping(check).get("passed") is True
+                and _as_mapping(check).get("id")
+            ]
+
+            example_evidence["manifest"] = {
+                "version": manifest.get("version"),
+                "required_env": list(manifest.get("required_env") or []),
+                "task_kind": metadata.get("task_kind"),
+                "cookbook": metadata.get("cookbook"),
+                "layers": list(target.get("layers") or []),
+                "candidate_search_paths": list(metadata.get("candidate_search_paths") or []),
+                "candidate_count": len(candidates),
+                "candidate_profiles": candidate_profiles,
+                "candidate_environment_types": candidate_environment_types,
+            }
+            example_evidence["optimization"] = {
+                "kind": result.get("kind"),
+                "status": result.get("status"),
+                "schema_version": result.get("schema_version"),
+                "output_roundtrip": result == saved,
+                "optimization_passed": summary.get("optimization_passed"),
+                "evaluation_passed": summary.get("evaluation_passed"),
+                "optimization_score": summary.get("optimization_score"),
+                "evaluation_score": summary.get("evaluation_score"),
+                "threshold": summary.get("threshold"),
+                "candidate_lineage_count": summary.get("candidate_lineage_count"),
+                "best_environment_types": [
+                    str(environment.get("type") or "") for environment in best_envs
+                ],
+                "selected_profile": selected_profile,
+                "best_patch_keys": sorted(str(path) for path in best_patch),
+                "best_metrics": {
+                    metric: best_metrics.get(metric)
+                    for metric in V1_WORKFLOW_HOOK_REQUIRED_METRICS
+                },
+            }
+            example_evidence["runtime"] = {
+                "state_keys": sorted(str(key) for key in state),
+                "workflow_summary": dict(workflow_summary),
+                "refund_workflow": dict(refund_workflow),
+                "trace": {
+                    "tool": trace.get("tool"),
+                    "status_code": trace.get("status_code"),
+                    "success": trace.get("success"),
+                    "auth": dict(trace_auth),
+                },
+                "serialized_secret_absent": env_value not in serialized,
+            }
+            example_evidence["proof"] = {
+                "kind": proof.get("kind"),
+                "status": proof.get("status"),
+                "passed": proof.get("passed"),
+                "assurance_level": proof.get("assurance_level"),
+                "requires_external_service": proof.get("requires_external_service"),
+                "failed_check_ids": list(proof.get("failed_check_ids") or []),
+                "warning_check_ids": list(proof.get("warning_check_ids") or []),
+                "check_ids": check_ids,
+                "passed_check_ids": passed_check_ids,
+                "selected_environment_types": list(
+                    proof_evidence.get("selected_environment_types") or []
+                ),
+                "selected_state_keys": list(
+                    proof_evidence.get("selected_state_keys") or []
+                ),
+                "selected_profile": proof_evidence.get("selected_profile"),
+                "selected_metrics": {
+                    metric: selected_metrics.get(metric)
+                    for metric in V1_WORKFLOW_HOOK_REQUIRED_METRICS
+                },
+                "summary": {
+                    "workflow_hook_proof_status": summary.get(
+                        "workflow_hook_proof_status"
+                    ),
+                    "workflow_hook_proof_passed": summary.get(
+                        "workflow_hook_proof_passed"
+                    ),
+                    "workflow_hook_proof_failed_check_count": summary.get(
+                        "workflow_hook_proof_failed_check_count"
+                    ),
+                },
+            }
+
+            manifest_expectations = {
+                "manifest.version": (
+                    manifest.get("version"),
+                    "agent-learning.optimization.v1",
+                ),
+                "manifest.required_env": (manifest.get("required_env") or [], [env_name]),
+                "manifest.optimization.target.metadata.task_kind": (
+                    metadata.get("task_kind"),
+                    "workflow_hook",
+                ),
+                "manifest.optimization.target.metadata.cookbook": (
+                    metadata.get("cookbook"),
+                    "sdk-workflow-hook-optimization",
+                ),
+            }
+            for field, (observed, expected) in manifest_expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_layers = missing_values(
+                target.get("layers") or [],
+                ["tools", "security", "environment", "integration", "evaluator"],
+            )
+            if missing_layers:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.layers",
+                    expected=["tools", "security", "environment", "integration", "evaluator"],
+                    observed=target.get("layers") or [],
+                )
+            if "simulation.environments" not in set(metadata.get("candidate_search_paths") or []):
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.metadata.candidate_search_paths",
+                    expected=["simulation.environments"],
+                    observed=metadata.get("candidate_search_paths") or [],
+                )
+            if len(candidates) < 3:
+                append_error(
+                    manifest_errors,
+                    path=path,
+                    field="manifest.optimization.target.search_space.simulation.environments",
+                    expected=">=3",
+                    observed=len(candidates),
+                )
+            for profile in (
+                "mocked_without_http_execution",
+                "http_workflow_hook_missing_auth",
+                V1_WORKFLOW_HOOK_SELECTED_PROFILE,
+            ):
+                if profile not in candidate_profiles:
+                    append_error(
+                        manifest_errors,
+                        path=path,
+                        field="manifest.workflow_hook_candidate_profiles",
+                        expected=profile,
+                        observed=candidate_profiles,
+                    )
+
+            optimization_expectations = {
+                "result.kind": (result.get("kind"), "agent-learning.optimization.v1"),
+                "result.status": (result.get("status"), "passed"),
+                "output_roundtrip": (result == saved, True),
+                "summary.optimization_passed": (
+                    summary.get("optimization_passed"),
+                    True,
+                ),
+                "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+                "best_environment_type": (best_env.get("type"), "workflow_hook"),
+                "best_candidate_profile": (
+                    selected_profile,
+                    V1_WORKFLOW_HOOK_SELECTED_PROFILE,
+                ),
+                "best_hook.auth.type": (best_auth.get("type"), "bearer"),
+                "best_hook.auth.token_env": (best_auth.get("token_env"), env_name),
+            }
+            for field, (observed, expected) in optimization_expectations.items():
+                if observed != expected:
+                    append_error(
+                        optimization_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if _float_or_zero(summary.get("optimization_score")) < _float_or_zero(
+                summary.get("threshold")
+            ):
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.optimization_score",
+                    expected=f">={summary.get('threshold')}",
+                    observed=summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.evaluation_score",
+                    expected=">=1.0",
+                    observed=summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 3:
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="summary.candidate_lineage_count",
+                    expected=">=3",
+                    observed=summary.get("candidate_lineage_count"),
+                )
+            if "simulation.environments" not in set(best_patch):
+                append_error(
+                    optimization_errors,
+                    path=path,
+                    field="best_history.patch",
+                    expected=["simulation.environments"],
+                    observed=sorted(str(item) for item in best_patch),
+                )
+
+            runtime_expectations = {
+                "workflow_hooks.summary.call_count": (
+                    workflow_summary.get("call_count"),
+                    1,
+                ),
+                "workflow_hooks.summary.success_count": (
+                    workflow_summary.get("success_count"),
+                    1,
+                ),
+                "refund_workflow.status": (refund_workflow.get("status"), "completed"),
+                "refund_workflow.approval_id": (
+                    refund_workflow.get("approval_id"),
+                    "wf_refund_2026",
+                ),
+                "workflow_hooks.last_call.tool": (
+                    trace.get("tool"),
+                    "execute_refund_workflow",
+                ),
+                "workflow_hooks.last_call.status_code": (trace.get("status_code"), 200),
+                "workflow_hooks.last_call.success": (trace.get("success"), True),
+                "workflow_hooks.last_call.auth.redacted": (
+                    trace_auth.get("redacted"),
+                    True,
+                ),
+                "workflow_hooks.last_call.auth.token_env": (
+                    trace_auth.get("token_env"),
+                    env_name,
+                ),
+            }
+            for field, (observed, expected) in runtime_expectations.items():
+                if observed != expected:
+                    append_error(
+                        runtime_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_state_keys = missing_values(
+                state,
+                V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    runtime_errors,
+                    path=path,
+                    field="report.results.metadata.environment_state",
+                    expected=V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS,
+                    observed=sorted(str(key) for key in state),
+                )
+
+            proof_expectations = {
+                "workflow_hook_proof.kind": (
+                    proof.get("kind"),
+                    V1_WORKFLOW_HOOK_PROOF_KIND,
+                ),
+                "workflow_hook_proof.status": (proof.get("status"), "passed"),
+                "workflow_hook_proof.passed": (proof.get("passed"), True),
+                "workflow_hook_proof.assurance_level": (
+                    proof.get("assurance_level"),
+                    V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL,
+                ),
+                "workflow_hook_proof.requires_external_service": (
+                    proof.get("requires_external_service"),
+                    False,
+                ),
+                "workflow_hook_proof.failed_check_ids": (
+                    proof.get("failed_check_ids") or [],
+                    [],
+                ),
+                "workflow_hook_proof.warning_check_ids": (
+                    proof.get("warning_check_ids") or [],
+                    [],
+                ),
+                "summary.workflow_hook_proof_status": (
+                    summary.get("workflow_hook_proof_status"),
+                    "passed",
+                ),
+                "summary.workflow_hook_proof_passed": (
+                    summary.get("workflow_hook_proof_passed"),
+                    True,
+                ),
+                "summary.workflow_hook_proof_failed_check_count": (
+                    summary.get("workflow_hook_proof_failed_check_count"),
+                    0,
+                ),
+            }
+            for field, (observed, expected) in proof_expectations.items():
+                if observed != expected:
+                    append_error(
+                        proof_errors,
+                        path=path,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_proof_checks = missing_values(
+                passed_check_ids,
+                V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS,
+            )
+            if missing_proof_checks:
+                append_error(
+                    proof_errors,
+                    path=path,
+                    field="workflow_hook_proof.passed_check_ids",
+                    expected=V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS,
+                    observed=passed_check_ids,
+                )
+
+            for metric in V1_WORKFLOW_HOOK_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=f"best_history.metrics.{metric}",
+                        expected=">=1.0",
+                        observed=best_metrics.get(metric),
+                    )
+                if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        path=path,
+                        field=f"workflow_hook_proof.evidence.selected_metrics.{metric}",
+                        expected=">=1.0",
+                        observed=selected_metrics.get(metric),
+                    )
+
+            if env_value in serialized:
+                append_error(
+                    security_errors,
+                    path=path,
+                    field="serialized_result",
+                    expected=f"{env_name} value absent",
+                    observed=f"{env_name} value present",
+                )
+        except Exception as exc:
+            execution_errors.append({"path": path, "error": str(exc)})
+            evidence["examples"].setdefault(path, {})
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_env is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_env
+            if previous_endpoint is None:
+                os.environ.pop(endpoint_env, None)
+            else:
+                os.environ[endpoint_env] = previous_endpoint
+
+    return {
+        "required_files": list(V1_WORKFLOW_HOOK_FILES),
+        "required_environment_types": list(V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES),
+        "required_state_keys": list(V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS),
+        "required_metrics": list(V1_WORKFLOW_HOOK_REQUIRED_METRICS),
+        "required_proof_kind": V1_WORKFLOW_HOOK_PROOF_KIND,
+        "required_assurance_level": V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL,
+        "required_proof_checks": list(V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS),
+        "selected_profile": V1_WORKFLOW_HOOK_SELECTED_PROFILE,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "runtime_errors": runtime_errors,
+        "metric_errors": metric_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
 
 
 def _release_semantic_framework_adapter_status(
@@ -22547,6 +23500,7 @@ def _release_semantic_framework_adapter_status(
     artifact_errors: list[dict[str, Any]] = []
     metric_errors: list[dict[str, Any]] = []
     state_errors: list[dict[str, Any]] = []
+    proof_surface_errors: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     adapters: list[dict[str, Any]] = []
 
@@ -22564,10 +23518,30 @@ def _release_semantic_framework_adapter_status(
                     raise RuntimeError(f"Unable to load {example_path}")
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
+                proof_surface: dict[str, Any] = {}
                 with tempfile.TemporaryDirectory(
                     prefix=f"agent-learning-{surface}-"
                 ) as tmpdir:
-                    result = module.run(Path(tmpdir) / f"{surface}.json")
+                    tmp_root = Path(tmpdir)
+                    output_path = tmp_root / f"{surface}.json"
+                    result = module.run(output_path)
+                    if surface == "workflow_trace":
+                        (
+                            proof_surface,
+                            surface_errors,
+                        ) = _stateful_framework_adapter_workflow_proof_surface(
+                            result,
+                            source_path=output_path,
+                            tmp_root=tmp_root,
+                        )
+                        for error in surface_errors:
+                            proof_surface_errors.append(
+                                {
+                                    "surface": surface,
+                                    "path": relative_path,
+                                    **error,
+                                }
+                            )
             except Exception as exc:
                 errors.append({"path": relative_path, "surface": surface, "error": str(exc)})
                 continue
@@ -22661,6 +23635,8 @@ def _release_semantic_framework_adapter_status(
                     for field in state_fields
                 },
             }
+            if proof_surface:
+                record["proof_surface"] = proof_surface
             adapters.append(record)
 
             expectations = {
@@ -22852,6 +23828,7 @@ def _release_semantic_framework_adapter_status(
         "artifact_errors": artifact_errors,
         "metric_errors": metric_errors,
         "state_errors": state_errors,
+        "proof_surface_errors": proof_surface_errors,
         "errors": errors,
         "adapters": adapters,
     }

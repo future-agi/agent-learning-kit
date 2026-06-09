@@ -103,11 +103,11 @@ external input shapes. Agent Learning
 environment robustness is
 also executable: release-check aggregates local replay, framework, eval,
 optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
-red-team, orchestration, and regression proof outputs and requires at least ten
-independent axes to pass. OpenEnv and Gymnasium are compatibility inputs, not
-the product center. Regression artifact readiness runs the local baseline, compare,
-report, promote-to-regression, and replay lifecycle so optimized or red-team
-evidence can become replayable CI artifacts. Optimizer governance readiness
+workflow-hook, red-team, orchestration, and regression proof outputs and requires
+at least ten independent axes to pass. OpenEnv and Gymnasium are compatibility
+inputs, not the product center. Regression artifact readiness runs the local
+baseline, compare, report, promote-to-regression, and replay lifecycle so
+optimized or red-team evidence can become replayable CI artifacts. Optimizer governance readiness
 executes local governed optimizer-society search and verifies candidate lineage,
 role credit, top-ranked selection, rollback, locality, dependency audit, and
 optimizer trace metrics. Optimizer portfolio readiness makes backend selection
@@ -870,6 +870,11 @@ selected output. See
 now runs this cookbook locally and requires the selected `execute_task(dict)`
 adapter to emit graph topology, checkpoints, route decisions, interrupts,
 replay, tool evidence, artifacts, and passing workflow coverage/quality metrics.
+The release gate must also make that workflow-trace adapter visible to Future
+AGI by rendering a `stateful_framework_adapter` report/action card, exposing
+report/promote/replay/export actions, promoting a local-only regression, and
+replaying the promoted run with workflow coverage, graph-quality, and framework
+runtime-contract metrics closed.
 
 Orchestration framework exports normalize multi-agent control semantics.
 Supervisor/delegate/handoff traces, CrewAI-style routed coordination records,
@@ -2131,6 +2136,12 @@ auth before selecting the verified authenticated hook. The SDK entry points are
 `simulate.build_workflow_hook_run_manifest()`,
 `optimize.build_workflow_hook_optimization_manifest()`, and
 `optimize.optimize_workflow_hooks()`.
+`agent-learn release-check` gates this path as `workflow_hook_readiness`: the
+SDK example must run a local authenticated hook, select
+`verified_authenticated_workflow_hook`, attach
+`agent-learning.optimization.workflow-hook-proof.v1`, prove redacted auth and
+`workflow_hooks`/`refund_workflow` state, and feed the
+`authenticated_workflow_hooks` axis in `environment_10x_robustness`.
 
 The `sdk_retrieval_hook_optimization.py` example adds executable HTTP
 retrieval/RAG hooks. A manifest can expose `retrieval_hook` tools backed by a

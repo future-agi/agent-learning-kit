@@ -53,7 +53,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
+| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_trace_export_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -429,7 +429,16 @@ Current checkpoint:
   `examples/sdk_framework_adapter_lifecycle_trace.py` must run locally, select
   the local stateful adapter methods, emit memory/workflow/orchestration/
   lifecycle state, events, and artifacts, and pass framework runtime, coverage,
-  quality, retrieval, and recovery metrics.
+  quality, retrieval, and recovery metrics. The workflow-trace slice must also
+  expose a Future AGI-visible `stateful_framework_adapter` report/action card,
+  promote a local-only regression, and replay that promoted run with workflow
+  coverage, graph-quality, and framework runtime-contract metrics closed.
+- Workflow hook readiness is now an executable release-check gate:
+  `examples/sdk_workflow_hook_optimization.py` must run a local authenticated
+  HTTP workflow hook, select the verified authenticated hook over mocked/missing
+  auth candidates, attach native workflow-hook proof, prove secret redaction plus
+  `workflow_hooks`/`refund_workflow` runtime state, and count as the
+  `authenticated_workflow_hooks` axis in `environment_10x_robustness`.
 - Framework adapter trinity suite readiness is now an executable release-check
   gate: `examples/sdk_framework_adapter_trinity_suite.py` must pass the local
   run+redteam suite with the same promoted adapter contract, and
@@ -534,8 +543,13 @@ Next implementation focus:
 - Keep stateful framework adapters on the same bar: local release gates should
   prove governed memory lineage, retrieval attribution, durable workflow
   checkpoints/replay, supervisor orchestration, lifecycle retry/recovery, and
-  full runtime-contract evidence before expanding to additional framework
-  control planes.
+  full runtime-contract evidence, including report/action, regression
+  promotion, and replay proof surfaces, before expanding to additional
+  framework control planes.
+- Keep workflow hooks on the Agent Learning-native bar: OpenEnv compatibility is
+  useful, but authenticated workflow-hook optimization must remain our own local
+  proof surface with redacted auth, state updates, candidate lineage, and replay
+  evidence before adding third-party workflow providers.
 
 ### M7: Release Packaging And Proof
 

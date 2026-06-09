@@ -25,6 +25,9 @@ AGENT_LEARNING_SUITE_OPTIMIZATION_KIND = "agent-learning.suite-optimization.v1"
 AGENT_LEARNING_WORLD_HOOK_PROOF_KIND = (
     "agent-learning.optimization.world-hook-proof.v1"
 )
+AGENT_LEARNING_WORKFLOW_HOOK_PROOF_KIND = (
+    "agent-learning.optimization.workflow-hook-proof.v1"
+)
 AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND = (
     "agent-learning.optimization.framework-certification-proof.v1"
 )
@@ -399,6 +402,7 @@ def optimize_manifest_file(
     payload = with_redteam_attack_evolution_proof(payload)
     payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
+    payload = with_workflow_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
     payload = with_workspace_import_certification_proof(payload)
@@ -435,6 +439,7 @@ def optimize_manifest(
     payload = with_redteam_attack_evolution_proof(payload)
     payload = with_framework_runtime_proof(payload)
     payload = with_world_hook_proof(payload)
+    payload = with_workflow_hook_proof(payload)
     payload = with_framework_certification_proof(payload)
     payload = with_framework_adapter_matrix_proof(payload)
     payload = with_workspace_import_certification_proof(payload)
@@ -475,6 +480,34 @@ def with_world_hook_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
     summary["world_hook_proof_check_count"] = proof["check_count"]
     summary["world_hook_proof_failed_check_count"] = len(proof["failed_check_ids"])
     summary["world_hook_proof_warning_check_count"] = len(
+        proof["warning_check_ids"]
+    )
+    result["summary"] = summary
+    return result
+
+
+def with_workflow_hook_proof(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a native proof contract for authenticated workflow-hook optimizations."""
+
+    result = copy.deepcopy(dict(payload))
+    optimization = _plain_mapping(result.get("optimization"))
+    if not _is_workflow_hook_optimization(result, optimization):
+        return result
+
+    proof = _workflow_hook_proof(result, optimization)
+    result["workflow_hook_proof"] = proof
+    optimization["workflow_hook_proof"] = copy.deepcopy(proof)
+    result["optimization"] = optimization
+
+    summary = _plain_mapping(result.get("summary"))
+    summary["workflow_hook_proof_status"] = proof["status"]
+    summary["workflow_hook_proof_passed"] = proof["passed"]
+    summary["workflow_hook_proof_assurance_level"] = proof["assurance_level"]
+    summary["workflow_hook_proof_check_count"] = proof["check_count"]
+    summary["workflow_hook_proof_failed_check_count"] = len(
+        proof["failed_check_ids"]
+    )
+    summary["workflow_hook_proof_warning_check_count"] = len(
         proof["warning_check_ids"]
     )
     result["summary"] = summary
@@ -4469,6 +4502,324 @@ def _world_hook_proof(
         "passed_check_count": sum(1 for check in checks if check["passed"]),
         "failed_check_ids": failed,
         "warning_check_ids": warnings,
+        "checks": checks,
+    }
+
+
+def _workflow_hook_proof(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_manifest = _source_manifest_with_optimization(optimization)
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(
+        source_manifest.get("optimization")
+    ) or _plain_mapping(optimization.get("manifest_optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    target_metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    source_name = str(source_manifest.get("name") or "")
+    eval_config = _plain_mapping(
+        _plain_mapping(_plain_mapping(source_manifest.get("evaluation")).get("agent_report"))
+        .get("config")
+    )
+    required_tools = {str(tool) for tool in _plain_list(eval_config.get("required_tools"))}
+    source_task_kind = _scope_key(target_metadata.get("task_kind"))
+    if not source_task_kind and "workflow_hook" in _scope_key(source_name):
+        source_task_kind = "workflow_hook"
+    manifest_search_space = _plain_mapping(source_optimization.get("search_space"))
+    search_paths = [
+        str(path)
+        for path in _plain_list(
+            manifest_search_space.get("paths")
+            or _plain_mapping(optimization.get("manifest_optimization")).get("search_paths")
+            or _plain_mapping(payload.get("summary")).get("search_paths")
+        )
+        if path is not None
+    ]
+    target_layers = {_scope_key(layer) for layer in _plain_list(target.get("layers"))}
+    required_env = [str(item) for item in _plain_list(source_manifest.get("required_env"))]
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    environment_types = [str(environment.get("type") or "") for environment in environments]
+    workflow_env = _world_hook_environment(environments, "workflow_hook")
+    workflow_data = _plain_mapping(workflow_env.get("data"))
+    hooks = _plain_mapping(workflow_data.get("hooks"))
+    hook_name = "execute_refund_workflow"
+    hook = _plain_mapping(hooks.get(hook_name))
+    hook_metadata = _plain_mapping(hook.get("metadata"))
+    env_metadata = _plain_mapping(workflow_data.get("metadata"))
+    selected_profile = str(
+        hook_metadata.get("candidate_profile")
+        or env_metadata.get("candidate_profile")
+        or ""
+    )
+    hook_auth = _plain_mapping(hook.get("auth"))
+    endpoint = str(hook.get("endpoint") or "")
+    endpoint_parts = urlparse(endpoint)
+    endpoint_host = endpoint_parts.hostname or ""
+    local_endpoint = endpoint_parts.scheme in {"http", "https"} and endpoint_host in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }
+
+    selected_history = _selected_optimization_history(payload, optimization)
+    selected_metrics = _plain_mapping(selected_history.get("metrics"))
+    selected_patch = _plain_mapping(
+        selected_history.get("candidate_patch") or selected_history.get("patch")
+    )
+    patch_paths = sorted(str(path) for path in selected_patch)
+    selected_score = _as_float(selected_history.get("score"))
+    threshold = _as_float(_plain_mapping(payload.get("summary")).get("threshold"))
+    histories = [
+        _plain_mapping(item)
+        for item in _plain_list(optimization.get("history"))
+        if _plain_mapping(item)
+    ]
+
+    report_state = _selected_report_environment_state(selected_history)
+    workflow_state = _plain_mapping(report_state.get("workflow_hooks"))
+    workflow_summary = _plain_mapping(workflow_state.get("summary"))
+    refund_workflow = _plain_mapping(report_state.get("refund_workflow"))
+    trace = _plain_mapping(
+        workflow_state.get("last_call")
+        or next(
+            (
+                _plain_mapping(item)
+                for item in _plain_list(workflow_state.get("calls"))
+                if _plain_mapping(item)
+            ),
+            {},
+        )
+    )
+    trace_auth = _plain_mapping(trace.get("auth"))
+    trace_header_names = {str(name) for name in _plain_list(trace_auth.get("header_names"))}
+    forbidden_trace_keys = sorted(
+        _present_nested_keys(trace, {"api_key", "secret", "token"})
+    )
+    required_metrics = (
+        "tool_selection_accuracy",
+        "tool_argument_schema",
+        "workflow_trace_coverage",
+        "secret_leakage",
+    )
+
+    checks = [
+        _proof_check(
+            "workflow_hook_source_manifest_contract_closed",
+            passed=(
+                source_manifest.get("version") == "agent-learning.optimization.v1"
+                and source_task_kind == "workflow_hook"
+                and hook_name in required_tools
+                and "simulation.environments" in set(search_paths)
+                and "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY" in set(required_env)
+                and (
+                    not target_layers
+                    or {"tools", "security", "environment", "integration", "evaluator"}
+                    <= target_layers
+                )
+            ),
+            required=True,
+            reason=(
+                "source manifest declares the workflow-hook task, required secret "
+                "env, environment search path, and integration/security layers"
+            ),
+            evidence={
+                "version": source_manifest.get("version"),
+                "name": source_name,
+                "task_kind": source_task_kind,
+                "cookbook": target_metadata.get("cookbook"),
+                "required_env": required_env,
+                "required_tools": sorted(required_tools),
+                "search_paths": search_paths,
+                "target_layers": sorted(target_layers),
+            },
+        ),
+        _proof_check(
+            "local_authenticated_workflow_hook_selected",
+            passed=(
+                _scope_key(workflow_env.get("type")) == "workflow_hook"
+                and selected_profile == "verified_authenticated_workflow_hook"
+                and str(hook.get("method") or "").upper() == "POST"
+                and local_endpoint
+                and hook_auth.get("type") == "bearer"
+                and hook_auth.get("token_env")
+                == "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"
+                and not _contains_nested_keys(hook_auth, {"api_key", "secret", "token"})
+            ),
+            required=True,
+            reason=(
+                "selected candidate uses the verified local authenticated workflow "
+                "hook and references auth by environment variable"
+            ),
+            evidence={
+                "environment_types": environment_types,
+                "selected_profile": selected_profile,
+                "hook_name": hook_name if hook else None,
+                "method": hook.get("method"),
+                "endpoint_host": endpoint_parts.netloc,
+                "local_endpoint": local_endpoint,
+                "auth_type": hook_auth.get("type"),
+                "auth_token_env": hook_auth.get("token_env"),
+            },
+        ),
+        _proof_check(
+            "workflow_hook_execution_state_closed",
+            passed=(
+                _as_int(workflow_summary.get("call_count")) >= 1
+                and _as_int(workflow_summary.get("success_count")) >= 1
+                and refund_workflow.get("status") == "completed"
+                and refund_workflow.get("approval_id") == "wf_refund_2026"
+                and trace.get("tool") == hook_name
+                and _as_int(trace.get("status_code")) == 200
+                and trace.get("success") is True
+            ),
+            required=True,
+            reason=(
+                "selected report state records a completed refund workflow and "
+                "successful workflow-hook trace"
+            ),
+            evidence={
+                "workflow_summary": copy.deepcopy(workflow_summary),
+                "refund_workflow": copy.deepcopy(refund_workflow),
+                "trace_status_code": trace.get("status_code"),
+                "trace_success": trace.get("success"),
+                "trace_tool": trace.get("tool"),
+            },
+        ),
+        _proof_check(
+            "workflow_hook_auth_redaction_closed",
+            passed=(
+                trace_auth.get("enabled") is True
+                and trace_auth.get("redacted") is True
+                and trace_auth.get("token_env")
+                == "AGENT_LEARNING_SDK_WORKFLOW_HOOK_KEY"
+                and "Authorization" in trace_header_names
+                and not forbidden_trace_keys
+            ),
+            required=True,
+            reason=(
+                "workflow hook trace proves auth was sent while serializing only "
+                "redacted/token-env metadata"
+            ),
+            evidence={
+                "trace_auth": copy.deepcopy(trace_auth),
+                "header_names": sorted(trace_header_names),
+                "forbidden_trace_keys": forbidden_trace_keys,
+            },
+        ),
+        _proof_check(
+            "workflow_hook_metric_evidence_closed",
+            passed=all(
+                _as_float(selected_metrics.get(metric)) >= 1.0
+                for metric in required_metrics
+            ),
+            required=True,
+            reason=(
+                "selected candidate closes workflow hook tool, schema, workflow, "
+                "and secret-leakage metrics"
+            ),
+            evidence={metric: selected_metrics.get(metric) for metric in required_metrics},
+        ),
+        _proof_check(
+            "workflow_hook_patch_surface_present",
+            passed="simulation.environments" in set(patch_paths),
+            required=True,
+            reason="optimizer selected the workflow-hook environment patch surface",
+            evidence={"patch_paths": patch_paths},
+        ),
+        _proof_check(
+            "workflow_hook_candidate_lineage_gate_passed",
+            passed=(
+                len(histories) >= 3
+                and selected_score >= max(threshold, 0.95)
+                and bool(selected_history.get("candidate_id"))
+            ),
+            required=True,
+            reason=(
+                "optimizer evaluated multiple candidates and selected a candidate "
+                "above the release threshold"
+            ),
+            evidence={
+                "history_count": len(histories),
+                "selected_candidate_id": selected_history.get("candidate_id"),
+                "selected_score": selected_history.get("score"),
+                "threshold": threshold,
+            },
+        ),
+    ]
+    failed = [check["id"] for check in checks if check["required"] and not check["passed"]]
+    warnings = [
+        check["id"] for check in checks if not check["required"] and not check["passed"]
+    ]
+    passed = not failed
+    return {
+        "kind": AGENT_LEARNING_WORKFLOW_HOOK_PROOF_KIND,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "assurance_level": (
+            "l3_authenticated_workflow_hook_verified"
+            if passed
+            else "workflow_hook_proof_failed"
+        ),
+        "task_kind": source_task_kind,
+        "selected_candidate_id": (
+            optimization.get("best_candidate_id")
+            or _plain_mapping(payload.get("summary")).get("best_candidate_id")
+        ),
+        "candidate_profile": selected_profile,
+        "requires_external_service": not local_endpoint,
+        "evidence": {
+            "selected_environment_types": environment_types,
+            "selected_profile": selected_profile,
+            "selected_hook": {
+                "name": hook_name,
+                "method": hook.get("method"),
+                "endpoint_host": endpoint_parts.netloc,
+                "local_endpoint": local_endpoint,
+                "auth": {
+                    "type": hook_auth.get("type"),
+                    "token_env": hook_auth.get("token_env"),
+                },
+            },
+            "selected_state_keys": sorted(str(key) for key in report_state),
+            "workflow_summary": copy.deepcopy(workflow_summary),
+            "refund_workflow": copy.deepcopy(refund_workflow),
+            "selected_trace": {
+                "tool": trace.get("tool"),
+                "status_code": trace.get("status_code"),
+                "success": trace.get("success"),
+                "auth": copy.deepcopy(trace_auth),
+            },
+            "selected_metrics": {
+                key: selected_metrics.get(key)
+                for key in (
+                    "tool_selection_accuracy",
+                    "tool_argument_schema",
+                    "workflow_trace_coverage",
+                    "secret_leakage",
+                    "task_completion",
+                    "trajectory_score",
+                )
+                if key in selected_metrics
+            },
+            "patch_paths": patch_paths,
+            "candidate_lineage_count": len(histories),
+        },
+        "check_count": len(checks),
+        "passed_check_count": sum(1 for check in checks if check["passed"]),
+        "failed_check_ids": failed,
+        "warning_check_ids": warnings,
+        "passed_check_ids": [str(check["id"]) for check in checks if check["passed"]],
         "checks": checks,
     }
 
@@ -30977,7 +31328,9 @@ def _is_workspace_import_certification_optimization(
 
     source_manifest = _source_manifest_with_optimization(optimization)
     source_metadata = _plain_mapping(source_manifest.get("metadata"))
-    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    source_optimization = _plain_mapping(
+        source_manifest.get("optimization")
+    ) or _plain_mapping(optimization.get("manifest_optimization"))
     target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
     metadata = {
         **source_metadata,
@@ -30996,6 +31349,47 @@ def _is_workspace_import_certification_optimization(
     return (
         "build_workspace_import_certification_optimization_manifest"
         in _scope_key(metadata.get("source"))
+    )
+
+
+def _is_workflow_hook_optimization(
+    payload: Mapping[str, Any],
+    optimization: Mapping[str, Any],
+) -> bool:
+    del payload
+
+    source_manifest = _source_manifest_with_optimization(optimization)
+    source_metadata = _plain_mapping(source_manifest.get("metadata"))
+    source_optimization = _plain_mapping(source_manifest.get("optimization"))
+    target = _plain_mapping(_plain_mapping(source_optimization.get("target")))
+    metadata = {
+        **source_metadata,
+        **_plain_mapping(target.get("metadata")),
+    }
+    if _scope_key(metadata.get("task_kind")) == "workflow_hook":
+        return True
+
+    if _scope_key(metadata.get("cookbook")) in {
+        "workflow_hook",
+        "workflow_hook_optimization",
+        "workflow_hook_optimization_cookbook",
+        "sdk_workflow_hook_optimization",
+    }:
+        return True
+
+    if "build_workflow_hook_optimization_manifest" in _scope_key(metadata.get("source")):
+        return True
+
+    best_config = _plain_mapping(optimization.get("best_config"))
+    simulation = _plain_mapping(best_config.get("simulation"))
+    environments = [
+        _plain_mapping(item)
+        for item in _plain_list(simulation.get("environments"))
+        if _plain_mapping(item)
+    ]
+    return any(
+        _scope_key(environment.get("type")) == "workflow_hook"
+        for environment in environments
     )
 
 
@@ -31678,6 +32072,7 @@ __all__ = [
     "AGENT_LEARNING_REDTEAM_ATTACK_EVOLUTION_PROOF_KIND",
     "AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND",
     "AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND",
+    "AGENT_LEARNING_WORKFLOW_HOOK_PROOF_KIND",
     "AGENT_LEARNING_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND",
     "AGENT_LEARNING_WORLD_HOOK_PROOF_KIND",
     "diagnose_report",
@@ -31830,6 +32225,7 @@ __all__ = [
     "with_redteam_campaign_proof",
     "with_redteam_attack_evolution_proof",
     "with_retrospective_harness_proof",
+    "with_workflow_hook_proof",
     "with_workspace_import_certification_proof",
     "with_world_hook_proof",
 ]
