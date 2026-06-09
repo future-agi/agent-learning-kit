@@ -1025,6 +1025,13 @@ promotes the selected stack into the normal `agent-learning.run.v1`
 orchestration simulation path. See
 `examples/sdk_orchestration_stack_probe_optimization.py` for an end-to-end
 probe, promotion, and evaluated run cookbook.
+`agent-learn release-check` gates this path as
+`orchestration_stack_probe_readiness`: the optimizer must select the strong
+local orchestration stack over weak candidates, pass native stack proof, promote
+to `agent-learning.run.v1`, execute the promoted orchestration run, and close
+world transition, LangGraph trace, current retrieval citation, governed memory
+lineage, multi-agent review/reconciliation, required tool, source-grounding, and
+run metrics.
 To close the full local trinity boundary before a live evaluator is involved,
 `optimize.optimize_trinity_stack_probe()` first selects the orchestration stack,
 then probes the same selected agent through a localhost evaluation hook and

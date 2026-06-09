@@ -47,7 +47,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `optimizer_governance_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `trinity_stack_probe_readiness` |
+| M6 | Framework/provider simulation surface | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `openenv_optimizer_readiness`, `framework_openenv_adapter_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -333,6 +333,14 @@ Current checkpoint:
   from a run-only seed to the nested full-trinity `suite.json` job while
   preserving framework runtime, adapter-contract, adversarial, campaign, and
   optimizer-governance evidence.
+- Orchestration stack probe readiness is now an executable release-check gate:
+  `examples/sdk_orchestration_stack_probe_optimization.py` must select the
+  strong local world/framework/retrieval/memory/multi-agent stack over weak
+  candidates, pass native orchestration-stack proof checks, promote to
+  `agent-learning.run.v1`, execute the promoted orchestration run, and close
+  world transition, LangGraph trace, current retrieval citation, governed memory
+  lineage, multi-agent review/reconciliation, required tool, source-grounding,
+  and run metrics.
 - Trinity stack probe readiness is now an executable release-check gate:
   `examples/sdk_trinity_stack_probe_optimization.py` must select the local
   orchestration stack, reuse the same selected agent through a localhost

@@ -15358,6 +15358,60 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_adapter_trinity_suite_optimizer_flags"] == (
         trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
     )
+    assert payload["required_orchestration_stack_probe_files"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FILES
+    )
+    assert payload["required_orchestration_stack_probe_environment_types"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_orchestration_stack_probe_state_keys"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_orchestration_stack_probe_proof_kind"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND
+    )
+    assert payload["required_orchestration_stack_probe_selected_stack"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
+    )
+    assert payload["required_orchestration_stack_probe_rejected_stack"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK
+    )
+    assert payload["required_orchestration_stack_probe_framework"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK
+    )
+    assert payload["required_orchestration_stack_probe_expected_transition"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION
+    )
+    assert payload["required_orchestration_stack_probe_expected_doc_id"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
+    )
+    assert payload["forbidden_orchestration_stack_probe_doc_id"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID
+    )
+    assert payload["required_orchestration_stack_probe_roles"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES
+    )
+    assert payload["required_orchestration_stack_probe_reconciliation_source"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
+    )
+    assert payload["required_orchestration_stack_probe_tools"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS
+    )
+    assert payload["required_orchestration_stack_probe_metrics"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
+    )
+    assert payload["required_orchestration_stack_probe_run_metrics"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert payload["required_orchestration_stack_probe_source_grounding_minimum"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
+    )
+    assert payload["required_orchestration_stack_probe_memory_operations"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS
+    )
+    assert payload["required_orchestration_stack_probe_events"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS
+    )
     assert payload["required_trinity_stack_probe_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES
     )
@@ -15469,6 +15523,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "memory_layer_probe_readiness",
         "stateful_framework_adapter_readiness",
         "framework_adapter_trinity_suite_readiness",
+        "orchestration_stack_probe_readiness",
         "trinity_stack_probe_readiness",
         "package_metadata",
     }
@@ -17654,6 +17709,295 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert optimization_evidence["optimizer_trace_terminal_status"] == "completed"
     for flag in trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS:
         assert optimization_evidence["optimizer_trace_flags"][flag] is True
+    orchestration_stack_probe = checks["orchestration_stack_probe_readiness"][
+        "evidence"
+    ]
+    assert orchestration_stack_probe["required_files"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FILES
+    )
+    assert orchestration_stack_probe["required_environment_types"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert orchestration_stack_probe["required_state_keys"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS
+    )
+    assert orchestration_stack_probe["required_proof_kind"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND
+    )
+    assert orchestration_stack_probe["selected_stack"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
+    )
+    assert orchestration_stack_probe["rejected_stack"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK
+    )
+    assert orchestration_stack_probe["required_framework"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK
+    )
+    assert orchestration_stack_probe["expected_transition"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION
+    )
+    assert orchestration_stack_probe["expected_doc_id"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
+    )
+    assert orchestration_stack_probe["forbidden_doc_id"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID
+    )
+    assert orchestration_stack_probe["expected_roles"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES
+    )
+    assert orchestration_stack_probe["expected_reconciliation_source"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
+    )
+    assert orchestration_stack_probe["required_tools"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS
+    )
+    assert orchestration_stack_probe["required_metrics"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
+    )
+    assert orchestration_stack_probe["required_run_metrics"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
+    )
+    assert orchestration_stack_probe["source_grounding_minimum"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
+    )
+    assert orchestration_stack_probe["required_memory_operations"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS
+    )
+    assert orchestration_stack_probe["required_events"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS
+    )
+    assert orchestration_stack_probe["missing_files"] == []
+    assert orchestration_stack_probe["optimization_errors"] == []
+    assert orchestration_stack_probe["proof_errors"] == []
+    assert orchestration_stack_probe["manifest_errors"] == []
+    assert orchestration_stack_probe["metric_errors"] == []
+    assert orchestration_stack_probe["runtime_errors"] == []
+    assert orchestration_stack_probe["errors"] == []
+    orchestration_evidence = orchestration_stack_probe["evidence"]
+    orchestration_optimization = orchestration_evidence["optimization"]
+    assert orchestration_optimization["kind"] == "agent-learning.optimization.v1"
+    assert orchestration_optimization["status"] == "passed"
+    assert orchestration_optimization["optimization_passed"] is True
+    assert orchestration_optimization["evaluation_passed"] is True
+    assert orchestration_optimization["optimization_score"] == pytest.approx(1.0)
+    assert orchestration_optimization["evaluation_score"] == pytest.approx(1.0)
+    assert orchestration_optimization["total_evaluations"] >= 5
+    assert orchestration_optimization["total_iterations"] >= 5
+    assert orchestration_optimization["candidate_lineage_count"] >= 5
+    assert orchestration_optimization[
+        "candidate_lineage_selected_score_delta"
+    ] >= 0.9
+    assert orchestration_optimization[
+        "orchestration_stack_probe_proof_passed"
+    ] is True
+    assert (
+        orchestration_optimization["orchestration_stack_probe_proof_status"]
+        == "passed"
+    )
+    assert orchestration_optimization["selected_stack"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        orchestration_optimization["selected_tool_names"]
+    )
+    assert orchestration_optimization["optimizer_governance_status"] == "passed"
+    assert orchestration_optimization["optimizer_governance_failed_check_count"] == 0
+    orchestration_history = orchestration_optimization["history_stacks"]
+    assert set(orchestration_history) == {
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK,
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK,
+    }
+    assert orchestration_history[trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK][
+        "max_score"
+    ] == pytest.approx(1.0)
+    assert orchestration_history[trinity.V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK][
+        "max_score"
+    ] < orchestration_history[trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK][
+        "max_score"
+    ]
+    orchestration_proof = orchestration_evidence["proof"]
+    assert orchestration_proof["kind"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND
+    )
+    assert orchestration_proof["status"] == "passed"
+    assert orchestration_proof["passed"] is True
+    assert orchestration_proof["assurance_level"] == (
+        "l2_native_orchestration_stack_probe_verified"
+    )
+    assert orchestration_proof["failed_check_ids"] == []
+    assert orchestration_proof["warning_check_ids"] == []
+    assert orchestration_proof["check_count"] >= 11
+    assert orchestration_proof["requires_external_service"] is False
+    assert orchestration_proof["contract_kind"] == (
+        "agent-learning.orchestration-stack-contract.v1"
+    )
+    assert orchestration_proof["contract_runtime"] == "in_process"
+    assert orchestration_proof["contract_local_executable_fixture"] is True
+    assert orchestration_proof["contract_requires_external_service"] is False
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES) <= set(
+        orchestration_proof["contract_environment_types"]
+    )
+    assert orchestration_proof["selected_patch_stack"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        orchestration_proof["selected_patch_tool_names"]
+    )
+    assert orchestration_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
+    }
+    orchestration_selected_summary = orchestration_proof["selected_summary"]
+    assert orchestration_selected_summary["local_executable_fixture"] is True
+    assert orchestration_selected_summary["requires_external_service"] is False
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES) <= set(
+        orchestration_selected_summary["environment_types"]
+    )
+    assert orchestration_selected_summary["expected_transition"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION
+    )
+    assert orchestration_selected_summary["expected_transition_completed"] is True
+    assert orchestration_selected_summary["world_present"] is True
+    assert orchestration_selected_summary["world_state_match"] is True
+    assert orchestration_selected_summary["world_terminal_success"] is True
+    assert orchestration_selected_summary["world_transition_count"] >= 1
+    assert orchestration_selected_summary["world_completed_transition_count"] >= 1
+    assert orchestration_selected_summary["framework"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK
+    )
+    assert orchestration_selected_summary["framework_present"] is True
+    assert orchestration_selected_summary["framework_span_count"] >= 1
+    assert orchestration_selected_summary["framework_required_signal_match_count"] >= (
+        orchestration_selected_summary["framework_required_signal_count"]
+    )
+    assert orchestration_selected_summary["framework_tool_signal_present"] is True
+    assert orchestration_selected_summary["retrieval_present"] is True
+    assert orchestration_selected_summary["retrieval_expected_document_id"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
+    )
+    assert orchestration_selected_summary["retrieval_expected_document_cited"] is True
+    assert orchestration_selected_summary["retrieval_citations_current"] is True
+    assert orchestration_selected_summary["retrieval_current_document_count"] >= 1
+    assert orchestration_selected_summary["retrieval_citation_count"] >= 1
+    assert orchestration_selected_summary["retrieval_freshness_checked_count"] >= 1
+    assert orchestration_selected_summary["memory_present"] is True
+    assert orchestration_selected_summary["memory_store_count"] >= 1
+    assert orchestration_selected_summary["memory_record_count"] >= 1
+    assert orchestration_selected_summary["memory_operation_count"] >= 3
+    assert orchestration_selected_summary["memory_audited_operation_count"] >= (
+        orchestration_selected_summary["memory_operation_count"]
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS) <= set(
+        orchestration_selected_summary["memory_operation_types"]
+    )
+    assert orchestration_selected_summary["memory_required_operations_present"] is True
+    for key in (
+        "has_source_attribution",
+        "has_tenant_isolation",
+        "has_audit",
+        "has_retention_policy",
+        "has_deletion_policy",
+        "has_redaction",
+        "has_canaries",
+        "has_observability",
+        "has_artifacts",
+    ):
+        assert orchestration_selected_summary[key] is True
+    assert orchestration_selected_summary["policy_violation_count"] == 0
+    assert orchestration_selected_summary["open_poisoning_count"] == 0
+    assert orchestration_selected_summary["isolation_violation_count"] == 0
+    assert orchestration_selected_summary["retention_violation_count"] == 0
+    assert orchestration_selected_summary["room_present"] is True
+    assert orchestration_selected_summary["role_match"] is True
+    assert orchestration_selected_summary["allow_unknown_roles"] is False
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES) <= set(
+        orchestration_selected_summary["participants"]
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES) <= set(
+        orchestration_selected_summary["required_roles"]
+    )
+    assert orchestration_selected_summary["review_count"] >= 1
+    assert orchestration_selected_summary["reconciliation_count"] >= 1
+    assert orchestration_selected_summary["expected_review_present"] is True
+    assert orchestration_selected_summary["expected_reconciliation_present"] is True
+    assert orchestration_selected_summary["reconciliation_conflict_count"] == 0
+    assert orchestration_selected_summary["terminal_room_state"] is True
+    assert orchestration_selected_summary["terminal_status"] == "resolved"
+    assert orchestration_selected_summary["tool_call_count"] >= len(
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS
+    )
+    assert orchestration_selected_summary["successful_tool_call_count"] >= (
+        orchestration_selected_summary["tool_call_count"]
+    )
+    assert orchestration_selected_summary["failed_tool_call_count"] == 0
+    assert orchestration_selected_summary["required_tools_present"] is True
+    assert orchestration_selected_summary["required_tools_handled"] is True
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        orchestration_selected_summary["observed_tool_names"]
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        orchestration_selected_summary["handled_tool_names"]
+    )
+    assert orchestration_selected_summary["passed_case_count"] >= 1
+    assert orchestration_selected_summary["failed_case_count"] == 0
+    assert orchestration_selected_summary["finding_count"] == 0
+    assert orchestration_selected_summary["blocking_gap_count"] == 0
+    orchestration_manifest = orchestration_evidence["manifest"]
+    assert orchestration_manifest["version"] == "agent-learning.run.v1"
+    assert orchestration_manifest["required_env"] == []
+    assert (
+        orchestration_manifest["promoted_from_orchestration_stack_probe"] is True
+    )
+    assert (
+        orchestration_manifest["orchestration_stack_probe_proof_status"]
+        == "passed"
+    )
+    assert orchestration_manifest["environment_types"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS) <= set(
+        orchestration_manifest["required_tools"]
+    )
+    assert orchestration_manifest["expected_doc_ids"] == [
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
+    ]
+    assert orchestration_manifest["forbidden_doc_ids"] == [
+        trinity.V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID
+    ]
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES) <= set(
+        orchestration_manifest["required_roles"]
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS) <= set(
+        orchestration_manifest["metric_weights"]
+    )
+    orchestration_run = orchestration_evidence["run"]
+    assert orchestration_run["kind"] == "agent-learning.run.v1"
+    assert orchestration_run["status"] == "passed"
+    assert orchestration_run["evaluation_passed"] is True
+    assert orchestration_run["evaluation_score"] >= 0.98
+    assert orchestration_run["metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
+    }
+    assert orchestration_run["source_grounding"] >= (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS) <= set(
+        orchestration_run["state_keys"]
+    )
+    assert orchestration_run["world_refund_status"] == "approved"
+    assert orchestration_run["retrieval_doc_ids"] == [
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
+    ]
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS) <= set(
+        orchestration_run["memory_operations"]
+    )
+    assert orchestration_run["reconciliation_accepted_source"] == (
+        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
+    )
+    assert set(trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS) <= set(
+        orchestration_run["event_names"]
+    )
     trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
     assert trinity_stack_probe["required_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES

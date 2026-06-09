@@ -590,6 +590,118 @@ V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS = [
     },
 ]
 
+V1_ORCHESTRATION_STACK_PROBE_FILES = [
+    "examples/sdk_orchestration_stack_probe_optimization.py",
+    "examples/sdk_orchestration_optimization.py",
+    "internal-docs/orchestration-stack-probe-research.md",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES = [
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent_room",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS = [
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND = (
+    "agent-learning.optimization.orchestration-stack-probe-proof.v1"
+)
+
+V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK = "strong-orchestration-stack"
+
+V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK = "weak-orchestration-stack"
+
+V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK = "langgraph"
+
+V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION = "approve_refund"
+
+V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID = "doc_refund_2026"
+
+V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID = "doc_refund_2025"
+
+V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES = [
+    "planner",
+    "retriever",
+    "critic",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE = "critic"
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS = [
+    "apply_world_transition",
+    "framework_trace_status",
+    "retrieve_documents",
+    "read_document",
+    "cite_sources",
+    "agent_memory_lineage_status",
+    "retrieval_memory_status",
+    "room_status",
+    "request_review",
+    "reconcile",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS = [
+    "orchestration_stack_probe_pass_rate",
+    "orchestration_stack_probe_local_contract_quality",
+    "orchestration_stack_probe_world_quality",
+    "orchestration_stack_probe_framework_quality",
+    "orchestration_stack_probe_retrieval_quality",
+    "orchestration_stack_probe_memory_quality",
+    "orchestration_stack_probe_multi_agent_quality",
+    "orchestration_stack_probe_tool_evidence",
+    "orchestration_stack_probe_score",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS = [
+    "world_contract_coverage",
+    "world_contract_quality",
+    "framework_trace_coverage",
+    "retrieval_context_quality",
+    "retrieval_memory_attribution",
+    "agent_memory_lineage_coverage",
+    "agent_memory_lineage_quality",
+    "memory_integrity",
+    "multi_agent_trace_coverage",
+    "multi_agent_coordination_quality",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM = 0.7
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS = [
+    "read",
+    "write",
+    "recall",
+]
+
+V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS = [
+    "world_contract_ready",
+    "framework_trace_ready",
+    "retrieval_memory_ready",
+    "agent_memory_lineage_ready",
+    "room_ready",
+    "world_transition_applied",
+    "framework_trace_status",
+    "retrieve_documents",
+    "read_document",
+    "cite_sources",
+    "agent_memory_lineage_status",
+    "retrieval_memory_status",
+    "room_status",
+    "review_requested",
+    "reconciled",
+]
+
 V1_TRINITY_STACK_PROBE_FILES = [
     "examples/sdk_trinity_stack_probe_optimization.py",
     "examples/sdk_orchestration_stack_probe_optimization.py",
@@ -2372,6 +2484,22 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_adapter_trinity_suite,
     )
+    orchestration_stack_probe = _release_orchestration_stack_probe_status(root)
+    _append_release_check(
+        checks,
+        check_id="orchestration_stack_probe_readiness",
+        passed=(
+            not orchestration_stack_probe["missing_files"]
+            and not orchestration_stack_probe["optimization_errors"]
+            and not orchestration_stack_probe["proof_errors"]
+            and not orchestration_stack_probe["manifest_errors"]
+            and not orchestration_stack_probe["metric_errors"]
+            and not orchestration_stack_probe["runtime_errors"]
+            and not orchestration_stack_probe["errors"]
+        ),
+        milestone="M6",
+        evidence=orchestration_stack_probe,
+    )
     trinity_stack_probe = _release_trinity_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -2697,6 +2825,60 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_adapter_trinity_suite_optimizer_flags": list(
             V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
+        ),
+        "required_orchestration_stack_probe_files": list(
+            V1_ORCHESTRATION_STACK_PROBE_FILES
+        ),
+        "required_orchestration_stack_probe_environment_types": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_orchestration_stack_probe_state_keys": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS
+        ),
+        "required_orchestration_stack_probe_proof_kind": (
+            V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND
+        ),
+        "required_orchestration_stack_probe_selected_stack": (
+            V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
+        ),
+        "required_orchestration_stack_probe_rejected_stack": (
+            V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK
+        ),
+        "required_orchestration_stack_probe_framework": (
+            V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK
+        ),
+        "required_orchestration_stack_probe_expected_transition": (
+            V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION
+        ),
+        "required_orchestration_stack_probe_expected_doc_id": (
+            V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
+        ),
+        "forbidden_orchestration_stack_probe_doc_id": (
+            V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID
+        ),
+        "required_orchestration_stack_probe_roles": list(
+            V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES
+        ),
+        "required_orchestration_stack_probe_reconciliation_source": (
+            V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
+        ),
+        "required_orchestration_stack_probe_tools": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS
+        ),
+        "required_orchestration_stack_probe_metrics": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
+        ),
+        "required_orchestration_stack_probe_run_metrics": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "required_orchestration_stack_probe_source_grounding_minimum": (
+            V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
+        ),
+        "required_orchestration_stack_probe_memory_operations": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS
+        ),
+        "required_orchestration_stack_probe_events": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS
         ),
         "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_trinity_stack_probe_environment_types": list(
@@ -12191,6 +12373,1129 @@ def _release_framework_adapter_trinity_suite_status(root: Path) -> dict[str, Any
     }
 
 
+def _release_orchestration_stack_probe_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_ORCHESTRATION_STACK_PROBE_FILES,
+    )
+    optimization_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def tool_names_from_agent(agent: Mapping[str, Any]) -> list[str]:
+        names: list[str] = []
+        for response in _as_list(agent.get("responses")):
+            response_map = _as_mapping(response)
+            for tool_call in _as_list(response_map.get("tool_calls")):
+                name = _as_mapping(tool_call).get("name")
+                if name:
+                    names.append(str(name))
+        return names
+
+    result: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    run_result: dict[str, Any] = {}
+    if not missing_files:
+        example_path = root / "examples/sdk_orchestration_stack_probe_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_orchestration_stack_probe",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            from agent_learning import optimize, simulate
+
+            orchestration_example = module._orchestration_example()
+            result = module.build_probe_optimization()
+            manifest = optimize.build_orchestration_run_manifest_from_probe_optimization(
+                result,
+                name="release-orchestration-stack-probe-readiness",
+                evaluation_config=orchestration_example.evaluation_config(),
+                metadata={"release_check": "orchestration_stack_probe_readiness"},
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-orchestration-stack-probe-"
+            ) as tmpdir:
+                manifest_path = simulate.write_manifest_file(
+                    manifest,
+                    Path(tmpdir) / "orchestration-stack-probe-run.json",
+                )
+                run_result = asyncio.run(simulate.run_manifest_file(manifest_path))
+        except Exception as exc:
+            errors.append({"path": str(example_path.relative_to(root)), "error": str(exc)})
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_pair = _as_mapping(best_config.get("orchestration_stack") or best_config)
+        best_stack = _as_mapping(best_pair.get("stack"))
+        best_agent = _as_mapping(best_pair.get("agent"))
+        best_tool_names = tool_names_from_agent(best_agent)
+        proof = _as_mapping(result.get("orchestration_stack_probe_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        selected_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        selected_summary = _as_mapping(proof_evidence.get("selected_report_summary"))
+        selected_patch = _as_mapping(proof_evidence.get("selected_patch"))
+        selected_patch_pair = _as_mapping(selected_patch.get("orchestration_stack"))
+        selected_patch_stack = _as_mapping(selected_patch_pair.get("stack"))
+        selected_patch_agent = _as_mapping(selected_patch_pair.get("agent"))
+        proof_checks = [
+            check for check in _as_list(proof.get("checks")) if isinstance(check, Mapping)
+        ]
+        contract: Mapping[str, Any] = {}
+        for check in proof_checks:
+            if check.get("id") == "orchestration_stack_probe_local_contract_closed":
+                contract = _as_mapping(
+                    _as_mapping(check.get("evidence")).get(
+                        "orchestration_stack_contract"
+                    )
+                )
+                break
+        histories = [
+            item
+            for item in _as_list(optimization.get("history"))
+            if isinstance(item, Mapping)
+        ]
+        history_stacks: dict[str, dict[str, Any]] = {}
+        for history in histories:
+            candidate = _as_mapping(history.get("candidate_config"))
+            candidate_pair = _as_mapping(
+                candidate.get("orchestration_stack") or candidate
+            )
+            candidate_stack = _as_mapping(candidate_pair.get("stack"))
+            candidate_agent = _as_mapping(candidate_pair.get("agent"))
+            stack_name = str(candidate_stack.get("name") or "")
+            if not stack_name:
+                continue
+            score = history.get("score")
+            stack_history = history_stacks.setdefault(
+                stack_name,
+                {
+                    "scores": [],
+                    "max_score": None,
+                    "best_metrics": {},
+                    "tool_call_counts": [],
+                },
+            )
+            stack_history["scores"].append(score)
+            stack_history["tool_call_counts"].append(
+                len(tool_names_from_agent(candidate_agent))
+            )
+            if _float_or_zero(score) >= _float_or_zero(stack_history["max_score"]):
+                stack_history["max_score"] = score
+                stack_history["best_metrics"] = {
+                    metric: _as_mapping(history.get("metrics")).get(metric)
+                    for metric in V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
+                }
+        for stack_history in history_stacks.values():
+            stack_history["scores"] = sorted(
+                stack_history["scores"],
+                key=lambda item: _float_or_zero(item),
+            )
+            stack_history["tool_call_counts"] = sorted(
+                stack_history["tool_call_counts"]
+            )
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "status": result.get("status"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "candidate_lineage_selected_score_delta": summary.get(
+                "candidate_lineage_selected_score_delta"
+            ),
+            "orchestration_stack_probe_proof_passed": summary.get(
+                "orchestration_stack_probe_proof_passed"
+            ),
+            "orchestration_stack_probe_proof_status": summary.get(
+                "orchestration_stack_probe_proof_status"
+            ),
+            "selected_stack": best_stack.get("name"),
+            "selected_tool_names": best_tool_names,
+            "history_stacks": history_stacks,
+            "optimizer_governance_status": summary.get("optimizer_governance_status"),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "failed_check_ids": proof.get("failed_check_ids") or [],
+            "warning_check_ids": proof.get("warning_check_ids") or [],
+            "check_count": proof.get("check_count"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "contract_kind": contract.get("kind"),
+            "contract_runtime": contract.get("runtime"),
+            "contract_local_executable_fixture": contract.get(
+                "local_executable_fixture"
+            ),
+            "contract_requires_external_service": contract.get(
+                "requires_external_service"
+            ),
+            "contract_environment_types": contract.get("environment_types") or [],
+            "selected_patch_stack": selected_patch_stack.get("name"),
+            "selected_patch_tool_names": tool_names_from_agent(selected_patch_agent),
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
+            },
+            "selected_summary": {
+                "local_executable_fixture": selected_summary.get(
+                    "local_executable_fixture"
+                ),
+                "requires_external_service": selected_summary.get(
+                    "requires_external_service"
+                ),
+                "environment_types": selected_summary.get("environment_types") or [],
+                "expected_transition": selected_summary.get("expected_transition"),
+                "expected_transition_completed": selected_summary.get(
+                    "expected_transition_completed"
+                ),
+                "world_present": selected_summary.get("world_present"),
+                "world_state_match": selected_summary.get("world_state_match"),
+                "world_terminal_success": selected_summary.get(
+                    "world_terminal_success"
+                ),
+                "world_transition_count": selected_summary.get(
+                    "world_transition_count"
+                ),
+                "world_completed_transition_count": selected_summary.get(
+                    "world_completed_transition_count"
+                ),
+                "framework": selected_summary.get("framework"),
+                "framework_present": selected_summary.get("framework_present"),
+                "framework_span_count": selected_summary.get("framework_span_count"),
+                "framework_required_signal_count": selected_summary.get(
+                    "framework_required_signal_count"
+                ),
+                "framework_required_signal_match_count": selected_summary.get(
+                    "framework_required_signal_match_count"
+                ),
+                "framework_tool_signal_present": selected_summary.get(
+                    "framework_tool_signal_present"
+                ),
+                "retrieval_present": selected_summary.get("retrieval_present"),
+                "retrieval_expected_document_id": selected_summary.get(
+                    "retrieval_expected_document_id"
+                ),
+                "retrieval_expected_document_cited": selected_summary.get(
+                    "retrieval_expected_document_cited"
+                ),
+                "retrieval_citations_current": selected_summary.get(
+                    "retrieval_citations_current"
+                ),
+                "retrieval_current_document_count": selected_summary.get(
+                    "retrieval_current_document_count"
+                ),
+                "retrieval_citation_count": selected_summary.get(
+                    "retrieval_citation_count"
+                ),
+                "retrieval_freshness_checked_count": selected_summary.get(
+                    "retrieval_freshness_checked_count"
+                ),
+                "memory_present": selected_summary.get("memory_present"),
+                "memory_store_count": selected_summary.get("memory_store_count"),
+                "memory_record_count": selected_summary.get("memory_record_count"),
+                "memory_operation_count": selected_summary.get(
+                    "memory_operation_count"
+                ),
+                "memory_audited_operation_count": selected_summary.get(
+                    "memory_audited_operation_count"
+                ),
+                "memory_operation_types": selected_summary.get(
+                    "memory_operation_types"
+                )
+                or [],
+                "memory_required_operations_present": selected_summary.get(
+                    "memory_required_operations_present"
+                ),
+                "has_source_attribution": selected_summary.get(
+                    "has_source_attribution"
+                ),
+                "has_tenant_isolation": selected_summary.get("has_tenant_isolation"),
+                "has_audit": selected_summary.get("has_audit"),
+                "has_retention_policy": selected_summary.get(
+                    "has_retention_policy"
+                ),
+                "has_deletion_policy": selected_summary.get("has_deletion_policy"),
+                "has_redaction": selected_summary.get("has_redaction"),
+                "has_canaries": selected_summary.get("has_canaries"),
+                "has_observability": selected_summary.get("has_observability"),
+                "has_artifacts": selected_summary.get("has_artifacts"),
+                "policy_violation_count": selected_summary.get(
+                    "policy_violation_count"
+                ),
+                "open_poisoning_count": selected_summary.get("open_poisoning_count"),
+                "isolation_violation_count": selected_summary.get(
+                    "isolation_violation_count"
+                ),
+                "retention_violation_count": selected_summary.get(
+                    "retention_violation_count"
+                ),
+                "room_present": selected_summary.get("room_present"),
+                "role_match": selected_summary.get("role_match"),
+                "allow_unknown_roles": selected_summary.get("allow_unknown_roles"),
+                "participants": selected_summary.get("participants") or [],
+                "required_roles": selected_summary.get("required_roles") or [],
+                "review_count": selected_summary.get("review_count"),
+                "reconciliation_count": selected_summary.get("reconciliation_count"),
+                "expected_review_present": selected_summary.get(
+                    "expected_review_present"
+                ),
+                "expected_reconciliation_present": selected_summary.get(
+                    "expected_reconciliation_present"
+                ),
+                "reconciliation_conflict_count": selected_summary.get(
+                    "reconciliation_conflict_count"
+                ),
+                "terminal_room_state": selected_summary.get("terminal_room_state"),
+                "terminal_status": selected_summary.get("terminal_status"),
+                "tool_call_count": selected_summary.get("tool_call_count"),
+                "successful_tool_call_count": selected_summary.get(
+                    "successful_tool_call_count"
+                ),
+                "failed_tool_call_count": selected_summary.get(
+                    "failed_tool_call_count"
+                ),
+                "required_tools_present": selected_summary.get(
+                    "required_tools_present"
+                ),
+                "required_tools_handled": selected_summary.get(
+                    "required_tools_handled"
+                ),
+                "observed_tool_names": selected_summary.get("observed_tool_names")
+                or [],
+                "handled_tool_names": selected_summary.get("handled_tool_names")
+                or [],
+                "case_count": selected_summary.get("case_count"),
+                "passed_case_count": selected_summary.get("passed_case_count"),
+                "failed_case_count": selected_summary.get("failed_case_count"),
+                "finding_count": selected_summary.get("finding_count"),
+                "blocking_gap_count": selected_summary.get("blocking_gap_count"),
+            },
+        }
+
+        optimization_expectations = {
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "summary.optimization_passed": (summary.get("optimization_passed"), True),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "summary.orchestration_stack_probe_proof_passed": (
+                summary.get("orchestration_stack_probe_proof_passed"),
+                True,
+            ),
+            "summary.orchestration_stack_probe_proof_status": (
+                summary.get("orchestration_stack_probe_proof_status"),
+                "passed",
+            ),
+            "best_config.orchestration_stack.stack.name": (
+                best_stack.get("name"),
+                V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.optimization_score",
+                expected=1.0,
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                field="summary.evaluation_score",
+                expected=1.0,
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 5:
+            append_error(
+                optimization_errors,
+                field="summary.total_evaluations",
+                expected=">=5",
+                observed=summary.get("total_evaluations"),
+            )
+        if _int_or_zero(summary.get("total_iterations")) < 5:
+            append_error(
+                optimization_errors,
+                field="summary.total_iterations",
+                expected=">=5",
+                observed=summary.get("total_iterations"),
+            )
+        if _int_or_zero(summary.get("candidate_lineage_count")) < 5:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_count",
+                expected=">=5",
+                observed=summary.get("candidate_lineage_count"),
+            )
+        if _float_or_zero(
+            summary.get("candidate_lineage_selected_score_delta")
+        ) < 0.9:
+            append_error(
+                optimization_errors,
+                field="summary.candidate_lineage_selected_score_delta",
+                expected=">=0.9",
+                observed=summary.get("candidate_lineage_selected_score_delta"),
+            )
+        for stack_name in (
+            V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK,
+            V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK,
+        ):
+            if stack_name not in history_stacks:
+                append_error(
+                    optimization_errors,
+                    field="optimization.history.stacks",
+                    expected=stack_name,
+                    observed=sorted(history_stacks),
+                )
+        selected_history = history_stacks.get(
+            V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK,
+            {},
+        )
+        rejected_history = history_stacks.get(
+            V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK,
+            {},
+        )
+        if _float_or_zero(selected_history.get("max_score")) <= _float_or_zero(
+            rejected_history.get("max_score")
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.history.score_order",
+                expected="selected > rejected",
+                observed={
+                    "selected": selected_history.get("max_score"),
+                    "rejected": rejected_history.get("max_score"),
+                },
+            )
+        missing_selected_tools = missing_values(
+            best_tool_names,
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS,
+        )
+        if missing_selected_tools:
+            append_error(
+                optimization_errors,
+                field="best_config.orchestration_stack.agent.tool_calls",
+                expected=V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS,
+                observed=best_tool_names,
+            )
+
+        proof_expectations = {
+            "kind": (proof.get("kind"), V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND),
+            "status": (proof.get("status"), "passed"),
+            "passed": (proof.get("passed"), True),
+            "assurance_level": (
+                proof.get("assurance_level"),
+                "l2_native_orchestration_stack_probe_verified",
+            ),
+            "failed_check_ids": (proof.get("failed_check_ids") or [], []),
+            "warning_check_ids": (proof.get("warning_check_ids") or [], []),
+            "requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "contract.kind": (
+                contract.get("kind"),
+                "agent-learning.orchestration-stack-contract.v1",
+            ),
+            "contract.runtime": (contract.get("runtime"), "in_process"),
+            "contract.local_executable_fixture": (
+                contract.get("local_executable_fixture"),
+                True,
+            ),
+            "contract.requires_external_service": (
+                contract.get("requires_external_service"),
+                False,
+            ),
+            "selected_patch.orchestration_stack.stack.name": (
+                selected_patch_stack.get("name"),
+                V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK,
+            ),
+            "selected_summary.local_executable_fixture": (
+                selected_summary.get("local_executable_fixture"),
+                True,
+            ),
+            "selected_summary.requires_external_service": (
+                selected_summary.get("requires_external_service"),
+                False,
+            ),
+            "selected_summary.expected_transition": (
+                selected_summary.get("expected_transition"),
+                V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION,
+            ),
+            "selected_summary.expected_transition_completed": (
+                selected_summary.get("expected_transition_completed"),
+                True,
+            ),
+            "selected_summary.world_present": (
+                selected_summary.get("world_present"),
+                True,
+            ),
+            "selected_summary.world_state_match": (
+                selected_summary.get("world_state_match"),
+                True,
+            ),
+            "selected_summary.world_terminal_success": (
+                selected_summary.get("world_terminal_success"),
+                True,
+            ),
+            "selected_summary.framework": (
+                selected_summary.get("framework"),
+                V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK,
+            ),
+            "selected_summary.framework_present": (
+                selected_summary.get("framework_present"),
+                True,
+            ),
+            "selected_summary.framework_tool_signal_present": (
+                selected_summary.get("framework_tool_signal_present"),
+                True,
+            ),
+            "selected_summary.retrieval_present": (
+                selected_summary.get("retrieval_present"),
+                True,
+            ),
+            "selected_summary.retrieval_expected_document_id": (
+                selected_summary.get("retrieval_expected_document_id"),
+                V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID,
+            ),
+            "selected_summary.retrieval_expected_document_cited": (
+                selected_summary.get("retrieval_expected_document_cited"),
+                True,
+            ),
+            "selected_summary.retrieval_citations_current": (
+                selected_summary.get("retrieval_citations_current"),
+                True,
+            ),
+            "selected_summary.memory_present": (
+                selected_summary.get("memory_present"),
+                True,
+            ),
+            "selected_summary.memory_required_operations_present": (
+                selected_summary.get("memory_required_operations_present"),
+                True,
+            ),
+            "selected_summary.has_source_attribution": (
+                selected_summary.get("has_source_attribution"),
+                True,
+            ),
+            "selected_summary.has_tenant_isolation": (
+                selected_summary.get("has_tenant_isolation"),
+                True,
+            ),
+            "selected_summary.has_audit": (
+                selected_summary.get("has_audit"),
+                True,
+            ),
+            "selected_summary.has_retention_policy": (
+                selected_summary.get("has_retention_policy"),
+                True,
+            ),
+            "selected_summary.has_deletion_policy": (
+                selected_summary.get("has_deletion_policy"),
+                True,
+            ),
+            "selected_summary.has_redaction": (
+                selected_summary.get("has_redaction"),
+                True,
+            ),
+            "selected_summary.has_canaries": (
+                selected_summary.get("has_canaries"),
+                True,
+            ),
+            "selected_summary.has_observability": (
+                selected_summary.get("has_observability"),
+                True,
+            ),
+            "selected_summary.has_artifacts": (
+                selected_summary.get("has_artifacts"),
+                True,
+            ),
+            "selected_summary.room_present": (
+                selected_summary.get("room_present"),
+                True,
+            ),
+            "selected_summary.role_match": (
+                selected_summary.get("role_match"),
+                True,
+            ),
+            "selected_summary.allow_unknown_roles": (
+                selected_summary.get("allow_unknown_roles"),
+                False,
+            ),
+            "selected_summary.expected_review_present": (
+                selected_summary.get("expected_review_present"),
+                True,
+            ),
+            "selected_summary.expected_reconciliation_present": (
+                selected_summary.get("expected_reconciliation_present"),
+                True,
+            ),
+            "selected_summary.terminal_room_state": (
+                selected_summary.get("terminal_room_state"),
+                True,
+            ),
+            "selected_summary.terminal_status": (
+                selected_summary.get("terminal_status"),
+                "resolved",
+            ),
+            "selected_summary.required_tools_present": (
+                selected_summary.get("required_tools_present"),
+                True,
+            ),
+            "selected_summary.required_tools_handled": (
+                selected_summary.get("required_tools_handled"),
+                True,
+            ),
+            "selected_summary.failed_tool_call_count": (
+                selected_summary.get("failed_tool_call_count"),
+                0,
+            ),
+            "selected_summary.failed_case_count": (
+                selected_summary.get("failed_case_count"),
+                0,
+            ),
+            "selected_summary.finding_count": (
+                selected_summary.get("finding_count"),
+                0,
+            ),
+            "selected_summary.blocking_gap_count": (
+                selected_summary.get("blocking_gap_count"),
+                0,
+            ),
+            "selected_summary.policy_violation_count": (
+                selected_summary.get("policy_violation_count"),
+                0,
+            ),
+            "selected_summary.open_poisoning_count": (
+                selected_summary.get("open_poisoning_count"),
+                0,
+            ),
+            "selected_summary.isolation_violation_count": (
+                selected_summary.get("isolation_violation_count"),
+                0,
+            ),
+            "selected_summary.retention_violation_count": (
+                selected_summary.get("retention_violation_count"),
+                0,
+            ),
+            "selected_summary.reconciliation_conflict_count": (
+                selected_summary.get("reconciliation_conflict_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _int_or_zero(proof.get("check_count")) < 11:
+            append_error(
+                proof_errors,
+                field="check_count",
+                expected=">=11",
+                observed=proof.get("check_count"),
+            )
+        missing_contract_env_types = missing_values(
+            contract.get("environment_types"),
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_contract_env_types:
+            append_error(
+                proof_errors,
+                field="contract.environment_types",
+                expected=V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+                observed=contract.get("environment_types") or [],
+            )
+        missing_summary_env_types = missing_values(
+            selected_summary.get("environment_types"),
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_summary_env_types:
+            append_error(
+                proof_errors,
+                field="selected_summary.environment_types",
+                expected=V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+                observed=selected_summary.get("environment_types") or [],
+            )
+        proof_minimums = {
+            "selected_summary.world_transition_count": (
+                selected_summary.get("world_transition_count"),
+                1,
+            ),
+            "selected_summary.world_completed_transition_count": (
+                selected_summary.get("world_completed_transition_count"),
+                1,
+            ),
+            "selected_summary.framework_span_count": (
+                selected_summary.get("framework_span_count"),
+                1,
+            ),
+            "selected_summary.retrieval_current_document_count": (
+                selected_summary.get("retrieval_current_document_count"),
+                1,
+            ),
+            "selected_summary.retrieval_citation_count": (
+                selected_summary.get("retrieval_citation_count"),
+                1,
+            ),
+            "selected_summary.retrieval_freshness_checked_count": (
+                selected_summary.get("retrieval_freshness_checked_count"),
+                1,
+            ),
+            "selected_summary.memory_store_count": (
+                selected_summary.get("memory_store_count"),
+                1,
+            ),
+            "selected_summary.memory_record_count": (
+                selected_summary.get("memory_record_count"),
+                1,
+            ),
+            "selected_summary.memory_operation_count": (
+                selected_summary.get("memory_operation_count"),
+                3,
+            ),
+            "selected_summary.review_count": (
+                selected_summary.get("review_count"),
+                1,
+            ),
+            "selected_summary.reconciliation_count": (
+                selected_summary.get("reconciliation_count"),
+                1,
+            ),
+            "selected_summary.tool_call_count": (
+                selected_summary.get("tool_call_count"),
+                len(V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS),
+            ),
+            "selected_summary.successful_tool_call_count": (
+                selected_summary.get("successful_tool_call_count"),
+                len(V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS),
+            ),
+            "selected_summary.passed_case_count": (
+                selected_summary.get("passed_case_count"),
+                1,
+            ),
+        }
+        for field, (observed, minimum) in proof_minimums.items():
+            if _int_or_zero(observed) < minimum:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=f">={minimum}",
+                    observed=observed,
+                )
+        if _int_or_zero(
+            selected_summary.get("framework_required_signal_match_count")
+        ) < _int_or_zero(selected_summary.get("framework_required_signal_count")):
+            append_error(
+                proof_errors,
+                field="selected_summary.framework_required_signal_match_count",
+                expected=">=framework_required_signal_count",
+                observed=selected_summary.get("framework_required_signal_match_count"),
+            )
+        if _int_or_zero(
+            selected_summary.get("memory_audited_operation_count")
+        ) < _int_or_zero(selected_summary.get("memory_operation_count")):
+            append_error(
+                proof_errors,
+                field="selected_summary.memory_audited_operation_count",
+                expected=">=memory_operation_count",
+                observed=selected_summary.get("memory_audited_operation_count"),
+            )
+        for field, observed_values, required_values in (
+            (
+                "selected_summary.memory_operation_types",
+                selected_summary.get("memory_operation_types"),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS,
+            ),
+            (
+                "selected_summary.participants",
+                selected_summary.get("participants"),
+                V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES,
+            ),
+            (
+                "selected_summary.required_roles",
+                selected_summary.get("required_roles"),
+                V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES,
+            ),
+            (
+                "selected_summary.observed_tool_names",
+                selected_summary.get("observed_tool_names"),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS,
+            ),
+            (
+                "selected_summary.handled_tool_names",
+                selected_summary.get("handled_tool_names"),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS,
+            ),
+            (
+                "selected_patch.agent.tool_calls",
+                tool_names_from_agent(selected_patch_agent),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS,
+            ),
+        ):
+            missing_items = missing_values(observed_values, required_values)
+            if missing_items:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=required_values,
+                    observed=observed_values or [],
+                )
+        for metric in V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS:
+            if _float_or_zero(selected_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"proof.selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=selected_metrics.get(metric),
+                )
+
+    if manifest:
+        metadata = _as_mapping(manifest.get("metadata"))
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            env for env in _as_list(simulation.get("environments")) if isinstance(env, Mapping)
+        ]
+        env_types = [str(env.get("type") or "") for env in environments]
+        evaluation_config = _as_mapping(
+            _as_mapping(_as_mapping(manifest.get("evaluation")).get("agent_report")).get(
+                "config"
+            )
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": manifest.get("required_env") or [],
+            "promoted_from_orchestration_stack_probe": metadata.get(
+                "promoted_from_orchestration_stack_probe"
+            ),
+            "orchestration_stack_probe_proof_status": metadata.get(
+                "orchestration_stack_probe_proof_status"
+            ),
+            "simulation_modality": simulation.get("modality"),
+            "environment_types": env_types,
+            "required_tools": evaluation_config.get("required_tools") or [],
+            "expected_doc_ids": evaluation_config.get("expected_retrieval_doc_ids")
+            or [],
+            "forbidden_doc_ids": evaluation_config.get("forbidden_retrieval_doc_ids")
+            or [],
+            "required_roles": evaluation_config.get("required_multi_agent_roles")
+            or [],
+            "metric_weights": sorted(str(metric) for metric in metric_weights),
+        }
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.run.v1"),
+            "required_env": (manifest.get("required_env") or [], []),
+            "metadata.promoted_from_orchestration_stack_probe": (
+                metadata.get("promoted_from_orchestration_stack_probe"),
+                True,
+            ),
+            "metadata.orchestration_stack_probe_proof_status": (
+                metadata.get("orchestration_stack_probe_proof_status"),
+                "passed",
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field, observed_values, required_values in (
+            (
+                "simulation.environments",
+                env_types,
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES,
+            ),
+            (
+                "evaluation.agent_report.config.required_tools",
+                evaluation_config.get("required_tools"),
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS,
+            ),
+            (
+                "evaluation.agent_report.config.metric_weights",
+                metric_weights,
+                V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS,
+            ),
+            (
+                "evaluation.agent_report.config.expected_retrieval_doc_ids",
+                evaluation_config.get("expected_retrieval_doc_ids"),
+                [V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID],
+            ),
+            (
+                "evaluation.agent_report.config.forbidden_retrieval_doc_ids",
+                evaluation_config.get("forbidden_retrieval_doc_ids"),
+                [V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID],
+            ),
+            (
+                "evaluation.agent_report.config.required_multi_agent_roles",
+                evaluation_config.get("required_multi_agent_roles"),
+                V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES,
+            ),
+        ):
+            missing_items = missing_values(observed_values, required_values)
+            if missing_items:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=required_values,
+                    observed=observed_values or [],
+                )
+
+    if run_result:
+        run_summary = _as_mapping(run_result.get("summary"))
+        run_metrics = _as_mapping(run_summary.get("metric_averages"))
+        report = _as_mapping(run_result.get("report"))
+        cases = [
+            case for case in _as_list(report.get("results")) if isinstance(case, Mapping)
+        ]
+        case = _as_mapping(cases[0]) if cases else {}
+        state = _as_mapping(_as_mapping(case.get("metadata")).get("environment_state"))
+        world_state = _as_mapping(state.get("world_contract"))
+        retrieval_state = _as_mapping(state.get("retrieval_memory"))
+        memory_state = _as_mapping(state.get("agent_memory_lineage"))
+        room_state = _as_mapping(state.get("multi_agent"))
+        citation_doc_ids: list[str] = []
+        for citation in _as_list(retrieval_state.get("citations")):
+            citation_doc_ids.extend(
+                str(doc_id)
+                for doc_id in _as_list(_as_mapping(citation).get("doc_ids"))
+                if str(doc_id)
+            )
+        memory_operations = [
+            str(_as_mapping(operation).get("operation") or "")
+            for operation in _as_list(memory_state.get("operations"))
+            if _as_mapping(operation).get("operation")
+        ]
+        reconciliations = [
+            reconciliation
+            for reconciliation in _as_list(room_state.get("reconciliations"))
+            if isinstance(reconciliation, Mapping)
+        ]
+        first_reconciliation = (
+            _as_mapping(reconciliations[0]) if reconciliations else {}
+        )
+        event_names = [
+            str(event.get("name") or "")
+            for event in _as_list(case.get("events"))
+            if isinstance(event, Mapping)
+        ]
+        evidence["run"] = {
+            "kind": run_result.get("kind"),
+            "status": run_result.get("status"),
+            "evaluation_passed": run_summary.get("evaluation_passed"),
+            "evaluation_score": run_summary.get("evaluation_score"),
+            "metrics": {
+                metric: run_metrics.get(metric)
+                for metric in V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
+            },
+            "source_grounding": run_metrics.get("source_grounding"),
+            "state_keys": sorted(str(key) for key in state),
+            "world_refund_status": _as_mapping(world_state.get("state"))
+            .get("refund", {})
+            .get("status"),
+            "retrieval_doc_ids": sorted(set(citation_doc_ids)),
+            "memory_operations": memory_operations,
+            "reconciliation_accepted_source": first_reconciliation.get(
+                "accepted_source"
+            ),
+            "event_names": event_names,
+        }
+        runtime_expectations = {
+            "kind": (run_result.get("kind"), "agent-learning.run.v1"),
+            "status": (run_result.get("status"), "passed"),
+            "summary.evaluation_passed": (run_summary.get("evaluation_passed"), True),
+            "world_contract.state.refund.status": (
+                _as_mapping(world_state.get("state")).get("refund", {}).get("status"),
+                "approved",
+            ),
+            "multi_agent.reconciliations.accepted_source": (
+                first_reconciliation.get("accepted_source"),
+                V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(run_summary.get("evaluation_score")) < 0.98:
+            append_error(
+                runtime_errors,
+                field="summary.evaluation_score",
+                expected=">=0.98",
+                observed=run_summary.get("evaluation_score"),
+            )
+        missing_state_keys = missing_values(
+            state,
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS,
+        )
+        if missing_state_keys:
+            append_error(
+                runtime_errors,
+                field="report.results.0.metadata.environment_state",
+                expected=V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS,
+                observed=sorted(str(key) for key in state),
+            )
+        if V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID not in citation_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.citations.doc_ids",
+                expected=V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID,
+                observed=sorted(set(citation_doc_ids)),
+            )
+        if V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID in citation_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.citations.doc_ids",
+                expected=f"not {V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID}",
+                observed=sorted(set(citation_doc_ids)),
+            )
+        missing_memory_operations = missing_values(
+            memory_operations,
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS,
+        )
+        if missing_memory_operations:
+            append_error(
+                runtime_errors,
+                field="agent_memory_lineage.operations",
+                expected=V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS,
+                observed=memory_operations,
+            )
+        missing_events = missing_values(
+            event_names,
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS,
+        )
+        if missing_events:
+            append_error(
+                runtime_errors,
+                field="events",
+                expected=V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS,
+                observed=event_names,
+            )
+        if _float_or_zero(run_metrics.get("source_grounding")) < (
+            V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
+        ):
+            append_error(
+                metric_errors,
+                field="run.metric_averages.source_grounding",
+                expected=(
+                    f">={V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM}"
+                ),
+                observed=run_metrics.get("source_grounding"),
+            )
+        for metric in V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS:
+            if _float_or_zero(run_metrics.get(metric)) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"run.metric_averages.{metric}",
+                    expected=1.0,
+                    observed=run_metrics.get(metric),
+                )
+
+    return {
+        "required_files": list(V1_ORCHESTRATION_STACK_PROBE_FILES),
+        "required_environment_types": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_state_keys": list(V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS),
+        "required_proof_kind": V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND,
+        "selected_stack": V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK,
+        "rejected_stack": V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK,
+        "required_framework": V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK,
+        "expected_transition": V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION,
+        "expected_doc_id": V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID,
+        "forbidden_doc_id": V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID,
+        "expected_roles": list(V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES),
+        "expected_reconciliation_source": (
+            V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
+        ),
+        "required_tools": list(V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS),
+        "required_metrics": list(V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS),
+        "required_run_metrics": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
+        ),
+        "source_grounding_minimum": (
+            V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
+        ),
+        "required_memory_operations": list(
+            V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS
+        ),
+        "required_events": list(V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS),
+        "missing_files": missing_files,
+        "optimization_errors": optimization_errors,
+        "proof_errors": proof_errors,
+        "manifest_errors": manifest_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
+
+
 def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(root, V1_TRINITY_STACK_PROBE_FILES)
     optimization_errors: list[dict[str, Any]] = []
@@ -12924,6 +14229,24 @@ __all__ = [
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS",
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS",
     "V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS",
+    "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID",
+    "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE",
+    "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES",
+    "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION",
+    "V1_ORCHESTRATION_STACK_PROBE_FILES",
+    "V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID",
+    "V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK",
+    "V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND",
+    "V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS",
+    "V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS",
+    "V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK",
+    "V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM",
     "V1_REDTEAM_EXAMPLES",
     "V1_REDTEAM_CORPUS_EXECUTION_CHANNELS",
     "V1_REDTEAM_CORPUS_EXECUTION_FILE",

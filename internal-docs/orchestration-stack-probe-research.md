@@ -56,3 +56,10 @@ Keep orchestration support local-first:
   cheaply, then use
   `optimize.build_orchestration_run_manifest_from_probe_optimization()` when
   the selected stack should become a normal evaluated orchestration simulation.
+- `agent-learn release-check` now runs
+  `examples/sdk_orchestration_stack_probe_optimization.py` as
+  `orchestration_stack_probe_readiness`; the gate requires strong local stack
+  selection over weak candidates, native orchestration-stack proof, promoted
+  `agent-learning.run.v1` execution, and closed world transition, LangGraph
+  trace, current retrieval citation, governed memory lineage, multi-agent
+  review/reconciliation, required tool, source-grounding, and run metrics.
