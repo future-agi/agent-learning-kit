@@ -15241,6 +15241,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_evidence_components"] == (
         trinity.V1_REQUIRED_EVIDENCE_COMPONENTS
     )
+    assert payload["required_optimizer_governance_files"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_FILES
+    )
+    assert payload["required_optimizer_governance_metrics"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS
+    )
+    assert payload["required_optimizer_governance_trace_flags"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS
+    )
+    assert payload["required_optimizer_governance_checks"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
+    )
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == {
         "single_public_boundary",
@@ -15250,6 +15262,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "v1_examples_present",
         "local_sim_eval_examples_present",
         "native_optimizer_evidence_components",
+        "optimizer_governance_readiness",
         "redteam_core_examples_present",
         "redteam_research_coverage",
         "redteam_corpus_execution_readiness",
@@ -16453,6 +16466,105 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert "framework_lifecycle" in evidence["observed"]
     assert "world_hooks" in evidence["observed"]
     assert "optimizer_portfolio" in evidence["observed"]
+    optimizer_governance = checks["optimizer_governance_readiness"]["evidence"]
+    assert optimizer_governance["required_files"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_FILES
+    )
+    assert optimizer_governance["required_metrics"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS
+    )
+    assert optimizer_governance["required_trace_flags"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS
+    )
+    assert optimizer_governance["required_checks"] == (
+        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
+    )
+    assert optimizer_governance["missing_files"] == []
+    assert optimizer_governance["execution_errors"] == []
+    assert optimizer_governance["manifest_errors"] == []
+    assert optimizer_governance["optimization_errors"] == []
+    assert optimizer_governance["governance_errors"] == []
+    assert optimizer_governance["metric_errors"] == []
+    optimizer_evidence = optimizer_governance["evidence"]
+    assert optimizer_evidence["manifest"]["version"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert optimizer_evidence["manifest"]["required_env"] == [
+        "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY"
+    ]
+    assert optimizer_evidence["manifest"]["candidate_count"] == 2
+    assert optimizer_evidence["manifest"]["search_paths"] == [
+        "simulation.environments"
+    ]
+    assert set(optimizer_evidence["manifest"]["target_layers"]) >= {
+        "multi_agent",
+        "orchestration",
+        "planner",
+        "security",
+        "evaluator",
+    }
+    assert optimizer_evidence["manifest"]["quality"]["required_best_role"] == (
+        "dharma_steward"
+    )
+    assert optimizer_evidence["manifest"]["quality"]["min_governance_checks"] == 6
+    assert optimizer_evidence["manifest"]["quality"]["min_governance_pass_rate"] == (
+        pytest.approx(1.0)
+    )
+    assert optimizer_evidence["manifest"]["quality"]["min_best_score"] == (
+        pytest.approx(0.98)
+    )
+    assert optimizer_evidence["result_kind"] == "agent-learning.optimization.v1"
+    assert optimizer_evidence["result_status"] == "passed"
+    assert optimizer_evidence["output_roundtrip"] is True
+    assert optimizer_evidence["optimization_score"] >= 0.98
+    assert optimizer_evidence["evaluation_score"] == pytest.approx(1.0)
+    assert optimizer_evidence["candidate_lineage_count"] == 2
+    assert optimizer_evidence["candidate_lineage_content_addressed_count"] == 2
+    assert optimizer_evidence["candidate_lineage_selected_score_delta"] >= 0.0
+    assert optimizer_evidence["summary_optimizer_governance"] == {
+        "status": "passed",
+        "passed": True,
+        "check_count": 11,
+        "failed_check_count": 0,
+        "warning_check_count": 0,
+    }
+    assert optimizer_evidence["best_history"]["patch_keys"] == [
+        "simulation.environments"
+    ]
+    assert optimizer_evidence["best_history"]["metrics"] == {
+        "optimizer_trace_coverage": pytest.approx(1.0),
+        "optimizer_trace_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    assert optimizer_evidence["best_environment"] == {
+        "type": "optimizer_trace",
+        "optimizer": "SocietyAgentOptimizer",
+        "best_candidate_id": "c_steward",
+        "final_score": pytest.approx(0.99),
+    }
+    trace_summary = optimizer_evidence["trace_summary"]
+    assert trace_summary["role_count"] == 5
+    assert trace_summary["proposal_count"] == 5
+    assert trace_summary["round_count"] == 3
+    assert trace_summary["diagnostic_count"] == 2
+    assert trace_summary["role_credit_count"] == 5
+    assert trace_summary["duplicate_candidate_count"] == 0
+    assert trace_summary["best_candidate_id"] == "c_steward"
+    assert trace_summary["final_score"] == pytest.approx(0.99)
+    assert trace_summary["governance_check_count"] == 6
+    assert trace_summary["governance_pass_rate"] == pytest.approx(1.0)
+    for flag in trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS:
+        assert trace_summary[flag] is True
+    governance = optimizer_evidence["governance"]
+    assert governance["kind"] == "agent-learning.optimization.governance.v1"
+    assert governance["status"] == "passed"
+    assert governance["passed"] is True
+    assert governance["selected_rank"] == 1
+    assert governance["failed_check_ids"] == []
+    assert governance["warning_check_ids"] == []
+    assert set(trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS) <= set(
+        governance["check_ids"]
+    )
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
     assert payload["findings"] == []
     assert {

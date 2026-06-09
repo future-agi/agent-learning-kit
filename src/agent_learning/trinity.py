@@ -1363,6 +1363,41 @@ V1_REQUIRED_EVIDENCE_COMPONENTS = [
     "optimizer_portfolio",
 ]
 
+V1_OPTIMIZER_GOVERNANCE_FILES = [
+    "examples/sdk_optimizer_governance_optimization.py",
+    "examples/optimizer_governance_optimization.json",
+    "internal-docs/optimizer-governance-readiness-research.md",
+]
+
+V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS = [
+    "optimizer_trace_coverage",
+    "optimizer_trace_quality",
+    "tool_selection_accuracy",
+]
+
+V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS = [
+    "has_role_graph",
+    "has_critique",
+    "has_synthesis",
+    "has_steward",
+    "has_governance",
+    "has_role_diversity",
+    "has_mediator",
+    "has_contract_gate",
+    "has_rollback",
+    "has_locality",
+    "has_dependency_audit",
+]
+
+V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS = [
+    "candidate_lineage_present",
+    "selected_candidate_present",
+    "candidate_lineage_content_addressed",
+    "selected_candidate_top_ranked",
+    "score_credit_nonnegative",
+    "metric_evidence_present",
+]
+
 
 def consolidation_metadata() -> dict[str, Any]:
     """Return the stable public consolidation boundary for the unified SDK."""
@@ -1564,6 +1599,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         passed=not missing_components,
         milestone="M3",
         evidence=component_status,
+    )
+    optimizer_governance = _release_optimizer_governance_status(root)
+    _append_release_check(
+        checks,
+        check_id="optimizer_governance_readiness",
+        passed=(
+            not optimizer_governance["missing_files"]
+            and not optimizer_governance["execution_errors"]
+            and not optimizer_governance["manifest_errors"]
+            and not optimizer_governance["optimization_errors"]
+            and not optimizer_governance["governance_errors"]
+            and not optimizer_governance["metric_errors"]
+        ),
+        milestone="M3",
+        evidence=optimizer_governance,
     )
     missing_redteam = _missing_relative_paths(root, V1_REDTEAM_EXAMPLES)
     _append_release_check(
@@ -1912,6 +1962,18 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
         ),
         "required_release_proof_checks": list(V1_RELEASE_PROOF_REQUIRED_CHECKS),
+        "required_optimizer_governance_files": list(
+            V1_OPTIMIZER_GOVERNANCE_FILES
+        ),
+        "required_optimizer_governance_metrics": list(
+            V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS
+        ),
+        "required_optimizer_governance_trace_flags": list(
+            V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS
+        ),
+        "required_optimizer_governance_checks": list(
+            V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
+        ),
         "required_framework_provider_examples": list(V1_FRAMEWORK_PROVIDER_EXAMPLES),
         "required_framework_provider_frameworks": list(
             V1_FRAMEWORK_PROVIDER_FRAMEWORKS
@@ -2345,6 +2407,478 @@ def _release_evidence_component_status() -> dict[str, Any]:
         "observed": observed,
         "required": list(V1_REQUIRED_EVIDENCE_COMPONENTS),
         "missing": missing,
+    }
+
+
+def _release_optimizer_governance_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_OPTIMIZER_GOVERNANCE_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    governance_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def append_error(
+        errors: list[dict[str, Any]],
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        errors.append(
+            {
+                "path": "examples/sdk_optimizer_governance_optimization.py",
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        example_path = root / "examples/sdk_optimizer_governance_optimization.py"
+        env_name = "AGENT_LEARNING_SDK_OPTIMIZER_GOVERNANCE_EXAMPLE_KEY"
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_env = os.environ.get(env_name)
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_optimizer_governance",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            os.environ[env_name] = "release-check-optimizer-governance-key"
+            manifest = module.build_manifest()
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-optimizer-governance-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "optimizer-governance.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            manifest = {}
+            result = {}
+            saved = {}
+        finally:
+            if previous_env is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_env
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        if manifest:
+            optimization = _as_mapping(manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = _as_list(search_space.get("simulation.environments"))
+            target_layers = list(target.get("layers") or [])
+            evaluation = _as_mapping(manifest.get("evaluation"))
+            agent_report = _as_mapping(evaluation.get("agent_report"))
+            config = _as_mapping(agent_report.get("config"))
+            quality = _as_mapping(config.get("optimizer_trace_quality"))
+            evidence["manifest"] = {
+                "version": manifest.get("version"),
+                "required_env": list(manifest.get("required_env") or []),
+                "candidate_count": len(candidates),
+                "target_layers": target_layers,
+                "search_paths": sorted(str(path) for path in search_space),
+                "optimizer": dict(_as_mapping(optimization.get("optimizer"))),
+                "quality": {
+                    "required_best_role": quality.get("required_best_role"),
+                    "min_governance_checks": quality.get("min_governance_checks"),
+                    "min_governance_pass_rate": quality.get(
+                        "min_governance_pass_rate"
+                    ),
+                    "min_best_score": quality.get("min_best_score"),
+                    "required_governance_signals": list(
+                        quality.get("required_governance_signals") or []
+                    ),
+                },
+            }
+            if manifest.get("version") != "agent-learning.optimization.v1":
+                append_error(
+                    manifest_errors,
+                    "version",
+                    "agent-learning.optimization.v1",
+                    manifest.get("version"),
+                )
+            if manifest.get("required_env") != [env_name]:
+                append_error(
+                    manifest_errors,
+                    "required_env",
+                    [env_name],
+                    manifest.get("required_env"),
+                )
+            if "simulation.environments" not in search_space:
+                append_error(
+                    manifest_errors,
+                    "optimization.target.search_space",
+                    "simulation.environments",
+                    sorted(str(path) for path in search_space),
+                )
+            if len(candidates) < 2:
+                append_error(
+                    manifest_errors,
+                    "optimization.target.search_space.simulation.environments",
+                    ">=2 candidates",
+                    len(candidates),
+                )
+            required_layers = {
+                "multi_agent",
+                "orchestration",
+                "planner",
+                "security",
+                "evaluator",
+            }
+            if not required_layers <= set(target_layers):
+                append_error(
+                    manifest_errors,
+                    "optimization.target.layers",
+                    sorted(required_layers),
+                    target_layers,
+                )
+            quality_expectations = {
+                "required_best_role": "dharma_steward",
+                "min_governance_checks": 6,
+                "min_governance_pass_rate": 1.0,
+                "min_best_score": 0.98,
+            }
+            for field, expected in quality_expectations.items():
+                observed = quality.get(field)
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        f"evaluation.agent_report.config.optimizer_trace_quality.{field}",
+                        expected,
+                        observed,
+                    )
+
+        if result:
+            summary = _as_mapping(result.get("summary"))
+            optimization = _as_mapping(result.get("optimization"))
+            histories = [
+                item for item in _as_list(optimization.get("history"))
+                if isinstance(item, Mapping)
+            ]
+            best_history: Mapping[str, Any] = {}
+            best_score = -1.0
+            for history in histories:
+                score = _float_or_zero(history.get("score"))
+                if score > best_score:
+                    best_score = score
+                    best_history = history
+            best_config = _as_mapping(optimization.get("best_config"))
+            best_simulation = _as_mapping(best_config.get("simulation"))
+            best_environments = [
+                item
+                for item in _as_list(best_simulation.get("environments"))
+                if isinstance(item, Mapping)
+            ]
+            best_environment = (
+                _as_mapping(best_environments[0]) if best_environments else {}
+            )
+            best_trace = _as_mapping(best_environment.get("data"))
+            best_metrics = _as_mapping(best_history.get("metrics"))
+            best_patch = _as_mapping(best_history.get("patch"))
+            report = _as_mapping(best_history.get("report"))
+            report_results = [
+                item for item in _as_list(report.get("results"))
+                if isinstance(item, Mapping)
+            ]
+            first_report = _as_mapping(report_results[0]) if report_results else {}
+            metadata = _as_mapping(first_report.get("metadata"))
+            environment_state = _as_mapping(metadata.get("environment_state"))
+            society_trace_state = _as_mapping(
+                environment_state.get("optimizer_society_trace")
+            )
+            trace_summary = _as_mapping(society_trace_state.get("summary"))
+            governance = _as_mapping(result.get("optimization_governance"))
+            governance_checks = [
+                item for item in _as_list(governance.get("checks"))
+                if isinstance(item, Mapping)
+            ]
+            governance_check_ids = [
+                str(check.get("id") or "") for check in governance_checks
+            ]
+            evidence.update(
+                {
+                    "result_kind": result.get("kind"),
+                    "result_status": result.get("status"),
+                    "output_roundtrip": result == saved,
+                    "optimization_score": summary.get("optimization_score"),
+                    "evaluation_score": summary.get("evaluation_score"),
+                    "total_iterations": summary.get("total_iterations"),
+                    "candidate_lineage_count": summary.get(
+                        "candidate_lineage_count"
+                    ),
+                    "candidate_lineage_content_addressed_count": summary.get(
+                        "candidate_lineage_content_addressed_count"
+                    ),
+                    "candidate_lineage_selected_score_delta": summary.get(
+                        "candidate_lineage_selected_score_delta"
+                    ),
+                    "summary_optimizer_governance": {
+                        "status": summary.get("optimizer_governance_status"),
+                        "passed": summary.get("optimizer_governance_passed"),
+                        "check_count": summary.get("optimizer_governance_check_count"),
+                        "failed_check_count": summary.get(
+                            "optimizer_governance_failed_check_count"
+                        ),
+                        "warning_check_count": summary.get(
+                            "optimizer_governance_warning_check_count"
+                        ),
+                    },
+                    "best_history": {
+                        "score": best_history.get("score"),
+                        "patch_keys": sorted(str(key) for key in best_patch),
+                        "metrics": {
+                            metric: best_metrics.get(metric)
+                            for metric in V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS
+                        },
+                    },
+                    "best_environment": {
+                        "type": best_environment.get("type"),
+                        "optimizer": best_trace.get("optimizer"),
+                        "best_candidate_id": best_trace.get("best_candidate_id"),
+                        "final_score": best_trace.get("final_score"),
+                    },
+                    "trace_summary": {
+                        "role_count": trace_summary.get("role_count"),
+                        "proposal_count": trace_summary.get("proposal_count"),
+                        "round_count": trace_summary.get("round_count"),
+                        "diagnostic_count": trace_summary.get("diagnostic_count"),
+                        "role_credit_count": trace_summary.get("role_credit_count"),
+                        "duplicate_candidate_count": trace_summary.get(
+                            "duplicate_candidate_count"
+                        ),
+                        "best_candidate_id": trace_summary.get("best_candidate_id"),
+                        "final_score": trace_summary.get("final_score"),
+                        "governance_check_count": trace_summary.get(
+                            "governance_check_count"
+                        ),
+                        "governance_pass_rate": trace_summary.get(
+                            "governance_pass_rate"
+                        ),
+                        **{
+                            flag: trace_summary.get(flag)
+                            for flag in V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS
+                        },
+                    },
+                    "governance": {
+                        "kind": governance.get("kind"),
+                        "status": governance.get("status"),
+                        "passed": governance.get("passed"),
+                        "selected_candidate_id": governance.get(
+                            "selected_candidate_id"
+                        ),
+                        "selected_rank": governance.get("selected_rank"),
+                        "failed_check_ids": list(
+                            governance.get("failed_check_ids") or []
+                        ),
+                        "warning_check_ids": list(
+                            governance.get("warning_check_ids") or []
+                        ),
+                        "check_count": governance.get("check_count"),
+                        "check_ids": governance_check_ids,
+                    },
+                }
+            )
+
+            for field, observed, expected in (
+                ("kind", result.get("kind"), "agent-learning.optimization.v1"),
+                ("status", result.get("status"), "passed"),
+            ):
+                if observed != expected:
+                    append_error(optimization_errors, field, expected, observed)
+            if result != saved:
+                append_error(optimization_errors, "output_roundtrip", True, False)
+            if _float_or_zero(summary.get("optimization_score")) < 0.98:
+                append_error(
+                    optimization_errors,
+                    "summary.optimization_score",
+                    ">=0.98",
+                    summary.get("optimization_score"),
+                )
+            if _float_or_zero(summary.get("evaluation_score")) < 1.0:
+                append_error(
+                    optimization_errors,
+                    "summary.evaluation_score",
+                    ">=1.0",
+                    summary.get("evaluation_score"),
+                )
+            if _int_or_zero(summary.get("candidate_lineage_count")) < 2:
+                append_error(
+                    optimization_errors,
+                    "summary.candidate_lineage_count",
+                    ">=2",
+                    summary.get("candidate_lineage_count"),
+                )
+            if best_environment.get("type") != "optimizer_trace":
+                append_error(
+                    optimization_errors,
+                    "optimization.best_config.simulation.environments.type",
+                    "optimizer_trace",
+                    best_environment.get("type"),
+                )
+            if best_trace.get("optimizer") != "SocietyAgentOptimizer":
+                append_error(
+                    optimization_errors,
+                    "optimization.best_config.simulation.environments.data.optimizer",
+                    "SocietyAgentOptimizer",
+                    best_trace.get("optimizer"),
+                )
+            if best_trace.get("best_candidate_id") != "c_steward":
+                append_error(
+                    optimization_errors,
+                    "optimization.best_config.simulation.environments.data.best_candidate_id",
+                    "c_steward",
+                    best_trace.get("best_candidate_id"),
+                )
+            if set(best_patch) != {"simulation.environments"}:
+                append_error(
+                    optimization_errors,
+                    "optimization.history.best.patch",
+                    ["simulation.environments"],
+                    sorted(str(key) for key in best_patch),
+                )
+
+            for metric in V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS:
+                if _float_or_zero(best_metrics.get(metric)) < 1.0:
+                    append_error(
+                        metric_errors,
+                        f"optimization.history.best.metrics.{metric}",
+                        ">=1.0",
+                        best_metrics.get(metric),
+                    )
+            trace_minima = {
+                "role_count": 5,
+                "proposal_count": 5,
+                "round_count": 3,
+                "diagnostic_count": 2,
+                "role_credit_count": 5,
+                "governance_check_count": 6,
+            }
+            for field, minimum in trace_minima.items():
+                if _int_or_zero(trace_summary.get(field)) < minimum:
+                    append_error(
+                        governance_errors,
+                        f"optimizer_society_trace.summary.{field}",
+                        f">={minimum}",
+                        trace_summary.get(field),
+                    )
+            trace_expectations = {
+                "duplicate_candidate_count": 0,
+                "best_candidate_id": "c_steward",
+            }
+            for field, expected in trace_expectations.items():
+                observed = trace_summary.get(field)
+                if observed != expected:
+                    append_error(
+                        governance_errors,
+                        f"optimizer_society_trace.summary.{field}",
+                        expected,
+                        observed,
+                    )
+            if _float_or_zero(trace_summary.get("final_score")) < 0.99:
+                append_error(
+                    governance_errors,
+                    "optimizer_society_trace.summary.final_score",
+                    ">=0.99",
+                    trace_summary.get("final_score"),
+                )
+            if _float_or_zero(trace_summary.get("governance_pass_rate")) < 1.0:
+                append_error(
+                    governance_errors,
+                    "optimizer_society_trace.summary.governance_pass_rate",
+                    ">=1.0",
+                    trace_summary.get("governance_pass_rate"),
+                )
+            for flag in V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS:
+                if trace_summary.get(flag) is not True:
+                    append_error(
+                        governance_errors,
+                        f"optimizer_society_trace.summary.{flag}",
+                        True,
+                        trace_summary.get(flag),
+                    )
+
+            governance_expectations = {
+                "kind": "agent-learning.optimization.governance.v1",
+                "status": "passed",
+                "passed": True,
+                "selected_rank": 1,
+            }
+            for field, expected in governance_expectations.items():
+                observed = governance.get(field)
+                if observed != expected:
+                    append_error(
+                        governance_errors,
+                        f"optimization_governance.{field}",
+                        expected,
+                        observed,
+                    )
+            if governance.get("failed_check_ids"):
+                append_error(
+                    governance_errors,
+                    "optimization_governance.failed_check_ids",
+                    [],
+                    governance.get("failed_check_ids"),
+                )
+            missing_checks = sorted(
+                set(V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS)
+                - set(governance_check_ids)
+            )
+            if missing_checks:
+                append_error(
+                    governance_errors,
+                    "optimization_governance.checks",
+                    V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS,
+                    governance_check_ids,
+                )
+
+    return {
+        "required_files": list(V1_OPTIMIZER_GOVERNANCE_FILES),
+        "required_metrics": list(V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS),
+        "required_trace_flags": list(V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS),
+        "required_checks": list(V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "governance_errors": governance_errors,
+        "metric_errors": metric_errors,
+        "evidence": evidence,
     }
 
 
@@ -6864,6 +7398,10 @@ __all__ = [
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
+    "V1_OPTIMIZER_GOVERNANCE_FILES",
+    "V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS",
+    "V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS",
+    "V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS",
     "V1_REDTEAM_EXAMPLES",
     "V1_REDTEAM_CORPUS_EXECUTION_CHANNELS",
     "V1_REDTEAM_CORPUS_EXECUTION_FILE",

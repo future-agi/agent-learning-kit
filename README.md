@@ -84,13 +84,15 @@ executes a local framework adapter that returns OpenEnv/Gymnasium-style replay
 evidence and verifies generated OpenEnv gates, normalized state, events, and
 artifacts. Regression artifact readiness runs the local baseline, compare,
 report, promote-to-regression, and replay lifecycle so optimized or red-team
-evidence can become replayable CI artifacts. Adapter probe readiness exercises
-raw probe, discovery, optimization, auto-discovery, promotion, and one-call run
-cookbooks so BYO framework objects can become evaluated run manifests locally.
-The composed trinity-stack probe readiness gate proves that the selected
-orchestration stack agent can pass a localhost task evaluator and promote into
-one run manifest with world, framework, retrieval, memory, multi-agent, and
-evaluation-hook evidence.
+evidence can become replayable CI artifacts. Optimizer governance readiness
+executes local governed optimizer-society search and verifies candidate lineage,
+role credit, top-ranked selection, rollback, locality, dependency audit, and
+optimizer trace metrics. Adapter probe readiness exercises raw probe, discovery,
+optimization, auto-discovery, promotion, and one-call run cookbooks so BYO
+framework objects can become evaluated run manifests locally. The composed
+trinity-stack probe readiness gate proves that the selected orchestration stack
+agent can pass a localhost task evaluator and promote into one run manifest with
+world, framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -1988,6 +1990,11 @@ locality, rollback lineage, and governance pass rate.
 optimizer trace as a normal `agent-learning.run.v1` artifact, so optimizer
 decisions can be audited through simulation evidence without starting another
 optimizer loop.
+`agent-learn release-check` gates this optimizer path as
+`optimizer_governance_readiness`: the SDK cookbook must select the governed
+`SocietyAgentOptimizer` trace, pass native optimizer-governance checks, preserve
+candidate lineage, and close optimizer trace coverage/quality plus tool
+selection metrics.
 They can also select the social-memory optimizer with
 `optimization.optimizer.algorithm: "social_memory"`, then tune `max_rounds`,
 `beam_width`, `max_proposals_per_round`, `target_score`, `include_seed`, and
