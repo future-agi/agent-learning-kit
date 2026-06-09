@@ -15226,6 +15226,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_stateful_framework_adapter_contracts"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS
     )
+    assert payload["required_framework_adapter_trinity_suite_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES
+    )
+    assert payload["required_framework_adapter_trinity_suite_framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
+    )
+    assert payload["required_framework_adapter_trinity_suite_commands"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS
+    )
+    assert payload["required_framework_adapter_trinity_suite_child_kinds"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
+    )
+    assert payload["required_framework_adapter_trinity_suite_metrics"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS
+    )
+    assert payload["required_framework_adapter_trinity_suite_attacks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS
+    )
+    assert payload["required_framework_adapter_trinity_suite_surfaces"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
+    )
+    assert payload["required_framework_adapter_trinity_suite_optimizer_flags"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
+    )
     assert payload["required_trinity_stack_probe_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES
     )
@@ -15326,6 +15350,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "protocol_adapter_readiness",
         "browser_realtime_adapter_readiness",
         "stateful_framework_adapter_readiness",
+        "framework_adapter_trinity_suite_readiness",
         "trinity_stack_probe_readiness",
         "package_metadata",
     }
@@ -16775,6 +16800,122 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert lifecycle_adapter["state_summary"]["cleanup_count"] == 1
     assert lifecycle_adapter["state_summary"]["state_persistence"] is True
     assert lifecycle_adapter["state_summary"]["terminal_status"] == "completed"
+    framework_adapter_trinity_suite = checks[
+        "framework_adapter_trinity_suite_readiness"
+    ]["evidence"]
+    assert framework_adapter_trinity_suite["required_files"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES
+    )
+    assert framework_adapter_trinity_suite["required_framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
+    )
+    assert framework_adapter_trinity_suite["required_commands"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS
+    )
+    assert framework_adapter_trinity_suite["required_child_kinds"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
+    )
+    assert framework_adapter_trinity_suite["required_metrics"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS
+    )
+    assert framework_adapter_trinity_suite["required_attacks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS
+    )
+    assert framework_adapter_trinity_suite["required_surfaces"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
+    )
+    assert framework_adapter_trinity_suite["required_optimizer_flags"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
+    )
+    assert framework_adapter_trinity_suite["missing_files"] == []
+    assert framework_adapter_trinity_suite["suite_errors"] == []
+    assert framework_adapter_trinity_suite["manifest_errors"] == []
+    assert framework_adapter_trinity_suite["metric_errors"] == []
+    assert framework_adapter_trinity_suite["optimization_errors"] == []
+    assert framework_adapter_trinity_suite["errors"] == []
+    framework_trinity_evidence = framework_adapter_trinity_suite["evidence"]
+    suite_evidence = framework_trinity_evidence["suite"]
+    assert suite_evidence["kind"] == "agent-learning.suite.v1"
+    assert suite_evidence["status"] == "passed"
+    assert suite_evidence["exit_code"] == 0
+    assert suite_evidence["score"] == pytest.approx(1.0)
+    assert suite_evidence["child_commands"] == ["redteam", "run"]
+    assert set(suite_evidence["child_kinds"]) == set(
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
+    )
+    assert suite_evidence["child_statuses"] == ["passed", "passed"]
+    assert suite_evidence["workspace_kind"] == (
+        "agent-learning.framework-adapter-trinity-workspace.v1"
+    )
+    assert suite_evidence["suite_manifest_version"] == "agent-learning.suite.v1"
+    assert suite_evidence["suite_manifest_required_env"] == []
+    assert set(["run", "redteam"]) <= set(suite_evidence["suite_required_commands"])
+    assert set(trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS) <= set(
+        suite_evidence["suite_required_metrics"]
+    )
+    assert suite_evidence["observed_frameworks"] == [
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
+    ]
+    assert suite_evidence["missing_framework_count"] == 0
+    assert suite_evidence["adapter_conformance_failed_count"] == 0
+    run_manifest = framework_trinity_evidence["run_manifest"]
+    assert run_manifest["version"] == "agent-learning.run.v1"
+    assert run_manifest["required_env"] == []
+    assert run_manifest["agent_framework"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
+    )
+    assert run_manifest["agent_method"] == "execute_task"
+    assert run_manifest["agent_input_mode"] == "dict"
+    assert run_manifest["agent_trace_runtime"] is True
+    assert run_manifest["adapter_local_executable_fixture"] is True
+    assert run_manifest["adapter_requires_external_service"] is False
+    assert run_manifest["promoted_from_framework_adapter_probe"] is True
+    assert run_manifest["framework_adapter_probe_proof_status"] == "passed"
+    assert run_manifest["framework_adapter_discovery_used"] is True
+    redteam_manifest = framework_trinity_evidence["redteam_manifest"]
+    assert redteam_manifest["version"] == "agent-learning.redteam.v1"
+    assert redteam_manifest["required_env"] == []
+    assert redteam_manifest["attacks"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS
+    )
+    assert redteam_manifest["surfaces"] == (
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
+    )
+    assert redteam_manifest["frameworks"] == [
+        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
+    ]
+    assert framework_trinity_evidence["metrics"] == {
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "adversarial_resilience": pytest.approx(1.0),
+        "red_team_campaign_quality": pytest.approx(1.0),
+    }
+    optimization_evidence = framework_trinity_evidence["optimization"]
+    assert optimization_evidence["kind"] == "agent-learning.suite-optimization.v1"
+    assert optimization_evidence["status"] == "passed"
+    assert optimization_evidence["exit_code"] == 0
+    assert optimization_evidence["optimization_passed"] is True
+    assert optimization_evidence["evaluation_passed"] is True
+    assert optimization_evidence["optimization_score"] == pytest.approx(1.0)
+    assert optimization_evidence["evaluation_score"] >= 0.9
+    assert optimization_evidence["total_evaluations"] >= 2
+    assert optimization_evidence["total_iterations"] >= 2
+    assert optimization_evidence["best_commands"] == ["suite"]
+    assert optimization_evidence["best_job_ids"] == ["framework-adapter-trinity"]
+    assert optimization_evidence["best_job_paths"] == ["suite.json"]
+    assert optimization_evidence["workspace_kind"] == (
+        "agent-learning.framework-adapter-trinity-optimization-workspace.v1"
+    )
+    assert set(trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS) <= set(
+        optimization_evidence["suite_required_commands"]
+    )
+    assert optimization_evidence["optimizer_trace_final_score"] == pytest.approx(1.0)
+    assert optimization_evidence["optimizer_trace_governance_pass_rate"] == (
+        pytest.approx(1.0)
+    )
+    assert optimization_evidence["optimizer_trace_terminal_status"] == "completed"
+    for flag in trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS:
+        assert optimization_evidence["optimizer_trace_flags"][flag] is True
     trinity_stack_probe = checks["trinity_stack_probe_readiness"]["evidence"]
     assert trinity_stack_probe["required_files"] == (
         trinity.V1_TRINITY_STACK_PROBE_FILES

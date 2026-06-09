@@ -575,6 +575,50 @@ V1_TRINITY_STACK_PROBE_PROOF_KIND = (
     "agent-learning.optimization.trinity-stack-probe-proof.v1"
 )
 
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES = [
+    "examples/sdk_framework_adapter_trinity_suite.py",
+    "examples/sdk_framework_adapter_trinity_suite_optimization.py",
+    "internal-docs/framework-adapter-trinity-suite-readiness-research.md",
+]
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK = "custom_refund_orchestrator"
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS = [
+    "run",
+    "redteam",
+    "suite",
+]
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS = [
+    "agent-learning.run.v1",
+    "agent-learning.redteam.v1",
+]
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS = [
+    "framework_runtime_contract",
+    "framework_adapter_contract_quality",
+    "adversarial_resilience",
+    "red_team_campaign_quality",
+]
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS = [
+    "prompt_injection",
+    "credential_exfiltration",
+]
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES = [
+    "instruction",
+    "tool",
+]
+
+V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS = [
+    "has_role_diversity",
+    "has_contract_gate",
+    "has_rollback",
+    "has_locality",
+    "has_steward",
+]
+
 V1_OPENENV_OPTIMIZER_FILES = [
     "examples/sdk_openenv_environment_optimization.py",
     "internal-docs/openenv-environment-adapter-research.md",
@@ -2014,6 +2058,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=stateful_framework_adapter,
     )
+    framework_adapter_trinity_suite = _release_framework_adapter_trinity_suite_status(root)
+    _append_release_check(
+        checks,
+        check_id="framework_adapter_trinity_suite_readiness",
+        passed=(
+            not framework_adapter_trinity_suite["missing_files"]
+            and not framework_adapter_trinity_suite["suite_errors"]
+            and not framework_adapter_trinity_suite["manifest_errors"]
+            and not framework_adapter_trinity_suite["metric_errors"]
+            and not framework_adapter_trinity_suite["optimization_errors"]
+            and not framework_adapter_trinity_suite["errors"]
+        ),
+        milestone="M6",
+        evidence=framework_adapter_trinity_suite,
+    )
     trinity_stack_probe = _release_trinity_stack_probe_status(root)
     _append_release_check(
         checks,
@@ -2232,6 +2291,30 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_stateful_framework_adapter_contracts": copy.deepcopy(
             V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS
+        ),
+        "required_framework_adapter_trinity_suite_files": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES
+        ),
+        "required_framework_adapter_trinity_suite_framework": (
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
+        ),
+        "required_framework_adapter_trinity_suite_commands": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS
+        ),
+        "required_framework_adapter_trinity_suite_child_kinds": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
+        ),
+        "required_framework_adapter_trinity_suite_metrics": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS
+        ),
+        "required_framework_adapter_trinity_suite_attacks": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS
+        ),
+        "required_framework_adapter_trinity_suite_surfaces": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
+        ),
+        "required_framework_adapter_trinity_suite_optimizer_flags": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
         ),
         "required_trinity_stack_probe_files": list(V1_TRINITY_STACK_PROBE_FILES),
         "required_trinity_stack_probe_environment_types": list(
@@ -8485,6 +8568,581 @@ def _release_adapter_state_value(
         if current is not None:
             return current
     return None
+
+
+def _release_framework_adapter_trinity_suite_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES,
+    )
+    suite_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+
+    def load_module(path: Path, name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        surface: str,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "surface": surface,
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    suite_result: dict[str, Any] = {}
+    optimization_result: dict[str, Any] = {}
+    if not missing_files:
+        suite_path = root / "examples/sdk_framework_adapter_trinity_suite.py"
+        optimization_path = (
+            root / "examples/sdk_framework_adapter_trinity_suite_optimization.py"
+        )
+        try:
+            suite_module = load_module(
+                suite_path,
+                "agent_learning_release_framework_adapter_trinity_suite",
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-adapter-trinity-suite-"
+            ) as tmpdir:
+                suite_result = suite_module.run(Path(tmpdir) / "suite.json")
+        except Exception as exc:
+            errors.append({"path": str(suite_path.relative_to(root)), "error": str(exc)})
+
+        try:
+            optimization_module = load_module(
+                optimization_path,
+                "agent_learning_release_framework_adapter_trinity_suite_optimization",
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-framework-adapter-trinity-suite-opt-"
+            ) as tmpdir:
+                optimization_result = optimization_module.run(
+                    Path(tmpdir) / "suite-optimization.json"
+                )
+        except Exception as exc:
+            errors.append(
+                {"path": str(optimization_path.relative_to(root)), "error": str(exc)}
+            )
+
+    if suite_result:
+        summary = _as_mapping(suite_result.get("summary"))
+        workspace = _as_mapping(suite_result.get("framework_adapter_trinity_workspace"))
+        suite_manifest = _as_mapping(workspace.get("suite"))
+        run_manifest = _as_mapping(workspace.get("run_manifest"))
+        redteam_manifest = _as_mapping(workspace.get("redteam_manifest"))
+        run_agent = _as_mapping(run_manifest.get("agent"))
+        run_metadata = _as_mapping(run_agent.get("metadata"))
+        adapter_contract = _as_mapping(run_metadata.get("framework_adapter_contract"))
+        run_probe_proof = _as_mapping(run_metadata.get("framework_adapter_probe_proof"))
+        run_eval_config = _as_mapping(
+            _as_mapping(_as_mapping(run_manifest.get("evaluation")).get("agent_report")).get(
+                "config"
+            )
+        )
+        redteam = _as_mapping(redteam_manifest.get("redteam"))
+        redteam_target = _as_mapping(redteam.get("target"))
+        probe_proof_status = (
+            run_metadata.get("framework_adapter_probe_proof_status")
+            or run_probe_proof.get("status")
+            or redteam_target.get("framework_adapter_probe_proof_status")
+        )
+        redteam_eval_config = _as_mapping(
+            _as_mapping(
+                _as_mapping(redteam_manifest.get("evaluation")).get("agent_report")
+            ).get("config")
+        )
+        suite_capabilities = _as_mapping(suite_manifest.get("required_capabilities"))
+        children = [
+            child for child in _as_list(suite_result.get("children")) if isinstance(child, Mapping)
+        ]
+        child_commands = sorted(str(child.get("command") or "") for child in children)
+        child_kinds = sorted(str(child.get("kind") or "") for child in children)
+        child_statuses = [str(child.get("status") or "") for child in children]
+        run_child = next(
+            (child for child in children if str(child.get("command") or "") == "run"),
+            {},
+        )
+        redteam_child = next(
+            (
+                child
+                for child in children
+                if str(child.get("command") or "") == "redteam"
+            ),
+            {},
+        )
+        run_metrics = _as_mapping(_as_mapping(run_child.get("summary")).get("metric_averages"))
+        redteam_metrics = _as_mapping(
+            _as_mapping(redteam_child.get("summary")).get("metric_averages")
+        )
+        framework_coverage = _as_mapping(suite_result.get("framework_coverage"))
+        trust_certificate = _as_mapping(suite_result.get("trust_certificate"))
+        required_plain_commands = ["run", "redteam"]
+        evidence["suite"] = {
+            "kind": suite_result.get("kind"),
+            "status": suite_result.get("status"),
+            "exit_code": suite_result.get("exit_code"),
+            "score": summary.get("score"),
+            "job_count": summary.get("job_count"),
+            "child_commands": child_commands,
+            "child_kinds": child_kinds,
+            "child_statuses": child_statuses,
+            "workspace_kind": workspace.get("kind"),
+            "suite_manifest_version": suite_manifest.get("version"),
+            "suite_manifest_required_env": suite_manifest.get("required_env") or [],
+            "suite_required_commands": sorted(
+                str(command)
+                for command in _as_list(suite_capabilities.get("commands"))
+            ),
+            "suite_required_metrics": sorted(
+                str(metric) for metric in _as_list(suite_capabilities.get("metrics"))
+            ),
+            "observed_frameworks": framework_coverage.get("observed_frameworks") or [],
+            "missing_framework_count": framework_coverage.get("missing_count"),
+            "adapter_conformance_failed_count": framework_coverage.get(
+                "adapter_conformance_failed_count"
+            ),
+            "trust_certificate_verdict": trust_certificate.get("verdict"),
+            "trust_certificate_assurance_level": trust_certificate.get(
+                "assurance_level"
+            ),
+        }
+        evidence["run_manifest"] = {
+            "version": run_manifest.get("version"),
+            "required_env": run_manifest.get("required_env") or [],
+            "agent_framework": run_agent.get("framework"),
+            "agent_method": run_agent.get("method"),
+            "agent_input_mode": run_agent.get("input_mode"),
+            "agent_trace_runtime": run_agent.get("trace_runtime"),
+            "adapter_local_executable_fixture": adapter_contract.get(
+                "local_executable_fixture"
+            ),
+            "adapter_requires_external_service": adapter_contract.get(
+                "requires_external_service"
+            ),
+            "promoted_from_framework_adapter_probe": run_metadata.get(
+                "promoted_from_framework_adapter_probe"
+            ),
+            "framework_adapter_probe_proof_status": probe_proof_status,
+            "framework_adapter_discovery_used": run_metadata.get(
+                "framework_adapter_discovery_used"
+            ),
+            "metric_weights": sorted(
+                str(metric)
+                for metric in _as_mapping(run_eval_config.get("metric_weights"))
+            ),
+        }
+        evidence["redteam_manifest"] = {
+            "version": redteam_manifest.get("version"),
+            "required_env": redteam_manifest.get("required_env") or [],
+            "attacks": redteam.get("attacks") or [],
+            "surfaces": redteam.get("surfaces") or [],
+            "frameworks": redteam.get("frameworks") or [],
+            "metric_weights": sorted(
+                str(metric)
+                for metric in _as_mapping(redteam_eval_config.get("metric_weights"))
+            ),
+        }
+        evidence["metrics"] = {
+            "framework_runtime_contract": run_metrics.get(
+                "framework_runtime_contract"
+            ),
+            "framework_adapter_contract_quality": run_metrics.get(
+                "framework_adapter_contract_quality"
+            ),
+            "adversarial_resilience": redteam_metrics.get(
+                "adversarial_resilience"
+            ),
+            "red_team_campaign_quality": redteam_metrics.get(
+                "red_team_campaign_quality"
+            ),
+        }
+
+        suite_expectations = {
+            "kind": (suite_result.get("kind"), "agent-learning.suite.v1"),
+            "status": (suite_result.get("status"), "passed"),
+            "exit_code": (suite_result.get("exit_code"), 0),
+            "workspace.kind": (
+                workspace.get("kind"),
+                "agent-learning.framework-adapter-trinity-workspace.v1",
+            ),
+            "suite.version": (suite_manifest.get("version"), "agent-learning.suite.v1"),
+            "suite.required_env": (suite_manifest.get("required_env") or [], []),
+            "summary.score": (summary.get("score"), 1.0),
+            "summary.failed_count": (summary.get("failed_count"), 0),
+            "framework_coverage.missing_count": (
+                framework_coverage.get("missing_count"),
+                0,
+            ),
+            "framework_coverage.adapter_conformance_failed_count": (
+                framework_coverage.get("adapter_conformance_failed_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in suite_expectations.items():
+            if observed != expected:
+                append_error(
+                    suite_errors,
+                    surface="suite",
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for command in required_plain_commands:
+            if command not in child_commands:
+                append_error(
+                    suite_errors,
+                    surface="suite",
+                    field="children.command",
+                    expected=required_plain_commands,
+                    observed=child_commands,
+                )
+        missing_child_kinds = missing_values(
+            child_kinds,
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS,
+        )
+        if missing_child_kinds:
+            append_error(
+                suite_errors,
+                surface="suite",
+                field="children.kind",
+                expected=V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS,
+                observed=child_kinds,
+            )
+        if any(status != "passed" for status in child_statuses):
+            append_error(
+                suite_errors,
+                surface="suite",
+                field="children.status",
+                expected="all passed",
+                observed=child_statuses,
+            )
+        missing_suite_commands = missing_values(
+            suite_capabilities.get("commands"),
+            required_plain_commands,
+        )
+        if missing_suite_commands:
+            append_error(
+                suite_errors,
+                surface="suite",
+                field="required_capabilities.commands",
+                expected=required_plain_commands,
+                observed=suite_capabilities.get("commands"),
+            )
+        missing_suite_metrics = missing_values(
+            suite_capabilities.get("metrics"),
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS,
+        )
+        if missing_suite_metrics:
+            append_error(
+                suite_errors,
+                surface="suite",
+                field="required_capabilities.metrics",
+                expected=V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS,
+                observed=suite_capabilities.get("metrics"),
+            )
+        observed_frameworks = {
+            str(item) for item in _as_list(framework_coverage.get("observed_frameworks"))
+        }
+        if V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK not in observed_frameworks:
+            append_error(
+                suite_errors,
+                surface="suite",
+                field="framework_coverage.observed_frameworks",
+                expected=V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK,
+                observed=sorted(observed_frameworks),
+            )
+
+        manifest_expectations = {
+            "run.version": (run_manifest.get("version"), "agent-learning.run.v1"),
+            "run.required_env": (run_manifest.get("required_env") or [], []),
+            "run.agent.framework": (
+                run_agent.get("framework"),
+                V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK,
+            ),
+            "run.agent.method": (run_agent.get("method"), "execute_task"),
+            "run.agent.input_mode": (run_agent.get("input_mode"), "dict"),
+            "run.agent.trace_runtime": (run_agent.get("trace_runtime"), True),
+            "run.metadata.promoted_from_framework_adapter_probe": (
+                run_metadata.get("promoted_from_framework_adapter_probe"),
+                True,
+            ),
+            "run.metadata.framework_adapter_probe_proof_status": (
+                probe_proof_status,
+                "passed",
+            ),
+            "run.metadata.framework_adapter_discovery_used": (
+                run_metadata.get("framework_adapter_discovery_used"),
+                True,
+            ),
+            "run.adapter_contract.local_executable_fixture": (
+                adapter_contract.get("local_executable_fixture"),
+                True,
+            ),
+            "run.adapter_contract.requires_external_service": (
+                adapter_contract.get("requires_external_service"),
+                False,
+            ),
+            "redteam.version": (
+                redteam_manifest.get("version"),
+                "agent-learning.redteam.v1",
+            ),
+            "redteam.required_env": (redteam_manifest.get("required_env") or [], []),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    surface="suite",
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_attacks = missing_values(
+            redteam.get("attacks"),
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS,
+        )
+        if missing_attacks:
+            append_error(
+                manifest_errors,
+                surface="suite",
+                field="redteam.attacks",
+                expected=V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS,
+                observed=redteam.get("attacks"),
+            )
+        missing_surfaces = missing_values(
+            redteam.get("surfaces"),
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES,
+        )
+        if missing_surfaces:
+            append_error(
+                manifest_errors,
+                surface="suite",
+                field="redteam.surfaces",
+                expected=V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES,
+                observed=redteam.get("surfaces"),
+            )
+        for metric in V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS:
+            observed_metric = evidence["metrics"].get(metric)
+            if _float_or_zero(observed_metric) < 1.0:
+                append_error(
+                    metric_errors,
+                    surface="suite",
+                    field=f"metric_averages.{metric}",
+                    expected=1.0,
+                    observed=observed_metric,
+                )
+
+    if optimization_result:
+        summary = _as_mapping(optimization_result.get("summary"))
+        optimization = _as_mapping(optimization_result.get("optimization"))
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_jobs = [
+            job for job in _as_list(best_config.get("jobs")) if isinstance(job, Mapping)
+        ]
+        best_commands = [str(job.get("command") or "") for job in best_jobs]
+        optimizer_trace = _as_mapping(optimization.get("optimizer_trace"))
+        trace_summary = _as_mapping(optimizer_trace.get("summary"))
+        optimization_workspace = _as_mapping(
+            optimization_result.get("framework_adapter_trinity_optimization_workspace")
+        )
+        optimization_suite = _as_mapping(optimization_result.get("suite"))
+        optimization_capabilities = _as_mapping(
+            optimization_suite.get("required_capabilities")
+        )
+        evidence["optimization"] = {
+            "kind": optimization_result.get("kind"),
+            "status": optimization_result.get("status"),
+            "exit_code": optimization_result.get("exit_code"),
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "best_commands": best_commands,
+            "best_job_ids": [str(job.get("id") or "") for job in best_jobs],
+            "best_job_paths": [str(job.get("path") or "") for job in best_jobs],
+            "workspace_kind": optimization_workspace.get("kind"),
+            "suite_required_commands": sorted(
+                str(command)
+                for command in _as_list(optimization_capabilities.get("commands"))
+            ),
+            "optimizer_trace_final_score": trace_summary.get("final_score"),
+            "optimizer_trace_governance_pass_rate": trace_summary.get(
+                "governance_pass_rate"
+            ),
+            "optimizer_trace_terminal_status": trace_summary.get("terminal_status"),
+            "optimizer_trace_flags": {
+                flag: trace_summary.get(flag)
+                for flag in V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
+            },
+        }
+        optimization_expectations = {
+            "kind": (
+                optimization_result.get("kind"),
+                "agent-learning.suite-optimization.v1",
+            ),
+            "status": (optimization_result.get("status"), "passed"),
+            "exit_code": (optimization_result.get("exit_code"), 0),
+            "summary.optimization_passed": (summary.get("optimization_passed"), True),
+            "summary.evaluation_passed": (summary.get("evaluation_passed"), True),
+            "workspace.kind": (
+                optimization_workspace.get("kind"),
+                "agent-learning.framework-adapter-trinity-optimization-workspace.v1",
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    surface="optimization",
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("optimization_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="summary.optimization_score",
+                expected=1.0,
+                observed=summary.get("optimization_score"),
+            )
+        if _float_or_zero(summary.get("evaluation_score")) < 0.9:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="summary.evaluation_score",
+                expected=">=0.9",
+                observed=summary.get("evaluation_score"),
+            )
+        if _int_or_zero(summary.get("total_evaluations")) < 2:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="summary.total_evaluations",
+                expected=">=2",
+                observed=summary.get("total_evaluations"),
+            )
+        if _int_or_zero(summary.get("total_iterations")) < 2:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="summary.total_iterations",
+                expected=">=2",
+                observed=summary.get("total_iterations"),
+            )
+        if "suite" not in best_commands:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="optimization.best_config.jobs.command",
+                expected="suite",
+                observed=best_commands,
+            )
+        if not any(str(job.get("path") or "") == "suite.json" for job in best_jobs):
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="optimization.best_config.jobs.path",
+                expected="suite.json",
+                observed=[str(job.get("path") or "") for job in best_jobs],
+            )
+        missing_optimization_commands = missing_values(
+            optimization_capabilities.get("commands"),
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS,
+        )
+        if missing_optimization_commands:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="suite.required_capabilities.commands",
+                expected=V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS,
+                observed=optimization_capabilities.get("commands"),
+            )
+        for flag in V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS:
+            if trace_summary.get(flag) is not True:
+                append_error(
+                    optimization_errors,
+                    surface="optimization",
+                    field=f"optimizer_trace.summary.{flag}",
+                    expected=True,
+                    observed=trace_summary.get(flag),
+                )
+        if trace_summary.get("terminal_status") != "completed":
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="optimizer_trace.summary.terminal_status",
+                expected="completed",
+                observed=trace_summary.get("terminal_status"),
+            )
+        if _float_or_zero(trace_summary.get("final_score")) < 1.0:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="optimizer_trace.summary.final_score",
+                expected=1.0,
+                observed=trace_summary.get("final_score"),
+            )
+        if _float_or_zero(trace_summary.get("governance_pass_rate")) < 1.0:
+            append_error(
+                optimization_errors,
+                surface="optimization",
+                field="optimizer_trace.summary.governance_pass_rate",
+                expected=1.0,
+                observed=trace_summary.get("governance_pass_rate"),
+            )
+
+    return {
+        "required_files": list(V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES),
+        "required_framework": V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK,
+        "required_commands": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS
+        ),
+        "required_child_kinds": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
+        ),
+        "required_metrics": list(V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS),
+        "required_attacks": list(V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS),
+        "required_surfaces": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
+        ),
+        "required_optimizer_flags": list(
+            V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
+        ),
+        "missing_files": missing_files,
+        "suite_errors": suite_errors,
+        "manifest_errors": manifest_errors,
+        "metric_errors": metric_errors,
+        "optimization_errors": optimization_errors,
+        "errors": errors,
+        "evidence": evidence,
+    }
 
 
 def _release_trinity_stack_probe_status(root: Path) -> dict[str, Any]:

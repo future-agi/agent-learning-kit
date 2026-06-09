@@ -92,10 +92,14 @@ and simulation cookbooks for autonomous-agent trust boundaries, approval gates,
 budgets, rollback, kill switches, containment, drift detection, and audit
 evidence. Adapter probe readiness exercises raw probe, discovery, optimization,
 auto-discovery, promotion, and one-call run cookbooks so BYO framework objects
-can become evaluated run manifests locally. The composed trinity-stack probe
-readiness gate proves that the selected orchestration stack agent can pass a
-localhost task evaluator and promote into one run manifest with world,
-framework, retrieval, memory, multi-agent, and evaluation-hook evidence.
+can become evaluated run manifests locally. Framework adapter trinity suite
+readiness executes the run+redteam suite cookbook and the suite-optimization
+cookbook, requiring the optimizer to select the nested full-trinity suite job
+with framework runtime, adapter-contract, adversarial, campaign, and optimizer
+governance evidence. The composed trinity-stack probe readiness gate proves
+that the selected orchestration stack agent can pass a localhost task evaluator
+and promote into one run manifest with world, framework, retrieval, memory,
+multi-agent, and evaluation-hook evidence.
 
 For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
@@ -822,14 +826,20 @@ optimized framework run manifest, a red-team campaign manifest pinned to the
 same adapter contract/proof, and an `agent-learning.suite.v1` wrapper with
 `run` plus `redteam` jobs. See
 `examples/sdk_framework_adapter_trinity_suite.py` for the full
-target-to-suite workflow.
+target-to-suite workflow. `agent-learn release-check` now gates this path as
+`framework_adapter_trinity_suite_readiness`: the local suite must pass the
+promoted run and red-team campaign with framework runtime, adapter-contract,
+adversarial, and campaign metrics closed.
 
 To make that workflow itself optimizer-selected, use
 `suite.write_framework_adapter_trinity_suite_optimization_workspace(...)`: it
 writes a suite optimization whose search space compares a run-only seed against
 the full nested run+redteam trinity suite and selects the candidate satisfying
 framework, eval, and red-team capability gates. See
-`examples/sdk_framework_adapter_trinity_suite_optimization.py`.
+`examples/sdk_framework_adapter_trinity_suite_optimization.py`. The same
+release gate requires the optimizer to select the nested `suite.json` job and
+preserve optimizer trace governance evidence before V1 claims framework-adapter
+trinity coverage.
 
 Agent-report evaluation can now score that same metadata with
 `framework_adapter_contract_quality`; framework optimization weights it as a
