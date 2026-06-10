@@ -4390,6 +4390,90 @@ def test_sdk_workflow_target_optimization_example_runs(monkeypatch, tmp_path):
     assert workflow["topology"]["terminal_nodes"] == ["finalize"]
 
 
+def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY",
+        "real-local-sdk-workflow-target-profile-matrix-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_workflow_target_profile_matrix.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_workflow_target_profile_matrix",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifests = module.build_manifests()
+    assert list(manifests) == module.PROFILE_FRAMEWORKS
+    for framework, manifest in manifests.items():
+        assert manifest["required_env"] == [
+            "AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY"
+        ]
+        target = manifest["optimization"]["target"]
+        assert target["metadata"]["profile_framework"] == framework
+        assert target["metadata"]["optimized_surface"] == "workflow_trace_profile"
+        assert target["layers"] == [
+            "graph",
+            "router",
+            "orchestration",
+            "harness",
+            "evaluator",
+        ]
+        assert list(target["search_space"]) == [module.TARGET_PATH]
+        candidates = target["search_space"][module.TARGET_PATH]
+        assert len(candidates) == 2
+        assert candidates[0]["framework"] == framework
+        assert candidates[1]["framework"] == framework
+        quality = manifest["evaluation"]["agent_report"]["config"][
+            "workflow_trace_quality"
+        ]
+        assert quality["framework"] == framework
+
+    output_path = tmp_path / "sdk-workflow-target-profile-matrix-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    serialized_result = output_path.read_text(encoding="utf-8")
+    assert "real-local-sdk-workflow-target-profile-matrix-key" not in serialized_result
+    assert json.loads(serialized_result)["status"] == "passed"
+    assert result["kind"] == "agent-learning.workflow-target-profile-matrix.v1"
+    assert result["schema_version"] == "agent-learning.cli.v1"
+    assert result["status"] == "passed"
+    assert result["frameworks"] == module.PROFILE_FRAMEWORKS
+    assert result["summary"] == {
+        "profile_count": 3,
+        "passed_profile_count": 3,
+        "failed_profiles": [],
+        "all_patch_paths": [module.TARGET_PATH],
+    }
+    profiles = {profile["framework"]: profile for profile in result["profiles"]}
+    assert set(profiles) == set(module.PROFILE_FRAMEWORKS)
+    for framework, profile in profiles.items():
+        assert profile["status"] == "passed"
+        assert profile["workflow_framework"] == framework
+        assert profile["selected_patch_paths"] == [module.TARGET_PATH]
+        assert profile["optimization_score"] >= 0.98
+        assert profile["evaluation_score"] == pytest.approx(1.0)
+        assert profile["best_score"] >= 0.98
+        assert profile["counts"] == module.REQUIRED_COUNTS
+        assert profile["tool_names"] == ["policy_lookup"]
+        assert profile["tool_call_names"] == ["workflow_trace_status"]
+        assert profile["final_state_keys"] == [
+            "approval",
+            "decision",
+            "policy_result",
+        ]
+        assert profile["entry_nodes"] == ["intake"]
+        assert profile["terminal_nodes"] == ["finalize"]
+        assert profile["has_replay"] is True
+        assert profile["has_interrupts"] is True
+        assert profile["has_routes"] is True
+        for metric in module.REQUIRED_METRICS:
+            assert profile["selected_metrics"][metric] == pytest.approx(1.0)
+
+
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     from agent_learning import optimize
 
@@ -16475,6 +16559,30 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workflow_target_optimizer_score_minimum"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
     )
+    assert payload["required_workflow_target_profile_matrix_files"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES
+    )
+    assert payload["required_workflow_target_profile_matrix_env"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV
+    )
+    assert payload["required_workflow_target_profile_matrix_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert payload["required_workflow_target_profile_matrix_search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["required_workflow_target_profile_matrix_layers"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS
+    )
+    assert payload["required_workflow_target_profile_matrix_metrics"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS
+    )
+    assert payload["required_workflow_target_profile_matrix_counts"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS
+    )
+    assert payload["required_workflow_target_profile_matrix_score_minimum"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -17366,6 +17474,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "memory_target_optimizer_readiness",
         "orchestration_target_optimizer_readiness",
         "workflow_target_optimizer_readiness",
+        "workflow_target_profile_matrix_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -18986,6 +19095,142 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_target_runtime["has_routes"] is True
     workflow_target_security = workflow_target_evidence["security"]
     assert workflow_target_security["serialized_secret_absent"] is True
+
+    workflow_profile_matrix = checks["workflow_target_profile_matrix_readiness"][
+        "evidence"
+    ]
+    assert workflow_profile_matrix["required_files"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES
+    )
+    assert workflow_profile_matrix["required_env"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV
+    )
+    assert workflow_profile_matrix["required_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert workflow_profile_matrix["required_search_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+    )
+    assert workflow_profile_matrix["required_layers"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS
+    )
+    assert workflow_profile_matrix["required_metrics"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS
+    )
+    assert workflow_profile_matrix["required_counts"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS
+    )
+    assert workflow_profile_matrix["required_score_minimum"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+    )
+    assert workflow_profile_matrix["missing_files"] == []
+    assert workflow_profile_matrix["execution_errors"] == []
+    assert workflow_profile_matrix["manifest_errors"] == []
+    assert workflow_profile_matrix["optimization_errors"] == []
+    assert workflow_profile_matrix["metric_errors"] == []
+    assert workflow_profile_matrix["runtime_errors"] == []
+    assert workflow_profile_matrix["security_errors"] == []
+    workflow_profile_evidence = workflow_profile_matrix["evidence"]
+    workflow_profile_manifest = workflow_profile_evidence["manifest"]
+    assert workflow_profile_manifest["profile_frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    workflow_profile_manifests = workflow_profile_manifest["profiles"]
+    assert set(workflow_profile_manifests) == set(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    for framework in trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS:
+        profile_manifest = workflow_profile_manifests[framework]
+        assert profile_manifest["version"] == "agent-learning.optimization.v1"
+        assert profile_manifest["required_env"] == [
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV
+        ]
+        assert profile_manifest["target_layers"] == (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS
+        )
+        assert profile_manifest["threshold"] == pytest.approx(
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+        )
+        assert profile_manifest["search_paths"] == (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+        )
+        assert profile_manifest["candidate_count"] == 2
+        assert profile_manifest["profile_framework"] == framework
+        assert profile_manifest["optimized_surface"] == "workflow_trace_profile"
+        assert (
+            profile_manifest["workflow_trace_quality_framework"] == framework
+        )
+
+    workflow_profile_result = workflow_profile_evidence["result"]
+    assert workflow_profile_result["kind"] == (
+        "agent-learning.workflow-target-profile-matrix.v1"
+    )
+    assert workflow_profile_result["schema_version"] == "agent-learning.cli.v1"
+    assert workflow_profile_result["status"] == "passed"
+    assert workflow_profile_result["output_roundtrip"] is True
+    assert workflow_profile_result["required_env"] == [
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV
+    ]
+    assert workflow_profile_result["frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert workflow_profile_result["target_path"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS[0]
+    )
+    assert workflow_profile_result["summary"] == {
+        "profile_count": len(trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+        "passed_profile_count": len(
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+        ),
+        "failed_profiles": [],
+        "all_patch_paths": (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+        ),
+    }
+    workflow_profiles = {
+        profile["framework"]: profile for profile in workflow_profile_result["profiles"]
+    }
+    assert set(workflow_profiles) == set(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    for framework in trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS:
+        profile = workflow_profiles[framework]
+        assert profile["workflow_framework"] == framework
+        assert profile["selected_patch_paths"] == (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+        )
+        assert profile["optimization_score"] >= (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+        )
+        assert profile["evaluation_score"] >= (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+        )
+        assert profile["best_score"] >= (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+        )
+        assert profile["selected_metrics"] == {
+            metric: pytest.approx(1.0)
+            for metric in trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS
+        }
+        assert profile["counts"] == (
+            trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS
+        )
+        assert profile["tool_names"] == ["policy_lookup"]
+        assert profile["tool_call_names"] == ["workflow_trace_status"]
+        assert profile["final_state_keys"] == (
+            trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
+        )
+        assert profile["entry_nodes"] == [
+            trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
+        ]
+        assert profile["terminal_nodes"] == [
+            trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
+        ]
+        assert profile["has_replay"] is True
+        assert profile["has_interrupts"] is True
+        assert profile["has_routes"] is True
+    workflow_profile_security = workflow_profile_evidence["security"]
+    assert workflow_profile_security["serialized_secret_absent"] is True
 
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
@@ -24772,6 +25017,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         in milestones["M3"]["check_ids"]
     )
     assert "workflow_target_optimizer_readiness" in milestones["M3"]["check_ids"]
+    assert (
+        "workflow_target_profile_matrix_readiness"
+        in milestones["M3"]["check_ids"]
+    )
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]

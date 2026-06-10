@@ -1144,6 +1144,12 @@ evidence as `workflow_target_optimizer_readiness`. The evidence bar is
 deterministic and local-only: no prompt patching, no external workflow provider
 dependency, and no secret leakage.
 
+For per-framework workflow target evidence, see
+`examples/sdk_workflow_target_profile_matrix.py`. It runs the same generic
+target path as separate LangGraph, CrewAI, and LlamaIndex profiles and gates
+them as `workflow_target_profile_matrix_readiness`, so Agent Learning remains
+the primary framework while external shapes stay compatibility inputs.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can

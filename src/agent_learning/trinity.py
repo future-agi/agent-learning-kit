@@ -924,6 +924,54 @@ V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE = "workflow_trace_graph"
 
 V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM = 0.98
 
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES = [
+    "examples/sdk_workflow_target_profile_matrix.py",
+    "internal-docs/workflow-target-profile-matrix-readiness-research.md",
+]
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY"
+)
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS = [
+    "langgraph",
+    "crewai",
+    "llamaindex",
+]
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments.0.data.trace",
+]
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS = [
+    "graph",
+    "router",
+    "orchestration",
+    "harness",
+    "evaluator",
+]
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS = [
+    "workflow_trace_coverage",
+    "workflow_graph_quality",
+    "tool_selection_accuracy",
+    "artifact_coverage",
+    "task_completion",
+]
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS = {
+    "node_count": 4,
+    "edge_count": 3,
+    "step_count": 4,
+    "checkpoint_count": 2,
+    "route_decision_count": 1,
+    "interrupt_count": 1,
+    "replay_count": 1,
+    "write_count": 1,
+}
+
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM = 0.98
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -4483,6 +4531,24 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=workflow_target_optimizer,
     )
+    workflow_target_profile_matrix = _release_workflow_target_profile_matrix_status(
+        root
+    )
+    _append_release_check(
+        checks,
+        check_id="workflow_target_profile_matrix_readiness",
+        passed=(
+            not workflow_target_profile_matrix["missing_files"]
+            and not workflow_target_profile_matrix["execution_errors"]
+            and not workflow_target_profile_matrix["manifest_errors"]
+            and not workflow_target_profile_matrix["optimization_errors"]
+            and not workflow_target_profile_matrix["metric_errors"]
+            and not workflow_target_profile_matrix["runtime_errors"]
+            and not workflow_target_profile_matrix["security_errors"]
+        ),
+        milestone="M3",
+        evidence=workflow_target_profile_matrix,
+    )
     optimizer_governance = _release_optimizer_governance_status(root)
     _append_release_check(
         checks,
@@ -5586,6 +5652,30 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_workflow_target_optimizer_score_minimum": (
             V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
+        ),
+        "required_workflow_target_profile_matrix_files": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES
+        ),
+        "required_workflow_target_profile_matrix_env": (
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV
+        ),
+        "required_workflow_target_profile_matrix_frameworks": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+        ),
+        "required_workflow_target_profile_matrix_search_paths": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+        ),
+        "required_workflow_target_profile_matrix_layers": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS
+        ),
+        "required_workflow_target_profile_matrix_metrics": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS
+        ),
+        "required_workflow_target_profile_matrix_counts": dict(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS
+        ),
+        "required_workflow_target_profile_matrix_score_minimum": (
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -12713,6 +12803,418 @@ def _release_workflow_target_optimizer_status(root: Path) -> dict[str, Any]:
         "required_task_kind": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
         "required_surface": V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE,
         "required_score_minimum": V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifests: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    output_text = ""
+    release_secret = (
+        "agent-learning-release-local-"
+        f"{V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV.lower()}"
+    )
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        profile: str | None = None,
+    ) -> None:
+        error = {
+            "field": field,
+            "expected": expected,
+            "observed": observed,
+        }
+        if profile:
+            error["profile"] = profile
+        bucket.append(error)
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        previous_config = agent_config.current_config()
+        example_path = root / "examples/sdk_workflow_target_profile_matrix.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_workflow_target_profile_matrix",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            manifests = dict(module.build_manifests())
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-workflow-target-profile-matrix-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "workflow-target-profile-matrix.json"
+
+                def run_example() -> dict[str, Any]:
+                    return dict(module.run(output_path))
+
+                result = _release_run_with_local_env(
+                    [V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV],
+                    run_example,
+                )
+                output_text = output_path.read_text(encoding="utf-8")
+                saved = json.loads(output_text)
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+            manifests = {}
+            result = {}
+            saved = {}
+        finally:
+            agent_config._CONFIG = previous_config
+
+    if manifests:
+        profile_manifest_evidence: dict[str, Any] = {}
+        for framework in V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS:
+            manifest = _as_mapping(manifests.get(framework))
+            optimization = _as_mapping(manifest.get("optimization"))
+            target = _as_mapping(optimization.get("target"))
+            target_metadata = _as_mapping(target.get("metadata"))
+            search_space = _as_mapping(target.get("search_space"))
+            candidates = _as_list(
+                search_space.get(
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS[0]
+                )
+            )
+            evaluation_config = _as_mapping(
+                _as_mapping(manifest.get("evaluation")).get("agent_report")
+            )
+            evaluation_config = _as_mapping(evaluation_config.get("config"))
+            workflow_quality = _as_mapping(
+                evaluation_config.get("workflow_trace_quality")
+            )
+            profile_manifest_evidence[framework] = {
+                "version": manifest.get("version"),
+                "required_env": list(manifest.get("required_env") or []),
+                "target_layers": list(target.get("layers") or []),
+                "threshold": optimization.get("threshold"),
+                "search_paths": sorted(str(path) for path in search_space),
+                "candidate_count": len(candidates),
+                "profile_framework": target_metadata.get("profile_framework"),
+                "optimized_surface": target_metadata.get("optimized_surface"),
+                "workflow_trace_quality_framework": workflow_quality.get("framework"),
+            }
+            expectations = {
+                "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+                "required_env": (
+                    list(manifest.get("required_env") or []),
+                    [V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV],
+                ),
+                "optimization.target.layers": (
+                    list(target.get("layers") or []),
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS,
+                ),
+                "optimization.target.search_space": (
+                    sorted(str(path) for path in search_space),
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS,
+                ),
+                "optimization.threshold": (
+                    optimization.get("threshold"),
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM,
+                ),
+                "optimization.target.metadata.profile_framework": (
+                    target_metadata.get("profile_framework"),
+                    framework,
+                ),
+                "optimization.target.metadata.optimized_surface": (
+                    target_metadata.get("optimized_surface"),
+                    "workflow_trace_profile",
+                ),
+                "evaluation.agent_report.config.workflow_trace_quality.framework": (
+                    workflow_quality.get("framework"),
+                    framework,
+                ),
+            }
+            for field, (observed, expected) in expectations.items():
+                if observed != expected:
+                    append_error(
+                        manifest_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                        profile=framework,
+                    )
+            if len(candidates) != 2:
+                append_error(
+                    manifest_errors,
+                    field="optimization.target.search_space.candidate_count",
+                    expected=2,
+                    observed=len(candidates),
+                    profile=framework,
+                )
+        evidence["manifest"] = {
+            "profiles": profile_manifest_evidence,
+            "profile_frameworks": [
+                framework
+                for framework in V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+                if framework in profile_manifest_evidence
+            ],
+        }
+        if sorted(profile_manifest_evidence) != sorted(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+        ):
+            append_error(
+                manifest_errors,
+                field="profiles",
+                expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+                observed=sorted(profile_manifest_evidence),
+            )
+
+    if result:
+        profile_summaries = [
+            _as_mapping(profile)
+            for profile in _as_list(result.get("profiles"))
+            if isinstance(profile, Mapping)
+        ]
+        profiles_by_framework = {
+            str(profile.get("framework")): profile
+            for profile in profile_summaries
+            if profile.get("framework")
+        }
+        summary = _as_mapping(result.get("summary"))
+        evidence["result"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "required_env": list(result.get("required_env") or []),
+            "frameworks": list(result.get("frameworks") or []),
+            "target_path": result.get("target_path"),
+            "summary": dict(summary),
+            "profiles": profile_summaries,
+        }
+        result_expectations = {
+            "kind": (
+                result.get("kind"),
+                "agent-learning.workflow-target-profile-matrix.v1",
+            ),
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "required_env": (
+                list(result.get("required_env") or []),
+                [V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV],
+            ),
+            "frameworks": (
+                list(result.get("frameworks") or []),
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+            ),
+            "target_path": (
+                result.get("target_path"),
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS[0],
+            ),
+            "summary.profile_count": (
+                summary.get("profile_count"),
+                len(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+            ),
+            "summary.passed_profile_count": (
+                summary.get("passed_profile_count"),
+                len(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+            ),
+            "summary.failed_profiles": (list(summary.get("failed_profiles") or []), []),
+            "summary.all_patch_paths": (
+                list(summary.get("all_patch_paths") or []),
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS,
+            ),
+        }
+        for field, (observed, expected) in result_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_profiles = missing_values(
+            profiles_by_framework,
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+        )
+        if missing_profiles:
+            append_error(
+                optimization_errors,
+                field="profiles.framework",
+                expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+                observed=sorted(profiles_by_framework),
+            )
+        for framework in V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS:
+            profile = _as_mapping(profiles_by_framework.get(framework))
+            if not profile:
+                continue
+            for field in ("optimization_score", "evaluation_score", "best_score"):
+                if _float_or_zero(profile.get(field)) < (
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+                ):
+                    append_error(
+                        optimization_errors,
+                        field=field,
+                        expected=f">={V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM}",
+                        observed=profile.get(field),
+                        profile=framework,
+                    )
+            if list(profile.get("selected_patch_paths") or []) != (
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+            ):
+                append_error(
+                    optimization_errors,
+                    field="selected_patch_paths",
+                    expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS,
+                    observed=profile.get("selected_patch_paths") or [],
+                    profile=framework,
+                )
+            if profile.get("workflow_framework") != framework:
+                append_error(
+                    runtime_errors,
+                    field="workflow_framework",
+                    expected=framework,
+                    observed=profile.get("workflow_framework"),
+                    profile=framework,
+                )
+            for metric in V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS:
+                observed = _as_mapping(profile.get("selected_metrics")).get(metric)
+                if _float_or_zero(observed) < 1.0:
+                    append_error(
+                        metric_errors,
+                        field=f"selected_metrics.{metric}",
+                        expected=1.0,
+                        observed=observed,
+                        profile=framework,
+                    )
+            counts = _as_mapping(profile.get("counts"))
+            for field, expected in (
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS.items()
+            ):
+                observed = _int_or_zero(counts.get(field))
+                if observed < expected:
+                    append_error(
+                        runtime_errors,
+                        field=f"counts.{field}",
+                        expected=f">={expected}",
+                        observed=observed,
+                        profile=framework,
+                    )
+            if "workflow_trace_status" not in _as_list(profile.get("tool_call_names")):
+                append_error(
+                    runtime_errors,
+                    field="tool_call_names",
+                    expected="workflow_trace_status",
+                    observed=profile.get("tool_call_names") or [],
+                    profile=framework,
+                )
+            if "policy_lookup" not in _as_list(profile.get("tool_names")):
+                append_error(
+                    runtime_errors,
+                    field="tool_names",
+                    expected="policy_lookup",
+                    observed=profile.get("tool_names") or [],
+                    profile=framework,
+                )
+            missing_state_keys = missing_values(
+                profile.get("final_state_keys"),
+                V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    runtime_errors,
+                    field="final_state_keys",
+                    expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS,
+                    observed=profile.get("final_state_keys") or [],
+                    profile=framework,
+                )
+            if V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE not in _as_list(
+                profile.get("entry_nodes")
+            ):
+                append_error(
+                    runtime_errors,
+                    field="entry_nodes",
+                    expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE,
+                    observed=profile.get("entry_nodes") or [],
+                    profile=framework,
+                )
+            if V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE not in _as_list(
+                profile.get("terminal_nodes")
+            ):
+                append_error(
+                    runtime_errors,
+                    field="terminal_nodes",
+                    expected=V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE,
+                    observed=profile.get("terminal_nodes") or [],
+                    profile=framework,
+                )
+            for field in ("has_replay", "has_interrupts", "has_routes"):
+                if profile.get(field) is not True:
+                    append_error(
+                        runtime_errors,
+                        field=field,
+                        expected=True,
+                        observed=profile.get(field),
+                        profile=framework,
+                    )
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        serialized_secret_absent = (
+            release_secret not in output_text and release_secret not in serialized
+        )
+        evidence["security"] = {
+            "serialized_secret_absent": serialized_secret_absent,
+        }
+        if not serialized_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES),
+        "required_env": V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV,
+        "required_frameworks": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+        "required_search_paths": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+        ),
+        "required_layers": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS),
+        "required_metrics": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS),
+        "required_counts": dict(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS),
+        "required_score_minimum": V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM,
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "manifest_errors": manifest_errors,
@@ -39347,6 +39849,14 @@ __all__ = [
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL",
     "V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL",
     "V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
