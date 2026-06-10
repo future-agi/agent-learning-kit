@@ -705,6 +705,7 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_browser_cua_trace.py` and
 `examples/sdk_framework_adapter_workflow_trace.py` and
 `examples/sdk_framework_adapter_orchestration_trace.py` and
+`examples/sdk_framework_adapter_lifecycle_trace.py` and
 `examples/sdk_framework_adapter_mcp_tool_session.py` and
 `examples/sdk_framework_adapter_a2a_protocol_trace.py` and
 `examples/sdk_framework_adapter_agent_control_plane.py` for local
@@ -716,9 +717,11 @@ OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
 `execute_task(dict)` promotion with local CUA trace evidence, LangGraph-style
 workflow promotion with checkpoints/interrupt/replay evidence, and
 LangGraph-style orchestration promotion with supervisor/delegate trace
-evidence, plus MCP `execute_task(dict)` tool-session promotion and A2A
-`send_message(dict)` protocol-trace promotion, plus Agent Learning Kit
-`execute_task(dict)` trust-boundary/control-plane promotion.
+evidence, plus LiveKit-style lifecycle promotion with retry/recovery,
+checkpoint, cancellation/resume, cleanup, and state-persistence evidence, plus
+MCP `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
+protocol-trace promotion, plus Agent Learning Kit `execute_task(dict)`
+trust-boundary/control-plane promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -729,8 +732,9 @@ promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
 `run_session(dict)` session promotion plus provider-response promotion and
 Browser/CUA trace promotion plus LangGraph workflow and orchestration trace
-promotions plus MCP tool-session and A2A protocol-trace promotions plus Agent
-Learning Kit control-plane promotion. It requires
+promotions plus lifecycle trace promotion plus MCP tool-session and A2A
+protocol-trace promotions plus Agent Learning Kit control-plane promotion. It
+requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
 promotion, LiveKit session promotion, and provider-response promotion with
@@ -741,11 +745,15 @@ avoidance, plus LangGraph `execute_task(dict)` with `workflow_trace` state,
 checkpoint/interrupt/replay evidence, workflow graph metrics, and
 `orchestration_trace` state, supervisor/delegate/handoff evidence, retry
 recovery, trace artifacts, and orchestration coverage/flow-quality metrics,
-plus MCP `execute_task(dict)` with `mcp_tool_session` state, protocol events,
-tool schemas/resources/results, and MCP coverage/quality metrics, and A2A
-`send_message(dict)` with `a2a_protocol_trace` state, protocol events,
-artifacts, terminal task state, and A2A coverage/quality metrics, plus Agent
-Learning Kit `execute_task(dict)` with `agent_trust_boundary_model` and
+plus LiveKit `execute_task(dict)` with `framework_lifecycle_trace` state,
+lifecycle phase/trace events, trace artifacts, retry/recovery, streaming,
+checkpoint, cancellation/resume, cleanup, state persistence, and lifecycle
+coverage/quality metrics, plus MCP `execute_task(dict)` with
+`mcp_tool_session` state, protocol events, tool schemas/resources/results, and
+MCP coverage/quality metrics, and A2A `send_message(dict)` with
+`a2a_protocol_trace` state, protocol events, artifacts, terminal task state, and
+A2A coverage/quality metrics, plus Agent Learning Kit `execute_task(dict)` with
+`agent_trust_boundary_model` and
 `agent_control_plane` state, trust/control events, artifacts, state-summary
 gates, and trust-boundary/control-plane coverage and quality metrics,
 callable-signature evidence, observed I/O contracts, passing probe proofs,
@@ -1060,6 +1068,13 @@ adapter output. See `examples/sdk_framework_adapter_lifecycle_trace.py`.
 `agent-learn release-check` now runs this cookbook locally and requires retry,
 cancellation, resume, cleanup, state persistence, artifacts, and passing
 lifecycle metrics.
+The same cookbook is release-gated as `lifecycle_trace_promotion` in
+`framework_adapter_probe_readiness`: discovery must select
+`execute_task(dict)` for the local LiveKit-style agent, preserve probe metadata
+in the promoted manifest, emit `framework_lifecycle_trace` state plus lifecycle
+events/artifacts, and close the normal adapter metric floors plus lifecycle
+coverage and quality metrics. It also counts under native adapter promotion in
+`environment_10x_robustness`.
 
 For a focused trinity gate around a local framework adapter, use
 `suite.write_framework_adapter_trinity_suite_workspace(...)`: it writes the
@@ -2187,9 +2202,9 @@ hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
 native adapter probe promotion including provider-response, Browser/CUA trace,
-workflow trace, orchestration trace, MCP tool-session, and A2A protocol-trace
-promotion, and authenticated hooks are counted as native proof-backed axes;
-OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
+workflow trace, orchestration trace, lifecycle trace, MCP tool-session, and A2A
+protocol-trace promotion, and authenticated hooks are counted as native
+proof-backed axes; OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
 no external endpoint is required. It builds on 2026 world-model and environment

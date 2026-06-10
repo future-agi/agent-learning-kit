@@ -530,11 +530,12 @@ Current checkpoint:
   expose a Future AGI-visible `stateful_framework_adapter` report/action card,
   promote a local-only regression, and replay that promoted run with workflow
   coverage, graph-quality, and framework runtime-contract metrics closed. The
-  workflow and orchestration trace cookbooks are also promoted under
+  workflow, orchestration, and lifecycle trace cookbooks are also promoted under
   `framework_adapter_probe_readiness` as `workflow_trace_promotion` and
-  `orchestration_trace_promotion`, so their adapter discovery/proof metadata
-  and workflow/orchestration metric floors count toward the native adapter 10x
-  axis.
+  `orchestration_trace_promotion`, and `lifecycle_trace_promotion`, so their
+  adapter discovery/proof metadata, state/event/artifact requirements, and
+  workflow/orchestration/lifecycle metric floors count toward the native adapter
+  10x axis.
 - MCP and A2A protocol adapter cookbooks are also promoted under
   `framework_adapter_probe_readiness` as `mcp_tool_session_promotion` and
   `a2a_protocol_trace_promotion`, so protocol state/events/artifacts, selected
@@ -602,8 +603,9 @@ Current checkpoint:
   certification, red-team suite coverage, and regression replay. Workspace
   import certification, local HTTP framework transport, local WebSocket
   framework transport, framework matrix optimization, native adapter probe
-  promotion including MCP/A2A protocol-native adapter promotions, and
-  authenticated hooks are counted as native proof-backed axes;
+  promotion including workflow/orchestration/lifecycle stateful adapter
+  promotions and MCP/A2A protocol-native adapter promotions, and authenticated
+  hooks are counted as native proof-backed axes;
   OpenEnv/Gymnasium-shaped traces are compatibility inputs inside that bar.
 
 Acceptance gates:

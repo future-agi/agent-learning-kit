@@ -60,14 +60,15 @@ outputs and requires at least ten independent axes to pass:
   `run_session(dict)` session adapters plus provider-response adapters with
   required provider kwargs and normalized `provider_response` state plus Browser
   Use `execute_task(dict)` CUA trace adapters plus LangGraph
-  `execute_task(dict)` workflow/orchestration trace adapters plus MCP
-  `execute_task(dict)` tool-session adapters and A2A `send_message(dict)`
-  protocol-trace adapters plus Agent Learning Kit `execute_task(dict)`
-  trust-boundary/control-plane adapters into normal `agent-learning.run.v1`
-  artifacts with proof metadata, discovery evidence where required, adapter
-  call-contract metrics, observed-I/O metrics, protocol evidence, agent
-  control-plane evidence, and framework runtime/trace/workflow/orchestration/tool
-  metric floors.
+  `execute_task(dict)` workflow/orchestration trace adapters plus LiveKit
+  `execute_task(dict)` lifecycle trace adapters plus MCP `execute_task(dict)`
+  tool-session adapters and A2A `send_message(dict)` protocol-trace adapters
+  plus Agent Learning Kit `execute_task(dict)` trust-boundary/control-plane
+  adapters into normal `agent-learning.run.v1` artifacts with proof metadata,
+  discovery evidence where required, adapter call-contract metrics, observed-I/O
+  metrics, lifecycle evidence, protocol evidence, agent control-plane evidence,
+  and framework runtime/trace/workflow/orchestration/lifecycle/tool metric
+  floors.
 - `protocol_tool_routing`: MCP and A2A adapters preserve protocol state,
   events, artifacts, and tool/task records.
 - `browser_cua_resilience`: browser/CUA probes prove DOM/screenshot grounding,

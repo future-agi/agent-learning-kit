@@ -35,15 +35,20 @@ promotion plus LiveKit `run_session(dict)` session promotion and
 provider-response promotion with required provider kwargs and normalized
 `provider_response` state plus Browser Use `execute_task(dict)` CUA trace
 promotion plus LangGraph `execute_task(dict)` workflow and orchestration trace
-promotions plus MCP `execute_task(dict)` tool-session promotion and A2A
-`send_message(dict)` protocol-trace promotion plus Agent Learning Kit
-`execute_task(dict)` agent control-plane promotion, callable
+promotions plus LiveKit `execute_task(dict)` lifecycle trace promotion plus MCP
+`execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
+protocol-trace promotion plus Agent Learning Kit `execute_task(dict)` agent
+control-plane promotion, callable
 signatures to be inspectable, observed I/O contracts and call contracts to cover
 the selected probe cases, discovery to be used where expected, probe proofs to
 pass, promoted manifests to carry proof/discovery metadata, and evaluated runs
 to close framework runtime, adapter call-contract, observed-I/O,
-adapter-contract, framework-trace, workflow, orchestration, protocol, and
-agent control-plane, and tool-selection metrics. The MCP/A2A promotions
+adapter-contract, framework-trace, workflow, orchestration, lifecycle, protocol,
+agent control-plane, and tool-selection metrics. The lifecycle promotion
+additionally requires `framework_lifecycle_trace` state, runtime required-state
+keys, lifecycle/runtime event types, artifact kinds, phase/session/retry/error/
+recovery/cancellation/resume/cleanup/checkpoint counts, state persistence, and
+terminal cleanup evidence. The MCP/A2A promotions
 additionally require protocol state keys, runtime required-state keys, event
 types, artifact kinds, summary counts, and summary membership evidence so
 protocol semantics cannot regress behind passing metric averages. The

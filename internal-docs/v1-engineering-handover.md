@@ -7,9 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `d1880ef Promote protocol adapter probes`.
+  `0130b61 Promote agent control-plane adapter`.
 - Current handoff slice:
-  Agent control-plane framework adapter promotion.
+  Lifecycle framework adapter promotion.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -39,10 +39,11 @@ What is done:
   provider-response `chat.completions.create(messages=..., model=...)`, plus
   Browser Use `execute_task(dict)` CUA trace promotion, LangGraph-style
   `execute_task(dict)` workflow trace promotion, and LangGraph-style
-  `execute_task(dict)` orchestration trace promotion, plus MCP
-  `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
-  protocol-trace promotion, plus Agent Learning Kit `execute_task(dict)`
-  agent trust-boundary/control-plane promotion.
+  `execute_task(dict)` orchestration trace promotion, plus LiveKit-style
+  `execute_task(dict)` lifecycle trace promotion, plus MCP `execute_task(dict)`
+  tool-session promotion and A2A `send_message(dict)` protocol-trace promotion,
+  plus Agent Learning Kit `execute_task(dict)` agent trust-boundary/control-plane
+  promotion.
 
 What is not done:
 
@@ -53,7 +54,61 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest Agent Control-Plane Adapter Promotion Slice
+## Latest Lifecycle Adapter Promotion Slice
+
+This handoff slice promotes the existing LiveKit-style lifecycle trace cookbook
+through the generic framework adapter probe gate and the environment 10x native
+adapter axis.
+
+Implemented behavior:
+
+- Reuses `examples/sdk_framework_adapter_lifecycle_trace.py`, a local-only
+  cookbook that discovers and promotes
+  `LocalRealtimeLifecycleAgent.execute_task` as `framework=livekit`,
+  `input_mode=dict`, positional call style.
+- `lifecycle_trace_promotion` in `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`
+  requires discovery/proof metadata, required state keys, runtime required-state
+  keys, lifecycle/runtime event types, artifact kinds, exact metric floors, and
+  state-summary gates for phases, sessions, retry/recovery, cancellation,
+  resume, cleanup, checkpointing, streaming, tool registration, state
+  persistence, and terminal cleanup.
+- `environment_10x_robustness` now counts `lifecycle_trace_promotion` through
+  the native adapter promotion axis.
+- The promotion stays under the existing generic release-record boundary:
+  `_framework_adapter_probe_record()` exposes sanitized `state_summaries`, and
+  `_append_framework_adapter_probe_errors()` enforces `state_summary_minimums`
+  and `state_summary_equals` without adding lifecycle-specific validator code.
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
+- `framework_lifecycle_coverage == 1.0`
+- `framework_lifecycle_quality == 1.0`
+
+Current slice verification:
+
+- `uv run python -m py_compile src/agent_learning/trinity.py tests/test_config_and_facades.py`
+  passed.
+- `uv run ruff check src/agent_learning/trinity.py tests/test_config_and_facades.py`
+  passed.
+- Focused lifecycle cookbook and behavior tests passed:
+  `2 passed, 5 warnings in 5.99s`.
+- `uv run pytest tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones -q`
+  passed: `1 passed, 8 warnings in 385.91s (0:06:25)`.
+- Selected release-proof passed for `release_check` and `git_diff_check`, writing
+  `/tmp/agent-learning-lifecycle-promotion-release-proof.json`. Its
+  `summary.ready` is `false` because non-selected checks are intentionally
+  skipped.
+- `uv run ruff check .` passed.
+- `git diff --check` passed.
+- `uv run pytest -q` passed: `302 passed, 10 warnings in 701.71s (0:11:41)`.
+
+## Previous Agent Control-Plane Adapter Promotion Slice
 
 This handoff slice promotes Agent Learning Kit's own trust-boundary and runtime
 control-plane evidence through the generic framework adapter probe gate and the
@@ -620,8 +675,8 @@ contract.
 The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
 session promoted adapter contracts plus provider-response, Browser/CUA trace,
-workflow trace, orchestration trace, MCP tool-session, and A2A protocol-trace
-promotion plus Agent Learning Kit control-plane promotion.
+workflow trace, orchestration trace, lifecycle trace, MCP tool-session, and A2A
+protocol-trace promotion plus Agent Learning Kit control-plane promotion.
 
 Implemented behavior:
 
@@ -632,8 +687,8 @@ Implemented behavior:
   `nested_method_promotion`, `livekit_run_session_promotion`, and
   `provider_response_promotion`, `browser_cua_trace_promotion`,
   `workflow_trace_promotion`, `orchestration_trace_promotion`,
-  `mcp_tool_session_promotion`, `a2a_protocol_trace_promotion`, and
-  `agent_control_plane_promotion`.
+  `lifecycle_trace_promotion`, `mcp_tool_session_promotion`,
+  `a2a_protocol_trace_promotion`, and `agent_control_plane_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
   mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
@@ -951,6 +1006,7 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_browser_cua_trace.py`
 - `examples/sdk_framework_adapter_workflow_trace.py`
 - `examples/sdk_framework_adapter_orchestration_trace.py`
+- `examples/sdk_framework_adapter_lifecycle_trace.py`
 - `examples/sdk_framework_adapter_mcp_tool_session.py`
 - `examples/sdk_framework_adapter_a2a_protocol_trace.py`
 - `examples/sdk_framework_adapter_agent_control_plane.py`

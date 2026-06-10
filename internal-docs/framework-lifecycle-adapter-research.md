@@ -42,6 +42,14 @@ Keep lifecycle support local-first:
   `stateful_framework_adapter_readiness`; the gate requires local
   `execute_task(dict)` selection, retry/recovery, cancellation, resume, cleanup,
   state persistence, artifacts, and passing lifecycle coverage/quality metrics.
+- The same cookbook is also promoted through
+  `framework_adapter_probe_readiness` as `lifecycle_trace_promotion` and counts
+  under the `environment_10x_robustness` native adapter promotion axis. That
+  gate requires discovery/proof metadata, positional `execute_task(dict)`,
+  `framework_lifecycle_trace` state, lifecycle/runtime events, trace artifacts,
+  phase/session/retry/error/recovery/cancellation/resume/cleanup/checkpoint
+  summary counts, state persistence, terminal cleanup, and adapter/runtime/
+  trace/lifecycle/tool metric floors at 1.0.
 
 ## Cookbook Contract
 

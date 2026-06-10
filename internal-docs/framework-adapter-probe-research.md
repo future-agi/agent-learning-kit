@@ -207,7 +207,8 @@ Keep framework support local-first:
   normalize into `framework_lifecycle_trace` state, trace artifacts,
   `framework_lifecycle_*` events, and selected-output-derived lifecycle
   coverage/quality gates so reliability regressions are visible during adapter
-  optimization.
+  optimization. Verified lifecycle trace adapters also participate in native
+  adapter promotion and `environment_10x_robustness`.
 - Preserve A2A/Agent2Agent protocol semantics. Local framework outputs carrying
   agent cards, `SendMessage` JSON-RPC records, messages, tasks, status updates,
   artifact updates, or protocol artifacts should normalize into

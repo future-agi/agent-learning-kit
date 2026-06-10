@@ -22751,6 +22751,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         is True
     )
     assert (
+        adapter_axis_evidence["surface_checks"]["lifecycle_trace_promotion"]
+        is True
+    )
+    assert (
         adapter_axis_evidence["surface_checks"]["mcp_tool_session_promotion"]
         is True
     )
@@ -23965,6 +23969,98 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "orchestration_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    lifecycle_trace_promotion = adapter_probes["lifecycle_trace_promotion"]
+    assert lifecycle_trace_promotion["result_kind"] == "agent-learning.run.v1"
+    assert lifecycle_trace_promotion["result_status"] == "passed"
+    assert lifecycle_trace_promotion["output_roundtrip"] is True
+    assert lifecycle_trace_promotion["manifest_present"] is True
+    assert lifecycle_trace_promotion["manifest_agent"] == {
+        "framework": "livekit",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert lifecycle_trace_promotion["selected_probe_summary"][
+        "call_styles"
+    ] == ["positional"]
+    assert lifecycle_trace_promotion["probe_proof_status"] == "passed"
+    assert lifecycle_trace_promotion["probe_proof_failed_check_ids"] == []
+    assert lifecycle_trace_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert lifecycle_trace_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert lifecycle_trace_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert lifecycle_trace_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert lifecycle_trace_promotion["manifest_metadata"][
+        "framework_adapter_discovery_status"
+    ] == "passed"
+    assert {
+        "framework_lifecycle_trace",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(lifecycle_trace_promotion["state_keys"])
+    assert lifecycle_trace_promotion["runtime_required_state_keys"] == [
+        "framework_lifecycle_trace"
+    ]
+    assert {
+        "framework_lifecycle_phase",
+        "framework_lifecycle_trace",
+        "framework_runtime",
+        "framework_span",
+        "framework_trace",
+    } <= set(lifecycle_trace_promotion["event_types"])
+    assert {
+        "framework_lifecycle_trace",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(lifecycle_trace_promotion["artifact_kinds"])
+
+    lifecycle_summary = lifecycle_trace_promotion["state_summaries"][
+        "framework_lifecycle_trace"
+    ]
+    assert lifecycle_summary["phase_count"] == 10
+    assert lifecycle_summary["session_count"] == 1
+    assert lifecycle_summary["invocation_count"] == 1
+    assert lifecycle_summary["retry_count"] == 1
+    assert lifecycle_summary["error_count"] == 1
+    assert lifecycle_summary["recovered_error_count"] == 1
+    assert lifecycle_summary["cancellation_count"] == 1
+    assert lifecycle_summary["resume_count"] == 1
+    assert lifecycle_summary["cleanup_count"] == 1
+    assert lifecycle_summary["checkpoint_count"] == 2
+    assert lifecycle_summary["streaming_event_count"] == 1
+    assert lifecycle_summary["tool_registration_count"] == 3
+    assert lifecycle_summary["state_persistence"] is True
+    assert lifecycle_summary["cleanup_complete"] is True
+    assert lifecycle_summary["terminal_status"] == "completed"
+    assert lifecycle_summary["stage_counts"] == {
+        "cancel": 1,
+        "checkpoint": 1,
+        "initialize": 1,
+        "invoke": 1,
+        "resume": 1,
+        "retry": 1,
+        "shutdown": 1,
+        "start_session": 1,
+        "stream": 1,
+        "tool_registration": 1,
+    }
+    assert lifecycle_trace_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_lifecycle_coverage": pytest.approx(1.0),
+        "framework_lifecycle_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     mcp_tool_session_promotion = adapter_probes["mcp_tool_session_promotion"]
     assert mcp_tool_session_promotion["result_kind"] == "agent-learning.run.v1"
     assert mcp_tool_session_promotion["result_status"] == "passed"
@@ -24217,6 +24313,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "browser_cua_trace_promotion",
         "workflow_trace_promotion",
         "orchestration_trace_promotion",
+        "lifecycle_trace_promotion",
         "mcp_tool_session_promotion",
         "a2a_protocol_trace_promotion",
         "agent_control_plane_promotion",
