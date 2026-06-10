@@ -42,13 +42,17 @@ outputs and requires at least ten independent axes to pass:
   metadata, sandbox/isolation, deterministic reset, no external service, and
   failure injection, including OpenEnv/Gymnasium-shaped compatibility traces.
 - `cross_framework_simulation_matrix`: local contracts for LangChain,
-  LangGraph, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, A2A, and
-  the rest of the V1 framework matrix.
+  LangGraph, LiveKit, Pipecat, Browser Use, MCP, A2A, OpenEnv/Gymnasium-shaped
+  environment replay compatibility entries, and the rest of the V1 framework
+  matrix.
 - `local_evaluation_gates`: environment replay coverage/quality, framework
   runtime, and framework adapter metrics all score 1.0, with OpenEnv/Gymnasium
   shapes kept as compatibility aliases.
 - `adaptive_optimizer_recovery`: agent-opt rejects weak/partial environment
   replay bundles and selects the verified replay.
+- `openenv_compatibility_boundary`: OpenEnv/Gymnasium stay dependency-free
+  compatibility wire formats while Agent Learning environment replay remains
+  the owned product surface.
 - `native_framework_adapter_probe_promotion`: Agent Learning's adapter probe
   optimizer promotes custom `execute_task(dict)`, LangGraph `ainvoke(dict)`,
   LangChain `invoke(dict)`, Pipecat `process(dict)`, and OpenAI-compatible

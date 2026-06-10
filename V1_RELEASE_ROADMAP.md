@@ -53,7 +53,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `generic_target_optimizer_readiness`, `framework_adapter_target_optimizer_readiness`, `multi_agent_target_optimizer_readiness`, `memory_target_optimizer_readiness`, `orchestration_target_optimizer_readiness`, `workflow_target_optimizer_readiness`, `workflow_target_profile_matrix_readiness`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `multi_framework_runtime_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `environment_replay_optimizer_readiness`, `framework_environment_replay_adapter_readiness`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
+| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `multi_framework_runtime_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `environment_replay_optimizer_readiness`, `framework_environment_replay_adapter_readiness`, `openenv_compatibility_boundary`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -421,6 +421,11 @@ Current checkpoint:
   state, events, and trace artifacts, and pass environment replay coverage and
   quality metrics. OpenEnv and Gymnasium remain compatibility input shapes, not
   the product center.
+- OpenEnv compatibility boundary is now an executable release-check gate through
+  `openenv_compatibility_boundary`: Python and TypeScript manifests must not
+  add OpenEnv, legacy Gym, or Gymnasium runtime dependencies, local source must
+  not import those packages directly, and the required docs must keep the
+  compatibility-only product boundary explicit.
 - Framework trace export readiness is now an executable release-check gate:
   `examples/sdk_framework_adapter_trace_export.py` must promote a local
   `langgraph.execute_task(dict)` adapter, normalize OTLP-style trace export
@@ -649,7 +654,8 @@ Next implementation focus:
   framework/provider outputs that return OpenEnv/Gymnasium-style reset, step,
   state, reward/done, sandbox, or failure-injection traces must keep
   normalizing into evaluator-visible `openenv` state, artifacts, events, and
-  generated OpenEnv quality gates before adding live environment shortcuts.
+  generated environment replay quality gates, with `openenv_*` compatibility
+  aliases where needed, before adding live environment shortcuts.
 - Keep trace-export adapters on the same local-first bar: OTLP, TraceAI,
   OpenInference, and framework-native span exports should normalize into
   evaluator-visible `framework_trace` state, events, artifacts, ordinary tool

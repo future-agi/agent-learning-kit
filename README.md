@@ -81,11 +81,11 @@ rendered `harness_diagnosis` card, diagnosis actions, rollout plan, proof, and
 2026 research lineage without calling hosted optimizer/eval services.
 Framework/provider readiness is executable too: release-check builds the native
 adapter matrix for LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen,
-CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, OpenEnv, Gymnasium, MCP, and
-A2A, requires local fixture targets with no external service dependency, and
-validates representative text, voice, CUA, realtime, browser/CUA, memory,
-workflow, orchestration, lifecycle, protocol, and environment replay framework
-manifests.
+CrewAI, PydanticAI, LiveKit, Pipecat, Browser Use, MCP, A2A, and
+OpenEnv/Gymnasium-shaped environment replay compatibility entries. It requires
+local fixture targets with no external service dependency and validates
+representative text, voice, CUA, realtime, browser/CUA, memory, workflow,
+orchestration, lifecycle, protocol, and environment replay framework manifests.
 The Agent Learning-owned M6 runtime gate is executable as
 `multi_framework_runtime_readiness`: it runs
 `examples/sdk_multi_framework_simulation.py` locally across LangChain,
@@ -925,6 +925,11 @@ release-check` runs this cookbook as
 `framework_environment_replay_adapter_readiness` and
 requires normalized reset/step/reward/done/sandbox/failure evidence plus passing
 environment replay coverage and quality metrics.
+`agent-learn release-check` also gates this boundary directly as
+`openenv_compatibility_boundary`: the gate fails if OpenEnv/Gymnasium become
+Python or TypeScript runtime dependencies, if legacy Gym/Gymnasium/OpenEnv
+modules are imported directly by local source, or if the docs stop positioning
+them as compatibility wire-format inputs instead of the product center.
 
 Realtime framework exports are normalized from local session traces. Pipecat-like
 `frames` and LiveKit-like `session_events` become `realtime_trace` state, a trace
@@ -1059,7 +1064,8 @@ HTTP/HTTPS targets by default, and carries a `contract_quality_gate` that
 `framework_adapter_contract_quality` can score with plural requirements such as
 `required_frameworks`. The default matrix covers LangChain, LangGraph,
 LlamaIndex, CrewAI, AutoGen, OpenAI Agents, LiveKit, Pipecat, Browser Use,
-OpenEnv, Gymnasium, MCP, and A2A without importing or calling those packages.
+MCP, A2A, and OpenEnv/Gymnasium-shaped environment replay compatibility entries
+without importing or calling those packages.
 `simulate.build_framework_adapter_matrix_run_manifest()` turns the same matrix
 into a normal local run artifact. `optimize.optimize_framework_adapter_matrix()`
 then searches weak versus verified matrix candidates through AgentOptimizer,
@@ -1630,6 +1636,9 @@ AGENT_LEARNING_SDK_OPENENV_OPTIMIZATION_KEY=... \
   PYTHONPATH=src python examples/sdk_openenv_environment_optimization.py \
   artifacts/sdk-openenv-environment-optimization.json
 
+# OpenEnv-named examples are compatibility-boundary checks.
+# The Agent Learning-owned surface is environment replay.
+
 AGENT_LEARNING_SDK_ARTIFACT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_artifact_optimization.py \
   artifacts/sdk-artifact-optimization.json
@@ -2127,6 +2136,10 @@ and quality gates.
 `framework_environment_replay_adapter_readiness`; the static
 `framework_openenv_manifest.json` continues to carry the same compatibility
 contract into the manifest contract gate.
+The `openenv_compatibility_boundary` gate makes the product boundary
+executable: Agent Learning environment replay remains the owned surface, while
+OpenEnv/Gymnasium names remain dependency-free compatibility aliases for
+reset/step/state-shaped payloads.
 
 `agent-learn release-check` also gates the broader Agent Learning environment
 bar as `environment_10x_robustness`. That check does not rely on wording alone:

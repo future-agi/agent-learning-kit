@@ -15039,6 +15039,112 @@ def test_agent_learning_kit_does_not_depend_on_legacy_sdk_distributions():
         assert distribution not in normalized
 
 
+def test_openenv_compatibility_boundary_current_checkout_has_no_drift():
+    from agent_learning import trinity
+
+    status = trinity._release_openenv_compatibility_boundary_status(PROJECT_ROOT)
+
+    assert status["owned_surface"] == "environment_replay"
+    assert status["compatibility_boundary"] == "openenv_gymnasium_wire_format"
+    assert status["missing_files"] == []
+    assert status["dependency_errors"] == []
+    assert status["import_errors"] == []
+    assert status["doc_errors"] == []
+    assert status["forbidden_runtime_packages"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
+    )
+    assert status["forbidden_import_modules"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
+    )
+    for relative_path, phrases in (
+        trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES.items()
+    ):
+        assert status["doc_phrase_hits"][relative_path] == phrases
+
+
+def test_openenv_compatibility_boundary_rejects_dependency_import_and_doc_drift(
+    tmp_path,
+):
+    from agent_learning import trinity
+
+    for relative_path in trinity.V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("compatibility boundary missing\n", encoding="utf-8")
+
+    (tmp_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "agent-learning-kit"',
+                'version = "0.1.0"',
+                'dependencies = ["openenv>=1"]',
+                "",
+                "[project.optional-dependencies]",
+                'compat = ["gym>=0.26", "gymnasium>=1"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "typescript" / "package.json").write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@future-agi/agent-learning-kit": "workspace:*",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "typescript" / "agent-learning-kit" / "package.json").write_text(
+        json.dumps({"dependencies": {"gym": "^0.26.0", "gymnasium": "^1.0.0"}}),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / "bad_boundary.py"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        "import os, " + "gym\n"
+        "from " + "gymnasium import spaces\n"
+        "__import__(" + '"openenv"' + ")\n",
+        encoding="utf-8",
+    )
+
+    status = trinity._release_openenv_compatibility_boundary_status(tmp_path)
+
+    assert status["missing_files"] == []
+    dependency_packages = {
+        error["package"] for error in status["dependency_errors"]
+    }
+    assert {
+        "openenv>=1",
+        "gym>=0.26",
+        "gymnasium>=1",
+        "gym",
+        "gymnasium",
+    } <= dependency_packages
+    assert status["import_errors"] == [
+        {
+            "path": "src/bad_boundary.py",
+            "line": 1,
+            "module": "gym",
+        },
+        {
+            "path": "src/bad_boundary.py",
+            "line": 2,
+            "module": "gymnasium",
+        },
+        {
+            "path": "src/bad_boundary.py",
+            "line": 3,
+            "module": "openenv",
+        },
+    ]
+    assert status["doc_errors"]
+    assert {
+        error["path"] for error in status["doc_errors"]
+    } == set(trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES)
+
+
 def test_public_runtime_dispatch_uses_agent_learning_aliases():
     from agent_learning import cli as public_cli
     from agent_learning import suite as public_suite
@@ -17305,6 +17411,18 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["compatibility_framework_openenv_adapter_metrics"] == (
         trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
     )
+    assert payload["required_openenv_compatibility_boundary_files"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES
+    )
+    assert payload["forbidden_openenv_compatibility_boundary_packages"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
+    )
+    assert payload["forbidden_openenv_compatibility_import_modules"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
+    )
+    assert payload["required_openenv_compatibility_doc_phrases"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES
+    )
     assert payload["required_framework_trace_export_files"] == (
         trinity.V1_FRAMEWORK_TRACE_EXPORT_FILES
     )
@@ -17825,6 +17943,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "external_agent_adapter_readiness",
         "environment_replay_optimizer_readiness",
         "framework_environment_replay_adapter_readiness",
+        "openenv_compatibility_boundary",
         "framework_trace_export_readiness",
         "framework_http_transport_readiness",
         "framework_websocket_transport_readiness",
@@ -17855,6 +17974,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert typescript_boundary["metadata_errors"] == []
     assert typescript_boundary["forbidden_token_findings"] == []
     assert typescript_boundary["legacy_sibling_errors"] == []
+    openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
+    assert openenv_boundary["owned_surface"] == "environment_replay"
+    assert openenv_boundary["compatibility_boundary"] == (
+        "openenv_gymnasium_wire_format"
+    )
+    assert openenv_boundary["compatibility_wire_formats"] == [
+        "openenv",
+        "gymnasium",
+        "gymnasium_env",
+    ]
+    assert openenv_boundary["missing_files"] == []
+    assert openenv_boundary["dependency_errors"] == []
+    assert openenv_boundary["import_errors"] == []
+    assert openenv_boundary["doc_errors"] == []
+    assert openenv_boundary["forbidden_runtime_packages"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
+    )
+    assert openenv_boundary["forbidden_import_modules"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
+    )
+    assert openenv_boundary["required_doc_phrases"] == (
+        trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES
+    )
+    for relative_path, phrases in (
+        trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES.items()
+    ):
+        assert openenv_boundary["doc_phrase_hits"][relative_path] == phrases
     assert checks["release_docs_present"]["evidence"]["missing"] == []
     assert checks["v1_examples_present"]["evidence"]["missing"] == []
     assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []

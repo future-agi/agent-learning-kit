@@ -7,10 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `8d7154e Gate Browser CUA adapter promotion`.
+  `6d28ad8 Gate trace adapter promotions`.
 - Current handoff slice:
-  LangGraph-style `execute_task(dict)` workflow and orchestration trace BYO
-  framework adapter promotions.
+  OpenEnv/Gymnasium compatibility boundary release-check gate.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -31,8 +30,8 @@ What is done:
   environment 10x aggregation, multi-agent room probing, memory/retrieval
   checks, realtime voice checks, browser/CUA checks, workflow/orchestration
   checks, red-team coverage, and regression promotion.
-- OpenEnv/Gymnasium are documented and wired as compatibility input shapes, not
-  the primary product abstraction.
+- OpenEnv/Gymnasium are documented, release-checked, and wired as compatibility
+  input shapes, not the primary product abstraction.
 - Non-custom adapter promotion now covers custom `execute_task(dict)`,
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, Pipecat
   `process(dict)`, OpenAI-compatible
@@ -51,7 +50,36 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest Workflow/Orchestration Trace Slice
+## Latest OpenEnv Compatibility Boundary Slice
+
+This handoff slice makes the OpenEnv/Gymnasium boundary executable instead of
+only documented.
+
+Implemented behavior:
+
+- Adds `openenv_compatibility_boundary` to `agent-learn release-check`.
+- The gate verifies:
+  - Python and TypeScript package manifests do not add `openenv`, legacy `gym`,
+    or `gymnasium` runtime dependencies.
+  - Local Python/TypeScript source does not directly import `openenv`, legacy
+    `gym`, or `gymnasium`.
+  - Required docs keep the compatibility-only positioning explicit.
+- The gate intentionally allows existing compatibility cookbooks and wire-format
+  names:
+  - `examples/sdk_openenv_environment_optimization.py`
+  - `examples/sdk_framework_adapter_openenv_trace.py`
+  - `openenv`, `open_env`, and `gymnasium_env` compatibility wire formats
+- The owned product surface remains `environment_replay`.
+
+Key evidence fields:
+
+- `owned_surface == "environment_replay"`
+- `compatibility_boundary == "openenv_gymnasium_wire_format"`
+- `dependency_errors == []`
+- `import_errors == []`
+- `doc_errors == []`
+
+## Previous Workflow/Orchestration Trace Slice
 
 This handoff slice promotes the existing local workflow and orchestration trace
 framework-adapter cookbooks into the adapter-probe release gate and environment
@@ -808,19 +836,17 @@ Rules:
 
 Suggested next packets:
 
-1. OpenEnv boundary audit.
-   - Goal: verify OpenEnv/Gymnasium remain compatibility-only.
-   - Files: `pyproject.toml`, `typescript/agent-learning-kit/package.json`,
-     `README.md`, `V1_RELEASE_ROADMAP.md`, `internal-docs/*openenv*`.
-   - Output: dependency check, wording audit, and any accidental positioning
-     drift.
-2. Release proof packaging.
+1. Release proof packaging.
    - Goal: make the final v1 handoff artifact easy for engineering/product to
      consume without rerunning every long gate first.
    - Files: release-proof CLI output, README release instructions, and
      `internal-docs/v1-engineering-handover.md`.
    - Constraint: do not call v1 complete until the full suite and release proof
      pass on the final tree.
+2. Additional local framework control-plane promotion.
+   - Goal: promote another local framework-shaped adapter through the BYO probe
+     path only if it adds a new runtime contract, not another wrapper variant.
+   - Constraint: keep it local-only and map claims to release-check metrics.
 
 ## Release Discipline
 
@@ -841,17 +867,14 @@ Commit locally with a message that names the proof surface. For this slice:
 
 ```bash
 git add src/agent_learning/trinity.py \
-  tests/test_cli_examples.py \
   tests/test_config_and_facades.py \
   README.md \
   V1_RELEASE_ROADMAP.md \
-  internal-docs/framework-adapter-probe-research.md \
-  internal-docs/framework-adapter-probe-readiness-research.md \
   internal-docs/environment-10x-robustness-research.md \
-  internal-docs/workflow-graph-probe-research.md \
-  internal-docs/orchestration-trace-adapter-research.md \
+  internal-docs/openenv-compatibility-boundary-research.md \
+  internal-docs/openenv-environment-adapter-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Gate trace adapter promotions"
+git commit -m "Gate OpenEnv compatibility boundary"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

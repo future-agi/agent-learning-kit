@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import copy
 import importlib
 import importlib.util
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -2455,6 +2457,50 @@ V1_OPENENV_OPTIMIZER_REQUIRED_PROFILES = (
 V1_OPENENV_OPTIMIZER_REQUIRED_METRICS = (
     V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
 )
+
+V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES = [
+    "pyproject.toml",
+    "typescript/package.json",
+    "typescript/agent-learning-kit/package.json",
+    "README.md",
+    "V1_RELEASE_ROADMAP.md",
+    "internal-docs/environment-10x-robustness-research.md",
+    "internal-docs/framework-http-transport-readiness-research.md",
+    "internal-docs/framework-openenv-adapter-readiness-research.md",
+    "internal-docs/openenv-compatibility-boundary-research.md",
+    "internal-docs/openenv-environment-adapter-research.md",
+    "internal-docs/v1-engineering-handover.md",
+]
+
+V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES = ["openenv", "gym", "gymnasium"]
+V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES = [
+    "openenv",
+    "gym",
+    "gymnasium",
+]
+V1_OPENENV_COMPATIBILITY_DOC_PHRASES = {
+    "README.md": [
+        "compatibility inputs, not the product center.",
+        "OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.",
+    ],
+    "V1_RELEASE_ROADMAP.md": [
+        "OpenEnv/Gymnasium shapes should stay compatible inputs",
+        "owned system of",
+    ],
+    "internal-docs/environment-10x-robustness-research.md": [
+        "OpenEnv and Gymnasium are compatibility inputs",
+        "They are not runtime dependencies",
+    ],
+    "internal-docs/openenv-compatibility-boundary-research.md": [
+        "OpenEnv/Gymnasium are compatibility inputs only.",
+        "Agent Learning remains the primary optimization",
+        "pen-test layer.",
+    ],
+    "internal-docs/v1-engineering-handover.md": [
+        "OpenEnv/Gymnasium remain compatibility input shapes only.",
+        "OpenEnv compatibility remains compatibility, not product ownership.",
+    ],
+}
 
 V1_ENVIRONMENT_10X_ROBUSTNESS_FILES = [
     "examples/sdk_evaluation_hook_optimization.py",
@@ -5175,6 +5221,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_environment_replay_adapter,
     )
+    openenv_compatibility_boundary = _release_openenv_compatibility_boundary_status(
+        root
+    )
+    _append_release_check(
+        checks,
+        check_id="openenv_compatibility_boundary",
+        passed=(
+            not openenv_compatibility_boundary["missing_files"]
+            and not openenv_compatibility_boundary["dependency_errors"]
+            and not openenv_compatibility_boundary["import_errors"]
+            and not openenv_compatibility_boundary["doc_errors"]
+        ),
+        milestone="M6",
+        evidence=openenv_compatibility_boundary,
+    )
     framework_trace_export = _release_framework_trace_export_status(root)
     _append_release_check(
         checks,
@@ -6452,6 +6513,18 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "compatibility_framework_openenv_adapter_metrics": list(
             V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
+        ),
+        "required_openenv_compatibility_boundary_files": list(
+            V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES
+        ),
+        "forbidden_openenv_compatibility_boundary_packages": list(
+            V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
+        ),
+        "forbidden_openenv_compatibility_import_modules": list(
+            V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
+        ),
+        "required_openenv_compatibility_doc_phrases": copy.deepcopy(
+            V1_OPENENV_COMPATIBILITY_DOC_PHRASES
         ),
         "required_framework_trace_export_files": list(
             V1_FRAMEWORK_TRACE_EXPORT_FILES
@@ -26976,6 +27049,249 @@ def _release_openenv_optimizer_status(root: Path) -> dict[str, Any]:
     return _release_environment_replay_optimizer_status(root)
 
 
+def _release_openenv_compatibility_boundary_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES)
+    dependency_errors: list[dict[str, Any]] = []
+    import_errors: list[dict[str, Any]] = []
+    doc_errors: list[dict[str, Any]] = []
+    package_manifests: dict[str, Any] = {}
+    forbidden_packages = {
+        item.lower() for item in V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
+    }
+
+    pyproject = _read_full_pyproject(root)
+    project = _as_mapping(pyproject.get("project"))
+    pyproject_dependencies = [
+        str(item) for item in _as_list(project.get("dependencies"))
+    ]
+    pyproject_optional_dependencies = _as_mapping(
+        project.get("optional-dependencies")
+    )
+    package_manifests["pyproject.toml"] = {
+        "dependencies": pyproject_dependencies,
+        "optional_dependencies": {
+            str(extra): [str(item) for item in _as_list(values)]
+            for extra, values in pyproject_optional_dependencies.items()
+        },
+    }
+
+    def normalized_package_name(requirement: str) -> str:
+        return re.split(r"[<>=!~;\[\s]", requirement.strip(), maxsplit=1)[
+            0
+        ].lower()
+
+    for dependency in pyproject_dependencies:
+        if normalized_package_name(dependency) in forbidden_packages:
+            dependency_errors.append(
+                {
+                    "path": "pyproject.toml",
+                    "section": "project.dependencies",
+                    "package": dependency,
+                }
+            )
+    for extra, dependencies in pyproject_optional_dependencies.items():
+        for dependency in _as_list(dependencies):
+            dependency_text = str(dependency)
+            if normalized_package_name(dependency_text) in forbidden_packages:
+                dependency_errors.append(
+                    {
+                        "path": "pyproject.toml",
+                        "section": f"project.optional-dependencies.{extra}",
+                        "package": dependency_text,
+                    }
+                )
+
+    for relative_path in (
+        "typescript/package.json",
+        "typescript/agent-learning-kit/package.json",
+    ):
+        package_json = _read_json_file(root / relative_path)
+        sections: dict[str, dict[str, Any]] = {}
+        for section in (
+            "dependencies",
+            "devDependencies",
+            "peerDependencies",
+            "optionalDependencies",
+        ):
+            dependencies = _as_mapping(package_json.get(section))
+            sections[section] = dict(dependencies)
+            for package_name in dependencies:
+                if str(package_name).lower() in forbidden_packages:
+                    dependency_errors.append(
+                        {
+                            "path": relative_path,
+                            "section": section,
+                            "package": package_name,
+                        }
+                    )
+        package_manifests[relative_path] = sections
+
+    forbidden_import_modules = list(
+        V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
+    )
+    forbidden_import_module_set = {
+        item.lower() for item in forbidden_import_modules
+    }
+    import_alternatives = "|".join(
+        re.escape(item) for item in forbidden_import_modules
+    )
+    direct_import_pattern = re.compile(
+        rf"^\s*(?:from|import)\s+({import_alternatives})(?:\b|\.)"
+    )
+    dynamic_import_pattern = re.compile(
+        rf"(?:importlib\.import_module|__import__|find_spec)"
+        rf"\(\s*['\"]({import_alternatives})['\"]"
+    )
+    ts_import_pattern = re.compile(
+        rf"(?:from\s+['\"]|import\s*\(\s*['\"]|require\(\s*['\"])"
+        rf"({import_alternatives})['\"]"
+    )
+    scan_suffixes = {".py", ".ts", ".tsx"}
+    skipped_parts = {".git", ".venv", "dist", "node_modules", "__pycache__"}
+
+    def forbidden_module_root(module_name: str | None) -> str | None:
+        if not module_name:
+            return None
+        module_root = module_name.split(".", maxsplit=1)[0].lower()
+        if module_root in forbidden_import_module_set:
+            return module_root
+        return None
+
+    def call_name(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            prefix = call_name(node.value)
+            return f"{prefix}.{node.attr}" if prefix else node.attr
+        return None
+
+    def scan_python_imports(path: Path, source: str) -> list[dict[str, Any]]:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            findings: list[dict[str, Any]] = []
+            for lineno, line in enumerate(source.splitlines(), start=1):
+                match = direct_import_pattern.search(line) or (
+                    dynamic_import_pattern.search(line)
+                )
+                if match:
+                    findings.append(
+                        {
+                            "path": str(path.relative_to(root)),
+                            "line": lineno,
+                            "module": match.group(1),
+                        }
+                    )
+            return findings
+
+        relative_path = str(path.relative_to(root))
+        findings = []
+        seen: set[tuple[int, str]] = set()
+
+        def add_finding(lineno: int, module_name: str | None) -> None:
+            module_root = forbidden_module_root(module_name)
+            if not module_root:
+                return
+            key = (lineno, module_root)
+            if key in seen:
+                return
+            seen.add(key)
+            findings.append(
+                {
+                    "path": relative_path,
+                    "line": lineno,
+                    "module": module_root,
+                }
+            )
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    add_finding(node.lineno, alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                add_finding(node.lineno, node.module)
+            elif isinstance(node, ast.Call):
+                name = call_name(node.func)
+                if name not in {
+                    "__import__",
+                    "find_spec",
+                    "importlib.import_module",
+                    "importlib.util.find_spec",
+                }:
+                    continue
+                if not node.args:
+                    continue
+                first_arg = node.args[0]
+                if isinstance(first_arg, ast.Constant) and isinstance(
+                    first_arg.value,
+                    str,
+                ):
+                    add_finding(node.lineno, first_arg.value)
+
+        return sorted(findings, key=lambda item: (item["line"], item["module"]))
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix not in scan_suffixes:
+            continue
+        if any(part in skipped_parts for part in path.parts):
+            continue
+        relative_path = str(path.relative_to(root))
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        if path.suffix == ".py":
+            import_errors.extend(scan_python_imports(path, source))
+            continue
+        for lineno, line in enumerate(
+            source.splitlines(),
+            start=1,
+        ):
+            match = ts_import_pattern.search(line)
+            if match:
+                import_errors.append(
+                    {
+                        "path": relative_path,
+                        "line": lineno,
+                        "module": match.group(1),
+                    }
+                )
+
+    doc_phrase_hits: dict[str, list[str]] = {}
+    for relative_path, phrases in V1_OPENENV_COMPATIBILITY_DOC_PHRASES.items():
+        path = root / relative_path
+        text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+        hits: list[str] = []
+        for phrase in phrases:
+            if phrase in text:
+                hits.append(phrase)
+            else:
+                doc_errors.append(
+                    {
+                        "path": relative_path,
+                        "missing_phrase": phrase,
+                    }
+                )
+        doc_phrase_hits[relative_path] = hits
+
+    return {
+        "required_files": list(V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES),
+        "missing_files": missing_files,
+        "owned_surface": "environment_replay",
+        "compatibility_boundary": "openenv_gymnasium_wire_format",
+        "compatibility_wire_formats": ["openenv", "gymnasium", "gymnasium_env"],
+        "forbidden_runtime_packages": list(
+            V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
+        ),
+        "forbidden_import_modules": list(
+            V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
+        ),
+        "package_manifests": package_manifests,
+        "dependency_errors": dependency_errors,
+        "import_errors": import_errors,
+        "required_doc_phrases": copy.deepcopy(V1_OPENENV_COMPATIBILITY_DOC_PHRASES),
+        "doc_phrase_hits": doc_phrase_hits,
+        "doc_errors": doc_errors,
+    }
+
+
 def _release_framework_environment_replay_adapter_status(root: Path) -> dict[str, Any]:
     missing_files = _missing_relative_paths(
         root,
@@ -40588,6 +40904,16 @@ def _release_secret_marker_findings(
 
 
 def _read_pyproject(root: Path) -> dict[str, Any]:
+    parsed = _read_full_pyproject(root)
+    project = _as_mapping(parsed.get("project"))
+    return {
+        "name": project.get("name"),
+        "version": project.get("version"),
+        "scripts": project.get("scripts", {}),
+    }
+
+
+def _read_full_pyproject(root: Path) -> dict[str, Any]:
     pyproject = root / "pyproject.toml"
     if not pyproject.exists():
         return {}
@@ -40596,15 +40922,10 @@ def _read_pyproject(root: Path) -> dict[str, Any]:
     except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
         return {}
     try:
-        parsed = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        loaded = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    project = parsed.get("project", {})
-    return {
-        "name": project.get("name"),
-        "version": project.get("version"),
-        "scripts": project.get("scripts", {}),
-    }
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _release_milestones(checks: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -41035,6 +41356,10 @@ __all__ = [
     "V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES",
     "V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS",
     "V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS",
+    "V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES",
+    "V1_OPENENV_COMPATIBILITY_DOC_PHRASES",
+    "V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES",
+    "V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES",
     "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID",
     "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE",
     "V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES",

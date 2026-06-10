@@ -1,4 +1,4 @@
-# OpenEnv Environment Adapter Research
+# Environment Replay Compatibility Adapter Research
 
 ## Primary Sources
 
@@ -10,18 +10,22 @@
 OpenEnv positions environments as reusable agent-facing runtimes with reset,
 step, and state lifecycle boundaries. The docs also separate simulation-style
 environment control from production/MCP exposure, which maps to Agent Learning
-Kit as a local-first replay adapter: tests can prove the environment contract
-without requiring external servers.
+Kit as a local-first environment replay compatibility adapter: tests can prove
+the environment contract without requiring external servers.
 
 Gymnasium's environment API gives the stable reset/step shape used by the
 adapter: reset returns an initial observation/info pair, and step returns
 observation, reward, terminated/truncated, and info-style metadata. The
-OpenEnv adapter keeps that shape while adding sandbox, replay transport, and
-failure-injection evidence so agent-opt can compare environment candidates.
+environment replay compatibility adapter accepts that shape while adding
+sandbox, replay transport, and failure-injection evidence so agent-opt can
+compare environment candidates. OpenEnv/Gymnasium are executable compatibility
+boundaries for environment replay wire formats; Agent Learning environment
+replay remains the owned product surface.
 
 ## Roadmap Bar
 
-The executable OpenEnv bar should prove more than action success:
+The executable environment replay compatibility boundary should prove more than
+action success:
 
 - deterministic reset evidence
 - routed step/action evidence
@@ -36,13 +40,18 @@ The executable OpenEnv bar should prove more than action success:
 
 ## Current Local Surface
 
-- `OpenEnvEnvironment` accepts `type: openenv`, `open_env`, `gymnasium_env`, or
-  `environment_replay` manifest specs.
-- SDK builders expose `simulate.build_openenv_environments()` and
-  `simulate.build_openenv_run_manifest()`.
-- Agent report configs can require `required_openenv` and `openenv_quality`.
-- AgentOptimizer configs can use `build_openenv_optimization_manifest()` and
-  `optimize_openenv()` with simulation-evidence scoring for `openenv`.
+- `EnvironmentReplayEnvironment` is the owned surface. Compatibility manifest
+  specs may use `type: openenv`, `open_env`, `gymnasium_env`, or
+  `environment_replay`.
+- SDK builders expose `simulate.build_environment_replay_environments()` and
+  `simulate.build_environment_replay_run_manifest()` as the owned names; the
+  `build_openenv_*` names remain compatibility aliases.
+- Agent report configs can require environment replay evidence. The
+  `required_openenv` and `openenv_quality` names remain compatibility aliases.
+- AgentOptimizer configs can use `build_environment_replay_optimization_manifest()`
+  and `optimize_environment_replay()` as owned names; `build_openenv_*` and
+  `optimize_openenv()` remain compatibility aliases with simulation-evidence
+  scoring for the `openenv` wire format.
 - Framework adapter presets include `openenv` and `gymnasium`, and generic local
   adapter outputs with `openenv`, `open_env`, reset/step trajectories, sandbox
   metadata, reward/done fields, or failure-injection records are normalized into
