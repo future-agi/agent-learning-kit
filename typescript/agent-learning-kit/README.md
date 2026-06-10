@@ -1,6 +1,12 @@
 # @future-agi/agent-learning-kit
 
-TypeScript SDK for Future AGI's AI evaluation platform. Evaluate LLM outputs with 50+ metrics including factual accuracy, groundedness, relevance, and more.
+TypeScript SDK for Future AGI's agent evaluation surface. Use it to evaluate
+LLM and agent outputs with cloud metrics, local heuristics, hybrid routing, and
+pipeline-level checks.
+
+For simulation, red-team, and optimization workflows, use the Python
+`agent-learning-kit` package and `agent-learn` CLI in this repository. The
+TypeScript package is the v1 evaluation package.
 
 ## Installation
 
@@ -287,7 +293,7 @@ const result = await evaluator.evaluate(
 
 ## License
 
-MIT
+Apache-2.0
 
 ## Links
 

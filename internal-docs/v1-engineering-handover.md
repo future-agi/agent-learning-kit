@@ -31,6 +31,11 @@ Hand this document to the next engineering owner as the starting point.
   both TypeScript package manifests declare `Apache-2.0` license metadata.
 - Release-candidate notes and publish checklist:
   `internal-docs/v1-release-candidate-notes.md`.
+- Public README is kept concise for developer onboarding; detailed cookbook
+  material moved to `internal-docs/agent-learning-kit-readme-deep-dive.md`.
+- Release-proof timeout handling now terminates timed-out process groups and
+  uses a 2400-second default per command so the expanded v1 suite is not cut off
+  at the old 1200-second ceiling.
 
 ## Immediate Answer
 
@@ -1218,12 +1223,27 @@ Commit locally with a message that names the release-candidate proof:
 
 ```bash
 git add LICENSE \
+  NOTICE \
+  CHANGELOG.md \
+  CONTRIBUTING.md \
+  SECURITY.md \
+  CODE_OF_CONDUCT.md \
+  .github \
+  docs/assets \
   typescript/package.json \
   typescript/agent-learning-kit/package.json \
+  typescript/agent-learning-kit/LICENSE \
+  typescript/agent-learning-kit/NOTICE \
+  src/agent_learning/cli.py \
+  tests/test_config_and_facades.py \
+  README.md \
+  pyproject.toml \
   V1_RELEASE_ROADMAP.md \
   internal-docs/v1-engineering-handover.md \
-  internal-docs/v1-release-candidate-notes.md
-git commit -m "Document v1 release candidate proof"
+  internal-docs/v1-release-candidate-notes.md \
+  internal-docs/release-readiness-research.md \
+  internal-docs/agent-learning-kit-readme-deep-dive.md
+git commit -m "Prepare v1 release readiness"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

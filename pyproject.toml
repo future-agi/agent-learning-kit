@@ -9,6 +9,7 @@ description = "Unified Future AGI SDK for agent learning workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Future AGI", email = "hello@futureagi.io" }]
 keywords = [
   "ai-agents",
@@ -82,6 +83,8 @@ agent-learn = "agent_learning.cli:main"
 Homepage = "https://futureagi.com"
 Documentation = "https://docs.futureagi.com"
 Repository = "https://github.com/future-agi/agent-learning-kit"
+Issues = "https://github.com/future-agi/agent-learning-kit/issues"
+Changelog = "https://github.com/future-agi/agent-learning-kit/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_learning", "src/fi"]

@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new workflow, adapter, evaluator, optimizer, or release gate.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What developer workflow should become easier or more robust?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the requested API, CLI, example, or gate.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - simulate
+        - evals
+        - optimize
+        - redteam
+        - suite
+        - TypeScript SDK
+        - release/readiness
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Suggested Proof
+      description: What test, cookbook, or release gate should prove this works?
+    validations:
+      required: false

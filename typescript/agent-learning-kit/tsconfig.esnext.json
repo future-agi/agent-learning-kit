@@ -7,5 +7,12 @@
       "baseUrl": "./src"
     },
     "include": ["src/**/*.ts"],
+    "exclude": [
+      "node_modules",
+      "dist",
+      "src/**/__tests__/**",
+      "src/**/*.test.ts",
+      "src/**/*.integration.test.ts"
+    ],
     "references": []
   }

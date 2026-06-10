@@ -71,6 +71,11 @@ Notable command evidence:
 - Public TypeScript package: `@future-agi/agent-learning-kit==0.2.0`
 - Repository license artifact: `LICENSE` with Apache-2.0 text
 - Package license metadata: Python `Apache-2.0`, TypeScript `Apache-2.0`
+- Public README is intentionally concise; detailed cookbook/deep-dive material
+  lives in `internal-docs/agent-learning-kit-readme-deep-dive.md`.
+- TypeScript npm package includes package-local `LICENSE` and `NOTICE`, and the
+  publish file list excludes tests, source maps, and TypeScript build-info
+  files.
 
 Release owner decision:
 
@@ -128,8 +133,11 @@ Before publishing:
 4. Choose publish targets and owner: PyPI or TestPyPI first, npm
    `@future-agi/agent-learning-kit`, credentials, and 2FA process.
 5. Commit the release-candidate documentation and metadata files:
-   `LICENSE`, `typescript/package.json`,
+   `LICENSE`, `NOTICE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+   `CODE_OF_CONDUCT.md`, `.github/`, `docs/assets/`, `typescript/package.json`,
    `typescript/agent-learning-kit/package.json`,
+   `typescript/agent-learning-kit/LICENSE`,
+   `typescript/agent-learning-kit/NOTICE`,
    `V1_RELEASE_ROADMAP.md`,
    `internal-docs/v1-engineering-handover.md`, and this file.
 6. If any package metadata or lockfile changes are made, rerun:

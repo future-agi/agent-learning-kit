@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -3200,7 +3202,7 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=1200.0,
+        default=2400.0,
         help="Per-command timeout in seconds.",
     )
     parser.add_argument(
@@ -3293,24 +3295,23 @@ def _run_release_proof_command(
 ) -> dict[str, Any]:
     command = _release_proof_command_args(check_id, project_root=project_root)
     started = time.time()
+    process: subprocess.Popen[str] | None = None
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=project_root,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            start_new_session=(os.name != "nt"),
         )
-        exit_code = int(completed.returncode)
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        exit_code = int(process.returncode or 0)
         timed_out = False
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         exit_code = 124
-        stdout = str(exc.stdout or "")
-        stderr = str(exc.stderr or "")
         timed_out = True
+        stdout, stderr = _terminate_release_proof_process(process)
     duration = round(time.time() - started, 4)
     return {
         "command": command,
@@ -3323,6 +3324,33 @@ def _run_release_proof_command(
         "stdout_bytes": len(stdout.encode("utf-8")),
         "stderr_bytes": len(stderr.encode("utf-8")),
     }
+
+
+def _terminate_release_proof_process(
+    process: subprocess.Popen[str] | None,
+) -> tuple[str, str]:
+    if process is None:
+        return "", ""
+    if process.poll() is None:
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+        except ProcessLookupError:
+            pass
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+    return stdout or "", stderr or ""
 
 
 def _release_proof_command_args(check_id: str, *, project_root: Path) -> list[str]:

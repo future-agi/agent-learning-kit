@@ -30,11 +30,15 @@
     }
   },
   "files": [
-    "dist"
+    "LICENSE",
+    "NOTICE",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/esm/package.json"
   ],
   "scripts": {
     "prebuild": "rimraf dist",
-    "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
+    "build": "rimraf dist && tsc --build --clean tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "build:watch": "tsc --build --watch tsconfig.json",
     "test": "jest --config jest.config.cjs",

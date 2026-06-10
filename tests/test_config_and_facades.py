@@ -26767,6 +26767,37 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
     } == {"v1_release_proof_partial"}
 
 
+def test_release_proof_command_timeout_returns_captured_evidence(monkeypatch, tmp_path):
+    from agent_learning import cli as cli_module
+
+    script = "import time; print('started', flush=True); time.sleep(30)"
+
+    def fake_command_args(check_id, *, project_root):
+        assert check_id == "pytest"
+        assert project_root == tmp_path
+        return [sys.executable, "-c", script]
+
+    monkeypatch.setattr(
+        cli_module,
+        "_release_proof_command_args",
+        fake_command_args,
+    )
+
+    result = cli_module._run_release_proof_command(
+        "pytest",
+        project_root=tmp_path,
+        timeout_seconds=0.2,
+        tail_bytes=1000,
+    )
+
+    assert result["exit_code"] == 124
+    assert result["timed_out"] is True
+    assert result["duration_seconds"] < 10
+    assert result["stdout_tail"].strip() == "started"
+    assert result["stderr_tail"] == ""
+    assert result["stdout_bytes"] >= len("started\n")
+
+
 def test_agent_learn_release_proof_dry_run_emits_plan(tmp_path, capsys):
     output_path = tmp_path / "release-proof-plan.json"
     exit_code = main(
