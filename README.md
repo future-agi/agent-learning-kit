@@ -115,8 +115,8 @@ outputs and requires at least ten independent axes to pass, including native
 adapter promotion for custom `execute_task(dict)`, LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, OpenAI-compatible
 `chat.completions.create(messages=...)`, provider-response
-`chat.completions.create(messages=..., model=...)`, and LiveKit
-`run_session(dict)`.
+`chat.completions.create(messages=..., model=...)`, LiveKit
+`run_session(dict)`, and Browser Use `execute_task(dict)` CUA trace promotion.
 OpenEnv and Gymnasium are
 compatibility inputs, not the product center. Regression artifact
 readiness runs the local baseline, compare, report, promote-to-regression, and
@@ -699,12 +699,14 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_pipecat_process_promotion.py` and
 `examples/sdk_framework_adapter_nested_method_promotion.py` and
 `examples/sdk_framework_adapter_livekit_run_session_promotion.py` and
-`examples/sdk_framework_adapter_provider_response.py` for local
+`examples/sdk_framework_adapter_provider_response.py` and
+`examples/sdk_framework_adapter_browser_cua_trace.py` for local
 target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)`,
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`,
 OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
 `run_session(dict)`, and provider-response promotion with
-`input_kwargs={"model": "local-provider-model"}`.
+`input_kwargs={"model": "local-provider-model"}`, plus Browser Use
+`execute_task(dict)` promotion with local CUA trace evidence.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -713,11 +715,15 @@ auto-discovery promotion, one-call promotion, one-call run, LangGraph
 `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat `process(dict)`
 promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
-`run_session(dict)` session promotion plus provider-response promotion. It requires
+`run_session(dict)` session promotion plus provider-response promotion and
+Browser/CUA trace promotion. It requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
 promotion, LiveKit session promotion, and provider-response promotion with
-required provider kwargs and normalized `provider_response` state,
+required provider kwargs and normalized `provider_response` state, plus Browser
+Use `execute_task(dict)` with `browser_cua` state, browser trace artifacts,
+grounded click evidence, mutation resilience, and prompt-injection-surface
+avoidance,
 callable-signature evidence, observed I/O contracts, passing probe proofs,
 discovery metadata where expected, promoted manifest proof metadata, and
 evaluated framework runtime, adapter call-contract, observed-I/O,
@@ -949,6 +955,13 @@ selected output. See
 release-check` now runs this cookbook locally and requires the selected
 `execute_task(dict)` Browser Use adapter to emit browser/CUA state, events,
 artifacts, and passing safety, outcome, grounding, mutation, and trace metrics.
+The same cookbook is release-gated as `browser_cua_trace_promotion` in
+`framework_adapter_probe_readiness`: discovery must select
+`execute_task(dict)` over the weak browser text fallback, preserve CUA modality,
+emit `browser_cua` state plus browser trace/screenshot artifacts, and close the
+normal adapter metric floors plus browser safety, outcome, grounding,
+mutation-resilience, and trace metrics. It also counts under native adapter
+promotion in `environment_10x_robustness`.
 
 Workflow graph framework exports normalize durable execution semantics.
 LangGraph-style nodes, edges, checkpoints, state history, interrupts, and replay,
@@ -2103,8 +2116,8 @@ world orchestration, workspace import certification, authenticated evaluation,
 workflow, and retrieval hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
-native adapter probe promotion including provider-response promotion, and
-authenticated hooks are counted as native proof-backed axes;
+native adapter probe promotion including provider-response and Browser/CUA trace
+promotion, and authenticated hooks are counted as native proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:

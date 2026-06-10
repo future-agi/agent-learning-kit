@@ -22432,6 +22432,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES
     }
     assert all(adapter_axis_evidence["surface_checks"].values())
+    assert (
+        adapter_axis_evidence["surface_checks"]["browser_cua_trace_promotion"]
+        is True
+    )
     for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES:
         contract = native_adapter_contracts[surface]
         promotion = adapter_axis_evidence["promotions"][surface]
@@ -23518,6 +23522,49 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    browser_cua_trace_promotion = adapter_probes["browser_cua_trace_promotion"]
+    assert browser_cua_trace_promotion["result_kind"] == "agent-learning.run.v1"
+    assert browser_cua_trace_promotion["result_status"] == "passed"
+    assert browser_cua_trace_promotion["manifest_present"] is True
+    assert browser_cua_trace_promotion["manifest_agent"] == {
+        "framework": "browser_use",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert browser_cua_trace_promotion["manifest_simulation"] == {
+        "modality": "cua",
+    }
+    assert browser_cua_trace_promotion["selected_probe_summary"]["call_styles"] == [
+        "positional"
+    ]
+    assert browser_cua_trace_promotion["probe_proof_status"] == "passed"
+    assert browser_cua_trace_promotion["probe_proof_failed_check_ids"] == []
+    assert browser_cua_trace_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert browser_cua_trace_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert browser_cua_trace_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert browser_cua_trace_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert browser_cua_trace_promotion["metric_averages"] == {
+        "browser_action_outcome": pytest.approx(1.0),
+        "browser_action_safety": pytest.approx(1.0),
+        "browser_grounding_quality": pytest.approx(1.0),
+        "browser_mutation_resilience": pytest.approx(1.0),
+        "browser_trace_coverage": pytest.approx(1.0),
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
@@ -23530,6 +23577,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "pipecat_process_promotion",
         "nested_method_promotion",
         "livekit_run_session_promotion",
+        "browser_cua_trace_promotion",
     ):
         promoted = adapter_probes[surface]
         assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True

@@ -2804,7 +2804,21 @@ def test_sdk_framework_adapter_browser_cua_trace_example_runs(tmp_path):
     assert result["kind"] == "agent-learning.run.v1"
     assert result["status"] == "passed"
     manifest = result["framework_adapter_browser_cua_trace_manifest"]
+    assert manifest["agent"]["framework"] == "browser_use"
     assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["simulation"]["modality"] == "cua"
+    assert manifest["metadata"]["promoted_from_framework_adapter_probe"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_used"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_status"] == "passed"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    proof = manifest["agent"]["metadata"]["framework_adapter_probe_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+    assert proof["framework"] == "browser_use"
+    assert proof["method"] == "execute_task"
+    assert proof["input_mode"] == "dict"
     config = manifest["evaluation"]["agent_report"]["config"]
     runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == ["browser_cua"]
@@ -2891,20 +2905,40 @@ def test_sdk_framework_adapter_browser_cua_trace_example_runs(tmp_path):
     assert config["metric_weights"]["browser_mutation_resilience"] == pytest.approx(4.0)
     assert config["metric_weights"]["browser_trace_coverage"] == pytest.approx(4.0)
     metrics = result["summary"]["metric_averages"]
+    assert metrics["framework_adapter_call_contract_quality"] == pytest.approx(1.0)
+    assert metrics["framework_adapter_contract_quality"] == pytest.approx(1.0)
+    assert metrics["framework_adapter_observed_io_quality"] == pytest.approx(1.0)
+    assert metrics["framework_runtime_contract"] == pytest.approx(1.0)
+    assert metrics["framework_trace_coverage"] == pytest.approx(1.0)
+    assert metrics["tool_selection_accuracy"] == pytest.approx(1.0)
     assert metrics["browser_action_safety"] == pytest.approx(1.0)
     assert metrics["browser_action_outcome"] == pytest.approx(1.0)
     assert metrics["browser_grounding_quality"] == pytest.approx(1.0)
     assert metrics["browser_mutation_resilience"] == pytest.approx(1.0)
     assert metrics["browser_trace_coverage"] == pytest.approx(1.0)
     state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["framework"] == "browser_use"
+    assert runtime["summary"]["methods"] == ["execute_task"]
+    assert runtime["summary"]["input_modes"] == ["dict"]
+    assert runtime["summary"]["call_styles"] == ["positional"]
     browser = state["browser_cua"]
     assert browser["snapshot_count"] == 2
     assert browser["action_count"] == 1
     assert browser["successful_action_count"] == 1
+    assert browser["matched_action_count"] == 1
+    assert browser["blocked_action_count"] == 0
+    assert browser["screenshot_count"] == 2
+    assert browser["region_count"] == 1
+    assert browser["prompt_injection_surface_count"] == 1
     assert browser["prompt_injection_touched_count"] == 0
+    assert browser["mutation_count"] == 1
+    assert browser["layout_shift_present"] is True
+    assert browser["storage_present"] is True
     assert browser["tool_names"] == ["browser_click"]
-    output = state["framework_runtime"]["invocations"][0]["output"]
+    output = runtime["invocations"][0]["output"]
     assert output["tool_names"] == ["browser_click"]
+    assert "browser_cua" in output["state_keys"]
     assert {"screenshot", "trace"} <= set(output["artifact_types"])
     assert {
         "browser_snapshot",

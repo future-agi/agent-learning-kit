@@ -7,10 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `245dca4 Gate LiveKit session adapter promotion`.
+  `af218fa Gate provider response adapter promotion`.
 - Current handoff slice:
-  Provider-response `chat.completions.create(messages=..., model=...)` BYO
-  framework adapter promotion.
+  Browser Use `execute_task(dict)` CUA trace BYO framework adapter promotion.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -37,7 +36,8 @@ What is done:
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, Pipecat
   `process(dict)`, OpenAI-compatible
   `chat.completions.create(messages=...)`, LiveKit `run_session(dict)`, and
-  provider-response `chat.completions.create(messages=..., model=...)`.
+  provider-response `chat.completions.create(messages=..., model=...)`, plus
+  Browser Use `execute_task(dict)` CUA trace promotion.
 
 What is not done:
 
@@ -48,7 +48,68 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest Provider Response Slice
+## Latest Browser/CUA Trace Slice
+
+This handoff slice promotes the existing local Browser/CUA framework-adapter
+cookbook into the adapter-probe release gate and environment 10x native adapter
+axis.
+
+Implemented behavior:
+
+- Reuses `examples/sdk_framework_adapter_browser_cua_trace.py`.
+- The cookbook uses weak `run(text)` plus trace-capable `execute_task(dict)`
+  candidates so adapter discovery and optimization must select the Browser Use
+  task path.
+- The promoted manifest preserves:
+  - `framework = browser_use`
+  - `method = execute_task`
+  - `input_mode = dict`
+  - `trace_runtime = true`
+  - `simulation.modality = cua`
+- The selected adapter emits:
+  - content containing `approved refund`
+  - `browser_click` tool evidence
+  - `browser_snapshot`, `browser_action`, `browser_trace`, `browser_network`,
+    `browser_runtime`, `browser_storage`, `browser_mutation_pack`, and
+    `environment_injection` events
+  - `framework_runtime` and `browser_cua` state evidence
+  - browser trace/screenshot artifacts
+  - positional-call proof through call-contract `call_styles = ["positional"]`
+- `agent-learn release-check` includes `browser_cua_trace_promotion` under
+  `framework_adapter_probe_readiness`.
+- `environment_10x_robustness` counts the Browser/CUA trace promotion through
+  the same generic per-surface contract path and checks CUA modality plus
+  browser-specific metric floors.
+
+The promoted manifest should select:
+
+```json
+{
+  "framework": "browser_use",
+  "method": "execute_task",
+  "input_mode": "dict",
+  "trace_runtime": true,
+  "simulation": {
+    "modality": "cua"
+  }
+}
+```
+
+Expected promoted-run metric floors:
+
+- `browser_action_outcome == 1.0`
+- `browser_action_safety == 1.0`
+- `browser_grounding_quality == 1.0`
+- `browser_mutation_resilience == 1.0`
+- `browser_trace_coverage == 1.0`
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
+
+## Previous Provider Response Slice
 
 This handoff slice promotes the existing local provider-response cookbook into
 the adapter-probe release gate and environment 10x native adapter axis.
@@ -117,7 +178,7 @@ uv run python -m agent_learning.cli release-proof \
   --project-root . \
   --only release_check \
   --only git_diff_check \
-  --output /tmp/agent-learning-provider-response-release-proof.json \
+  --output /tmp/agent-learning-browser-cua-trace-release-proof.json \
   --quiet
 ```
 
@@ -149,7 +210,7 @@ release bar Agent Learning-native: deterministic local simulation, adapter
 contracts, optimizer proof, evaluation metrics, reports/actions, and
 release-check gates.
 
-## Latest LiveKit Session Slice
+## Previous LiveKit Session Slice
 
 This handoff slice adds a LiveKit-style room/session adapter promotion path.
 
@@ -310,6 +371,7 @@ The release-check adapter-probe gate now runs:
 - LiveKit `run_session(dict)` promotion
 - provider-response `chat.completions.create(messages=..., model=...)`
   promotion
+- Browser Use `execute_task(dict)` CUA trace promotion
 
 Every promoted run must preserve proof/discovery metadata and close framework
 runtime, adapter call-contract, observed-I/O, adapter-contract, framework-trace,
@@ -319,7 +381,8 @@ and tool-selection metrics.
 
 The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
-session promoted adapter contracts plus provider-response promotion.
+session promoted adapter contracts plus provider-response and Browser/CUA trace
+promotion.
 
 Implemented behavior:
 
@@ -328,7 +391,7 @@ Implemented behavior:
   `one_call_run`, `langgraph_ainvoke_promotion`,
   `langchain_invoke_promotion`, `pipecat_process_promotion`,
   `nested_method_promotion`, `livekit_run_session_promotion`, and
-  `provider_response_promotion`.
+  `provider_response_promotion`, and `browser_cua_trace_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
   mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
@@ -527,6 +590,53 @@ Result:
   `status=passed`, selected checks `release_check` and `git_diff_check` passed,
   wrote `/tmp/agent-learning-provider-response-release-proof.json`
 
+Browser/CUA trace handoff verification passed:
+
+```bash
+uv run python -m py_compile \
+  examples/sdk_framework_adapter_browser_cua_trace.py \
+  src/agent_learning/trinity.py \
+  tests/test_cli_examples.py \
+  tests/test_config_and_facades.py
+uv run pytest \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_browser_cua_trace_example_runs \
+  -q
+uv run pytest \
+  tests/test_config_and_facades.py::test_browser_cua_framework_adapter_preserves_visual_action_trace \
+  -q
+uv run pytest \
+  tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones \
+  -q
+uv run ruff check .
+git diff --check
+uv run python -m agent_learning.cli release-check --project-root . --quiet
+uv run pytest -q
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --only release_check \
+  --only git_diff_check \
+  --output /tmp/agent-learning-browser-cua-trace-release-proof.json \
+  --quiet
+```
+
+Result:
+
+- `py_compile`: passed
+- focused Browser/CUA cookbook:
+  `1 passed, 5 warnings in 11.68s`
+- focused Browser/CUA runtime evidence:
+  `1 passed, 5 warnings in 20.51s`
+- release milestone test:
+  `1 passed, 5 warnings in 1132.01s (0:18:52)`
+- `uv run ruff check .`: passed
+- `git diff --check`: passed
+- CLI release-check: passed
+- full suite:
+  `298 passed, 6 warnings in 1567.07s (0:26:07)`
+- selected release-proof:
+  `status=passed`, selected checks `release_check` and `git_diff_check` passed,
+  wrote `/tmp/agent-learning-browser-cua-trace-release-proof.json`
+
 ## Key Files
 
 Runtime and simulation:
@@ -595,6 +705,7 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_nested_method_promotion.py`
 - `examples/sdk_framework_adapter_livekit_run_session_promotion.py`
 - `examples/sdk_framework_adapter_provider_response.py`
+- `examples/sdk_framework_adapter_browser_cua_trace.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
@@ -648,17 +759,17 @@ Rules:
 
 Suggested next packets:
 
-1. Browser Use / CUA promotion.
-   - Goal: promote a local browser/CUA-shaped adapter through the BYO probe
-     path.
-   - Constraint: use existing browser/CUA trace metrics; do not invent a
-     separate product claim.
-2. OpenEnv boundary audit.
+1. OpenEnv boundary audit.
    - Goal: verify OpenEnv/Gymnasium remain compatibility-only.
    - Files: `pyproject.toml`, `typescript/agent-learning-kit/package.json`,
      `README.md`, `V1_RELEASE_ROADMAP.md`, `internal-docs/*openenv*`.
    - Output: dependency check, wording audit, and any accidental positioning
      drift.
+2. Additional orchestration-framework promotion.
+   - Goal: promote another local framework-shaped adapter through the BYO probe
+     path, preferably workflow/orchestration-heavy rather than another provider
+     wrapper.
+   - Constraint: keep it local-only and map claims to release-check metrics.
 
 ## Release Discipline
 
@@ -683,11 +794,12 @@ git add src/agent_learning/trinity.py \
   tests/test_config_and_facades.py \
   README.md \
   V1_RELEASE_ROADMAP.md \
+  internal-docs/browser-cua-probe-research.md \
   internal-docs/framework-adapter-probe-research.md \
   internal-docs/framework-adapter-probe-readiness-research.md \
   internal-docs/environment-10x-robustness-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Gate provider response adapter promotion"
+git commit -m "Gate Browser CUA adapter promotion"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

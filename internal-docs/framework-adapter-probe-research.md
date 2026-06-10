@@ -182,7 +182,8 @@ Keep framework support local-first:
   and browser tool calls so computer-use agents can be optimized through the
   same framework adapter path, with selected-output-derived browser trace,
   action outcome, grounding, and mutation-resilience gates in generated adapter
-  eval configs.
+  eval configs. Verified Browser Use `execute_task(dict)` CUA trace adapters
+  also participate in native adapter promotion and `environment_10x_robustness`.
 - Preserve workflow graph execution semantics. Local framework outputs carrying
   graph nodes/edges, workflow steps, checkpoints, state history, route
   decisions, interrupts, replay, or step-level tool evidence should normalize

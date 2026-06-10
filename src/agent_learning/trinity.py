@@ -2505,6 +2505,7 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "nested_method_promotion",
     "livekit_run_session_promotion",
     "provider_response_promotion",
+    "browser_cua_trace_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3346,6 +3347,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_nested_method_promotion.py",
     "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
     "examples/sdk_framework_adapter_provider_response.py",
+    "examples/sdk_framework_adapter_browser_cua_trace.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3592,6 +3594,32 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "require_promoted_metadata": True,
         "require_discovery": False,
         "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "browser_cua_trace_promotion",
+        "path": "examples/sdk_framework_adapter_browser_cua_trace.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "browser_use",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "expected_call_style": "positional",
+        "expected_modality": "cua",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "browser_action_outcome": 1.0,
+            "browser_action_safety": 1.0,
+            "browser_grounding_quality": 1.0,
+            "browser_mutation_resilience": 1.0,
+            "browser_trace_coverage": 1.0,
             "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,
             "framework_adapter_observed_io_quality": 1.0,

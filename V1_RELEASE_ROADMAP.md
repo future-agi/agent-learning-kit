@@ -466,7 +466,8 @@ Current checkpoint:
   Pipecat-style `process(dict)` plus OpenAI-compatible
   `chat.completions.create(messages=...)` nested-method promotion and LiveKit
   `run_session(dict)` session promotion plus provider-response promotion with
-  required provider kwargs and normalized `provider_response` state,
+  required provider kwargs and normalized `provider_response` state plus Browser
+  Use `execute_task(dict)` CUA trace promotion,
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
@@ -619,7 +620,7 @@ Next implementation focus:
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat
   `process(dict)` plus OpenAI-compatible
   `chat.completions.create(messages=...)` plus LiveKit `run_session(dict)`
-  plus provider-response promotion evidence, and
+  plus provider-response and Browser/CUA trace promotion evidence, and
   release-checked agent-opt bundle search. OpenEnv-specific fixtures are
   compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove

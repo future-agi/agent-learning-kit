@@ -6,11 +6,11 @@ Date: 2026-06-08
 
 Browser/CUA manifests already exercise local browser replay environments with
 snapshots, selector drift, screenshots, storage, runtime, network, mutation
-packs, and prompt-injection surfaces. They still need the same cheap preflight
-path as framework, memory, multi-agent, and realtime stacks: a user should be
-able to pass local browser/CUA fixtures, prove refreshed perception plus safe
-action replay locally, then promote the selected bundle into the normal
-`agent-learning.run.v1` simulation path.
+packs, and prompt-injection surfaces. The release path now includes the same
+cheap preflight and promotion shape as framework, memory, multi-agent, and
+realtime stacks: a user can pass local browser/CUA fixtures, prove refreshed
+perception plus safe action replay locally, then promote the selected bundle or
+framework adapter into the normal `agent-learning.run.v1` simulation path.
 
 ## Current Browser-Agent Signals
 
@@ -61,6 +61,12 @@ Keep browser/CUA support local-first:
   `execute_task(dict)` Browser Use selection, `browser_cua` state, browser
   events, browser trace/screenshot artifacts, prompt-injection-surface
   avoidance, and passing safety/outcome/grounding/mutation/trace metrics.
+- The same local framework-adapter cookbook is also gated as
+  `browser_cua_trace_promotion` under `framework_adapter_probe_readiness` and
+  the native adapter axis in `environment_10x_robustness`. Discovery must select
+  Browser Use `execute_task(dict)`, preserve CUA modality, emit browser trace
+  artifacts and `browser_cua` state, and close generic adapter metrics plus
+  browser safety, outcome, grounding, mutation-resilience, and trace metrics.
 - `agent-learn release-check` now runs
   `examples/sdk_browser_cua_probe_optimization.py` as
   `browser_cua_probe_readiness`; the gate requires the optimizer to select a

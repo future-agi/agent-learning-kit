@@ -54,7 +54,8 @@ outputs and requires at least ten independent axes to pass:
   LangChain `invoke(dict)`, Pipecat `process(dict)`, and OpenAI-compatible
   `chat.completions.create(messages=...)` nested-method adapters plus LiveKit
   `run_session(dict)` session adapters plus provider-response adapters with
-  required provider kwargs and normalized `provider_response` state into normal
+  required provider kwargs and normalized `provider_response` state plus Browser
+  Use `execute_task(dict)` CUA trace adapters into normal
   `agent-learning.run.v1` artifacts with proof metadata, discovery evidence
   where required, adapter call-contract metrics, observed-I/O metrics, and
   framework runtime/trace/tool metric floors.
