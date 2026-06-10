@@ -214,6 +214,12 @@ class AgentReportEvalConfig(BaseModel):
     framework_import_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_runtime: List[str] = Field(default_factory=list)
     framework_runtime_contract: Dict[str, Any] = Field(default_factory=dict)
+    framework_adapter_call_contract_quality: Dict[str, Any] = Field(
+        default_factory=dict
+    )
+    framework_adapter_observed_io_quality: Dict[str, Any] = Field(
+        default_factory=dict
+    )
     framework_adapter_contract_quality: Dict[str, Any] = Field(default_factory=dict)
     required_framework_lifecycle: List[str] = Field(default_factory=list)
     framework_lifecycle_quality: Dict[str, Any] = Field(default_factory=dict)
@@ -462,6 +468,14 @@ class AgentReportEvaluator:
                 *_framework_import_quality_metrics(report_context, config),
                 *_framework_runtime_coverage_metrics(report_context, config),
                 *_framework_runtime_contract_metrics(report_context, config),
+                *_framework_adapter_call_contract_quality_metrics(
+                    report_context,
+                    config,
+                ),
+                *_framework_adapter_observed_io_quality_metrics(
+                    report_context,
+                    config,
+                ),
                 *_framework_adapter_contract_quality_metrics(report_context, config),
                 *_framework_lifecycle_coverage_metrics(report_context, config),
                 *_framework_lifecycle_quality_metrics(report_context, config),
@@ -11298,6 +11312,405 @@ def _framework_runtime_contract_metric(
     )
 
 
+def _framework_adapter_call_contract_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    metric_name = "framework_adapter_call_contract_quality"
+    if not config.framework_adapter_call_contract_quality and (
+        metric_name not in config.metric_weights
+    ):
+        return []
+    return [
+        _framework_adapter_call_contract_quality_metric(
+            context,
+            config.framework_adapter_call_contract_quality,
+        )
+    ]
+
+
+def _framework_adapter_call_contract_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    metric_name = "framework_adapter_call_contract_quality"
+    requirements = _as_dict(requirements)
+    contracts = _framework_adapter_call_contracts_from_context(context)
+    observed = _framework_adapter_call_contract_summary(contracts)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    min_contract_count = _as_int(
+        requirements.get("min_contract_count")
+        or requirements.get("min_call_contract_count")
+        or requirements.get("min_invocation_count")
+    )
+    if min_contract_count is None:
+        min_contract_count = 1
+    _append_framework_adapter_runtime_contract_check(
+        checks,
+        findings,
+        metric=metric_name,
+        check="min_contract_count",
+        expected={">=": min_contract_count},
+        actual=observed["contract_count"],
+        match=observed["contract_count"] >= min_contract_count,
+        finding_type="framework_adapter_call_contract_count_low",
+    )
+
+    expected_kind = (
+        requirements.get("kind")
+        or "agent-learning.framework-adapter-call-contract.v1"
+    )
+    normalized_kind = _normalize_framework_adapter_io_key(expected_kind)
+    _append_framework_adapter_runtime_contract_check(
+        checks,
+        findings,
+        metric=metric_name,
+        check="kind",
+        expected=normalized_kind,
+        actual=observed["kinds"],
+        match=normalized_kind in observed["kinds"],
+        finding_type="framework_adapter_call_contract_kind_missing",
+    )
+
+    for requirement_key, observed_key, finding_type in (
+        ("framework", "frameworks", "framework_adapter_call_contract_framework_mismatch"),
+        ("method", "methods", "framework_adapter_call_contract_method_missing"),
+        ("input_mode", "input_modes", "framework_adapter_call_contract_input_mode_mismatch"),
+        ("input_key", "input_keys", "framework_adapter_call_contract_input_key_missing"),
+        ("call_style", "call_styles", "framework_adapter_call_contract_call_style_missing"),
+    ):
+        expected = requirements.get(requirement_key) or requirements.get(
+            f"required_{requirement_key}"
+        )
+        if expected in (None, "", [], {}):
+            continue
+        normalized = _normalize_framework_adapter_io_key(expected)
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check=requirement_key,
+            expected=normalized,
+            actual=observed[observed_key],
+            match=normalized in observed[observed_key],
+            finding_type=finding_type,
+        )
+
+    for requirement_key, observed_key, finding_type in (
+        ("required_frameworks", "frameworks", "framework_adapter_call_contract_framework_mismatch"),
+        ("required_methods", "methods", "framework_adapter_call_contract_method_missing"),
+        ("required_input_modes", "input_modes", "framework_adapter_call_contract_input_mode_mismatch"),
+        ("required_input_keys", "input_keys", "framework_adapter_call_contract_input_key_missing"),
+        ("required_call_styles", "call_styles", "framework_adapter_call_contract_call_style_missing"),
+        ("required_input_kwargs", "input_kwargs_keys", "framework_adapter_call_contract_input_kwarg_missing"),
+        ("required_input_kwargs_keys", "input_kwargs_keys", "framework_adapter_call_contract_input_kwarg_missing"),
+        ("input_kwargs_keys", "input_kwargs_keys", "framework_adapter_call_contract_input_kwarg_missing"),
+        ("required_parameter_names", "parameter_names", "framework_adapter_call_contract_parameter_missing"),
+        ("required_keyword_only_parameters", "keyword_only_parameters", "framework_adapter_call_contract_keyword_only_missing"),
+    ):
+        for expected in _string_list(requirements.get(requirement_key)):
+            normalized = _normalize_framework_adapter_io_key(expected)
+            _append_framework_adapter_runtime_contract_check(
+                checks,
+                findings,
+                metric=metric_name,
+                check=requirement_key,
+                expected=normalized,
+                actual=observed[observed_key],
+                match=normalized in observed[observed_key],
+                finding_type=finding_type,
+            )
+
+    if (
+        requirements.get("require_signature")
+        is not None
+        or requirements.get("require_callable_signature") is not None
+    ):
+        required = bool(
+            requirements.get(
+                "require_signature",
+                requirements.get("require_callable_signature"),
+            )
+        )
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="require_signature",
+            expected=required,
+            actual=observed["signature_count"],
+            match=(observed["signature_count"] >= min_contract_count)
+            if required
+            else True,
+            finding_type="framework_adapter_call_contract_signature_missing",
+        )
+
+    if (
+        requirements.get("require_signature_inspectable")
+        is not None
+        or requirements.get("require_inspectable_signature") is not None
+    ):
+        required = bool(
+            requirements.get(
+                "require_signature_inspectable",
+                requirements.get("require_inspectable_signature"),
+            )
+        )
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="require_signature_inspectable",
+            expected=required,
+            actual=observed["signature_inspectable_count"],
+            match=(observed["signature_inspectable_count"] >= min_contract_count)
+            if required
+            else True,
+            finding_type="framework_adapter_call_contract_signature_uninspectable",
+        )
+
+    if requirements.get("require_signature_bound") is not None:
+        required = bool(requirements.get("require_signature_bound"))
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="require_signature_bound",
+            expected=required,
+            actual=observed["signature_bound_count"],
+            match=(observed["signature_bound_count"] >= min_contract_count)
+            if required
+            else True,
+            finding_type="framework_adapter_call_contract_signature_unbound",
+        )
+
+    max_error_count = _as_int(
+        requirements.get("max_error_count") or requirements.get("max_errors")
+    )
+    if max_error_count is not None:
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=observed["error_count"],
+            match=observed["error_count"] <= max_error_count,
+            finding_type="framework_adapter_call_contract_error_count_high",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name=metric_name,
+        score=round(matched / len(checks), 4) if checks else 1.0,
+        reason=(
+            f"{matched}/{len(checks)} framework adapter call-contract "
+            "check(s) matched."
+            if checks
+            else "No framework adapter call-contract checks were configured."
+        ),
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
+def _framework_adapter_observed_io_quality_metrics(
+    context: Mapping[str, Any],
+    config: AgentReportEvalConfig,
+) -> List[AgentReportMetricResult]:
+    metric_name = "framework_adapter_observed_io_quality"
+    if not config.framework_adapter_observed_io_quality and (
+        metric_name not in config.metric_weights
+    ):
+        return []
+    return [
+        _framework_adapter_observed_io_quality_metric(
+            context,
+            config.framework_adapter_observed_io_quality,
+        )
+    ]
+
+
+def _framework_adapter_observed_io_quality_metric(
+    context: Mapping[str, Any],
+    requirements: Mapping[str, Any],
+) -> AgentReportMetricResult:
+    metric_name = "framework_adapter_observed_io_quality"
+    requirements = _as_dict(requirements)
+    contracts = _framework_adapter_observed_io_contracts_from_context(context)
+    observed = _framework_adapter_observed_io_summary(contracts)
+    checks: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    min_contract_count = _as_int(
+        requirements.get("min_contract_count")
+        or requirements.get("min_observed_io_count")
+        or requirements.get("min_observed_io_contract_count")
+    )
+    if min_contract_count is None:
+        min_contract_count = 1
+    _append_framework_adapter_runtime_contract_check(
+        checks,
+        findings,
+        metric=metric_name,
+        check="min_contract_count",
+        expected={">=": min_contract_count},
+        actual=observed["contract_count"],
+        match=observed["contract_count"] >= min_contract_count,
+        finding_type="framework_adapter_observed_io_contract_count_low",
+    )
+
+    min_invocation_count = _as_int(
+        requirements.get("min_invocation_count")
+        or requirements.get("min_invocations")
+    )
+    if min_invocation_count is not None:
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="min_invocation_count",
+            expected={">=": min_invocation_count},
+            actual=observed["invocation_count"],
+            match=observed["invocation_count"] >= min_invocation_count,
+            finding_type="framework_adapter_observed_io_invocation_count_low",
+        )
+
+    expected_kind = (
+        requirements.get("kind")
+        or "agent-learning.framework-adapter-observed-io-contract.v1"
+    )
+    normalized_kind = _normalize_framework_adapter_io_key(expected_kind)
+    _append_framework_adapter_runtime_contract_check(
+        checks,
+        findings,
+        metric=metric_name,
+        check="kind",
+        expected=normalized_kind,
+        actual=observed["kinds"],
+        match=normalized_kind in observed["kinds"],
+        finding_type="framework_adapter_observed_io_kind_missing",
+    )
+
+    for requirement_key, observed_key, finding_type in (
+        ("framework", "frameworks", "framework_adapter_observed_io_framework_mismatch"),
+        ("method", "methods", "framework_adapter_observed_io_method_missing"),
+        ("input_mode", "input_modes", "framework_adapter_observed_io_input_mode_mismatch"),
+    ):
+        expected = requirements.get(requirement_key) or requirements.get(
+            f"required_{requirement_key}"
+        )
+        if expected in (None, "", [], {}):
+            continue
+        normalized = _normalize_framework_adapter_io_key(expected)
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check=requirement_key,
+            expected=normalized,
+            actual=observed[observed_key],
+            match=normalized in observed[observed_key],
+            finding_type=finding_type,
+        )
+
+    for requirement_key, observed_key, finding_type in (
+        ("required_frameworks", "frameworks", "framework_adapter_observed_io_framework_mismatch"),
+        ("required_methods", "methods", "framework_adapter_observed_io_method_missing"),
+        ("required_input_modes", "input_modes", "framework_adapter_observed_io_input_mode_mismatch"),
+        ("required_call_styles", "call_styles", "framework_adapter_observed_io_call_style_missing"),
+        ("required_input_keys", "input_keys", "framework_adapter_observed_io_input_key_missing"),
+        ("required_input_kwargs", "input_kwargs_keys", "framework_adapter_observed_io_input_kwarg_missing"),
+        ("required_input_kwargs_keys", "input_kwargs_keys", "framework_adapter_observed_io_input_kwarg_missing"),
+        ("required_input_types", "input_types", "framework_adapter_observed_io_input_type_missing"),
+        ("required_output_types", "output_types", "framework_adapter_observed_io_output_type_missing"),
+        ("required_output_state_keys", "output_state_keys", "framework_adapter_observed_io_state_key_missing"),
+        ("required_output_metadata_keys", "output_metadata_keys", "framework_adapter_observed_io_metadata_key_missing"),
+        ("required_output_tool_names", "output_tool_names", "framework_adapter_observed_io_tool_missing"),
+        ("required_output_event_types", "output_event_types", "framework_adapter_observed_io_event_missing"),
+        ("required_output_artifact_types", "output_artifact_types", "framework_adapter_observed_io_artifact_missing"),
+    ):
+        for expected in _string_list(requirements.get(requirement_key)):
+            normalized = _normalize_framework_adapter_io_key(expected)
+            _append_framework_adapter_runtime_contract_check(
+                checks,
+                findings,
+                metric=metric_name,
+                check=requirement_key,
+                expected=normalized,
+                actual=observed[observed_key],
+                match=normalized in observed[observed_key],
+                finding_type=finding_type,
+            )
+
+    if requirements.get("require_content_observed") is not None:
+        required = bool(requirements.get("require_content_observed"))
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="require_content_observed",
+            expected=required,
+            actual=observed["content_observed_count"],
+            match=(observed["content_observed_count"] >= min_contract_count)
+            if required
+            else True,
+            finding_type="framework_adapter_observed_io_content_missing",
+        )
+
+    if requirements.get("require_signature_bound") is not None:
+        required = bool(requirements.get("require_signature_bound"))
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="require_signature_bound",
+            expected=required,
+            actual=observed["signature_bound_count"],
+            match=(observed["signature_bound_count"] >= min_contract_count)
+            if required
+            else True,
+            finding_type="framework_adapter_observed_io_signature_unbound",
+        )
+
+    max_error_count = _as_int(
+        requirements.get("max_error_count") or requirements.get("max_errors")
+    )
+    if max_error_count is not None:
+        _append_framework_adapter_runtime_contract_check(
+            checks,
+            findings,
+            metric=metric_name,
+            check="max_error_count",
+            expected=max_error_count,
+            actual=observed["error_count"],
+            match=observed["error_count"] <= max_error_count,
+            finding_type="framework_adapter_observed_io_error_count_high",
+        )
+
+    matched = sum(1 for check in checks if check["match"])
+    return AgentReportMetricResult(
+        name=metric_name,
+        score=round(matched / len(checks), 4) if checks else 1.0,
+        reason=(
+            f"{matched}/{len(checks)} framework adapter observed-I/O "
+            "check(s) matched."
+            if checks
+            else "No framework adapter observed-I/O checks were configured."
+        ),
+        details={
+            "checks": checks,
+            "findings": findings,
+            "observed": observed,
+        },
+    )
+
+
 def _framework_adapter_contract_quality_metrics(
     context: Mapping[str, Any],
     config: AgentReportEvalConfig,
@@ -21254,6 +21667,536 @@ def _append_framework_runtime_check(
 
 def _normalize_framework_runtime_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_").replace(".", "_")
+
+
+def _framework_adapter_call_contracts_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    contracts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_contract(
+        value: Any,
+        *,
+        invocation: Mapping[str, Any] | None = None,
+        framework: Any = None,
+    ) -> None:
+        contract = _as_dict(value)
+        if not contract:
+            return
+        kind = str(contract.get("kind") or "").lower()
+        if kind != "agent-learning.framework-adapter-call-contract.v1":
+            return
+        invocation_dict = _as_dict(invocation)
+        row = dict(contract)
+        if framework not in (None, "", [], {}) and not row.get("framework"):
+            row["framework"] = framework
+        for key in ("method", "input_mode", "call_style", "input_key"):
+            if not row.get(key) and invocation_dict.get(key) not in (None, "", [], {}):
+                row[key] = invocation_dict.get(key)
+        if not row.get("input_kwargs_keys") and invocation_dict.get(
+            "input_kwargs_keys"
+        ):
+            row["input_kwargs_keys"] = list(invocation_dict.get("input_kwargs_keys") or [])
+        if not _as_dict(row.get("observed_io")) and (
+            invocation_dict.get("input") or invocation_dict.get("output")
+        ):
+            row["observed_io"] = {
+                "input": _as_dict(invocation_dict.get("input")),
+                "output": _as_dict(invocation_dict.get("output")),
+            }
+        signature = json.dumps(row, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        contracts.append(row)
+
+    for payload in _framework_runtime_payloads_from_context(context):
+        payload_dict = _as_dict(payload)
+        payload_framework = payload_dict.get("framework")
+        for invocation in _framework_runtime_invocations([payload_dict]):
+            invocation_dict = _as_dict(invocation)
+            append_contract(
+                invocation_dict.get("call_contract"),
+                invocation=invocation_dict,
+                framework=invocation_dict.get("framework") or payload_framework,
+            )
+
+    for payload in _framework_adapter_probe_payloads_from_context(context):
+        for case in _as_list(payload.get("cases")):
+            case_dict = _as_dict(case)
+            runtime_trace = _as_dict(case_dict.get("runtime_trace"))
+            payload_framework = (
+                runtime_trace.get("framework")
+                or payload.get("framework")
+                or _as_dict(payload.get("contract")).get("framework")
+            )
+            for invocation in _framework_runtime_invocations([runtime_trace]):
+                invocation_dict = _as_dict(invocation)
+                append_contract(
+                    invocation_dict.get("call_contract"),
+                    invocation=invocation_dict,
+                    framework=invocation_dict.get("framework") or payload_framework,
+                )
+
+    return contracts
+
+
+def _framework_adapter_call_contract_summary(
+    contracts: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    kinds: set[str] = set()
+    frameworks: set[str] = set()
+    methods: set[str] = set()
+    input_modes: set[str] = set()
+    input_keys: set[str] = set()
+    input_kwargs_keys: set[str] = set()
+    call_styles: set[str] = set()
+    input_types: set[str] = set()
+    output_types: set[str] = set()
+    parameter_names: set[str] = set()
+    required_parameters: set[str] = set()
+    keyword_only_parameters: set[str] = set()
+    signature_count = 0
+    signature_inspectable_count = 0
+    signature_bound_count = 0
+    error_count = 0
+
+    for raw_contract in contracts:
+        contract = _as_dict(raw_contract)
+        kind = _normalize_framework_adapter_io_key(contract.get("kind"))
+        if kind:
+            kinds.add(kind)
+        for source, sink in (
+            (contract.get("framework"), frameworks),
+            (contract.get("method"), methods),
+            (contract.get("input_mode"), input_modes),
+            (contract.get("input_key"), input_keys),
+            (contract.get("call_style"), call_styles),
+        ):
+            normalized = _normalize_framework_adapter_io_key(source)
+            if normalized:
+                sink.add(normalized)
+        input_kwargs_keys.update(
+            _normalize_framework_adapter_io_key(key)
+            for key in _as_list(contract.get("input_kwargs_keys", []))
+            if _normalize_framework_adapter_io_key(key)
+        )
+        signature = _as_dict(
+            contract.get("signature") or contract.get("callable_signature")
+        )
+        if signature:
+            signature_count += 1
+        if signature.get("inspectable") is True:
+            signature_inspectable_count += 1
+        if contract.get("signature_bound") is True:
+            signature_bound_count += 1
+        parameter_names.update(
+            _normalize_framework_adapter_io_key(name)
+            for name in _as_list(signature.get("parameter_names", []))
+            if _normalize_framework_adapter_io_key(name)
+        )
+        required_parameters.update(
+            _normalize_framework_adapter_io_key(name)
+            for name in _as_list(signature.get("required_parameters", []))
+            if _normalize_framework_adapter_io_key(name)
+        )
+        keyword_only_parameters.update(
+            _normalize_framework_adapter_io_key(name)
+            for name in _as_list(signature.get("keyword_only_parameters", []))
+            if _normalize_framework_adapter_io_key(name)
+        )
+        observed_io = _as_dict(contract.get("observed_io"))
+        input_shape = _as_dict(observed_io.get("input"))
+        output_shape = _as_dict(observed_io.get("output"))
+        input_type = _normalize_framework_adapter_io_key(input_shape.get("type"))
+        output_type = _normalize_framework_adapter_io_key(output_shape.get("type"))
+        if input_type:
+            input_types.add(input_type)
+        if output_type:
+            output_types.add(output_type)
+        error_count += _framework_adapter_io_error_count(output_shape)
+
+    return {
+        "contract_count": len(contracts),
+        "kinds": sorted(kinds),
+        "frameworks": sorted(frameworks),
+        "methods": sorted(methods),
+        "input_modes": sorted(input_modes),
+        "input_keys": sorted(input_keys),
+        "input_kwargs_keys": sorted(input_kwargs_keys),
+        "call_styles": sorted(call_styles),
+        "input_types": sorted(input_types),
+        "output_types": sorted(output_types),
+        "parameter_names": sorted(parameter_names),
+        "required_parameters": sorted(required_parameters),
+        "keyword_only_parameters": sorted(keyword_only_parameters),
+        "signature_count": signature_count,
+        "signature_inspectable_count": signature_inspectable_count,
+        "signature_bound_count": signature_bound_count,
+        "error_count": error_count,
+    }
+
+
+def _framework_adapter_observed_io_contracts_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    contracts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_contract(value: Any) -> None:
+        contract = _as_dict(value)
+        if not contract:
+            return
+        kind = str(contract.get("kind") or "").lower()
+        if kind != "agent-learning.framework-adapter-observed-io-contract.v1":
+            return
+        signature = json.dumps(contract, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        contracts.append(dict(contract))
+
+    for call_contract in _framework_adapter_call_contracts_from_context(context):
+        observed_io = _as_dict(call_contract.get("observed_io"))
+        if not observed_io:
+            continue
+        input_shape = _as_dict(observed_io.get("input"))
+        output_shape = _as_dict(observed_io.get("output"))
+        invocation = {
+            "id": str(call_contract.get("id") or "framework_runtime_invocation"),
+            "framework": call_contract.get("framework"),
+            "method": call_contract.get("method"),
+            "input_mode": call_contract.get("input_mode"),
+            "call_style": call_contract.get("call_style"),
+            "input_key": call_contract.get("input_key"),
+            "input_kwargs_keys": list(call_contract.get("input_kwargs_keys") or []),
+            "input_shape": input_shape,
+            "output_shape": output_shape,
+            "signals": list(call_contract.get("signals") or []),
+        }
+        append_contract(
+            {
+                "kind": "agent-learning.framework-adapter-observed-io-contract.v1",
+                "framework": call_contract.get("framework"),
+                "method": call_contract.get("method"),
+                "input_mode": call_contract.get("input_mode"),
+                "signature_bound": call_contract.get("signature_bound"),
+                "invocations": [invocation],
+                "summary": {
+                    "invocation_count": 1,
+                    "methods": [call_contract.get("method")],
+                    "input_modes": [call_contract.get("input_mode")],
+                    "call_styles": [call_contract.get("call_style")],
+                    "input_keys": [call_contract.get("input_key")]
+                    if call_contract.get("input_key")
+                    else [],
+                    "input_kwargs_keys": list(
+                        call_contract.get("input_kwargs_keys") or []
+                    ),
+                    "input_types": [input_shape.get("type")] if input_shape else [],
+                    "output_types": [output_shape.get("type")]
+                    if output_shape
+                    else [],
+                    "output_state_keys": list(output_shape.get("state_keys") or []),
+                    "output_metadata_keys": list(
+                        output_shape.get("metadata_keys") or []
+                    ),
+                    "output_tool_names": list(output_shape.get("tool_names") or []),
+                    "output_event_types": list(output_shape.get("event_types") or []),
+                    "output_artifact_types": list(
+                        output_shape.get("artifact_types") or []
+                    ),
+                    "content_observed": _framework_adapter_io_content_observed(
+                        output_shape
+                    ),
+                    "signature_bound": call_contract.get("signature_bound"),
+                },
+            }
+        )
+
+    for payload in _framework_adapter_probe_payloads_from_context(context):
+        append_contract(payload.get("observed_io_contract"))
+        for case in _as_list(payload.get("cases")):
+            case_dict = _as_dict(case)
+            append_contract(case_dict.get("observed_io_contract"))
+
+    return contracts
+
+
+def _framework_adapter_observed_io_summary(
+    contracts: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    kinds: set[str] = set()
+    frameworks: set[str] = set()
+    methods: set[str] = set()
+    input_modes: set[str] = set()
+    input_keys: set[str] = set()
+    input_kwargs_keys: set[str] = set()
+    call_styles: set[str] = set()
+    input_types: set[str] = set()
+    output_types: set[str] = set()
+    output_state_keys: set[str] = set()
+    output_metadata_keys: set[str] = set()
+    output_tool_names: set[str] = set()
+    output_event_types: set[str] = set()
+    output_artifact_types: set[str] = set()
+    signature_bound_count = 0
+    content_observed_count = 0
+    invocation_count = 0
+    error_count = 0
+
+    for raw_contract in contracts:
+        contract = _as_dict(raw_contract)
+        summary = _as_dict(contract.get("summary"))
+        kind = _normalize_framework_adapter_io_key(contract.get("kind"))
+        if kind:
+            kinds.add(kind)
+        for source, sink in (
+            (contract.get("framework"), frameworks),
+            (contract.get("method"), methods),
+            (contract.get("input_mode"), input_modes),
+        ):
+            normalized = _normalize_framework_adapter_io_key(source)
+            if normalized:
+                sink.add(normalized)
+        if (
+            contract.get("signature_bound") is True
+            or summary.get("signature_bound") is True
+        ):
+            signature_bound_count += 1
+        if summary.get("content_observed") is True:
+            content_observed_count += 1
+
+        invocation_rows = [
+            _as_dict(invocation)
+            for invocation in _as_list(contract.get("invocations", []))
+            if _as_dict(invocation)
+        ]
+        invocation_count += len(invocation_rows)
+        for invocation in invocation_rows:
+            for source, sink in (
+                (invocation.get("framework"), frameworks),
+                (invocation.get("method"), methods),
+                (invocation.get("input_mode"), input_modes),
+                (invocation.get("input_key"), input_keys),
+                (invocation.get("call_style"), call_styles),
+            ):
+                normalized = _normalize_framework_adapter_io_key(source)
+                if normalized:
+                    sink.add(normalized)
+            input_kwargs_keys.update(
+                _normalize_framework_adapter_io_key(key)
+                for key in _as_list(invocation.get("input_kwargs_keys", []))
+                if _normalize_framework_adapter_io_key(key)
+            )
+            input_shape = _as_dict(
+                invocation.get("input_shape") or invocation.get("input")
+            )
+            output_shape = _as_dict(
+                invocation.get("output_shape") or invocation.get("output")
+            )
+            input_type = _normalize_framework_adapter_io_key(input_shape.get("type"))
+            output_type = _normalize_framework_adapter_io_key(output_shape.get("type"))
+            if input_type:
+                input_types.add(input_type)
+            if output_type:
+                output_types.add(output_type)
+            _merge_framework_adapter_io_output_shape(
+                output_shape,
+                output_state_keys=output_state_keys,
+                output_metadata_keys=output_metadata_keys,
+                output_tool_names=output_tool_names,
+                output_event_types=output_event_types,
+                output_artifact_types=output_artifact_types,
+            )
+            if _framework_adapter_io_content_observed(output_shape):
+                content_observed_count += 1
+            error_count += _framework_adapter_io_error_count(output_shape)
+
+        for summary_key, sink in (
+            ("methods", methods),
+            ("input_modes", input_modes),
+            ("call_styles", call_styles),
+            ("input_keys", input_keys),
+            ("input_kwargs_keys", input_kwargs_keys),
+            ("input_types", input_types),
+            ("output_types", output_types),
+            ("output_state_keys", output_state_keys),
+            ("output_metadata_keys", output_metadata_keys),
+            ("output_tool_names", output_tool_names),
+            ("output_event_types", output_event_types),
+            ("output_artifact_types", output_artifact_types),
+        ):
+            sink.update(
+                _normalize_framework_adapter_io_key(value)
+                for value in _as_list(summary.get(summary_key, []))
+                if _normalize_framework_adapter_io_key(value)
+            )
+
+    return {
+        "contract_count": len(contracts),
+        "invocation_count": invocation_count,
+        "kinds": sorted(kinds),
+        "frameworks": sorted(frameworks),
+        "methods": sorted(methods),
+        "input_modes": sorted(input_modes),
+        "input_keys": sorted(input_keys),
+        "input_kwargs_keys": sorted(input_kwargs_keys),
+        "call_styles": sorted(call_styles),
+        "input_types": sorted(input_types),
+        "output_types": sorted(output_types),
+        "output_state_keys": sorted(output_state_keys),
+        "output_metadata_keys": sorted(output_metadata_keys),
+        "output_tool_names": sorted(output_tool_names),
+        "output_event_types": sorted(output_event_types),
+        "output_artifact_types": sorted(output_artifact_types),
+        "signature_bound_count": signature_bound_count,
+        "content_observed_count": content_observed_count,
+        "error_count": error_count,
+    }
+
+
+def _framework_adapter_probe_payloads_from_context(
+    context: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_payload(value: Any) -> None:
+        payload = _as_dict(value)
+        if not payload:
+            return
+        kind = str(payload.get("kind") or "").lower()
+        looks_like_adapter_probe = kind in {
+            "agent-learning.framework-adapter-probe.v1",
+            "framework_adapter_probe",
+        } or (
+            "cases" in payload
+            and (
+                "contract" in payload
+                or "observed_io_contract" in json.dumps(payload, default=str)
+            )
+        )
+        if not looks_like_adapter_probe:
+            return
+        signature = json.dumps(payload, sort_keys=True, default=str)
+        if signature in seen:
+            return
+        seen.add(signature)
+        payloads.append(payload)
+
+    append_payload(context.get("framework_adapter_probe"))
+    metadata = _as_dict(context.get("metadata", {}))
+    append_payload(metadata.get("framework_adapter_probe"))
+    state = _as_dict(metadata.get("environment_state"))
+    append_payload(state.get("framework_adapter_probe"))
+    for artifact in _as_list(context.get("artifacts", [])):
+        append_payload(_get(artifact, "data", {}))
+        append_payload(_get(artifact, "payload", {}))
+    for event in _as_list(context.get("events", [])):
+        event_type = str(_get(event, "type", "") or "").lower()
+        payload = _as_dict(_get(event, "payload", {}))
+        if "framework_adapter_probe" in event_type:
+            append_payload(payload)
+        else:
+            append_payload(payload)
+    return payloads
+
+
+def _append_framework_adapter_runtime_contract_check(
+    checks: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    *,
+    metric: str,
+    check: str,
+    expected: Any,
+    actual: Any,
+    match: bool,
+    finding_type: str,
+) -> None:
+    checks.append(
+        {
+            "check": check,
+            "expected": expected,
+            "actual": actual,
+            "match": bool(match),
+        }
+    )
+    if not match:
+        findings.append(
+            {
+                "type": finding_type,
+                "metric": metric,
+                "check": check,
+                "expected": expected,
+                "actual": actual,
+            }
+        )
+
+
+def _normalize_framework_adapter_io_key(value: Any) -> str:
+    normalized = (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace(".", "_")
+        .replace("/", "_")
+    )
+    aliases = {
+        "agentresponse": "agent_response",
+        "agent_response": "agent_response",
+        "agent_learning_framework_adapter_call_contract_v1": (
+            "agent_learning_framework_adapter_call_contract_v1"
+        ),
+        "agent_learning_framework_adapter_observed_io_contract_v1": (
+            "agent_learning_framework_adapter_observed_io_contract_v1"
+        ),
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _merge_framework_adapter_io_output_shape(
+    output_shape: Mapping[str, Any],
+    *,
+    output_state_keys: set[str],
+    output_metadata_keys: set[str],
+    output_tool_names: set[str],
+    output_event_types: set[str],
+    output_artifact_types: set[str],
+) -> None:
+    for source_key, sink in (
+        ("state_keys", output_state_keys),
+        ("metadata_keys", output_metadata_keys),
+        ("tool_names", output_tool_names),
+        ("event_types", output_event_types),
+        ("artifact_types", output_artifact_types),
+    ):
+        sink.update(
+            _normalize_framework_adapter_io_key(value)
+            for value in _as_list(output_shape.get(source_key, []))
+            if _normalize_framework_adapter_io_key(value)
+        )
+
+
+def _framework_adapter_io_content_observed(output_shape: Mapping[str, Any]) -> bool:
+    content_length = _as_int(output_shape.get("content_length"))
+    if content_length is not None and content_length > 0:
+        return True
+    content = output_shape.get("content")
+    return content not in (None, "", [], {})
+
+
+def _framework_adapter_io_error_count(output_shape: Mapping[str, Any]) -> int:
+    explicit = _as_int(output_shape.get("error_count"))
+    if explicit is not None:
+        return explicit
+    output_type = _normalize_framework_adapter_io_key(output_shape.get("type"))
+    if output_type in {"error", "exception"} or output_shape.get("error"):
+        return 1
+    return 0
 
 
 def _framework_adapter_contracts_from_context(

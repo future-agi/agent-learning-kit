@@ -674,8 +674,9 @@ proof, selected contract metadata, and any auto-discovery artifact, while
 optionally attaching the same `agent_report` evaluation config used by full
 framework simulations. Set `auto_evaluation_config=True` or call
 `optimize.build_framework_adapter_probe_evaluation_config(...)` to generate
-runtime-contract and adapter-contract eval gates directly from the selected
-probe proof. See `examples/sdk_framework_adapter_probe_promotion.py` and
+runtime-contract, adapter call-contract, observed-I/O, and adapter-contract eval
+gates directly from the selected probe proof. See
+`examples/sdk_framework_adapter_probe_promotion.py` and
 `examples/sdk_framework_adapter_auto_discovery_promotion.py` for end-to-end
 cookbooks that probe or discover candidates, build the manifest, run it, and
 save an `agent-learning.run.v1` result.
@@ -696,10 +697,11 @@ auto-discovery promotion, one-call promotion, and one-call run cookbooks. It
 requires `execute_task(dict)` selection, callable-signature evidence, observed
 I/O contracts, passing probe proofs, discovery metadata where expected,
 promoted manifest proof metadata, and evaluated framework runtime,
-adapter-contract, framework-trace, and tool metrics. Probe optimization
-artifacts also render a `framework_adapter_probe` report/action card with
-exportable proof, selected probe report, contract, callable signature, observed
-I/O contract, and replay-lock artifacts.
+adapter call-contract, observed-I/O, adapter-contract, framework-trace, and
+tool metrics. Probe optimization artifacts also render a
+`framework_adapter_probe` report/action card with exportable proof, selected
+probe report, contract, callable signature, observed I/O contract, and
+replay-lock artifacts.
 
 If you want the SDK to execute the promoted manifest immediately, call async
 `optimize.run_framework_adapter_from_local_adapter(...)`; it returns the normal
@@ -967,10 +969,12 @@ preserve optimizer trace governance evidence before V1 claims framework-adapter
 trinity coverage.
 
 Agent-report evaluation can now score that same metadata with
-`framework_adapter_contract_quality`; framework optimization weights it as a
-native gate alongside runtime and trace metrics, so an HTTP target or
-external-service contract is diagnosed locally instead of delegated to an
-external optimizer/eval platform.
+`framework_adapter_contract_quality`, and promoted BYO-framework runs add
+`framework_adapter_call_contract_quality` plus
+`framework_adapter_observed_io_quality` as native gates alongside runtime and
+trace metrics. Static contract gaps, signature drift, call-style drift, and
+missing observed input/output evidence are diagnosed locally instead of
+delegated to an external optimizer/eval platform.
 Use `simulate.framework_adapter_contract_matrix([...])` when Future AGI UI,
 CI, or CLI needs to certify many framework adapters in one artifact. The matrix
 emits `agent-learning.framework-adapter-contract-matrix.v1`, expands to one

@@ -8,12 +8,13 @@ Current handoff snapshot:
 
 - Date: 2026-06-10.
 - Branch observed during handoff: `main`.
-- Latest verified commit: `34373fd Gate adapter probe signature IO contracts`.
+- Latest verified baseline before the metric slice:
+  `34373fd Gate adapter probe signature IO contracts`.
 - Local worktree status observed during handoff: clean except unrelated
   untracked `uv.lock`.
 - Full v1 is not done. Do not communicate v1 completion from this handoff.
-- Latest verified slice: BYO-framework adapter probes now close deterministic
-  callable-signature and observed input/output contracts.
+- Latest verified functional slice: promoted BYO-framework runs now close
+  first-class adapter call-contract and observed-I/O evaluation metrics.
 
 First commands for a new engineer:
 
@@ -50,11 +51,35 @@ trinity usable for arbitrary agent work:
 The full v1 objective is not complete. The current verified state is a strong
 increment toward it: framework adapter probes now prove deterministic callable
 signatures and observed input/output contracts before an arbitrary local
-framework adapter is promoted into a normal run manifest.
+framework adapter is promoted, and promoted run manifests now score those
+contracts as first-class `ai-evaluation` metrics.
 
-## Latest Completed Slice
+## Latest Completed Slices
 
-The latest slice hardens BYO-framework adapter probing.
+The latest slice hardens promoted BYO-framework adapter evaluation.
+
+Implemented behavior:
+
+- `AgentReportEvalConfig` now supports:
+  - `framework_adapter_call_contract_quality`
+  - `framework_adapter_observed_io_quality`
+- `AgentReportEvaluator` extracts adapter call contracts from framework runtime
+  invocations and scores method, input mode, call style, callable signature,
+  signature binding, input/output types, output tools/events/artifacts, content
+  observation, and error count.
+- `build_framework_adapter_probe_evaluation_config()` emits both metric config
+  blocks and gives each an `8.0` metric weight for promoted adapter-probe runs.
+- Generated promotion paths and one-call local-adapter helpers now require both
+  metrics alongside `framework_runtime_contract` and
+  `framework_adapter_contract_quality`.
+- `agent-learn release-check` now requires both metrics at `1.0` for explicit
+  probe promotion, auto-discovery promotion, one-call promotion, and one-call
+  run surfaces.
+- `capabilities.DEFAULT_METRICS` exposes both metric names.
+- The explicit adapter-probe promotion cookbook has the same handwritten metric
+  gates as the generated promotion path.
+
+The previous slice hardened BYO-framework adapter probing.
 
 Implemented behavior:
 
@@ -187,6 +212,14 @@ uv run pytest tests/test_config_and_facades.py::test_agent_learn_release_check_r
 uv run pytest -q
 ```
 
+Current full-suite result after the metric slice:
+
+- `290 passed, 6 warnings in 725.32s`
+
+```bash
+uv run pytest -q
+```
+
 Result:
 
 - `289 passed, 6 warnings in 895.79s`
@@ -208,6 +241,44 @@ Release proof result:
 - `typescript_build=passed`
 - `typescript_test=passed`
 - `git_diff_check=passed`
+
+Additional verification passed for the call-contract metric slice:
+
+```bash
+python3 -m py_compile \
+  src/fi/evals/metrics/agents/report.py \
+  src/agent_learning/optimize.py \
+  src/agent_learning/capabilities.py \
+  src/agent_learning/trinity.py
+```
+
+```bash
+uv run pytest \
+  tests/test_config_and_facades.py::test_agent_report_scores_framework_adapter_call_contract_and_observed_io \
+  -q
+```
+
+```bash
+uv run pytest \
+  tests/test_config_and_facades.py::test_probe_optimization_promotes_to_framework_run_manifest \
+  tests/test_config_and_facades.py::test_auto_discovery_probe_optimization_promotes_discovery_metadata \
+  tests/test_config_and_facades.py::test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes \
+  tests/test_config_and_facades.py::test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs \
+  -q
+```
+
+```bash
+uv run pytest \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_probe_promotion_example_runs \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_auto_discovery_promotion_example_runs \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_one_call_promotion_example_runs \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_one_call_run_example_runs \
+  -q
+```
+
+```bash
+uv run pytest tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones -q
+```
 
 ## Deterministic Adapter-Probe Workflow
 
@@ -240,51 +311,42 @@ Use this workflow for new framework adapter surfaces:
 
 Recommended next slices, in order:
 
-1. Generalize signature/I-O proof beyond adapter probes into promoted framework
-   run manifests.
-   - Today the strong signature/I-O proof is centered on probe artifacts.
-   - Promoted runs preserve proof metadata, but normal runtime evals do not yet
-     score call-contract quality as a first-class metric.
-
-2. Add first-class evaluation metrics for `framework_adapter_call_contract`.
-   - Candidate metric names:
-     - `framework_adapter_call_contract_quality`
-     - `framework_adapter_observed_io_quality`
-   - Keep these separate from generic `framework_adapter_contract_quality` so
-     unrelated adapter contract gates do not regress.
-
-3. Expand arbitrary-framework coverage.
+1. Expand arbitrary-framework coverage.
    - Add focused cookbooks for LangChain/LangGraph-style `invoke/ainvoke`.
    - Add LiveKit/Pipecat-style voice/frame adapters.
    - Add Browser Use / CUA adapters.
    - Add provider-client adapters with nested method paths such as
      `chat.completions.create`.
 
-4. Move from method/input optimization to task/world optimization.
+2. Move from method/input optimization to task/world optimization.
    - The broader v1 goal is not just adapter choice.
    - `agent-opt` should optimize environment state, workflow hooks, memory
      policies, retrieval configs, multi-agent role boundaries, and red-team
      scenarios.
 
-5. Keep OpenEnv compatibility as a secondary surface.
+3. Generalize call-contract metrics beyond adapter-probe promotion.
+   - Apply the same metric family to other framework manifest builders where
+     runtime traces already carry call contracts.
+   - Keep the metrics separate from generic `framework_adapter_contract_quality`.
+
+4. Keep OpenEnv compatibility as a secondary surface.
    - Do not make OpenEnv the core abstraction.
    - Accept OpenEnv/Gymnasium-shaped traces as compatibility evidence.
    - Keep Agent Learning-native contracts as the release bar.
 
-6. Use deterministic multi-agent engineering workflow.
+5. Use deterministic multi-agent engineering workflow.
    - Give each subagent a small, disjoint task.
    - Keep one local critical path owner.
    - Require every slice to end with focused tests, release-check impact, docs,
      and a local commit.
 
-## Next Slice: Call-Contract Eval Metrics
+## Completed Slice: Call-Contract Eval Metrics
 
-This is the recommended first slice for the next engineer. A read-only audit has
-already confirmed the gap: `ai-evaluation` can see framework runtime contracts
-and static adapter contract quality, but it does not yet score adapter
-call-contract or observed-I/O quality as first-class promoted-run metrics.
+This slice is now implemented. `ai-evaluation` can see framework runtime
+contracts, static adapter contract quality, adapter call-contract quality, and
+observed-I/O quality as separate promoted-run metrics.
 
-Add these metrics:
+Implemented metrics:
 
 - `framework_adapter_call_contract_quality`
 - `framework_adapter_observed_io_quality`
@@ -310,8 +372,8 @@ Implementation anchors:
 - `src/agent_learning/capabilities.py`
   - Add the two metric names to default metric discovery.
 - `src/agent_learning/trinity.py`
-  - Require both metrics for probe promotion, auto-discovery promotion,
-    one-call promotion, and one-call run surfaces once the metrics exist.
+  - Requires both metrics for probe promotion, auto-discovery promotion,
+    one-call promotion, and one-call run surfaces.
 
 Suggested config shape:
 
@@ -346,7 +408,7 @@ Suggested config shape:
 }
 ```
 
-Acceptance tests for this slice:
+Acceptance tests covered for this slice:
 
 - Add a focused report-metric test where a tiny runtime report with
   `metadata.environment_state.framework_runtime.invocations[0].call_contract`
@@ -358,8 +420,7 @@ Acceptance tests for this slice:
   metric blocks and weights.
 - Update release-check tests so promoted adapter-probe surfaces require both
   metrics.
-- Update `README.md` and `V1_RELEASE_ROADMAP.md` only after the metrics are
-  executable.
+- `README.md` and `V1_RELEASE_ROADMAP.md` describe the executable metric gates.
 
 ## Recommended Subagent Packets
 

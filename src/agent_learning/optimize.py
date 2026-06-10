@@ -18124,8 +18124,92 @@ def build_framework_adapter_probe_evaluation_config(
             "metric_evidence",
         ],
     }
+    callable_signature = _plain_mapping(contract.get("callable_signature"))
+    call_contract_count = max(
+        _as_int(selected_report_summary.get("call_contract_count"))
+        or _as_int(selected_report_summary.get("runtime_trace_count"))
+        or 1,
+        1,
+    )
+    observed_io_contract_count = max(
+        _as_int(selected_report_summary.get("observed_io_contract_count"))
+        or _as_int(selected_report_summary.get("runtime_trace_count"))
+        or 1,
+        1,
+    )
+    call_styles = _unique_strings(selected_report_summary.get("call_styles"))
+    input_types = _unique_strings(selected_report_summary.get("input_types"))
+    output_types = _unique_strings(selected_report_summary.get("output_types"))
+    call_contract_quality: dict[str, Any] = {
+        "kind": "agent-learning.framework-adapter-call-contract.v1",
+        "framework": framework,
+        "method": method,
+        "input_mode": input_mode,
+        "require_signature": True,
+        "require_signature_inspectable": True,
+        "require_signature_bound": True,
+        "max_error_count": 0,
+        "min_contract_count": call_contract_count,
+    }
+    if input_key:
+        call_contract_quality["input_key"] = input_key
+    if call_styles:
+        call_contract_quality["required_call_styles"] = call_styles
+    elif input_key:
+        call_contract_quality["call_style"] = "keyword"
+    if input_kwargs_keys:
+        call_contract_quality["required_input_kwargs"] = input_kwargs_keys
+    parameter_names = _unique_strings(callable_signature.get("parameter_names"))
+    if parameter_names:
+        call_contract_quality["required_parameter_names"] = parameter_names
+    keyword_only_parameters = _unique_strings(
+        callable_signature.get("keyword_only_parameters")
+    )
+    if keyword_only_parameters:
+        call_contract_quality["required_keyword_only_parameters"] = (
+            keyword_only_parameters
+        )
+
+    observed_io_quality: dict[str, Any] = {
+        "kind": "agent-learning.framework-adapter-observed-io-contract.v1",
+        "framework": framework,
+        "method": method,
+        "input_mode": input_mode,
+        "require_signature_bound": True,
+        "max_error_count": 0,
+        "min_contract_count": observed_io_contract_count,
+        "min_invocation_count": observed_io_contract_count,
+    }
+    if call_styles:
+        observed_io_quality["required_call_styles"] = call_styles
+    elif input_key:
+        observed_io_quality["required_call_styles"] = ["keyword"]
+    if input_key:
+        observed_io_quality["required_input_keys"] = [input_key]
+    if input_kwargs_keys:
+        observed_io_quality["required_input_kwargs"] = input_kwargs_keys
+    if input_types:
+        observed_io_quality["required_input_types"] = input_types
+    if output_types:
+        observed_io_quality["required_output_types"] = output_types
+    if tool_names:
+        observed_io_quality["required_output_tool_names"] = tool_names
+    observed_io_event_types = [
+        event_type
+        for event_type in event_types
+        if str(event_type).lower() != "framework_runtime"
+    ]
+    if observed_io_event_types:
+        observed_io_quality["required_output_event_types"] = observed_io_event_types
+    if artifact_types:
+        observed_io_quality["required_output_artifact_types"] = artifact_types
+    if _framework_probe_response_content_observed(selected_report):
+        observed_io_quality["require_content_observed"] = True
+
     metric_weights = {
         "framework_adapter_contract_quality": 8.0,
+        "framework_adapter_call_contract_quality": 8.0,
+        "framework_adapter_observed_io_quality": 8.0,
         "framework_runtime_contract": 10.0,
         "task_completion": 1.0,
     }
@@ -18203,6 +18287,8 @@ def build_framework_adapter_probe_evaluation_config(
             *(["artifact"] if artifact_types else []),
         ],
         "framework_runtime_contract": runtime_contract,
+        "framework_adapter_call_contract_quality": call_contract_quality,
+        "framework_adapter_observed_io_quality": observed_io_quality,
         "framework_adapter_contract_quality": contract_quality,
         "metric_weights": metric_weights,
     }
@@ -18283,6 +18369,21 @@ def _framework_probe_response_values(
         response = _plain_mapping(case_dict.get("response"))
         values.extend(str(item) for item in _plain_list(response.get(key)) if str(item))
     return values
+
+
+def _framework_probe_response_content_observed(
+    selected_report: Mapping[str, Any],
+) -> bool:
+    for case in _plain_list(selected_report.get("cases")):
+        case_dict = _plain_mapping(case)
+        response = _plain_mapping(case_dict.get("response"))
+        content = response.get("content")
+        if content not in (None, "", [], {}):
+            return True
+        content_length = _as_int(response.get("content_length"))
+        if content_length is not None and content_length > 0:
+            return True
+    return False
 
 
 def _framework_probe_first_response_mapping(

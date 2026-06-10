@@ -789,6 +789,133 @@ def test_optimize_facade_exposes_advanced_governance_surfaces():
     assert "langgraph.apply.json" in deployment.files
 
 
+def test_agent_report_scores_framework_adapter_call_contract_and_observed_io():
+    from fi.evals.metrics.agents.report import AgentReportEvaluator
+
+    call_contract = {
+        "kind": "agent-learning.framework-adapter-call-contract.v1",
+        "framework": "custom_refund_orchestrator",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "call_style": "keyword",
+        "input_key": "payload",
+        "input_kwargs_keys": [],
+        "signature": {
+            "kind": "agent-learning.framework-adapter-callable-signature.v1",
+            "inspectable": True,
+            "method": "execute_task",
+            "parameter_names": ["payload"],
+            "required_parameters": ["payload"],
+            "keyword_only_parameters": ["payload"],
+        },
+        "observed_io": {
+            "input": {"type": "dict", "key_count": 2},
+            "output": {
+                "type": "AgentResponse",
+                "content_length": 24,
+                "tool_call_count": 1,
+                "tool_names": ["framework_trace_status"],
+                "event_count": 1,
+                "event_types": ["framework_trace"],
+                "state_keys": ["framework_trace"],
+                "metadata_keys": ["framework"],
+            },
+        },
+        "signature_bound": True,
+    }
+    report = {
+        "results": [
+            {
+                "messages": [{"role": "assistant", "content": "approved refund"}],
+                "metadata": {
+                    "environment_state": {
+                        "framework_runtime": {
+                            "kind": "framework_runtime",
+                            "framework": "custom_refund_orchestrator",
+                            "summary": {"invocation_count": 1},
+                            "invocations": [
+                                {
+                                    "id": "framework_runtime_1",
+                                    "framework": "custom_refund_orchestrator",
+                                    "method": "execute_task",
+                                    "input_mode": "dict",
+                                    "input_key": "payload",
+                                    "call_style": "keyword",
+                                    "input": {"type": "dict", "key_count": 2},
+                                    "output": call_contract["observed_io"]["output"],
+                                    "call_contract": call_contract,
+                                }
+                            ],
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    config = {
+        "framework_adapter_call_contract_quality": {
+            "kind": "agent-learning.framework-adapter-call-contract.v1",
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "input_key": "payload",
+            "call_style": "keyword",
+            "require_signature": True,
+            "require_signature_inspectable": True,
+            "require_signature_bound": True,
+            "required_parameter_names": ["payload"],
+            "required_keyword_only_parameters": ["payload"],
+            "max_error_count": 0,
+            "min_contract_count": 1,
+        },
+        "framework_adapter_observed_io_quality": {
+            "kind": "agent-learning.framework-adapter-observed-io-contract.v1",
+            "framework": "custom_refund_orchestrator",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "required_call_styles": ["keyword"],
+            "required_input_keys": ["payload"],
+            "required_input_types": ["dict"],
+            "required_output_types": ["agent_response"],
+            "required_output_tool_names": ["framework_trace_status"],
+            "required_output_event_types": ["framework_trace"],
+            "require_content_observed": True,
+            "require_signature_bound": True,
+            "max_error_count": 0,
+            "min_contract_count": 1,
+            "min_invocation_count": 1,
+        },
+        "metric_weights": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+        },
+    }
+
+    evaluation = AgentReportEvaluator(config=config).evaluate(report)
+
+    assert evaluation.summary["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert evaluation.summary["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
+
+    broken_report = copy.deepcopy(report)
+    broken_call_contract = broken_report["results"][0]["metadata"][
+        "environment_state"
+    ]["framework_runtime"]["invocations"][0]["call_contract"]
+    broken_call_contract["signature_bound"] = False
+
+    broken_evaluation = AgentReportEvaluator(config=config).evaluate(broken_report)
+
+    assert broken_evaluation.summary["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] < 1.0
+    assert broken_evaluation.summary["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] < 1.0
+
+
 def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch):
     from agent_learning import optimize, simulate
 
@@ -3066,6 +3193,12 @@ def test_probe_optimization_promotes_to_framework_run_manifest(
     assert result["summary"]["metric_averages"][
         "framework_adapter_contract_quality"
     ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
     state = result["report"]["results"][0]["metadata"]["environment_state"]
     assert state["framework_runtime"]["summary"]["methods"] == ["execute_task"]
     assert state["framework_runtime"]["summary"]["input_modes"] == ["dict"]
@@ -3117,7 +3250,25 @@ def test_auto_discovery_probe_optimization_promotes_discovery_metadata():
     assert eval_config["framework_adapter_contract_quality"]["method"] == (
         "execute_task"
     )
+    assert eval_config["framework_adapter_call_contract_quality"]["method"] == (
+        "execute_task"
+    )
+    assert eval_config["framework_adapter_call_contract_quality"][
+        "require_signature_bound"
+    ] is True
+    assert eval_config["framework_adapter_observed_io_quality"]["method"] == (
+        "execute_task"
+    )
+    assert eval_config["framework_adapter_observed_io_quality"][
+        "require_signature_bound"
+    ] is True
     assert eval_config["metric_weights"]["framework_runtime_contract"] == 10.0
+    assert eval_config["metric_weights"][
+        "framework_adapter_call_contract_quality"
+    ] == 8.0
+    assert eval_config["metric_weights"][
+        "framework_adapter_observed_io_quality"
+    ] == 8.0
 
 
 def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes():
@@ -3166,6 +3317,12 @@ def test_build_framework_run_manifest_from_local_adapter_optimizes_and_promotes(
     assert manifest["evaluation"]["agent_report"]["config"][
         "framework_runtime_contract"
     ]["required_tools"] == ["framework_trace_status"]
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "framework_adapter_call_contract_quality"
+    ]["require_signature_bound"] is True
+    assert manifest["evaluation"]["agent_report"]["config"][
+        "framework_adapter_observed_io_quality"
+    ]["require_signature_bound"] is True
 
 
 def test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs(tmp_path):
@@ -3205,6 +3362,12 @@ def test_run_framework_adapter_from_local_adapter_optimizes_promotes_and_runs(tm
     assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
         pytest.approx(1.0)
     )
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
     manifest = result["framework_adapter_run_manifest"]
     assert manifest["agent"]["target"] == target
     assert manifest["agent"]["method"] == "execute_task"
@@ -23127,7 +23290,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         ] is True
         assert promoted["manifest_metadata"]["probe_proof_status"] == "passed"
         assert promoted["metric_averages"] == {
+            "framework_adapter_call_contract_quality": pytest.approx(1.0),
             "framework_adapter_contract_quality": pytest.approx(1.0),
+            "framework_adapter_observed_io_quality": pytest.approx(1.0),
             "framework_runtime_contract": pytest.approx(1.0),
             "framework_trace_coverage": pytest.approx(1.0),
             "tool_selection_accuracy": pytest.approx(1.0),

@@ -1678,6 +1678,12 @@ def test_sdk_framework_adapter_probe_promotion_example_runs(tmp_path):
     assert result["summary"]["metric_averages"][
         "framework_adapter_contract_quality"
     ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
     assert manifest["agent"]["method"] == "execute_task"
     assert manifest["agent"]["input_mode"] == "dict"
     assert manifest["agent"]["metadata"]["promoted_from_framework_adapter_probe"] is True
@@ -1712,6 +1718,12 @@ def test_sdk_framework_adapter_auto_discovery_promotion_example_runs(tmp_path):
     )
     assert result["summary"]["metric_averages"][
         "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
     ] == pytest.approx(1.0)
     assert manifest["agent"]["method"] == "execute_task"
     assert manifest["agent"]["input_mode"] == "dict"
@@ -1750,6 +1762,12 @@ def test_sdk_framework_adapter_one_call_promotion_example_runs(tmp_path):
     assert result["summary"]["metric_averages"][
         "framework_adapter_contract_quality"
     ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
     assert manifest["agent"]["method"] == "execute_task"
     assert manifest["agent"]["input_mode"] == "dict"
     assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
@@ -1783,6 +1801,12 @@ def test_sdk_framework_adapter_one_call_run_example_runs(tmp_path):
     )
     assert result["summary"]["metric_averages"][
         "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
     ] == pytest.approx(1.0)
     assert manifest == result["framework_adapter_run_manifest"]
     assert manifest["agent"]["method"] == "execute_task"

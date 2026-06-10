@@ -3393,7 +3393,9 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "require_promoted_metadata": True,
         "require_discovery": False,
         "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
             "framework_runtime_contract": 1.0,
             "framework_trace_coverage": 1.0,
             "tool_selection_accuracy": 1.0,
@@ -3410,7 +3412,9 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "require_promoted_metadata": True,
         "require_discovery": True,
         "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
             "framework_runtime_contract": 1.0,
             "framework_trace_coverage": 1.0,
             "tool_selection_accuracy": 1.0,
@@ -3427,7 +3431,9 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "require_promoted_metadata": True,
         "require_discovery": True,
         "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
             "framework_runtime_contract": 1.0,
             "framework_trace_coverage": 1.0,
             "tool_selection_accuracy": 1.0,
@@ -3444,7 +3450,9 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "require_promoted_metadata": True,
         "require_discovery": True,
         "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
             "framework_runtime_contract": 1.0,
             "framework_trace_coverage": 1.0,
             "tool_selection_accuracy": 1.0,

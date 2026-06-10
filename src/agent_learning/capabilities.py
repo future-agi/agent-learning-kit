@@ -86,6 +86,8 @@ DEFAULT_METRICS = [
     "evaluation_hook_probe_task_evidence",
     "framework_capability_coverage",
     "framework_capability_quality",
+    "framework_adapter_call_contract_quality",
+    "framework_adapter_observed_io_quality",
     "framework_adapter_probe_finding_quality",
     "framework_adapter_probe_io_contract_quality",
     "framework_adapter_probe_local_contract_quality",
