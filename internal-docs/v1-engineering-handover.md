@@ -7,9 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `eb8daba Package release handover proof plan`.
+  `d1880ef Promote protocol adapter probes`.
 - Current handoff slice:
-  MCP/A2A protocol adapter probe promotions.
+  Agent control-plane framework adapter promotion.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -41,7 +41,8 @@ What is done:
   `execute_task(dict)` workflow trace promotion, and LangGraph-style
   `execute_task(dict)` orchestration trace promotion, plus MCP
   `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
-  protocol-trace promotion.
+  protocol-trace promotion, plus Agent Learning Kit `execute_task(dict)`
+  agent trust-boundary/control-plane promotion.
 
 What is not done:
 
@@ -52,7 +53,71 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest MCP/A2A Protocol Adapter Probe Promotion Slice
+## Latest Agent Control-Plane Adapter Promotion Slice
+
+This handoff slice promotes Agent Learning Kit's own trust-boundary and runtime
+control-plane evidence through the generic framework adapter probe gate and the
+environment 10x native adapter axis.
+
+Implemented behavior:
+
+- Adds `examples/sdk_framework_adapter_agent_control_plane.py`, a local-only
+  cookbook that discovers and promotes `LocalAgentControlPlaneRuntime.execute_task`
+  as `framework=agent_learning_kit`, `input_mode=dict`, positional call style.
+- The generic framework wrapper now preserves normalized
+  `agent_trust_boundary_model` and `agent_control_plane` state, artifacts, and
+  trust/control events from arbitrary adapter outputs.
+- Framework runtime traces now advertise `control_plane` and `trust_boundary`
+  runtime signals when those states are present, allowing generated runtime
+  contracts to close at `1.0`.
+- `build_framework_adapter_probe_evaluation_config()` derives
+  trust-boundary/control-plane coverage and quality gates from selected probe
+  output summaries.
+- `agent_control_plane_promotion` in `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`
+  requires discovery/proof metadata, required state keys, runtime required-state
+  keys, trust/control event types, artifact kinds, exact metric floors, and
+  state-summary gates for required controls, zero gaps, zero unmitigated
+  high-risk threats, zero uncontained high-risk incidents, approvals, rollback,
+  budgets, containment, and audit evidence.
+- `_framework_adapter_probe_record()` now exposes sanitized generic
+  `state_summaries` plus direct `agent_trust_boundary_summary` and
+  `agent_control_plane_summary` fields. Timing fields such as `duration_ms` are
+  removed so CLI and direct release-status payloads remain deterministic.
+- `environment_10x_robustness` now counts `agent_control_plane_promotion` through
+  the native adapter promotion axis.
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
+- `agent_trust_boundary_coverage == 1.0`
+- `agent_trust_boundary_quality == 1.0`
+- `agent_control_plane_coverage == 1.0`
+- `agent_control_plane_quality == 1.0`
+
+Current slice verification:
+
+- `uv run python -m py_compile src/fi/simulate/agent/generic.py src/fi/simulate/agent/frameworks.py src/agent_learning/optimize.py src/agent_learning/trinity.py examples/sdk_framework_adapter_agent_control_plane.py tests/test_cli_examples.py tests/test_config_and_facades.py`
+  passed.
+- `uv run ruff check src/fi/simulate/agent/generic.py src/fi/simulate/agent/frameworks.py src/agent_learning/optimize.py src/agent_learning/trinity.py examples/sdk_framework_adapter_agent_control_plane.py tests/test_cli_examples.py tests/test_config_and_facades.py`
+  passed.
+- Focused agent-control-plane cookbook and behavior tests passed:
+  `2 passed, 5 warnings in 8.97s`.
+- `uv run pytest tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones -q`
+  passed: `1 passed, 8 warnings in 654.10s (0:10:54)`.
+- `git diff --check` passed.
+- `uv run ruff check .` passed.
+- Selected release-proof passed for `release_check` and `git_diff_check`, writing
+  `/tmp/agent-learning-control-plane-promotion-release-proof.json`. Its
+  `summary.ready` is `false` because non-selected checks are intentionally
+  skipped.
+- `uv run pytest -q` passed: `302 passed, 10 warnings in 1232.82s (0:20:32)`.
+
+## Previous MCP/A2A Protocol Adapter Probe Promotion Slice
 
 This handoff slice promotes the existing local MCP and A2A protocol cookbooks
 through the generic adapter-probe release gate and the environment 10x native
@@ -541,10 +606,14 @@ The release-check adapter-probe gate now runs:
 - Browser Use `execute_task(dict)` CUA trace promotion
 - LangGraph-style `execute_task(dict)` workflow trace promotion
 - LangGraph-style `execute_task(dict)` orchestration trace promotion
+- MCP `execute_task(dict)` tool-session promotion
+- A2A `send_message(dict)` protocol-trace promotion
+- Agent Learning Kit `execute_task(dict)` trust-boundary/control-plane promotion
 
 Every promoted run must preserve proof/discovery metadata and close framework
 runtime, adapter call-contract, observed-I/O, adapter-contract, framework-trace,
-tool-selection, and any trace-specific metrics required by its contract.
+tool-selection, and any trace/control/protocol-specific metrics required by its
+contract.
 
 ## Latest Environment 10x Slice
 
@@ -552,7 +621,7 @@ The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
 session promoted adapter contracts plus provider-response, Browser/CUA trace,
 workflow trace, orchestration trace, MCP tool-session, and A2A protocol-trace
-promotion.
+promotion plus Agent Learning Kit control-plane promotion.
 
 Implemented behavior:
 
@@ -563,7 +632,8 @@ Implemented behavior:
   `nested_method_promotion`, `livekit_run_session_promotion`, and
   `provider_response_promotion`, `browser_cua_trace_promotion`,
   `workflow_trace_promotion`, `orchestration_trace_promotion`,
-  `mcp_tool_session_promotion`, and `a2a_protocol_trace_promotion`.
+  `mcp_tool_session_promotion`, `a2a_protocol_trace_promotion`, and
+  `agent_control_plane_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
   mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
@@ -883,6 +953,7 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_orchestration_trace.py`
 - `examples/sdk_framework_adapter_mcp_tool_session.py`
 - `examples/sdk_framework_adapter_a2a_protocol_trace.py`
+- `examples/sdk_framework_adapter_agent_control_plane.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
@@ -890,6 +961,7 @@ Cookbooks, docs, and tests:
 - `internal-docs/framework-adapter-probe-research.md`
 - `internal-docs/framework-adapter-probe-readiness-research.md`
 - `internal-docs/environment-10x-robustness-research.md`
+- `internal-docs/agent-control-plane-readiness-research.md`
 - `internal-docs/mcp-tool-session-adapter-research.md`
 - `internal-docs/a2a-protocol-adapter-research.md`
 - `internal-docs/workflow-graph-probe-research.md`

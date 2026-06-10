@@ -479,7 +479,8 @@ Current checkpoint:
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
-  adapter-contract, trace, workflow, orchestration, protocol, and tool metrics.
+  adapter-contract, trace, workflow, orchestration, protocol, agent
+  control-plane, and tool metrics.
   The same gate now renders the
   `framework_adapter_probe` report/action card and exports the native probe
   proof, callable signature, observed I/O contract, selected probe report,
@@ -539,6 +540,12 @@ Current checkpoint:
   `a2a_protocol_trace_promotion`, so protocol state/events/artifacts, selected
   adapter discovery/proof metadata, and MCP/A2A coverage/quality metric floors
   count toward the native adapter 10x axis.
+- The Agent Learning Kit control-plane adapter cookbook is also promoted under
+  `framework_adapter_probe_readiness` as `agent_control_plane_promotion`, so
+  discovered `execute_task(dict)` proof metadata, `agent_trust_boundary_model`
+  and `agent_control_plane` state/events/artifacts, state-summary gates, and
+  trust-boundary/control-plane coverage/quality metric floors count toward the
+  native adapter 10x axis.
 - Workflow hook readiness is now an executable release-check gate:
   `examples/sdk_workflow_hook_optimization.py` must run a local authenticated
   HTTP workflow hook, select the verified authenticated hook over mocked/missing

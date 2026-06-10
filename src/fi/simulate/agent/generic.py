@@ -5,6 +5,8 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Union
 
 from fi.simulate.environment import (
+    normalize_agent_control_plane,
+    normalize_agent_trust_boundary_model,
     normalize_framework_adapter_conformance,
     normalize_framework_lifecycle_trace,
     normalize_framework_trace_events,
@@ -580,6 +582,12 @@ class GenericAgentWrapper(AgentWrapper):
         browser_state = _browser_cua_state(raw)
         if browser_state:
             state.setdefault("browser_cua", browser_state)
+        trust_boundary_state = _agent_trust_boundary_state(raw)
+        if trust_boundary_state:
+            state.setdefault("agent_trust_boundary_model", trust_boundary_state)
+        control_plane_state = _agent_control_plane_state(raw)
+        if control_plane_state:
+            state.setdefault("agent_control_plane", control_plane_state)
         return state
 
     def _extract_artifacts(self, raw: Any) -> List[SimulationArtifact]:
@@ -752,6 +760,32 @@ class GenericAgentWrapper(AgentWrapper):
                     },
                 )
             )
+        trust_boundary_state = _agent_trust_boundary_state(raw)
+        if trust_boundary_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=trust_boundary_state,
+                    metadata={
+                        "kind": "agent_trust_boundary_model",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
+        control_plane_state = _agent_control_plane_state(raw)
+        if control_plane_state:
+            artifacts.append(
+                SimulationArtifact(
+                    type="trace",
+                    role="assistant",
+                    data=control_plane_state,
+                    metadata={
+                        "kind": "agent_control_plane",
+                        "source": "generic_agent_wrapper",
+                    },
+                )
+            )
         return artifacts
 
     def _extract_events(self, raw: Any) -> List[SimulationEvent]:
@@ -775,6 +809,8 @@ class GenericAgentWrapper(AgentWrapper):
         events.extend(_framework_memory_events(raw))
         events.extend(_browser_cua_events(raw))
         events.extend(_openenv_trace_events(raw))
+        events.extend(_agent_trust_boundary_events(raw))
+        events.extend(_agent_control_plane_events(raw))
         return events
 
 
@@ -995,6 +1031,196 @@ def _provider_response_state(raw: Any) -> Dict[str, Any]:
         if value not in (None, "", [], {}):
             state[key] = value
     return state
+
+
+def _agent_trust_boundary_state(raw: Any) -> Dict[str, Any]:
+    payload = _agent_trust_boundary_payload(raw)
+    if not payload:
+        return {}
+    framework = str(
+        payload.get("framework")
+        or _agent_control_plane_framework(raw)
+        or "custom"
+    )
+    return normalize_agent_trust_boundary_model(payload, framework=framework)
+
+
+def _agent_control_plane_state(raw: Any) -> Dict[str, Any]:
+    payload = _agent_control_plane_payload(raw)
+    if not payload:
+        return {}
+    framework = str(
+        payload.get("framework")
+        or _agent_control_plane_framework(raw)
+        or "custom"
+    )
+    return normalize_agent_control_plane(payload, framework=framework)
+
+
+def _agent_trust_boundary_payload(raw: Any) -> Dict[str, Any]:
+    for key in (
+        "agent_trust_boundary_model",
+        "agent_trust_boundary",
+        "trust_boundary",
+        "trust_boundary_model",
+        "threat_model",
+    ):
+        payload = _agent_control_plane_payload_field(raw, key)
+        if payload:
+            return payload
+    return {}
+
+
+def _agent_control_plane_payload(raw: Any) -> Dict[str, Any]:
+    for key in (
+        "agent_control_plane",
+        "control_plane",
+        "runtime_governance",
+        "agency_control",
+    ):
+        payload = _agent_control_plane_payload_field(raw, key)
+        if payload:
+            return payload
+    return {}
+
+
+def _agent_control_plane_payload_field(raw: Any, key: str) -> Dict[str, Any]:
+    raw_mapping = _object_mapping(raw)
+    candidates: List[Any] = []
+    if raw_mapping is not None:
+        candidates.append(raw_mapping.get(key))
+        state = _plain_mapping(raw_mapping.get("state"))
+        candidates.append(state.get(key))
+        output = _plain_mapping(raw_mapping.get("output"))
+        candidates.append(output.get(key))
+    else:
+        candidates.append(getattr(raw, key, None))
+        state = _plain_mapping(getattr(raw, "state", None))
+        candidates.append(state.get(key))
+    for candidate in candidates:
+        payload = _plain_mapping(candidate)
+        if payload:
+            return payload
+    return {}
+
+
+def _agent_control_plane_framework(raw: Any) -> str:
+    raw_mapping = _object_mapping(raw)
+    if raw_mapping is not None:
+        metadata = _plain_mapping(raw_mapping.get("metadata"))
+        for source in (raw_mapping, metadata):
+            value = source.get("framework") or source.get("runtime")
+            if value not in (None, "", [], {}):
+                return str(value)
+    metadata = _plain_mapping(getattr(raw, "metadata", None))
+    value = metadata.get("framework") or metadata.get("runtime")
+    return str(value or "")
+
+
+def _agent_trust_boundary_events(raw: Any) -> List[SimulationEvent]:
+    state = _agent_trust_boundary_state(raw)
+    if not state:
+        return []
+    summary = _plain_mapping(state.get("summary"))
+    events = [
+        SimulationEvent(
+            type="agent_trust_boundary_ready",
+            name=str(state.get("name") or "agent_trust_boundary_ready"),
+            payload={"framework": state.get("framework"), "summary": summary},
+        ),
+        SimulationEvent(
+            type="agent_trust_boundary_status",
+            name=str(state.get("name") or "agent_trust_boundary_status"),
+            payload=summary,
+        ),
+    ]
+    if _plain_list(summary.get("gaps")):
+        events.append(
+            SimulationEvent(
+                type="agent_trust_gaps_listed",
+                name="agent_trust_gaps_listed",
+                payload={"gaps": _plain_list(summary.get("gaps"))},
+            )
+        )
+    else:
+        events.append(
+            SimulationEvent(
+                type="agent_trust_gaps_listed",
+                name="agent_trust_gaps_listed",
+                payload={"gaps": []},
+            )
+        )
+    for event_type, key in (
+        ("agent_trust_assets_listed", "assets"),
+        ("agent_trust_tools_listed", "tools"),
+        ("agent_trust_surfaces_listed", "surfaces"),
+    ):
+        events.append(
+            SimulationEvent(
+                type=event_type,
+                name=event_type,
+                payload={"items": _plain_list(state.get(key))},
+            )
+        )
+    controls = _plain_list(state.get("controls"))
+    if controls:
+        events.append(
+            SimulationEvent(
+                type="agent_trust_control_inspected",
+                name="agent_trust_control_inspected",
+                payload=_plain_mapping(controls[0]),
+            )
+        )
+    return events
+
+
+def _agent_control_plane_events(raw: Any) -> List[SimulationEvent]:
+    state = _agent_control_plane_state(raw)
+    if not state:
+        return []
+    summary = _plain_mapping(state.get("summary"))
+    events = [
+        SimulationEvent(
+            type="agent_control_plane_ready",
+            name=str(state.get("name") or "agent_control_plane_ready"),
+            payload={"framework": state.get("framework"), "summary": summary},
+        ),
+        SimulationEvent(
+            type="agent_control_plane_status",
+            name=str(state.get("name") or "agent_control_plane_status"),
+            payload=summary,
+        ),
+        SimulationEvent(
+            type="agent_control_gaps_listed",
+            name="agent_control_gaps_listed",
+            payload={"gaps": _plain_list(summary.get("gaps"))},
+        ),
+        SimulationEvent(
+            type="agent_control_actions_listed",
+            name="agent_control_actions_listed",
+            payload={"items": _plain_list(state.get("actions"))},
+        ),
+        SimulationEvent(
+            type="agent_control_budgets_listed",
+            name="agent_control_budgets_listed",
+            payload={"items": _plain_list(state.get("budgets"))},
+        ),
+        SimulationEvent(
+            type="agent_control_incidents_listed",
+            name="agent_control_incidents_listed",
+            payload={"items": _plain_list(state.get("incidents"))},
+        ),
+    ]
+    actions = _plain_list(state.get("actions"))
+    if actions:
+        events.append(
+            SimulationEvent(
+                type="agent_control_action_inspected",
+                name="agent_control_action_inspected",
+                payload=_plain_mapping(actions[0]),
+            )
+        )
+    return events
 
 
 def _provider_choices(raw: Any) -> List[Dict[str, Any]]:
@@ -7642,6 +7868,11 @@ def _framework_runtime_trace(
         signals.add("state")
     if "openenv" in response_dict.get("state_keys", []) or response_dict.get("openenv_summary"):
         signals.add("openenv")
+    state_keys = set(response_dict.get("state_keys") or [])
+    if "agent_control_plane" in state_keys:
+        signals.add("control_plane")
+    if "agent_trust_boundary_model" in state_keys:
+        signals.add("trust_boundary")
     if response_dict.get("metadata_keys"):
         signals.add("metadata")
 

@@ -1958,6 +1958,12 @@ def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
             state.get("a2a_protocol_trace")
         ),
         "openenv_summary": _probe_openenv_summary(state.get("openenv")),
+        "agent_trust_boundary_summary": _probe_agent_trust_boundary_summary(
+            state.get("agent_trust_boundary_model")
+        ),
+        "agent_control_plane_summary": _probe_agent_control_plane_summary(
+            state.get("agent_control_plane")
+        ),
         "metadata_keys": sorted(str(key) for key in metadata),
         "streaming": bool(streaming_trace or metadata.get("streaming")),
         "streaming_trace_signals": sorted(
@@ -1975,6 +1981,99 @@ def _probe_framework_lifecycle_summary(value: Any) -> dict[str, Any]:
     trace = dict(value or {}) if isinstance(value, Mapping) else {}
     summary = trace.get("summary")
     return dict(summary) if isinstance(summary, Mapping) else {}
+
+
+def _probe_agent_trust_boundary_summary(value: Any) -> dict[str, Any]:
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    summary = dict(payload.get("summary") or {}) if payload else {}
+    if not payload and not summary:
+        return {}
+    return {
+        "framework": payload.get("framework"),
+        "control_count": summary.get("control_count"),
+        "required_control_rate": summary.get("required_control_rate"),
+        "high_risk_unmitigated_count": summary.get(
+            "high_risk_unmitigated_count"
+        ),
+        "evidence_count": summary.get("evidence_count"),
+        "gaps": list(summary.get("gaps") or []),
+        "present_controls": list(summary.get("present_controls") or []),
+        "present_categories": list(summary.get("present_categories") or []),
+        "assets": [
+            str(item.get("id") or item.get("name") or "")
+            for item in _probe_mappings(payload.get("assets"))
+            if item.get("id") or item.get("name")
+        ],
+        "tools": [
+            str(item.get("id") or item.get("name") or "")
+            for item in _probe_mappings(payload.get("tools"))
+            if item.get("id") or item.get("name")
+        ],
+        "surfaces": [
+            str(item.get("id") or item.get("name") or "")
+            for item in _probe_mappings(payload.get("surfaces"))
+            if item.get("id") or item.get("name")
+        ],
+        "threats": list(summary.get("threats") or []),
+        "mitigated_threats": list(summary.get("mitigated_threats") or []),
+        "signals": list(payload.get("signals") or []),
+        "has_identity": bool(summary.get("has_identity")),
+        "has_permissions": bool(summary.get("has_permissions")),
+        "has_sandbox": bool(summary.get("has_sandbox")),
+        "has_audit": bool(summary.get("has_audit")),
+        "has_canaries": bool(summary.get("has_canaries")),
+        "has_human_approval": bool(summary.get("has_human_approval")),
+        "has_memory_isolation": bool(summary.get("has_memory_isolation")),
+        "has_network_egress_controls": bool(
+            summary.get("has_network_egress_controls")
+        ),
+        "has_tool_allowlist": bool(summary.get("has_tool_allowlist")),
+        "has_data_boundary": bool(summary.get("has_data_boundary")),
+        "has_secret_handling": bool(summary.get("has_secret_handling")),
+    }
+
+
+def _probe_agent_control_plane_summary(value: Any) -> dict[str, Any]:
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    summary = dict(payload.get("summary") or {}) if payload else {}
+    if not payload and not summary:
+        return {}
+    return {
+        "framework": payload.get("framework"),
+        "control_count": summary.get("control_count"),
+        "required_control_rate": summary.get("required_control_rate"),
+        "exceeded_budget_count": summary.get("exceeded_budget_count"),
+        "high_risk_uncontained_count": summary.get(
+            "high_risk_uncontained_count"
+        ),
+        "approval_required_action_count": summary.get(
+            "approval_required_action_count"
+        ),
+        "approved_action_count": summary.get("approved_action_count"),
+        "blocked_action_count": summary.get("blocked_action_count"),
+        "rolled_back_action_count": summary.get("rolled_back_action_count"),
+        "contained_incident_count": summary.get("contained_incident_count"),
+        "within_budget_count": summary.get("within_budget_count"),
+        "evidence_count": summary.get("evidence_count"),
+        "gaps": list(summary.get("gaps") or []),
+        "present_controls": list(summary.get("present_controls") or []),
+        "present_categories": list(summary.get("present_categories") or []),
+        "actions": list(summary.get("actions") or []),
+        "budgets": list(summary.get("budgets") or []),
+        "incidents": list(summary.get("incidents") or []),
+        "signals": list(payload.get("signals") or []),
+        "has_risk_scoring": bool(summary.get("has_risk_scoring")),
+        "has_action_policy": bool(summary.get("has_action_policy")),
+        "has_approval_gates": bool(summary.get("has_approval_gates")),
+        "has_rollback": bool(summary.get("has_rollback")),
+        "has_kill_switch": bool(summary.get("has_kill_switch")),
+        "has_circuit_breakers": bool(summary.get("has_circuit_breakers")),
+        "has_rate_limits": bool(summary.get("has_rate_limits")),
+        "has_budgets": bool(summary.get("has_budgets")),
+        "has_audit": bool(summary.get("has_audit")),
+        "has_containment": bool(summary.get("has_containment")),
+        "has_drift_detection": bool(summary.get("has_drift_detection")),
+    }
 
 
 def _probe_framework_trace_summary(value: Any) -> dict[str, Any]:

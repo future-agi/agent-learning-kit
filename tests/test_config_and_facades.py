@@ -3080,6 +3080,117 @@ def test_a2a_framework_adapter_preserves_protocol_trace(tmp_path):
     } <= set(output["event_types"])
 
 
+def test_agent_control_plane_framework_adapter_preserves_runtime_governance(tmp_path):
+    from agent_learning import simulate, trinity
+
+    shim_path = PROJECT_ROOT / "examples" / "sdk_framework_adapter_agent_control_plane.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_agent_control_plane_for_manifest_test",
+        shim_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    discovery = simulate.discover_framework_adapter(
+        "agent_learning_kit",
+        module.LocalAgentControlPlaneRuntime(),
+        target=module.TARGET,
+        method_candidates=["run", "execute_task"],
+        input_mode_candidates=["text", "dict", "agent_input"],
+        max_candidates=4,
+    )
+
+    assert discovery["status"] == "passed"
+    assert discovery["summary"]["top_method"] == "execute_task"
+    assert discovery["summary"]["top_input_mode"] == "dict"
+
+    manifest = module.build_manifest()
+    assert manifest["agent"]["framework"] == "agent_learning_kit"
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == [
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_trace",
+    ]
+    assert "control_plane" in runtime_contract["required_signals"]
+    assert set(config["required_events"]) >= {
+        *trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS,
+        "framework_runtime",
+        "framework_trace",
+        "framework_trace_span",
+    }
+
+    manifest_path = simulate.write_manifest_file(
+        manifest,
+        tmp_path / "promoted-agent-control-plane-framework-adapter-run.json",
+    )
+    result = asyncio.run(simulate.run_manifest_file(manifest_path))
+
+    assert result["status"] == "passed"
+    metrics = result["summary"]["metric_averages"]
+    for metric in (
+        "framework_runtime_contract",
+        "framework_trace_coverage",
+        "agent_trust_boundary_coverage",
+        "agent_trust_boundary_quality",
+        "agent_control_plane_coverage",
+        "agent_control_plane_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metrics[metric] == pytest.approx(1.0)
+
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert {
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(state)
+    runtime = state["framework_runtime"]
+    assert "control_plane" in runtime["signals"]
+    output = runtime["invocations"][0]["output"]
+    assert {
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_trace",
+    } <= set(output["state_keys"])
+    assert {
+        *trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS,
+        "framework_trace",
+        "framework_trace_span",
+    } <= set(output["event_types"])
+
+    trust_summary = state["agent_trust_boundary_model"]["summary"]
+    assert trust_summary["control_count"] == 11
+    assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+    assert trust_summary["high_risk_unmitigated_count"] == 0
+    assert trust_summary["gaps"] == []
+    assert trust_summary["evidence_count"] >= 20
+    for flag in trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS:
+        assert trust_summary[flag] is True
+
+    control_summary = state["agent_control_plane"]["summary"]
+    assert control_summary["control_count"] == 11
+    assert control_summary["required_control_rate"] == pytest.approx(1.0)
+    assert control_summary["approval_required_action_count"] >= 2
+    assert control_summary["blocked_action_count"] >= 1
+    assert control_summary["rolled_back_action_count"] >= 1
+    assert control_summary["contained_incident_count"] >= 1
+    assert control_summary["within_budget_count"] >= 3
+    assert control_summary["exceeded_budget_count"] == 0
+    assert control_summary["high_risk_uncontained_count"] == 0
+    assert control_summary["gaps"] == []
+    assert control_summary["evidence_count"] >= 15
+    for flag in trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS:
+        assert control_summary[flag] is True
+
+
 def test_optimize_framework_adapter_probe_resolves_local_target_when_agent_omitted():
     from agent_learning import optimize
 
@@ -22647,6 +22758,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         adapter_axis_evidence["surface_checks"]["a2a_protocol_trace_promotion"]
         is True
     )
+    assert (
+        adapter_axis_evidence["surface_checks"]["agent_control_plane_promotion"]
+        is True
+    )
     for surface in trinity.V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES:
         contract = native_adapter_contracts[surface]
         promotion = adapter_axis_evidence["promotions"][surface]
@@ -23996,6 +24111,97 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    agent_control_plane_promotion = adapter_probes["agent_control_plane_promotion"]
+    assert agent_control_plane_promotion["result_kind"] == "agent-learning.run.v1"
+    assert agent_control_plane_promotion["result_status"] == "passed"
+    assert agent_control_plane_promotion["output_roundtrip"] is True
+    assert agent_control_plane_promotion["manifest_present"] is True
+    assert agent_control_plane_promotion["manifest_agent"] == {
+        "framework": "agent_learning_kit",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert agent_control_plane_promotion["selected_probe_summary"][
+        "call_styles"
+    ] == ["positional"]
+    assert agent_control_plane_promotion["probe_proof_status"] == "passed"
+    assert agent_control_plane_promotion["probe_proof_failed_check_ids"] == []
+    assert agent_control_plane_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert agent_control_plane_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert agent_control_plane_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert agent_control_plane_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert agent_control_plane_promotion["manifest_metadata"][
+        "framework_adapter_discovery_status"
+    ] == "passed"
+    assert {
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(agent_control_plane_promotion["state_keys"])
+    assert agent_control_plane_promotion["runtime_required_state_keys"] == [
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_trace",
+    ]
+    assert {
+        *trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS,
+        "framework_runtime",
+        "framework_trace",
+        "framework_trace_span",
+    } <= set(agent_control_plane_promotion["event_types"])
+    assert {
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(agent_control_plane_promotion["artifact_kinds"])
+
+    trust_summary = agent_control_plane_promotion["agent_trust_boundary_summary"]
+    assert trust_summary["control_count"] == 11
+    assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+    assert trust_summary["high_risk_unmitigated_count"] == 0
+    assert trust_summary["gaps"] == []
+    assert trust_summary["evidence_count"] >= 20
+    for flag in trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS:
+        assert trust_summary[flag] is True
+
+    runtime_summary = agent_control_plane_promotion["agent_control_plane_summary"]
+    assert runtime_summary["control_count"] == 11
+    assert runtime_summary["required_control_rate"] == pytest.approx(1.0)
+    assert runtime_summary["approval_required_action_count"] >= 2
+    assert runtime_summary["blocked_action_count"] >= 1
+    assert runtime_summary["rolled_back_action_count"] >= 1
+    assert runtime_summary["contained_incident_count"] >= 1
+    assert runtime_summary["within_budget_count"] >= 3
+    assert runtime_summary["exceeded_budget_count"] == 0
+    assert runtime_summary["high_risk_uncontained_count"] == 0
+    assert runtime_summary["gaps"] == []
+    assert runtime_summary["evidence_count"] >= 15
+    for flag in trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS:
+        assert runtime_summary[flag] is True
+
+    assert agent_control_plane_promotion["metric_averages"] == {
+        "agent_control_plane_coverage": pytest.approx(1.0),
+        "agent_control_plane_quality": pytest.approx(1.0),
+        "agent_trust_boundary_coverage": pytest.approx(1.0),
+        "agent_trust_boundary_quality": pytest.approx(1.0),
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
@@ -24013,6 +24219,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "orchestration_trace_promotion",
         "mcp_tool_session_promotion",
         "a2a_protocol_trace_promotion",
+        "agent_control_plane_promotion",
     ):
         promoted = adapter_probes[surface]
         assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True

@@ -32,6 +32,8 @@ are promoted.
   `agent_control_plane` state through a normal `agent-learning.run.v1` report.
 - Optimization must search weak versus hardened trust-boundary/control-plane
   bundles and select the hardened `simulation.environments` patch.
+- Framework adapter promotion must also preserve the same evidence when a local
+  Agent Learning Kit runtime exposes it through `execute_task(dict)`.
 - Trust-boundary evidence must include identity, permissions, sandboxing, audit,
   canaries, human approval, memory isolation, network egress controls, tool
   allowlists, data boundaries, and secret handling.
@@ -50,3 +52,12 @@ are promoted.
 optimizer artifact, a passing direct simulation artifact, complete trust and
 control summaries, generated control-plane report events/artifacts, optimizer
 governance, and local-only output roundtrips.
+
+The same trust/control payload contract is also release-gated through
+`framework_adapter_probe_readiness` as `agent_control_plane_promotion` using
+`examples/sdk_framework_adapter_agent_control_plane.py`. That cookbook discovers
+and promotes a local `agent_learning_kit` `execute_task(dict)` adapter, requires
+`agent_trust_boundary_model`, `agent_control_plane`, `framework_runtime`, and
+`framework_trace` state, checks trust/control events and artifacts, enforces
+state-summary gates for required controls and no gaps, and closes
+`agent_trust_boundary_*` plus `agent_control_plane_*` coverage/quality metrics.

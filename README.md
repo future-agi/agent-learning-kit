@@ -706,7 +706,8 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_workflow_trace.py` and
 `examples/sdk_framework_adapter_orchestration_trace.py` and
 `examples/sdk_framework_adapter_mcp_tool_session.py` and
-`examples/sdk_framework_adapter_a2a_protocol_trace.py` for local
+`examples/sdk_framework_adapter_a2a_protocol_trace.py` and
+`examples/sdk_framework_adapter_agent_control_plane.py` for local
 target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)`,
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`,
 OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
@@ -716,7 +717,8 @@ OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
 workflow promotion with checkpoints/interrupt/replay evidence, and
 LangGraph-style orchestration promotion with supervisor/delegate trace
 evidence, plus MCP `execute_task(dict)` tool-session promotion and A2A
-`send_message(dict)` protocol-trace promotion.
+`send_message(dict)` protocol-trace promotion, plus Agent Learning Kit
+`execute_task(dict)` trust-boundary/control-plane promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -727,7 +729,8 @@ promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
 `run_session(dict)` session promotion plus provider-response promotion and
 Browser/CUA trace promotion plus LangGraph workflow and orchestration trace
-promotions plus MCP tool-session and A2A protocol-trace promotions. It requires
+promotions plus MCP tool-session and A2A protocol-trace promotions plus Agent
+Learning Kit control-plane promotion. It requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
 promotion, LiveKit session promotion, and provider-response promotion with
@@ -741,7 +744,10 @@ recovery, trace artifacts, and orchestration coverage/flow-quality metrics,
 plus MCP `execute_task(dict)` with `mcp_tool_session` state, protocol events,
 tool schemas/resources/results, and MCP coverage/quality metrics, and A2A
 `send_message(dict)` with `a2a_protocol_trace` state, protocol events,
-artifacts, terminal task state, and A2A coverage/quality metrics,
+artifacts, terminal task state, and A2A coverage/quality metrics, plus Agent
+Learning Kit `execute_task(dict)` with `agent_trust_boundary_model` and
+`agent_control_plane` state, trust/control events, artifacts, state-summary
+gates, and trust-boundary/control-plane coverage and quality metrics,
 callable-signature evidence, observed I/O contracts, passing probe proofs,
 discovery metadata where expected, promoted manifest proof metadata, and
 evaluated framework runtime, adapter call-contract, observed-I/O,
@@ -926,6 +932,19 @@ release-check` runs this cookbook locally and requires the selected
 calls/results, resources, artifacts, and passing coverage/quality metrics. The
 same cookbook is release-gated as `mcp_tool_session_promotion` in
 `framework_adapter_probe_readiness` and counts under native adapter promotion
+in `environment_10x_robustness`.
+
+Agent control-plane framework outputs normalize into owned Agent Learning
+runtime governance evidence. Local adapters can return
+`agent_trust_boundary_model` and `agent_control_plane` payloads; the generic
+wrapper promotes them to evaluator-visible state, trace artifacts, trust/control
+events, and runtime signals. Generated adapter eval configs require
+trust-boundary/control-plane coverage and quality gates, including required
+controls, no gaps, no unmitigated high-risk threats, no uncontained high-risk
+incidents, approval, rollback, budget, containment, and audit evidence. See
+`examples/sdk_framework_adapter_agent_control_plane.py`. `agent-learn
+release-check` promotes this cookbook as `agent_control_plane_promotion` in
+`framework_adapter_probe_readiness` and counts it under native adapter promotion
 in `environment_10x_robustness`.
 
 OpenEnv/Gymnasium-style framework outputs normalize into environment replay
@@ -2568,6 +2587,12 @@ artifact.
 trust-boundary/control-plane bundle, the direct simulation must emit report
 state, events, and artifacts, and both must close trust-boundary/control-plane
 coverage, quality, and tool-selection metrics.
+The same evidence can now be exercised through the BYO framework adapter path:
+`examples/sdk_framework_adapter_agent_control_plane.py` discovers and promotes a
+local `agent_learning_kit` `execute_task(dict)` adapter, emits
+`agent_trust_boundary_model` and `agent_control_plane` state, and is
+release-gated as `agent_control_plane_promotion` under
+`framework_adapter_probe_readiness` and the 10x native adapter promotion axis.
 
 The `browser_cua_optimization.json` example optimizes a browser/computer-use
 red-team harness. It verifies selector-drift recovery, refreshed screenshots,

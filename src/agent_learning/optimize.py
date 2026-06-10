@@ -18015,6 +18015,29 @@ def build_framework_adapter_probe_evaluation_config(
         if lifecycle_observed
         else {}
     )
+    trust_boundary_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "agent_trust_boundary_summary",
+    )
+    control_plane_summary = _framework_probe_first_response_mapping(
+        selected_report,
+        "agent_control_plane_summary",
+    )
+    agent_control_plane_observed = (
+        "agent_trust_boundary_model" in state_keys
+        or "agent_control_plane" in state_keys
+        or bool(trust_boundary_summary)
+        or bool(control_plane_summary)
+    )
+    agent_control_plane_requirements = (
+        _framework_probe_agent_control_plane_requirements(
+            framework,
+            trust_boundary_summary,
+            control_plane_summary,
+        )
+        if agent_control_plane_observed
+        else {}
+    )
     required_signals = _unique_strings(
         [
             "method",
@@ -18030,6 +18053,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["openenv"] if openenv_observed else []),
             *(["memory"] if memory_trace_observed else []),
             *(["browser"] if browser_cua_observed else []),
+            *(["control_plane"] if agent_control_plane_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -18053,6 +18077,11 @@ def build_framework_adapter_probe_evaluation_config(
             *(["OpenEnv environment replay evidence"] if openenv_observed else []),
             *(["memory lineage evidence"] if memory_trace_observed else []),
             *(["browser/CUA evidence"] if browser_cua_observed else []),
+            *(
+                ["agent trust-boundary and control-plane evidence"]
+                if agent_control_plane_observed
+                else []
+            ),
             *(["tool evidence"] if tool_names else []),
             *(["event evidence"] if event_types else []),
             *(["artifact evidence"] if artifact_types else []),
@@ -18253,6 +18282,11 @@ def build_framework_adapter_probe_evaluation_config(
     if lifecycle_observed:
         metric_weights["framework_lifecycle_coverage"] = 4.0
         metric_weights["framework_lifecycle_quality"] = 4.0
+    if agent_control_plane_observed:
+        metric_weights["agent_trust_boundary_coverage"] = 4.0
+        metric_weights["agent_trust_boundary_quality"] = 4.0
+        metric_weights["agent_control_plane_coverage"] = 4.0
+        metric_weights["agent_control_plane_quality"] = 4.0
 
     config = {
         "task_description": task_description
@@ -18282,6 +18316,7 @@ def build_framework_adapter_probe_evaluation_config(
             *(["openenv"] if openenv_observed else []),
             *(["memory"] if memory_trace_observed else []),
             *(["browser"] if browser_cua_observed else []),
+            *(["control_plane"] if agent_control_plane_observed else []),
             *(["tool"] if tool_names else []),
             *(["event"] if event_types else []),
             *(["artifact"] if artifact_types else []),
@@ -18355,6 +18390,19 @@ def build_framework_adapter_probe_evaluation_config(
         ]
         config["framework_lifecycle_quality"] = lifecycle_requirements[
             "framework_lifecycle_quality"
+        ]
+    if agent_control_plane_observed:
+        config["required_agent_trust_boundary"] = agent_control_plane_requirements[
+            "required_agent_trust_boundary"
+        ]
+        config["agent_trust_boundary_quality"] = agent_control_plane_requirements[
+            "agent_trust_boundary_quality"
+        ]
+        config["required_agent_control_plane"] = agent_control_plane_requirements[
+            "required_agent_control_plane"
+        ]
+        config["agent_control_plane_quality"] = agent_control_plane_requirements[
+            "agent_control_plane_quality"
         ]
     return config
 
@@ -18452,6 +18500,145 @@ def _framework_probe_lifecycle_requirements(
     return {
         "required_framework_lifecycle": _unique_strings(required_lifecycle),
         "framework_lifecycle_quality": quality,
+    }
+
+
+def _framework_probe_agent_control_plane_requirements(
+    framework: str,
+    trust_summary: Mapping[str, Any],
+    control_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    trust_summary = _plain_mapping(trust_summary)
+    control_summary = _plain_mapping(control_summary)
+    trust_controls = _unique_strings(trust_summary.get("present_controls"))
+    trust_categories = _unique_strings(trust_summary.get("present_categories"))
+    trust_assets = _unique_strings(trust_summary.get("assets"))
+    trust_tools = _unique_strings(trust_summary.get("tools"))
+    trust_surfaces = _unique_strings(trust_summary.get("surfaces"))
+    trust_threats = _unique_strings(
+        trust_summary.get("mitigated_threats") or trust_summary.get("threats")
+    )
+    control_controls = _unique_strings(control_summary.get("present_controls"))
+    control_categories = _unique_strings(control_summary.get("present_categories"))
+    control_actions = _unique_strings(control_summary.get("actions"))
+    control_budgets = _unique_strings(control_summary.get("budgets"))
+
+    trust_quality: dict[str, Any] = {
+        "framework": framework,
+        "required_controls": trust_controls,
+        "required_categories": trust_categories,
+        "required_assets": trust_assets,
+        "required_tools": trust_tools,
+        "required_surfaces": trust_surfaces,
+        "required_threats": trust_threats,
+        "min_present_controls": max(_as_int(trust_summary.get("control_count")), 1),
+        "min_control_rate": 1.0,
+        "min_required_control_rate": 1.0,
+        "max_missing_controls": 0,
+        "max_blocked_controls": 0,
+        "max_unmitigated_threats": 0,
+        "max_high_risk_unmitigated_threats": _as_int(
+            trust_summary.get("high_risk_unmitigated_count")
+        ),
+        "require_evidence": _as_int(trust_summary.get("evidence_count")) > 0,
+        "forbidden_missing_controls": trust_controls,
+    }
+    for config_key, summary_key in (
+        ("require_identity", "has_identity"),
+        ("require_permissions", "has_permissions"),
+        ("require_sandbox", "has_sandbox"),
+        ("require_audit", "has_audit"),
+        ("require_canaries", "has_canaries"),
+        ("require_human_approval", "has_human_approval"),
+        ("require_memory_isolation", "has_memory_isolation"),
+        ("require_network_egress_controls", "has_network_egress_controls"),
+        ("require_tool_allowlist", "has_tool_allowlist"),
+        ("require_data_boundary", "has_data_boundary"),
+        ("require_secret_handling", "has_secret_handling"),
+    ):
+        if trust_summary.get(summary_key):
+            trust_quality[config_key] = True
+
+    control_quality: dict[str, Any] = {
+        "framework": framework,
+        "required_controls": control_controls,
+        "required_categories": control_categories,
+        "required_actions": control_actions,
+        "required_budgets": control_budgets,
+        "min_present_controls": max(_as_int(control_summary.get("control_count")), 1),
+        "min_control_rate": 1.0,
+        "min_required_control_rate": 1.0,
+        "max_missing_controls": 0,
+        "max_blocked_controls": 0,
+        "max_exceeded_budgets": _as_int(
+            control_summary.get("exceeded_budget_count")
+        ),
+        "max_uncontained_incidents": _as_int(
+            control_summary.get("high_risk_uncontained_count")
+        ),
+        "max_high_risk_uncontained_incidents": _as_int(
+            control_summary.get("high_risk_uncontained_count")
+        ),
+        "min_approved_actions": _as_int(control_summary.get("approved_action_count")),
+        "min_rollback_actions": _as_int(
+            control_summary.get("rolled_back_action_count")
+        ),
+        "require_evidence": _as_int(control_summary.get("evidence_count")) > 0,
+        "forbidden_missing_controls": control_controls,
+    }
+    for config_key, summary_key in (
+        ("require_risk_scoring", "has_risk_scoring"),
+        ("require_action_policy", "has_action_policy"),
+        ("require_approval_gates", "has_approval_gates"),
+        ("require_rollback", "has_rollback"),
+        ("require_kill_switch", "has_kill_switch"),
+        ("require_circuit_breakers", "has_circuit_breakers"),
+        ("require_rate_limits", "has_rate_limits"),
+        ("require_budgets", "has_budgets"),
+        ("require_audit", "has_audit"),
+        ("require_containment", "has_containment"),
+        ("require_drift_detection", "has_drift_detection"),
+    ):
+        if control_summary.get(summary_key):
+            control_quality[config_key] = True
+
+    return {
+        "required_agent_trust_boundary": _unique_strings(
+            [
+                "agent_trust_boundary",
+                "trust_boundary",
+                "threat_model",
+                *trust_controls,
+                *trust_categories,
+                *trust_assets,
+                *trust_tools,
+                *trust_surfaces,
+                *trust_threats,
+                *_plain_list(trust_summary.get("signals")),
+            ]
+        ),
+        "agent_trust_boundary_quality": {
+            key: value
+            for key, value in trust_quality.items()
+            if value not in (None, "", [], {})
+        },
+        "required_agent_control_plane": _unique_strings(
+            [
+                "agent_control_plane",
+                "control_plane",
+                "runtime_governance",
+                *control_controls,
+                *control_categories,
+                *control_actions,
+                *control_budgets,
+                *_plain_list(control_summary.get("signals")),
+            ]
+        ),
+        "agent_control_plane_quality": {
+            key: value
+            for key, value in control_quality.items()
+            if value not in (None, "", [], {})
+        },
     }
 
 

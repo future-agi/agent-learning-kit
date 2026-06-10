@@ -2662,6 +2662,7 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "orchestration_trace_promotion",
     "mcp_tool_session_promotion",
     "a2a_protocol_trace_promotion",
+    "agent_control_plane_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3508,6 +3509,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_orchestration_trace.py",
     "examples/sdk_framework_adapter_mcp_tool_session.py",
     "examples/sdk_framework_adapter_a2a_protocol_trace.py",
+    "examples/sdk_framework_adapter_agent_control_plane.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3941,6 +3943,122 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "min_metrics": {
             "a2a_protocol_coverage": 1.0,
             "a2a_protocol_quality": 1.0,
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "agent_control_plane_promotion",
+        "path": "examples/sdk_framework_adapter_agent_control_plane.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "agent_learning_kit",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "expected_call_style": "positional",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "required_state_keys": [
+            "agent_control_plane",
+            "agent_trust_boundary_model",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "required_runtime_state_keys": [
+            "agent_control_plane",
+            "agent_trust_boundary_model",
+            "framework_trace",
+        ],
+        "required_events": [
+            "agent_control_action_inspected",
+            "agent_control_actions_listed",
+            "agent_control_budgets_listed",
+            "agent_control_gaps_listed",
+            "agent_control_incidents_listed",
+            "agent_control_plane_ready",
+            "agent_control_plane_status",
+            "agent_trust_assets_listed",
+            "agent_trust_boundary_ready",
+            "agent_trust_boundary_status",
+            "agent_trust_control_inspected",
+            "agent_trust_gaps_listed",
+            "agent_trust_surfaces_listed",
+            "agent_trust_tools_listed",
+            "framework_runtime",
+            "framework_trace",
+            "framework_trace_span",
+        ],
+        "required_artifact_kinds": [
+            "agent_control_plane",
+            "agent_trust_boundary_model",
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "state_summary_minimums": {
+            "agent_trust_boundary_model": {
+                "control_count": 11,
+                "evidence_count": 20,
+                "required_control_rate": 1.0,
+            },
+            "agent_control_plane": {
+                "approval_required_action_count": 2,
+                "blocked_action_count": 1,
+                "contained_incident_count": 1,
+                "control_count": 11,
+                "evidence_count": 15,
+                "required_control_rate": 1.0,
+                "rolled_back_action_count": 1,
+                "within_budget_count": 3,
+            },
+        },
+        "state_summary_maximums": {
+            "agent_trust_boundary_model": {
+                "high_risk_unmitigated_count": 0,
+            },
+            "agent_control_plane": {
+                "exceeded_budget_count": 0,
+                "high_risk_uncontained_count": 0,
+            },
+        },
+        "state_summary_equals": {
+            "agent_trust_boundary_model": {
+                "gaps": [],
+                "has_audit": True,
+                "has_canaries": True,
+                "has_data_boundary": True,
+                "has_human_approval": True,
+                "has_identity": True,
+                "has_memory_isolation": True,
+                "has_network_egress_controls": True,
+                "has_permissions": True,
+                "has_sandbox": True,
+                "has_secret_handling": True,
+                "has_tool_allowlist": True,
+            },
+            "agent_control_plane": {
+                "gaps": [],
+                "has_action_policy": True,
+                "has_approval_gates": True,
+                "has_audit": True,
+                "has_budgets": True,
+                "has_circuit_breakers": True,
+                "has_containment": True,
+                "has_drift_detection": True,
+                "has_kill_switch": True,
+                "has_rate_limits": True,
+                "has_risk_scoring": True,
+                "has_rollback": True,
+            },
+        },
+        "min_metrics": {
+            "agent_control_plane_coverage": 1.0,
+            "agent_control_plane_quality": 1.0,
+            "agent_trust_boundary_coverage": 1.0,
+            "agent_trust_boundary_quality": 1.0,
             "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,
             "framework_adapter_observed_io_quality": 1.0,
@@ -34215,6 +34333,11 @@ def _framework_adapter_probe_record(
     case = _as_mapping(cases[0]) if cases else {}
     case_metadata = _as_mapping(case.get("metadata"))
     environment_state = _as_mapping(case_metadata.get("environment_state"))
+    state_summaries = {
+        str(key): summary
+        for key, value in environment_state.items()
+        if (summary := _framework_adapter_probe_state_summary(value))
+    }
     state_key = contract.get("state_key")
     protocol_state = (
         _as_mapping(environment_state.get(str(state_key)))
@@ -34323,6 +34446,11 @@ def _framework_adapter_probe_record(
         "event_types": event_types,
         "artifact_kinds": artifact_kinds,
         "protocol_summary": protocol_summary,
+        "state_summaries": state_summaries,
+        "agent_trust_boundary_summary": state_summaries.get(
+            "agent_trust_boundary_model", {}
+        ),
+        "agent_control_plane_summary": state_summaries.get("agent_control_plane", {}),
         "probe_proof_status": proof.get("status"),
         "probe_proof_failed_check_ids": list(proof.get("failed_check_ids") or []),
         "probe_proof_check_ids": [
@@ -34466,6 +34594,27 @@ def _framework_adapter_probe_record(
         "metric_averages": {
             str(metric): metric_averages.get(metric) for metric in expected_metrics
         },
+    }
+
+
+def _framework_adapter_probe_state_summary(value: Any) -> dict[str, Any]:
+    summary = _as_mapping(_as_mapping(value).get("summary"))
+    if not summary:
+        return {}
+    volatile_fields = {
+        "created_at",
+        "duration_ms",
+        "duration_seconds",
+        "ended_at",
+        "latency_ms",
+        "started_at",
+        "timestamp",
+        "updated_at",
+    }
+    return {
+        str(key): item
+        for key, item in summary.items()
+        if str(key) not in volatile_fields
     }
 
 
@@ -34650,6 +34799,77 @@ def _append_framework_adapter_probe_errors(
                     "missing": missing_values,
                 }
             )
+
+    state_summaries = _as_mapping(record.get("state_summaries"))
+    for state_key, field_minimums in _as_mapping(
+        contract.get("state_summary_minimums")
+    ).items():
+        state_summary = _as_mapping(state_summaries.get(str(state_key)))
+        for field, minimum in _as_mapping(field_minimums).items():
+            observed = _release_path_value(state_summary, str(field))
+            if _float_or_zero(observed) < float(minimum):
+                contract_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": f"state_summaries.{state_key}.{field}",
+                        "expected": f">={minimum}",
+                        "observed": observed,
+                    }
+                )
+    for state_key, field_maximums in _as_mapping(
+        contract.get("state_summary_maximums")
+    ).items():
+        state_summary = _as_mapping(state_summaries.get(str(state_key)))
+        for field, maximum in _as_mapping(field_maximums).items():
+            observed = _release_path_value(state_summary, str(field))
+            if _float_or_zero(observed) > float(maximum):
+                contract_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": f"state_summaries.{state_key}.{field}",
+                        "expected": f"<={maximum}",
+                        "observed": observed,
+                    }
+                )
+    for state_key, field_values in _as_mapping(
+        contract.get("state_summary_equals")
+    ).items():
+        state_summary = _as_mapping(state_summaries.get(str(state_key)))
+        for field, expected in _as_mapping(field_values).items():
+            observed = _release_path_value(state_summary, str(field))
+            if observed != expected:
+                contract_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": f"state_summaries.{state_key}.{field}",
+                        "expected": expected,
+                        "observed": observed,
+                    }
+                )
+    for state_key, field_values in _as_mapping(
+        contract.get("state_summary_contains")
+    ).items():
+        state_summary = _as_mapping(state_summaries.get(str(state_key)))
+        for field, required_values in _as_mapping(field_values).items():
+            observed = _release_path_value(state_summary, str(field))
+            missing_values = _release_missing_contains_items(
+                observed,
+                _as_list(required_values),
+            )
+            if missing_values:
+                contract_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": f"state_summaries.{state_key}.{field}",
+                        "required": list(required_values),
+                        "observed": observed,
+                        "missing": missing_values,
+                    }
+                )
 
     for summary_field, contract_field in (
         ("runtime_trace_count", "min_runtime_trace_count"),

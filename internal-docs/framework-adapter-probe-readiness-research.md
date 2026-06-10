@@ -36,16 +36,23 @@ provider-response promotion with required provider kwargs and normalized
 `provider_response` state plus Browser Use `execute_task(dict)` CUA trace
 promotion plus LangGraph `execute_task(dict)` workflow and orchestration trace
 promotions plus MCP `execute_task(dict)` tool-session promotion and A2A
-`send_message(dict)` protocol-trace promotion, callable
+`send_message(dict)` protocol-trace promotion plus Agent Learning Kit
+`execute_task(dict)` agent control-plane promotion, callable
 signatures to be inspectable, observed I/O contracts and call contracts to cover
 the selected probe cases, discovery to be used where expected, probe proofs to
 pass, promoted manifests to carry proof/discovery metadata, and evaluated runs
 to close framework runtime, adapter call-contract, observed-I/O,
 adapter-contract, framework-trace, workflow, orchestration, protocol, and
-tool-selection metrics. The MCP/A2A promotions additionally require protocol
-state keys, runtime required-state keys, event types, artifact kinds, summary
-counts, and summary membership evidence so protocol semantics cannot regress
-behind passing metric averages.
+agent control-plane, and tool-selection metrics. The MCP/A2A promotions
+additionally require protocol state keys, runtime required-state keys, event
+types, artifact kinds, summary counts, and summary membership evidence so
+protocol semantics cannot regress behind passing metric averages. The
+`agent_control_plane_promotion` contract similarly requires
+`agent_trust_boundary_model` and `agent_control_plane` state keys, runtime
+required-state keys, trust/control event types, artifact kinds, no summary gaps,
+required control rates of 1.0, no unmitigated high-risk threats, no uncontained
+high-risk incidents, and explicit approval, rollback, budget, containment, and
+audit evidence.
 
 The optimization surfaces also render a first-class `framework_adapter_probe`
 report/action card. Release-check verifies that the card is local-only,

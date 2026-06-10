@@ -62,10 +62,12 @@ outputs and requires at least ten independent axes to pass:
   Use `execute_task(dict)` CUA trace adapters plus LangGraph
   `execute_task(dict)` workflow/orchestration trace adapters plus MCP
   `execute_task(dict)` tool-session adapters and A2A `send_message(dict)`
-  protocol-trace adapters into normal `agent-learning.run.v1` artifacts with
-  proof metadata, discovery evidence where required, adapter call-contract
-  metrics, observed-I/O metrics, protocol evidence, and framework
-  runtime/trace/workflow/orchestration/tool metric floors.
+  protocol-trace adapters plus Agent Learning Kit `execute_task(dict)`
+  trust-boundary/control-plane adapters into normal `agent-learning.run.v1`
+  artifacts with proof metadata, discovery evidence where required, adapter
+  call-contract metrics, observed-I/O metrics, protocol evidence, agent
+  control-plane evidence, and framework runtime/trace/workflow/orchestration/tool
+  metric floors.
 - `protocol_tool_routing`: MCP and A2A adapters preserve protocol state,
   events, artifacts, and tool/task records.
 - `browser_cua_resilience`: browser/CUA probes prove DOM/screenshot grounding,

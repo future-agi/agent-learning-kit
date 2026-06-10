@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_learning import actions
+from agent_learning import actions, trinity
 from agent_learning.cli import main
 
 
@@ -3512,6 +3512,100 @@ def test_sdk_framework_adapter_a2a_protocol_trace_example_runs(tmp_path):
         "a2a_artifact",
         "a2a_protocol_trace",
     } <= set(output["event_types"])
+
+
+def test_sdk_framework_adapter_agent_control_plane_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_agent_control_plane.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_agent_control_plane",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-agent-control-plane.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    manifest = result["framework_adapter_agent_control_plane_manifest"]
+    assert manifest["agent"]["framework"] == "agent_learning_kit"
+    assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    assert manifest["agent"]["metadata"]["framework_adapter_discovery_used"] is True
+    config = manifest["evaluation"]["agent_report"]["config"]
+    runtime_contract = config["framework_runtime_contract"]
+    assert runtime_contract["required_state_keys"] == [
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_trace",
+    ]
+    assert "control_plane" in runtime_contract["required_signals"]
+    assert {
+        *trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS,
+        "framework_runtime",
+        "framework_trace",
+        "framework_trace_span",
+    } <= set(config["required_events"])
+
+    metric_averages = result["summary"]["metric_averages"]
+    for metric in (
+        "framework_adapter_call_contract_quality",
+        "framework_adapter_contract_quality",
+        "framework_adapter_observed_io_quality",
+        "framework_runtime_contract",
+        "framework_trace_coverage",
+        "agent_trust_boundary_coverage",
+        "agent_trust_boundary_quality",
+        "agent_control_plane_coverage",
+        "agent_control_plane_quality",
+        "tool_selection_accuracy",
+    ):
+        assert metric_averages[metric] == pytest.approx(1.0)
+
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    assert {
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_runtime",
+        "framework_trace",
+    } <= set(state)
+    runtime = state["framework_runtime"]
+    assert "control_plane" in runtime["signals"]
+    output = runtime["invocations"][0]["output"]
+    assert {
+        "agent_control_plane",
+        "agent_trust_boundary_model",
+        "framework_trace",
+    } <= set(output["state_keys"])
+    assert {"trace"} <= set(output["artifact_types"])
+
+    trust_summary = state["agent_trust_boundary_model"]["summary"]
+    assert trust_summary["control_count"] == 11
+    assert trust_summary["required_control_rate"] == pytest.approx(1.0)
+    assert trust_summary["high_risk_unmitigated_count"] == 0
+    assert trust_summary["gaps"] == []
+    for flag in trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS:
+        assert trust_summary[flag] is True
+
+    control_summary = state["agent_control_plane"]["summary"]
+    assert control_summary["control_count"] == 11
+    assert control_summary["required_control_rate"] == pytest.approx(1.0)
+    assert control_summary["approval_required_action_count"] >= 2
+    assert control_summary["blocked_action_count"] >= 1
+    assert control_summary["rolled_back_action_count"] >= 1
+    assert control_summary["contained_incident_count"] >= 1
+    assert control_summary["within_budget_count"] >= 3
+    assert control_summary["exceeded_budget_count"] == 0
+    assert control_summary["high_risk_uncontained_count"] == 0
+    assert control_summary["gaps"] == []
+    for flag in trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS:
+        assert control_summary[flag] is True
 
 
 def test_sdk_memory_layer_probe_optimization_example_runs(tmp_path):
