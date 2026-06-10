@@ -1,5 +1,39 @@
 # V1 Engineering Handover
 
+## Start Here
+
+Hand this document to the next engineer as the entry point.
+
+Current handoff snapshot:
+
+- Date: 2026-06-10.
+- Branch observed during handoff: `main`.
+- Latest verified commit: `34373fd Gate adapter probe signature IO contracts`.
+- Local worktree status observed during handoff: clean except unrelated
+  untracked `uv.lock`.
+- Full v1 is not done. Do not communicate v1 completion from this handoff.
+- Latest verified slice: BYO-framework adapter probes now close deterministic
+  callable-signature and observed input/output contracts.
+
+First commands for a new engineer:
+
+```bash
+git status --short
+git log --oneline -8
+uv run ruff check .
+git diff --check
+uv run python -m agent_learning.cli release-check --project-root . --quiet
+```
+
+If the engineer needs the full release-cut proof, run:
+
+```bash
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --output /tmp/agent-learning-release-proof.json \
+  --quiet
+```
+
 ## Current Status
 
 This repository is moving toward the v1 goal of making the Agent Learning
@@ -56,6 +90,9 @@ Important boundary:
 - The product bar remains Agent Learning-native: local-first simulation,
   deterministic adapter contracts, optimizer proof, and evaluation gates.
 - There is no direct OpenEnv package dependency in the current checked state.
+- Keep repeating this check before release: OpenEnv compatibility is allowed,
+  but OpenEnv should not become the core abstraction, dependency, or product
+  positioning.
 
 ## Key Files
 
@@ -240,6 +277,174 @@ Recommended next slices, in order:
    - Require every slice to end with focused tests, release-check impact, docs,
      and a local commit.
 
+## Next Slice: Call-Contract Eval Metrics
+
+This is the recommended first slice for the next engineer. A read-only audit has
+already confirmed the gap: `ai-evaluation` can see framework runtime contracts
+and static adapter contract quality, but it does not yet score adapter
+call-contract or observed-I/O quality as first-class promoted-run metrics.
+
+Add these metrics:
+
+- `framework_adapter_call_contract_quality`
+- `framework_adapter_observed_io_quality`
+
+Do not add this evidence to `framework_adapter_contract_quality`. That metric
+must stay focused on static adapter-contract quality.
+
+Implementation anchors:
+
+- `src/fi/evals/metrics/agents/report.py`
+  - Add config fields on `AgentReportEvalConfig`.
+  - Wire metric creation near the current `framework_runtime_contract` and
+    `framework_adapter_contract_quality` metrics.
+  - Extract runtime invocation `call_contract` entries from existing
+    framework-runtime payloads.
+  - Extract probe `observed_io_contract` entries from framework-probe payloads
+    when present.
+- `src/agent_learning/optimize.py`
+  - Update `build_framework_adapter_probe_evaluation_config()` so promoted
+    adapter-probe run manifests include both metric config blocks.
+  - Add both metric weights; use `8.0` unless a later calibration changes the
+    adapter-probe weighting scheme.
+- `src/agent_learning/capabilities.py`
+  - Add the two metric names to default metric discovery.
+- `src/agent_learning/trinity.py`
+  - Require both metrics for probe promotion, auto-discovery promotion,
+    one-call promotion, and one-call run surfaces once the metrics exist.
+
+Suggested config shape:
+
+```json
+{
+  "framework_adapter_call_contract_quality": {
+    "framework": "custom_refund_orchestrator",
+    "method": "execute_task",
+    "input_mode": "dict",
+    "call_style": "keyword",
+    "input_key": "payload",
+    "require_signature_inspectable": true,
+    "require_signature_bound": true,
+    "required_parameter_names": ["payload"],
+    "required_keyword_only_parameters": ["payload"],
+    "max_error_count": 0,
+    "min_contract_count": 1
+  },
+  "framework_adapter_observed_io_quality": {
+    "framework": "custom_refund_orchestrator",
+    "method": "execute_task",
+    "input_mode": "dict",
+    "required_call_styles": ["keyword"],
+    "required_input_keys": ["payload"],
+    "required_input_types": ["dict"],
+    "required_output_types": ["agent_response"],
+    "require_content_observed": true,
+    "require_signature_bound": true,
+    "min_contract_count": 1,
+    "min_invocation_count": 1
+  }
+}
+```
+
+Acceptance tests for this slice:
+
+- Add a focused report-metric test where a tiny runtime report with
+  `metadata.environment_state.framework_runtime.invocations[0].call_contract`
+  scores both metrics at `1.0`, then mutating `signature_bound` or `input_key`
+  lowers the relevant score.
+- Update probe-promotion tests so promoted runs assert both new metric averages
+  are `1.0`.
+- Update auto-discovery promotion tests so generated config includes both
+  metric blocks and weights.
+- Update release-check tests so promoted adapter-probe surfaces require both
+  metrics.
+- Update `README.md` and `V1_RELEASE_ROADMAP.md` only after the metrics are
+  executable.
+
+## Recommended Subagent Packets
+
+Use subagents for narrow audits or isolated implementation plans. Keep one
+engineer as the integration owner who applies patches, runs tests, resolves
+conflicts, and commits.
+
+Subagent A: evaluation metric implementation audit.
+
+- Goal: add first-class `ai-evaluation` metrics for framework adapter call
+  contracts and observed I/O quality.
+- Files to inspect first:
+  - `src/fi/evals/metrics/agents/report.py`
+  - `src/agent_learning/optimize.py`
+  - `src/agent_learning/capabilities.py`
+  - `tests/test_config_and_facades.py`
+  - `tests/test_cli_examples.py`
+- Expected output:
+  - Exact field names and helper insertion points.
+  - Focused tests that prove the metrics score `1.0` on promoted probe runs.
+  - Failure-mode tests where missing signature or observed I/O lowers score.
+- Constraints:
+  - Do not expand `framework_adapter_contract_quality` to cover this evidence.
+  - Keep `framework_adapter_call_contract_quality` and
+    `framework_adapter_observed_io_quality` separate metrics.
+
+Subagent B: promoted-manifest release gate audit.
+
+- Goal: make probe-promoted run manifests fail closed when call-contract or
+  observed-I/O evidence disappears.
+- Files to inspect first:
+  - `src/agent_learning/trinity.py`
+  - `src/agent_learning/optimize.py`
+  - `tests/test_config_and_facades.py`
+- Expected output:
+  - Required metric weights for probe promotion, auto-discovery promotion,
+    one-call promotion, and one-call run surfaces.
+  - Exact release-check assertions that need to change.
+  - A minimal targeted test command list.
+
+Subagent C: arbitrary-framework cookbook expansion.
+
+- Goal: expand BYO-framework evidence beyond the current `execute_task(dict)`
+  path.
+- Candidate cookbooks:
+  - LangChain/LangGraph-style `invoke` and `ainvoke`.
+  - Provider-style nested methods such as `chat.completions.create`.
+  - LiveKit/Pipecat voice or frame-shaped adapters.
+  - Browser/CUA adapter probe variants.
+- Expected output:
+  - One cookbook at a time.
+  - One deterministic local fixture per cookbook.
+  - Generated report/action evidence and release-check impact.
+
+Subagent D: OpenEnv compatibility boundary audit.
+
+- Goal: prevent accidental dependency or positioning drift.
+- Files to inspect first:
+  - `pyproject.toml`
+  - `typescript/agent-learning-kit/package.json`
+  - `README.md`
+  - `V1_RELEASE_ROADMAP.md`
+  - `internal-docs/*openenv*`
+- Expected output:
+  - Confirm no package dependency was introduced.
+  - Confirm docs say OpenEnv/Gymnasium are compatibility inputs only.
+  - Confirm Agent Learning-native contracts remain the primary release bar.
+
+## Deterministic Slice Workflow
+
+For each engineering slice:
+
+1. Define one small target and its expected release-check impact.
+2. Assign read-only audit tasks to subagents before implementation.
+3. Let the integration owner make the code changes.
+4. Run focused tests for the touched behavior.
+5. Run `uv run ruff check .` and `git diff --check`.
+6. Run `agent-learn release-check --project-root . --quiet`.
+7. Update docs in the same commit when behavior or release status changes.
+8. Commit locally with a message that names the proof surface.
+
+Do not merge a slice that only updates roadmap language. Every robustness or
+10x claim should map to executable local evidence, metrics, and release-check
+status.
+
 ## Release Discipline
 
 Before merging or handing a slice to another engineer:
@@ -287,4 +492,3 @@ Do not mark v1 complete until current evidence proves all of these:
 - Reports/actions expose proof artifacts that engineering and product surfaces
   can inspect or export.
 - OpenEnv compatibility remains compatibility, not product ownership.
-
