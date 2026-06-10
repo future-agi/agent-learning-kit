@@ -461,11 +461,12 @@ Current checkpoint:
 - Framework adapter probe readiness is now an executable release-check gate:
   the raw probe, discovery, probe-optimization, auto-discovery optimization,
   explicit promotion, auto-discovery promotion, one-call promotion, and one-call
-  run SDK cookbooks must run locally, select `execute_task(dict)`, pass native
-  probe proofs, prove deterministic callable signature plus observed I/O
-  contracts, preserve proof/discovery metadata in promoted manifests, and close
-  framework runtime, adapter call-contract, observed-I/O, adapter-contract,
-  trace, and tool metrics. The same gate now renders the
+  run SDK cookbooks must run locally, prove custom `execute_task(dict)` plus
+  LangGraph-style `ainvoke(dict)` promotion, pass native probe proofs, prove
+  deterministic callable signature plus observed I/O contracts, preserve
+  proof/discovery metadata in promoted manifests, and close framework runtime,
+  adapter call-contract, observed-I/O, adapter-contract, trace, and tool
+  metrics. The same gate now renders the
   `framework_adapter_probe` report/action card and exports the native probe
   proof, callable signature, observed I/O contract, selected probe report,
   contract, and replay lock through report/action artifacts.

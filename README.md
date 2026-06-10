@@ -687,18 +687,21 @@ adapter discovery when candidates are omitted, optimizes the adapter probe,
 promotes the selected method/input mode, and attaches generated eval gates in
 one call before you run the manifest. It can start from a live object/factory
 or from the same local `target` string the promoted manifest will run. See
-`examples/sdk_framework_adapter_one_call_promotion.py` for the full local
-target-to-evaluated-run flow.
+`examples/sdk_framework_adapter_one_call_promotion.py` and
+`examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py` for local
+target-to-evaluated-run flows, including a LangGraph-style `ainvoke(dict)`
+promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
 probe optimization, auto-discovery optimization, explicit promotion,
-auto-discovery promotion, one-call promotion, and one-call run cookbooks. It
-requires `execute_task(dict)` selection, callable-signature evidence, observed
-I/O contracts, passing probe proofs, discovery metadata where expected,
-promoted manifest proof metadata, and evaluated framework runtime,
-adapter call-contract, observed-I/O, adapter-contract, framework-trace, and
-tool metrics. Probe optimization artifacts also render a
+auto-discovery promotion, one-call promotion, one-call run, and LangGraph
+`ainvoke(dict)` promotion cookbooks. It requires custom `execute_task(dict)`
+coverage plus LangGraph `ainvoke(dict)` promotion, callable-signature evidence,
+observed I/O contracts, passing probe proofs, discovery metadata where expected,
+promoted manifest proof metadata, and evaluated framework runtime, adapter
+call-contract, observed-I/O, adapter-contract, framework-trace, and tool
+metrics. Probe optimization artifacts also render a
 `framework_adapter_probe` report/action card with exportable proof, selected
 probe report, contract, callable signature, observed I/O contract, and
 replay-lock artifacts.
