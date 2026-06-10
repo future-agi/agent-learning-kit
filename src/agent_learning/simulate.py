@@ -33,6 +33,8 @@ _FI_SIMULATE_EXPORT_NAMES = (
     "FrameworkAdapterSpec",
     "browser_cua_contract",
     "discover_framework_adapter",
+    "framework_adapter_capability_profile",
+    "framework_adapter_capability_profiles",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
     "memory_layer_contract",
@@ -5673,6 +5675,14 @@ def framework_adapter_contract(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract(*args, **kwargs)
 
 
+def framework_adapter_capability_profile(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().framework_adapter_capability_profile(*args, **kwargs)
+
+
+def framework_adapter_capability_profiles(*args: Any, **kwargs: Any) -> Any:
+    return _simulate().framework_adapter_capability_profiles(*args, **kwargs)
+
+
 def framework_adapter_contract_matrix(*args: Any, **kwargs: Any) -> Any:
     return _simulate().framework_adapter_contract_matrix(*args, **kwargs)
 
@@ -9688,6 +9698,8 @@ __all__ = [
     "create_baseline_file",
     "detect_manifest_command",
     "evaluate_manifest_report",
+    "framework_adapter_capability_profile",
+    "framework_adapter_capability_profiles",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",
     "harness_trajectory_replay_artifact",

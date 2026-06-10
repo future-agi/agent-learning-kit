@@ -6948,6 +6948,11 @@ def _framework_adapter_matrix_proof(
     matrix = _framework_adapter_matrix_from_environments(environments)
     report_matrix = _framework_adapter_matrix_from_trace(report_trace)
     matrix_summary = _plain_mapping(matrix.get("summary"))
+    matrix_profiles = [
+        _plain_mapping(profile)
+        for profile in _plain_list(matrix.get("profiles"))
+        if _plain_mapping(profile)
+    ]
     source_manifest = _plain_mapping(optimization.get("source_manifest"))
     source_optimization = _plain_mapping(source_manifest.get("optimization"))
     source_target = _plain_mapping(source_optimization.get("target"))
@@ -7053,6 +7058,33 @@ def _framework_adapter_matrix_proof(
             },
         ),
         _proof_check(
+            "adapter_matrix_profile_bindings_closed",
+            passed=len(matrix_profiles) >= len(matrix_frameworks)
+            and all(
+                profile.get("kind")
+                == "agent-learning.framework-adapter-capability-profile.v1"
+                and str(profile.get("status") or "") == "passed"
+                and {
+                    "simulate-sdk",
+                    "ai-evaluation",
+                    "agent-opt",
+                }.issubset(set(_plain_mapping(profile.get("bindings"))))
+                for profile in matrix_profiles
+            ),
+            required=True,
+            reason=(
+                "selected matrix carries portable profile bindings for "
+                "simulate-sdk, ai-evaluation, and agent-opt"
+            ),
+            evidence={
+                "profile_count": len(matrix_profiles),
+                "framework_count": len(matrix_frameworks),
+                "profile_frameworks": [
+                    profile.get("framework") for profile in matrix_profiles
+                ],
+            },
+        ),
+        _proof_check(
             "adapter_matrix_metric_evidence_closed",
             passed=_as_float(
                 selected_metrics.get("framework_adapter_contract_quality")
@@ -7104,6 +7136,9 @@ def _framework_adapter_matrix_proof(
         "evidence": {
             "environment_types": environment_types,
             "matrix_summary": copy.deepcopy(matrix_summary),
+            "profile_summary": copy.deepcopy(
+                _plain_mapping(matrix.get("profile_summary"))
+            ),
             "selected_metrics": selected_metric_evidence,
             "report_matrix_status": report_matrix.get("status"),
         },

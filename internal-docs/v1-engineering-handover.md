@@ -36,6 +36,11 @@ Hand this document to the next engineering owner as the starting point.
 - Release-proof timeout handling now terminates timed-out process groups and
   uses a 2400-second default per command so the expanded v1 suite is not cut off
   at the old 1200-second ceiling.
+- Post-proof active-goal increment: framework adapter capability profiles now
+  provide a portable simulate-sdk / ai-evaluation / agent-opt handshake derived
+  from native adapter contracts. Before cutting a release from a commit that
+  includes this increment, rerun full `agent-learn release-proof` on that exact
+  commit.
 
 ## Immediate Answer
 
@@ -87,6 +92,10 @@ What is not done:
 
 The concise release-candidate summary for release owners is in
 `internal-docs/v1-release-candidate-notes.md`.
+
+Note: this proof predates the framework adapter capability-profile increment.
+Focused tests for that increment are separate; rerun full proof before tagging
+or publishing from the updated tree.
 
 Command:
 

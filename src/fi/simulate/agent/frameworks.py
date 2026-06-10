@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
@@ -384,6 +385,10 @@ def framework_adapter_contract_matrix(
         for key in framework_keys
         for copy_metadata in [dict(metadata or {})]
     ]
+    profiles = [
+        _framework_adapter_capability_profile_from_contract(contract)
+        for contract in contracts
+    ]
     findings = _framework_matrix_findings(contracts)
     summary = _framework_matrix_summary(contracts)
     return {
@@ -395,7 +400,9 @@ def framework_adapter_contract_matrix(
         "framework_count": len(framework_keys),
         "frameworks": framework_keys,
         "contracts": contracts,
+        "profiles": profiles,
         "summary": summary,
+        "profile_summary": _framework_profile_collection_summary(profiles),
         "findings": findings,
         "contract_quality_gate": {
             "kind": "agent-learning.framework-adapter-contract.v1",
@@ -424,6 +431,130 @@ def framework_adapter_contract_matrix(
             "adapter_conformance",
             "metric_evidence",
             "matrix_coverage",
+        ],
+    }
+
+
+def framework_adapter_capability_profile(
+    framework: str,
+    *,
+    target: str | None = None,
+    method: str | None = None,
+    input_mode: InputMode | None = None,
+    input_key: str | None = None,
+    input_kwargs: Mapping[str, Any] | None = None,
+    modality: str | None = None,
+    trace_runtime: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+    contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a portable trinity profile for one framework adapter.
+
+    Profiles are derived from the native adapter contract and intentionally do
+    not import LangChain, LiveKit, Pipecat, or any other framework. The payload
+    is the shared handshake between simulate-sdk, ai-evaluation, and agent-opt:
+    it tells each library which local contract, metric, and optimization layer
+    represent the framework surface.
+    """
+
+    selected_contract = (
+        copy.deepcopy(dict(contract))
+        if contract is not None
+        else framework_adapter_contract(
+            framework,
+            target=target,
+            method=method,
+            input_mode=input_mode,
+            input_key=input_key,
+            input_kwargs=input_kwargs,
+            modality=modality,
+            trace_runtime=trace_runtime,
+            metadata=metadata,
+        )
+    )
+    return _framework_adapter_capability_profile_from_contract(selected_contract)
+
+
+def framework_adapter_capability_profiles(
+    frameworks: Sequence[str] | str | None = None,
+    *,
+    matrix: Mapping[str, Any] | None = None,
+    targets: Mapping[str, str] | None = None,
+    methods: Mapping[str, str] | None = None,
+    input_modes: Mapping[str, InputMode] | None = None,
+    modalities: Mapping[str, str] | None = None,
+    trace_runtime: bool = True,
+    allow_external_targets: bool = False,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Return framework capability profiles for a matrix or framework list."""
+
+    matrix_payload = (
+        copy.deepcopy(dict(matrix))
+        if matrix is not None
+        else framework_adapter_contract_matrix(
+            frameworks,
+            targets=targets,
+            methods=methods,
+            input_modes=input_modes,
+            modalities=modalities,
+            trace_runtime=trace_runtime,
+            allow_external_targets=allow_external_targets,
+            metadata=metadata,
+        )
+    )
+    contracts = [
+        copy.deepcopy(dict(contract))
+        for contract in matrix_payload.get("contracts", []) or []
+        if isinstance(contract, Mapping)
+    ]
+    if not contracts:
+        framework_keys = _framework_matrix_keys(
+            matrix_payload.get("frameworks") or frameworks
+        )
+        contracts = [
+            framework_adapter_contract(
+                key,
+                target=(dict(targets or {}).get(key) if targets else None),
+                method=(dict(methods or {}).get(key) if methods else None),
+                input_mode=(dict(input_modes or {}).get(key) if input_modes else None),
+                modality=(dict(modalities or {}).get(key) if modalities else None),
+                trace_runtime=trace_runtime,
+                metadata=metadata,
+            )
+            for key in framework_keys
+        ]
+
+    profiles = [
+        _framework_adapter_capability_profile_from_contract(contract)
+        for contract in contracts
+    ]
+    required_frameworks = _framework_matrix_keys(
+        matrix_payload.get("frameworks") or frameworks
+    )
+    findings = _framework_profile_collection_findings(
+        profiles,
+        required_frameworks=required_frameworks,
+    )
+    return {
+        "kind": "agent-learning.framework-adapter-capability-profiles.v1",
+        "status": "passed" if not findings else "failed",
+        "passed": not findings,
+        "requires_external_service": False,
+        "framework_count": len(required_frameworks),
+        "profile_count": len(profiles),
+        "frameworks": required_frameworks,
+        "profiles": profiles,
+        "summary": _framework_profile_collection_summary(profiles),
+        "findings": findings,
+        "source_matrix_kind": matrix_payload.get("kind"),
+        "evidence_requirements": [
+            "framework_adapter_contract",
+            "framework_adapter_profile",
+            "framework_runtime",
+            "framework_trace",
+            "metric_evidence",
+            "optimization_lineage",
         ],
     }
 
@@ -1368,6 +1499,340 @@ def _framework_matrix_findings(
             findings.append({"framework": framework, "type": "local_fixture_missing"})
         if _is_external_target(str(contract.get("target") or "")):
             findings.append({"framework": framework, "type": "external_target_scheme"})
+    return findings
+
+
+def _framework_adapter_capability_profile_from_contract(
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = copy.deepcopy(dict(contract))
+    framework = _framework_key(str(payload.get("framework") or "custom"))
+    capabilities = _framework_profile_capabilities(payload)
+    task_surfaces = _framework_profile_task_surfaces(payload)
+    bindings = _framework_profile_bindings(payload)
+    findings = _framework_profile_findings(payload, bindings)
+    summary = _framework_profile_summary(
+        payload,
+        capabilities=capabilities,
+        task_surfaces=task_surfaces,
+        bindings=bindings,
+    )
+    status = "passed" if not findings else "failed"
+    return {
+        "kind": "agent-learning.framework-adapter-capability-profile.v1",
+        "status": status,
+        "passed": status == "passed",
+        "framework": framework,
+        "method": str(payload.get("method") or "auto"),
+        "input_mode": str(payload.get("input_mode") or "auto"),
+        "modality": str(payload.get("modality") or "text"),
+        "transport": str(payload.get("transport") or "in_process"),
+        "requires_external_service": bool(payload.get("requires_external_service")),
+        "local_executable_fixture": bool(payload.get("local_executable_fixture")),
+        "trace_runtime": bool(payload.get("trace_runtime")),
+        "contract": payload,
+        "capabilities": capabilities,
+        "task_surfaces": task_surfaces,
+        "bindings": bindings,
+        "summary": summary,
+        "findings": findings,
+        "evidence_requirements": sorted(
+            {
+                "framework_adapter_profile",
+                "framework_adapter_contract",
+                *[
+                    str(item)
+                    for item in payload.get("evidence_requirements", []) or []
+                    if str(item)
+                ],
+            }
+        ),
+    }
+
+
+def _framework_profile_capabilities(
+    contract: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    names = [
+        *[str(item) for item in contract.get("capabilities", []) or []],
+        "adapter_contract",
+        "local_fixture",
+        "metric_evidence",
+        "optimization_search",
+    ]
+    if bool(contract.get("trace_runtime")):
+        names.append("trace_runtime")
+    if str(contract.get("modality") or "") == "voice":
+        names.extend(["voice", "realtime"])
+    if str(contract.get("modality") or "") == "cua":
+        names.extend(["browser", "computer_use"])
+
+    capabilities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_name in names:
+        name = _framework_key(raw_name)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        capabilities.append(
+            {
+                "name": name,
+                "category": _framework_profile_capability_category(name),
+                "status": "supported",
+                "source": "framework_adapter_contract",
+            }
+        )
+    return capabilities
+
+
+def _framework_profile_capability_category(name: str) -> str:
+    normalized = _framework_key(name)
+    if normalized in {"tool_calls", "tools", "call_tool"}:
+        return "tools"
+    if normalized in {"runtime_trace", "trace_runtime", "metric_evidence"}:
+        return "observability"
+    if normalized in {"structured_input", "messages", "artifacts", "state"}:
+        return "io"
+    if normalized in {"voice", "realtime", "streaming"}:
+        return "realtime"
+    if normalized in {"browser", "computer_use"}:
+        return "computer_use"
+    if normalized in {"environment_replay", "reset_step_trace"}:
+        return "world"
+    if normalized in {"optimization_search"}:
+        return "optimization"
+    if normalized in {"adapter_contract", "local_fixture"}:
+        return "adapter"
+    return "framework"
+
+
+def _framework_profile_task_surfaces(
+    contract: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    framework = _framework_key(str(contract.get("framework") or "custom"))
+    method = str(contract.get("method") or "auto")
+    input_mode = str(contract.get("input_mode") or "auto")
+    return [
+        {
+            "name": "framework_adapter_simulation",
+            "library": "simulate-sdk",
+            "framework": framework,
+            "method": method,
+            "input_mode": input_mode,
+            "evidence": [
+                "framework_adapter_contract",
+                "framework_runtime",
+                "framework_trace",
+            ],
+        },
+        {
+            "name": "framework_adapter_evaluation",
+            "library": "ai-evaluation",
+            "metric": "framework_adapter_contract_quality",
+            "evidence": [
+                "adapter_conformance",
+                "metric_evidence",
+                "tool_calls",
+            ],
+        },
+        {
+            "name": "framework_adapter_optimization",
+            "library": "agent-opt",
+            "layers": ["framework", "integration", "harness", "evaluator"],
+            "search_paths": [
+                "agent.method",
+                "agent.input_mode",
+                "simulation.environments",
+            ],
+        },
+    ]
+
+
+def _framework_profile_bindings(
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    method = str(contract.get("method") or "auto")
+    input_mode = str(contract.get("input_mode") or "auto")
+    framework = _framework_key(str(contract.get("framework") or "custom"))
+    return {
+        "simulate-sdk": {
+            "adapter": "wrap_framework",
+            "contract": "framework_adapter_contract",
+            "matrix": "framework_adapter_contract_matrix",
+            "probe": "probe_framework_adapter",
+            "framework": framework,
+            "method": method,
+            "input_mode": input_mode,
+            "local_executable_fixture": bool(
+                contract.get("local_executable_fixture")
+            ),
+        },
+        "ai-evaluation": {
+            "metric": "framework_adapter_contract_quality",
+            "contract_kind": "agent-learning.framework-adapter-contract.v1",
+            "required_frameworks": [framework],
+            "required_methods": [method] if method != "auto" else [],
+            "required_input_modes": [input_mode] if input_mode != "auto" else [],
+            "required_capabilities": [
+                str(item)
+                for item in contract.get("capabilities", []) or []
+                if str(item)
+            ],
+        },
+        "agent-opt": {
+            "target": "OptimizationTarget",
+            "candidate": "AgentCandidate",
+            "optimizer": "AgentOptimizer",
+            "layers": ["framework", "integration", "harness", "evaluator"],
+            "search_paths": [
+                "agent.method",
+                "agent.input_mode",
+                "simulation.environments",
+            ],
+        },
+    }
+
+
+def _framework_profile_findings(
+    contract: Mapping[str, Any],
+    bindings: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    framework = _framework_key(str(contract.get("framework") or "custom"))
+    if contract.get("kind") != "agent-learning.framework-adapter-contract.v1":
+        findings.append(
+            {
+                "level": "error",
+                "framework": framework,
+                "type": "contract_kind_mismatch",
+            }
+        )
+    if bool(contract.get("requires_external_service")):
+        findings.append(
+            {
+                "level": "error",
+                "framework": framework,
+                "type": "external_service_required",
+            }
+        )
+    if not bool(contract.get("local_executable_fixture")):
+        findings.append(
+            {
+                "level": "error",
+                "framework": framework,
+                "type": "local_fixture_missing",
+            }
+        )
+    if _is_external_target(str(contract.get("target") or "")):
+        findings.append(
+            {
+                "level": "error",
+                "framework": framework,
+                "type": "external_target_scheme",
+            }
+        )
+    for library in ("simulate-sdk", "ai-evaluation", "agent-opt"):
+        if not isinstance(bindings.get(library), Mapping):
+            findings.append(
+                {
+                    "level": "error",
+                    "framework": framework,
+                    "type": "trinity_binding_missing",
+                    "library": library,
+                }
+            )
+    return findings
+
+
+def _framework_profile_summary(
+    contract: Mapping[str, Any],
+    *,
+    capabilities: Sequence[Mapping[str, Any]],
+    task_surfaces: Sequence[Mapping[str, Any]],
+    bindings: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "framework": _framework_key(str(contract.get("framework") or "custom")),
+        "method": str(contract.get("method") or "auto"),
+        "input_mode": str(contract.get("input_mode") or "auto"),
+        "modality": str(contract.get("modality") or "text"),
+        "transport": str(contract.get("transport") or "in_process"),
+        "capability_count": len(capabilities),
+        "task_surface_count": len(task_surfaces),
+        "binding_count": len(bindings),
+        "libraries": sorted(str(key) for key in bindings),
+        "local_executable_fixture": bool(contract.get("local_executable_fixture")),
+        "trace_runtime": bool(contract.get("trace_runtime")),
+        "requires_external_service": bool(contract.get("requires_external_service")),
+    }
+
+
+def _framework_profile_collection_summary(
+    profiles: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    frameworks = [
+        _framework_key(str(profile.get("framework") or "custom"))
+        for profile in profiles
+    ]
+    libraries = sorted(
+        {
+            str(library)
+            for profile in profiles
+            for library in (profile.get("bindings") or {})
+        }
+    )
+    capabilities = sorted(
+        {
+            _framework_key(str(capability.get("name") or ""))
+            for profile in profiles
+            for capability in profile.get("capabilities", []) or []
+            if isinstance(capability, Mapping)
+        }
+    )
+    return {
+        "frameworks": frameworks,
+        "profile_count": len(profiles),
+        "passed_profile_count": sum(
+            1 for profile in profiles if str(profile.get("status")) == "passed"
+        ),
+        "failed_profile_count": sum(
+            1 for profile in profiles if str(profile.get("status")) != "passed"
+        ),
+        "libraries": libraries,
+        "capabilities": capabilities,
+        "local_executable_fixture_count": sum(
+            1 for profile in profiles if bool(profile.get("local_executable_fixture"))
+        ),
+        "requires_external_service_count": sum(
+            1 for profile in profiles if bool(profile.get("requires_external_service"))
+        ),
+    }
+
+
+def _framework_profile_collection_findings(
+    profiles: Sequence[Mapping[str, Any]],
+    *,
+    required_frameworks: Sequence[str],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    observed = {
+        _framework_key(str(profile.get("framework") or "custom"))
+        for profile in profiles
+    }
+    for framework in required_frameworks:
+        key = _framework_key(framework)
+        if key not in observed:
+            findings.append(
+                {
+                    "level": "error",
+                    "framework": key,
+                    "type": "framework_profile_missing",
+                }
+            )
+    for profile in profiles:
+        for finding in profile.get("findings", []) or []:
+            if isinstance(finding, Mapping):
+                findings.append(copy.deepcopy(dict(finding)))
     return findings
 
 

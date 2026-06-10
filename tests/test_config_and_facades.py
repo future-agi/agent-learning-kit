@@ -158,6 +158,32 @@ def test_facades_expose_unified_agent_learning_modules():
         "structured_input",
     }
     assert simulate.framework_adapter_contract is not None
+    profile = simulate.framework_adapter_capability_profile(
+        "langgraph",
+        target="framework_shims.py:build_langgraph_agent",
+        method="ainvoke",
+        input_mode="dict",
+    )
+    assert profile["kind"] == (
+        "agent-learning.framework-adapter-capability-profile.v1"
+    )
+    assert profile["status"] == "passed"
+    assert profile["contract"] == contract
+    assert set(profile["bindings"]) == {
+        "simulate-sdk",
+        "ai-evaluation",
+        "agent-opt",
+    }
+    assert profile["bindings"]["ai-evaluation"]["metric"] == (
+        "framework_adapter_contract_quality"
+    )
+    assert profile["bindings"]["agent-opt"]["layers"] == [
+        "framework",
+        "integration",
+        "harness",
+        "evaluator",
+    ]
+    assert simulate.framework_adapter_capability_profile is not None
     matrix = simulate.framework_adapter_contract_matrix(
         ["langchain", "langgraph", "livekit", "pipecat"]
     )
@@ -169,10 +195,24 @@ def test_facades_expose_unified_agent_learning_modules():
     assert matrix["summary"]["requires_external_service_count"] == 0
     assert matrix["summary"]["external_target_count"] == 0
     assert matrix["summary"]["local_executable_fixture_count"] == 4
+    assert matrix["profile_summary"]["profile_count"] == 4
+    assert {profile["framework"] for profile in matrix["profiles"]} == {
+        "langchain",
+        "langgraph",
+        "livekit",
+        "pipecat",
+    }
     assert matrix["contract_quality_gate"]["required_frameworks"] == (
         matrix["frameworks"]
     )
     assert simulate.framework_adapter_contract_matrix is not None
+    profiles = simulate.framework_adapter_capability_profiles(matrix=matrix)
+    assert profiles["kind"] == (
+        "agent-learning.framework-adapter-capability-profiles.v1"
+    )
+    assert profiles["status"] == "passed"
+    assert profiles["summary"]["profile_count"] == 4
+    assert simulate.framework_adapter_capability_profiles is not None
     discovery = simulate.discover_framework_adapter("langgraph")
     assert discovery["kind"] == "agent-learning.framework-adapter-discovery.v1"
     assert discovery["adapter_candidates"][0]["method"] == "ainvoke"
@@ -914,6 +954,80 @@ def test_agent_report_scores_framework_adapter_call_contract_and_observed_io():
     assert broken_evaluation.summary["metric_averages"][
         "framework_adapter_observed_io_quality"
     ] < 1.0
+
+
+def test_agent_report_scores_framework_adapter_capability_profile():
+    from agent_learning import simulate
+    from fi.evals.metrics.agents.report import AgentReportEvaluator
+
+    profile = simulate.framework_adapter_capability_profile(
+        "pipecat",
+        target="framework_shims.py:build_pipecat_pipeline",
+        method="process",
+        input_mode="dict",
+    )
+    report = {
+        "results": [
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "native pipecat profile certified",
+                    }
+                ],
+                "metadata": {
+                    "environment_state": {
+                        "framework_trace": {
+                            "kind": "framework_trace",
+                            "metadata": {
+                                "framework_adapter_capability_profile": profile
+                            },
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    evaluation = AgentReportEvaluator(
+        config={
+            "framework_adapter_contract_quality": {
+                "framework": "pipecat",
+                "method": "process",
+                "input_mode": "dict",
+                "modality": "voice",
+                "transport": "in_process",
+                "require_trace_runtime": True,
+                "require_local_executable_fixture": True,
+                "require_no_external_service": True,
+                "require_target": True,
+                "required_capabilities": [
+                    "messages",
+                    "tool_calls",
+                    "runtime_trace",
+                    "structured_input",
+                ],
+                "required_evidence_requirements": [
+                    "framework_runtime",
+                    "framework_trace",
+                    "adapter_conformance",
+                    "metric_evidence",
+                ],
+            },
+            "metric_weights": {"framework_adapter_contract_quality": 1.0},
+        }
+    ).evaluate(report)
+
+    assert evaluation.summary["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    profile_metric = next(
+        metric
+        for metric in evaluation.cases[0].metrics
+        if metric.name == "framework_adapter_contract_quality"
+    )
+    details = profile_metric.details
+    assert details["observed"]["frameworks"] == ["pipecat"]
+    assert details["observed"]["modalities"] == ["voice"]
 
 
 def test_optimize_facade_builds_and_runs_framework_adapter_manifest(monkeypatch):
@@ -12876,9 +12990,44 @@ def test_sdk_framework_adapter_matrix_optimization_example_runs(
         "adapter_matrix_status_closed",
         "adapter_matrix_framework_coverage_closed",
         "adapter_matrix_local_fixture_closed",
+        "adapter_matrix_profile_bindings_closed",
         "adapter_matrix_metric_evidence_closed",
         "adapter_matrix_report_evidence_closed",
     }
+
+
+def test_sdk_framework_adapter_capability_profiles_example_runs(tmp_path):
+    example_path = PROJECT_ROOT / "examples" / (
+        "sdk_framework_adapter_capability_profiles.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_capability_profiles",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "framework-adapter-profiles.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved == result
+    assert result["kind"] == (
+        "agent-learning.framework-adapter-capability-profiles.v1"
+    )
+    assert result["status"] == "passed"
+    assert result["frameworks"] == module.FRAMEWORKS
+    assert result["summary"]["profile_count"] == len(module.FRAMEWORKS)
+    for profile in result["profiles"]:
+        assert set(profile["bindings"]) == {
+            "simulate-sdk",
+            "ai-evaluation",
+            "agent-opt",
+        }
+        assert profile["summary"]["local_executable_fixture"] is True
 
 
 def test_sdk_framework_adapter_websocket_transport_example_runs(

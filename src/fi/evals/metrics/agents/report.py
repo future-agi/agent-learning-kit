@@ -22227,16 +22227,53 @@ def _framework_adapter_contracts_from_context(
             return
         for contract in _as_list(matrix.get("contracts")):
             append_contract(contract)
+        for profile in _as_list(matrix.get("profiles")):
+            append_profile(profile)
 
+    def append_profile(value: Any) -> None:
+        profile = _as_dict(value)
+        if not profile:
+            return
+        kind = str(profile.get("kind") or "").lower()
+        if kind != "agent-learning.framework-adapter-capability-profile.v1":
+            return
+        append_contract(profile.get("contract"))
+        for contract in _as_list(profile.get("contracts")):
+            append_contract(contract)
+        append_matrix(profile.get("matrix"))
+
+    def append_profile_bundle(value: Any) -> None:
+        bundle = _as_dict(value)
+        if not bundle:
+            return
+        kind = str(bundle.get("kind") or "").lower()
+        if kind == "agent-learning.framework-adapter-capability-profile.v1":
+            append_profile(bundle)
+            return
+        if kind != "agent-learning.framework-adapter-capability-profiles.v1":
+            return
+        for profile in _as_list(bundle.get("profiles")):
+            append_profile(profile)
+
+    append_profile(context.get("framework_adapter_capability_profile"))
+    append_profile_bundle(context.get("framework_adapter_capability_profiles"))
     append_matrix(context.get("framework_adapter_contract_matrix"))
     metadata = _as_dict(context.get("metadata", {}))
     append_contract(metadata.get("framework_adapter_contract"))
     append_matrix(metadata.get("framework_adapter_contract_matrix"))
+    append_profile(metadata.get("framework_adapter_capability_profile"))
+    append_profile_bundle(metadata.get("framework_adapter_capability_profiles"))
 
     agent = _as_dict(metadata.get("agent") or context.get("agent"))
     append_contract(_as_dict(agent.get("metadata")).get("framework_adapter_contract"))
     append_matrix(
         _as_dict(agent.get("metadata")).get("framework_adapter_contract_matrix")
+    )
+    append_profile(
+        _as_dict(agent.get("metadata")).get("framework_adapter_capability_profile")
+    )
+    append_profile_bundle(
+        _as_dict(agent.get("metadata")).get("framework_adapter_capability_profiles")
     )
     append_contract(
         _as_dict(agent.get("runtime_metadata")).get("framework_adapter_contract")
@@ -22246,16 +22283,38 @@ def _framework_adapter_contracts_from_context(
             "framework_adapter_contract_matrix"
         )
     )
+    append_profile(
+        _as_dict(agent.get("runtime_metadata")).get(
+            "framework_adapter_capability_profile"
+        )
+    )
+    append_profile_bundle(
+        _as_dict(agent.get("runtime_metadata")).get(
+            "framework_adapter_capability_profiles"
+        )
+    )
 
     state = _as_dict(metadata.get("environment_state"))
     for state_key in ("framework_runtime", "framework_trace"):
         payload = _as_dict(state.get(state_key))
         append_contract(payload.get("framework_adapter_contract"))
         append_matrix(payload.get("framework_adapter_contract_matrix"))
+        append_profile(payload.get("framework_adapter_capability_profile"))
+        append_profile_bundle(payload.get("framework_adapter_capability_profiles"))
         append_contract(_as_dict(payload.get("metadata")).get("framework_adapter_contract"))
         append_matrix(
             _as_dict(payload.get("metadata")).get(
                 "framework_adapter_contract_matrix"
+            )
+        )
+        append_profile(
+            _as_dict(payload.get("metadata")).get(
+                "framework_adapter_capability_profile"
+            )
+        )
+        append_profile_bundle(
+            _as_dict(payload.get("metadata")).get(
+                "framework_adapter_capability_profiles"
             )
         )
 
@@ -22263,10 +22322,22 @@ def _framework_adapter_contracts_from_context(
         payload_dict = _as_dict(payload)
         append_contract(payload_dict.get("framework_adapter_contract"))
         append_matrix(payload_dict.get("framework_adapter_contract_matrix"))
+        append_profile(payload_dict.get("framework_adapter_capability_profile"))
+        append_profile_bundle(payload_dict.get("framework_adapter_capability_profiles"))
         append_contract(_as_dict(payload_dict.get("metadata")).get("framework_adapter_contract"))
         append_matrix(
             _as_dict(payload_dict.get("metadata")).get(
                 "framework_adapter_contract_matrix"
+            )
+        )
+        append_profile(
+            _as_dict(payload_dict.get("metadata")).get(
+                "framework_adapter_capability_profile"
+            )
+        )
+        append_profile_bundle(
+            _as_dict(payload_dict.get("metadata")).get(
+                "framework_adapter_capability_profiles"
             )
         )
 
@@ -22275,16 +22346,28 @@ def _framework_adapter_contracts_from_context(
         artifact_metadata = _as_dict(_get(artifact, "metadata", {}))
         append_contract(data.get("framework_adapter_contract"))
         append_matrix(data.get("framework_adapter_contract_matrix"))
+        append_profile(data.get("framework_adapter_capability_profile"))
+        append_profile_bundle(data.get("framework_adapter_capability_profiles"))
         append_contract(artifact_metadata.get("framework_adapter_contract"))
         append_matrix(artifact_metadata.get("framework_adapter_contract_matrix"))
+        append_profile(artifact_metadata.get("framework_adapter_capability_profile"))
+        append_profile_bundle(
+            artifact_metadata.get("framework_adapter_capability_profiles")
+        )
 
     for event in _as_list(context.get("events", [])):
         payload = _as_dict(_get(event, "payload", {}))
         event_metadata = _as_dict(_get(event, "metadata", {}))
         append_contract(payload.get("framework_adapter_contract"))
         append_matrix(payload.get("framework_adapter_contract_matrix"))
+        append_profile(payload.get("framework_adapter_capability_profile"))
+        append_profile_bundle(payload.get("framework_adapter_capability_profiles"))
         append_contract(event_metadata.get("framework_adapter_contract"))
         append_matrix(event_metadata.get("framework_adapter_contract_matrix"))
+        append_profile(event_metadata.get("framework_adapter_capability_profile"))
+        append_profile_bundle(
+            event_metadata.get("framework_adapter_capability_profiles")
+        )
 
     return contracts
 

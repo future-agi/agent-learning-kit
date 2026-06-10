@@ -3,6 +3,8 @@ from .wrapper import AgentInput, AgentResponse, AgentWrapper, SimulationArtifact
 from .generic import GenericAgentWrapper, wrap_agent
 from .frameworks import (
     FrameworkAdapterSpec,
+    framework_adapter_capability_profile,
+    framework_adapter_capability_profiles,
     discover_framework_adapter,
     framework_adapter_contract,
     framework_adapter_contract_matrix,
@@ -54,6 +56,8 @@ __all__ = [
     "SimulationEvent",
     "GenericAgentWrapper",
     "FrameworkAdapterSpec",
+    "framework_adapter_capability_profile",
+    "framework_adapter_capability_profiles",
     "discover_framework_adapter",
     "framework_adapter_contract",
     "framework_adapter_contract_matrix",

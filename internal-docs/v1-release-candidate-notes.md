@@ -17,6 +17,12 @@ This is not a claim that the full long-term Agent Learning product vision is
 complete. It is a claim that the current v1 release contract has executable
 evidence and packaging proof.
 
+Update after this proof: the active-goal framework adapter capability-profile
+increment changed code and tests after the proof artifact below. Treat the
+artifact as evidence for the earlier release-readiness commit; rerun full
+`agent-learn release-proof` before publishing from a commit that includes the
+profile increment.
+
 ## Proof Artifact
 
 Command:
