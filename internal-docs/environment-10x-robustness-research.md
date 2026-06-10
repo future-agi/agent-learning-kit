@@ -51,10 +51,10 @@ outputs and requires at least ten independent axes to pass:
   replay bundles and selects the verified replay.
 - `native_framework_adapter_probe_promotion`: Agent Learning's adapter probe
   optimizer promotes custom `execute_task(dict)`, LangGraph `ainvoke(dict)`,
-  and LangChain `invoke(dict)` adapters into normal `agent-learning.run.v1`
-  artifacts with proof metadata, discovery evidence where required, adapter
-  call-contract metrics, observed-I/O metrics, and framework runtime/trace/tool
-  metric floors.
+  LangChain `invoke(dict)`, and Pipecat `process(dict)` adapters into normal
+  `agent-learning.run.v1` artifacts with proof metadata, discovery evidence
+  where required, adapter call-contract metrics, observed-I/O metrics, and
+  framework runtime/trace/tool metric floors.
 - `protocol_tool_routing`: MCP and A2A adapters preserve protocol state,
   events, artifacts, and tool/task records.
 - `browser_cua_resilience`: browser/CUA probes prove DOM/screenshot grounding,

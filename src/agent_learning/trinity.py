@@ -1561,6 +1561,7 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_adapter_one_call_run.py",
     "examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py",
     "examples/sdk_framework_adapter_langchain_invoke_promotion.py",
+    "examples/sdk_framework_adapter_pipecat_process_promotion.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -2497,6 +2498,7 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "one_call_run",
     "langgraph_ainvoke_promotion",
     "langchain_invoke_promotion",
+    "pipecat_process_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3334,6 +3336,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_one_call_run.py",
     "examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py",
     "examples/sdk_framework_adapter_langchain_invoke_promotion.py",
+    "examples/sdk_framework_adapter_pipecat_process_promotion.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3491,6 +3494,25 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "kind": "agent-learning.run.v1",
         "expected_framework": "langchain",
         "expected_method": "invoke",
+        "expected_input_mode": "dict",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "pipecat_process_promotion",
+        "path": "examples/sdk_framework_adapter_pipecat_process_promotion.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "pipecat",
+        "expected_method": "process",
         "expected_input_mode": "dict",
         "require_manifest": True,
         "require_promoted_metadata": True,

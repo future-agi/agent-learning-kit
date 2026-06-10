@@ -23367,6 +23367,31 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    pipecat_promotion = adapter_probes["pipecat_process_promotion"]
+    assert pipecat_promotion["result_kind"] == "agent-learning.run.v1"
+    assert pipecat_promotion["result_status"] == "passed"
+    assert pipecat_promotion["manifest_present"] is True
+    assert pipecat_promotion["manifest_agent"] == {
+        "framework": "pipecat",
+        "method": "process",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert pipecat_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert pipecat_promotion["manifest_metadata"]["probe_proof_status"] == "passed"
+    assert pipecat_promotion["manifest_metadata"]["adapter_candidate_source"] == (
+        "discovery"
+    )
+    assert pipecat_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
@@ -23376,6 +23401,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "one_call_run",
         "langgraph_ainvoke_promotion",
         "langchain_invoke_promotion",
+        "pipecat_process_promotion",
     ):
         promoted = adapter_probes[surface]
         assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True
