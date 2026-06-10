@@ -31,7 +31,9 @@ optimization, auto-discovery, promotion, and one-call cookbooks as
 `execute_task(dict)` coverage plus LangGraph-style `ainvoke(dict)` and
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`, and
 OpenAI-compatible `chat.completions.create(messages=...)` nested-method
-promotion plus LiveKit `run_session(dict)` session promotion, callable
+promotion plus LiveKit `run_session(dict)` session promotion and
+provider-response promotion with required provider kwargs and normalized
+`provider_response` state, callable
 signatures to be inspectable, observed I/O contracts and call contracts to cover
 the selected probe cases, discovery to be used where expected, probe proofs to
 pass, promoted manifests to carry proof/discovery metadata, and evaluated runs

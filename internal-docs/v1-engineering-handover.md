@@ -7,9 +7,10 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `d3898e1 Gate nested method adapter promotion`.
+  `245dca4 Gate LiveKit session adapter promotion`.
 - Current handoff slice:
-  LiveKit-style `run_session(dict)` BYO framework adapter promotion.
+  Provider-response `chat.completions.create(messages=..., model=...)` BYO
+  framework adapter promotion.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -35,7 +36,8 @@ What is done:
 - Non-custom adapter promotion now covers custom `execute_task(dict)`,
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, Pipecat
   `process(dict)`, OpenAI-compatible
-  `chat.completions.create(messages=...)`, and LiveKit `run_session(dict)`.
+  `chat.completions.create(messages=...)`, LiveKit `run_session(dict)`, and
+  provider-response `chat.completions.create(messages=..., model=...)`.
 
 What is not done:
 
@@ -45,6 +47,60 @@ What is not done:
   proof packaging, and final release discipline.
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
+
+## Latest Provider Response Slice
+
+This handoff slice promotes the existing local provider-response cookbook into
+the adapter-probe release gate and environment 10x native adapter axis.
+
+Implemented behavior:
+
+- Reuses `examples/sdk_framework_adapter_provider_response.py`.
+- The cookbook uses weak `run(text)` plus
+  `chat.completions.create(messages=...)` candidates and requires the selected
+  candidate to preserve `input_kwargs={"model": "local-provider-model"}`.
+- The promoted manifest preserves:
+  - `framework = openai`
+  - `method = chat.completions.create`
+  - `input_mode = messages`
+  - `input_key = messages`
+  - `input_kwargs = {"model": "local-provider-model"}`
+  - `trace_runtime = true`
+- The selected adapter emits:
+  - content containing `approved refund`
+  - `framework_trace_status` tool evidence
+  - `provider_choice` and `provider_tool_call` events
+  - `framework_runtime` and `provider_response` state evidence
+  - provider response summary with `choice_count=1`, `tool_call_count=1`,
+    `finish_reasons=["tool_calls"]`, and `model="local-provider-model"`
+- `agent-learn release-check` includes `provider_response_promotion` under
+  `framework_adapter_probe_readiness`.
+- `environment_10x_robustness` counts the provider-response promotion through
+  the same generic per-surface contract path and checks expected input kwargs.
+
+The promoted manifest should select:
+
+```json
+{
+  "framework": "openai",
+  "method": "chat.completions.create",
+  "input_mode": "messages",
+  "input_key": "messages",
+  "input_kwargs": {
+    "model": "local-provider-model"
+  },
+  "trace_runtime": true
+}
+```
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
 
 ## First Commands
 
@@ -57,6 +113,12 @@ uv run ruff check .
 git diff --check
 uv run python -m agent_learning.cli release-check --project-root . --quiet
 uv run pytest -q
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --only release_check \
+  --only git_diff_check \
+  --output /tmp/agent-learning-provider-response-release-proof.json \
+  --quiet
 ```
 
 For full release-cut proof:
@@ -246,6 +308,8 @@ The release-check adapter-probe gate now runs:
 - Pipecat `process(dict)` promotion
 - OpenAI-compatible `chat.completions.create(messages=...)` promotion
 - LiveKit `run_session(dict)` promotion
+- provider-response `chat.completions.create(messages=..., model=...)`
+  promotion
 
 Every promoted run must preserve proof/discovery metadata and close framework
 runtime, adapter call-contract, observed-I/O, adapter-contract, framework-trace,
@@ -255,7 +319,7 @@ and tool-selection metrics.
 
 The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
-session promoted adapter contracts.
+session promoted adapter contracts plus provider-response promotion.
 
 Implemented behavior:
 
@@ -263,7 +327,8 @@ Implemented behavior:
   `probe_promotion`, `auto_discovery_promotion`, `one_call_promotion`,
   `one_call_run`, `langgraph_ainvoke_promotion`,
   `langchain_invoke_promotion`, `pipecat_process_promotion`,
-  `nested_method_promotion`, and `livekit_run_session_promotion`.
+  `nested_method_promotion`, `livekit_run_session_promotion`, and
+  `provider_response_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
   mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
@@ -421,6 +486,47 @@ Result:
 - CLI release-check: passed
 - full suite: `298 passed, 6 warnings in 835.34s (0:13:55)`
 
+Provider-response handoff verification passed:
+
+```bash
+uv run python -m py_compile \
+  examples/sdk_framework_adapter_provider_response.py \
+  src/agent_learning/trinity.py \
+  tests/test_cli_examples.py \
+  tests/test_config_and_facades.py
+uv run pytest \
+  tests/test_cli_examples.py::test_sdk_framework_adapter_provider_response_example_runs \
+  -q
+uv run pytest \
+  tests/test_config_and_facades.py::test_provider_response_framework_adapter_preserves_nested_tool_evidence \
+  -q
+uv run pytest \
+  tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones \
+  -q
+uv run ruff check .
+git diff --check
+uv run python -m agent_learning.cli release-check --project-root . --quiet
+uv run pytest -q
+```
+
+Result:
+
+- `py_compile`: passed
+- focused provider-response cookbook:
+  `1 passed, 5 warnings in 8.21s`
+- focused provider-response runtime evidence:
+  `1 passed, 5 warnings in 14.42s`
+- release milestone test:
+  `1 passed, 5 warnings in 486.47s (0:08:06)`
+- `uv run ruff check .`: passed
+- `git diff --check`: passed
+- CLI release-check: passed
+- full suite:
+  `298 passed, 6 warnings in 1533.12s (0:25:33)`
+- selected release-proof:
+  `status=passed`, selected checks `release_check` and `git_diff_check` passed,
+  wrote `/tmp/agent-learning-provider-response-release-proof.json`
+
 ## Key Files
 
 Runtime and simulation:
@@ -488,10 +594,12 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_pipecat_process_promotion.py`
 - `examples/sdk_framework_adapter_nested_method_promotion.py`
 - `examples/sdk_framework_adapter_livekit_run_session_promotion.py`
+- `examples/sdk_framework_adapter_provider_response.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
 - `V1_RELEASE_ROADMAP.md`
+- `internal-docs/framework-adapter-probe-research.md`
 - `internal-docs/framework-adapter-probe-readiness-research.md`
 - `internal-docs/environment-10x-robustness-research.md`
 
@@ -540,19 +648,12 @@ Rules:
 
 Suggested next packets:
 
-1. Provider response promotion.
-   - Goal: promote a local provider-response shape that requires
-     `input_kwargs={"model": "local-provider-model"}` and normalized
-     `provider_response` state.
-   - Constraint: keep it local-only; do not call hosted provider APIs.
-   - Output: one cookbook or promoted variant, release-check contract, and
-     assertions for `provider_choice` / `provider_tool_call` evidence.
-2. Browser Use / CUA promotion.
+1. Browser Use / CUA promotion.
    - Goal: promote a local browser/CUA-shaped adapter through the BYO probe
      path.
    - Constraint: use existing browser/CUA trace metrics; do not invent a
      separate product claim.
-3. OpenEnv boundary audit.
+2. OpenEnv boundary audit.
    - Goal: verify OpenEnv/Gymnasium remain compatibility-only.
    - Files: `pyproject.toml`, `typescript/agent-learning-kit/package.json`,
      `README.md`, `V1_RELEASE_ROADMAP.md`, `internal-docs/*openenv*`.
@@ -577,16 +678,16 @@ uv run python -m agent_learning.cli release-proof \
 Commit locally with a message that names the proof surface. For this slice:
 
 ```bash
-git add examples/sdk_framework_adapter_livekit_run_session_promotion.py \
-  src/agent_learning/trinity.py \
+git add src/agent_learning/trinity.py \
   tests/test_cli_examples.py \
   tests/test_config_and_facades.py \
   README.md \
   V1_RELEASE_ROADMAP.md \
+  internal-docs/framework-adapter-probe-research.md \
   internal-docs/framework-adapter-probe-readiness-research.md \
   internal-docs/environment-10x-robustness-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Gate LiveKit session adapter promotion"
+git commit -m "Gate provider response adapter promotion"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

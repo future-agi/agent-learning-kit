@@ -128,6 +128,9 @@ Keep framework support local-first:
   reasons, usage blocks, and content `tool_use` blocks should normalize into
   ordinary `AgentResponse.tool_calls`, `provider_choice` /
   `provider_tool_call` events, provider metadata, and `provider_response` state.
+  Verified provider-response adapters also participate in native adapter
+  promotion and `environment_10x_robustness` when explicit candidates preserve
+  required provider kwargs such as `model`.
 - Preserve framework transcript histories. `TaskResult(messages=[...])`,
   message-history objects, tool-call request events, and tool-call execution
   events should normalize into ordinary tool calls, tool responses, transcript

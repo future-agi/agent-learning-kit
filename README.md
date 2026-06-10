@@ -114,7 +114,9 @@ workflow-hook, retrieval-hook, red-team, orchestration, and regression proof
 outputs and requires at least ten independent axes to pass, including native
 adapter promotion for custom `execute_task(dict)`, LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, OpenAI-compatible
-`chat.completions.create(messages=...)`, and LiveKit `run_session(dict)`.
+`chat.completions.create(messages=...)`, provider-response
+`chat.completions.create(messages=..., model=...)`, and LiveKit
+`run_session(dict)`.
 OpenEnv and Gymnasium are
 compatibility inputs, not the product center. Regression artifact
 readiness runs the local baseline, compare, report, promote-to-regression, and
@@ -696,11 +698,13 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_langchain_invoke_promotion.py` and
 `examples/sdk_framework_adapter_pipecat_process_promotion.py` and
 `examples/sdk_framework_adapter_nested_method_promotion.py` and
-`examples/sdk_framework_adapter_livekit_run_session_promotion.py` for local
+`examples/sdk_framework_adapter_livekit_run_session_promotion.py` and
+`examples/sdk_framework_adapter_provider_response.py` for local
 target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)`,
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`,
-OpenAI-compatible `chat.completions.create(messages=...)`, and LiveKit-style
-`run_session(dict)` promotion.
+OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
+`run_session(dict)`, and provider-response promotion with
+`input_kwargs={"model": "local-provider-model"}`.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -709,13 +713,15 @@ auto-discovery promotion, one-call promotion, one-call run, LangGraph
 `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat `process(dict)`
 promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
-`run_session(dict)` session promotion. It requires
+`run_session(dict)` session promotion plus provider-response promotion. It requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
-promotion, and LiveKit session promotion, callable-signature evidence, observed I/O
-contracts, passing probe proofs, discovery metadata where expected, promoted
-manifest proof metadata, and evaluated framework runtime, adapter call-contract,
-observed-I/O, adapter-contract, framework-trace, and tool metrics. Probe
+promotion, LiveKit session promotion, and provider-response promotion with
+required provider kwargs and normalized `provider_response` state,
+callable-signature evidence, observed I/O contracts, passing probe proofs,
+discovery metadata where expected, promoted manifest proof metadata, and
+evaluated framework runtime, adapter call-contract, observed-I/O,
+adapter-contract, framework-trace, and tool metrics. Probe
 optimization artifacts also render a
 `framework_adapter_probe` report/action card with exportable proof, selected
 probe report, contract, callable signature, observed I/O contract, and
@@ -779,7 +785,12 @@ Provider-style response objects are normalized too. OpenAI-compatible
 content `tool_use` blocks become ordinary `tool_calls`, `provider_choice` /
 `provider_tool_call` events, provider metadata, and `provider_response` state, so
 the same agent-report gates can require nested provider evidence. See
-`examples/sdk_framework_adapter_provider_response.py`.
+`examples/sdk_framework_adapter_provider_response.py`. The same example is also
+release-gated as `provider_response_promotion`: it promotes the local
+OpenAI-compatible `chat.completions.create(messages=...)` path with
+`input_kwargs={"model": "local-provider-model"}`, preserves `provider_response`
+state, and counts under native adapter promotion in
+`framework_adapter_probe_readiness` and `environment_10x_robustness`.
 
 Message-history framework results are normalized as well. AutoGen-style
 `TaskResult(messages=[...])`, transcript objects, and message lists with
@@ -2092,8 +2103,8 @@ world orchestration, workspace import certification, authenticated evaluation,
 workflow, and retrieval hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
-native adapter probe promotion, and authenticated hooks are counted as native
-proof-backed axes;
+native adapter probe promotion including provider-response promotion, and
+authenticated hooks are counted as native proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:

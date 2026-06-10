@@ -2370,18 +2370,61 @@ def test_sdk_framework_adapter_provider_response_example_runs(tmp_path):
     assert saved == result
     assert result["kind"] == "agent-learning.run.v1"
     assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
     manifest = result["framework_adapter_provider_response_manifest"]
+    assert manifest["agent"]["framework"] == "openai"
     assert manifest["agent"]["method"] == "chat.completions.create"
+    assert manifest["agent"]["input_mode"] == "messages"
+    assert manifest["agent"]["input_key"] == "messages"
     assert manifest["agent"]["input_kwargs"] == {"model": "local-provider-model"}
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "explicit"
+    assert manifest["agent"]["metadata"]["framework_adapter_discovery_used"] is False
+    proof = manifest["agent"]["metadata"]["framework_adapter_probe_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+    assert proof["method"] == "chat.completions.create"
+    assert proof["input_mode"] == "messages"
+    assert proof["input_key"] == "messages"
+    assert proof["input_kwargs_keys"] == ["model"]
     runtime_contract = manifest["evaluation"]["agent_report"]["config"][
         "framework_runtime_contract"
     ]
+    assert runtime_contract["method"] == "chat.completions.create"
+    assert runtime_contract["input_key"] == "messages"
     assert runtime_contract["required_tools"] == ["framework_trace_status"]
     assert runtime_contract["required_input_kwargs"] == ["model"]
     state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["methods"] == ["chat.completions.create"]
+    assert runtime["summary"]["input_modes"] == ["messages"]
+    assert runtime["summary"]["input_keys"] == ["messages"]
+    assert runtime["summary"]["input_kwargs_keys"] == ["model"]
+    assert runtime["summary"]["call_styles"] == ["keyword"]
+    assert state["provider_response"]["choice_count"] == 1
+    assert state["provider_response"]["tool_call_count"] == 1
+    assert state["provider_response"]["model"] == "local-provider-model"
     assert state["provider_response"]["tool_names"] == ["framework_trace_status"]
     assert state["provider_response"]["usage"]["total_tokens"] == 19
-    output = state["framework_runtime"]["invocations"][0]["output"]
+    assert state["provider_response"]["finish_reasons"] == ["tool_calls"]
+    output = runtime["invocations"][0]["output"]
     assert output["tool_names"] == ["framework_trace_status"]
     assert output["event_types"] == ["provider_choice", "provider_tool_call"]
 

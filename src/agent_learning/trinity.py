@@ -1564,6 +1564,7 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_adapter_pipecat_process_promotion.py",
     "examples/sdk_framework_adapter_nested_method_promotion.py",
     "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
+    "examples/sdk_framework_adapter_provider_response.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -2503,6 +2504,7 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "pipecat_process_promotion",
     "nested_method_promotion",
     "livekit_run_session_promotion",
+    "provider_response_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3343,6 +3345,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_pipecat_process_promotion.py",
     "examples/sdk_framework_adapter_nested_method_promotion.py",
     "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
+    "examples/sdk_framework_adapter_provider_response.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3566,6 +3569,28 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "require_manifest": True,
         "require_promoted_metadata": True,
         "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "provider_response_promotion",
+        "path": "examples/sdk_framework_adapter_provider_response.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "openai",
+        "expected_method": "chat.completions.create",
+        "expected_input_mode": "messages",
+        "expected_input_key": "messages",
+        "expected_input_kwargs": {"model": "local-provider-model"},
+        "expected_call_style": "keyword",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": False,
         "min_metrics": {
             "framework_adapter_call_contract_quality": 1.0,
             "framework_adapter_contract_quality": 1.0,

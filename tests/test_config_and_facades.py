@@ -23475,6 +23475,49 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    provider_response_promotion = adapter_probes["provider_response_promotion"]
+    assert provider_response_promotion["result_kind"] == "agent-learning.run.v1"
+    assert provider_response_promotion["result_status"] == "passed"
+    assert provider_response_promotion["manifest_present"] is True
+    assert provider_response_promotion["manifest_agent"] == {
+        "framework": "openai",
+        "method": "chat.completions.create",
+        "input_mode": "messages",
+        "trace_runtime": True,
+        "input_key": "messages",
+        "input_kwargs": {"model": "local-provider-model"},
+    }
+    assert provider_response_promotion["selected_probe_summary"]["call_styles"] == [
+        "keyword"
+    ]
+    assert provider_response_promotion["selected_probe_summary"]["input_keys"] == [
+        "messages"
+    ]
+    assert provider_response_promotion["selected_probe_summary"][
+        "input_kwargs_keys"
+    ] == ["model"]
+    assert provider_response_promotion["probe_proof_status"] == "passed"
+    assert provider_response_promotion["probe_proof_failed_check_ids"] == []
+    assert provider_response_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert provider_response_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert provider_response_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "explicit"
+    assert provider_response_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is False
+    assert provider_response_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
