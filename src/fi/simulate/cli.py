@@ -786,7 +786,43 @@ def _build_agent_callback(agent: Mapping[str, Any], base_dir: Path) -> Callable[
         return _build_http_agent_callback(agent, agent_type)
     if agent_type in {"websocket", "websocket_agent", "ws"}:
         return _build_websocket_agent_callback(agent)
+    if agent_type in {"llm", "prompt", "instructions"}:
+        return _build_llm_agent_callback(agent)
     raise ManifestError(f"unsupported agent.type: {agent_type}")
+
+
+def _build_llm_agent_callback(agent: Mapping[str, Any]) -> Callable[..., Any]:
+    """Instructions-driven LLM agent: the candidate IS its system prompt.
+
+    The natural candidate unit for prompt optimization — candidates differ only by
+    ``instructions`` (and optionally ``model``). Completion goes through
+    ``LiteLLMProvider`` so any litellm-routable model works; credentials follow the
+    provider's normal resolution (explicit ``agent.credentials`` or env vars).
+    """
+    instructions = str(agent.get("instructions") or agent.get("system_prompt") or "")
+    if not instructions:
+        raise ManifestError("agent.type=llm requires agent.instructions")
+    model = str(agent.get("model") or "gpt-4o-mini")
+
+    from fi.evals.llm.providers.litellm import LiteLLMProvider
+
+    provider = LiteLLMProvider(credentials=agent.get("credentials"))
+
+    def llm_agent(input: Any) -> AgentResponse:
+        history = list(getattr(input, "messages", None) or [])
+        new_message = getattr(input, "new_message", None) or {}
+        messages = [{"role": "system", "content": instructions}, *history]
+        if new_message and (not history or history[-1] != new_message):
+            messages.append(
+                {
+                    "role": str(new_message.get("role") or "user"),
+                    "content": str(new_message.get("content") or ""),
+                }
+            )
+        content = provider.get_completion(model=model, messages=messages)
+        return AgentResponse(content=str(content))
+
+    return llm_agent
 
 
 def _build_http_agent_callback(
