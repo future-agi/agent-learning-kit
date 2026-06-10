@@ -8197,6 +8197,24 @@ def _orchestration_stack_proof(
     selected_history = _selected_optimization_history(payload, optimization)
     selected_metrics = _plain_mapping(selected_history.get("metrics"))
     selected_patch = _plain_mapping(selected_history.get("patch"))
+    selected_patch_paths = {str(path) for path in selected_patch}
+    structural_bundle_patch = {"agent", "simulation.environments"}.issubset(
+        selected_patch_paths
+    )
+    targeted_environment_patch_paths = {
+        path
+        for path in selected_patch_paths
+        if path == "simulation.environments"
+        or path.startswith("simulation.environments.")
+    }
+    forbidden_target_patch_paths = {
+        path
+        for path in selected_patch_paths
+        if path in {"prompt", "agent.prompt", "agent.responses"}
+        or path.startswith("prompt.")
+        or path.startswith("agent.prompt.")
+        or path.startswith("agent.responses.")
+    }
     report_state = _selected_report_environment_state(selected_history)
 
     world_state = _plain_mapping(report_state.get("world_contract"))
@@ -8309,6 +8327,7 @@ def _orchestration_stack_proof(
         "world_contract_quality": 1.0,
         "framework_trace_coverage": 1.0,
         "retrieval_context_quality": 1.0,
+        "retrieval_memory_attribution": 1.0,
         "agent_memory_lineage_quality": 1.0,
         "multi_agent_coordination_quality": 1.0,
         "multi_agent_trace_coverage": 1.0,
@@ -8594,13 +8613,24 @@ def _orchestration_stack_proof(
         ),
         _proof_check(
             "cross_layer_patch_surface_present",
-            passed={"agent", "simulation.environments"}.issubset(set(selected_patch)),
+            passed=structural_bundle_patch
+            or (
+                bool(targeted_environment_patch_paths)
+                and not forbidden_target_patch_paths
+            ),
             required=True,
             reason=(
-                "selected patch covers both agent behavior and the structural "
-                "orchestration environment bundle"
+                "selected patch covers either the full agent plus structural "
+                "orchestration environment bundle, or a precise environment "
+                "subpath without prompt/response shortcuts"
             ),
-            evidence={"selected_patch_paths": sorted(selected_patch)},
+            evidence={
+                "selected_patch_paths": sorted(selected_patch_paths),
+                "targeted_environment_patch_paths": sorted(
+                    targeted_environment_patch_paths
+                ),
+                "forbidden_target_patch_paths": sorted(forbidden_target_patch_paths),
+            },
         ),
         _proof_check(
             "orchestration_topology_trace_present",

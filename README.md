@@ -1111,6 +1111,14 @@ uses generic `optimize_target` search over exactly
 read/write/recall operations to pass native L3 memory-lineage proof as
 `memory_target_optimizer_readiness`.
 
+For an orchestration/framework target path, see
+`examples/sdk_orchestration_target_optimization.py`. It keeps the scripted
+agent, world contract, retrieval memory, memory lineage, and multi-agent room
+fixed, uses generic `optimize_target` search over exactly
+`simulation.environments.1.data.spans`, and requires the selected LangGraph
+`planner.invoke` framework span to pass native L3 orchestration-stack proof as
+`orchestration_target_optimizer_readiness`.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can
@@ -1445,6 +1453,10 @@ AGENT_LEARNING_SDK_COMPONENT_OPTIMIZATION_KEY=... \
 AGENT_LEARNING_SDK_ORCHESTRATION_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_orchestration_optimization.py \
   artifacts/sdk-orchestration-optimization.json
+
+AGENT_LEARNING_SDK_ORCHESTRATION_TARGET_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_orchestration_target_optimization.py \
+  artifacts/sdk-orchestration-target-optimization.json
 
 AGENT_LEARNING_SDK_WORLD_FRAMEWORK_MEMORY_KEY=... \
   PYTHONPATH=src python examples/sdk_world_framework_memory_optimization.py \

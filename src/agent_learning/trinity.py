@@ -730,6 +730,114 @@ V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
     "agent_memory_lineage_operations"
 )
 
+V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES = [
+    "examples/sdk_orchestration_target_optimization.py",
+    "examples/sdk_orchestration_optimization.py",
+    "internal-docs/orchestration-target-optimizer-readiness-research.md",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments.1.data.spans",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS = [
+    "agent",
+    "agent.responses",
+    "agent.prompt",
+    "prompt",
+    "agent.method",
+    "simulation.environments.0.data.transitions",
+    "simulation.environments.2.data.documents",
+    "simulation.environments.3.data.operations",
+    "simulation.environments.4.data.participants",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS = [
+    "orchestration",
+    "framework",
+    "world",
+    "retrieval",
+    "memory",
+    "multi_agent",
+    "evaluator",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS = [
+    "orchestration_flow_quality",
+    "orchestration_trace_coverage",
+    "world_contract_quality",
+    "framework_trace_coverage",
+    "retrieval_context_quality",
+    "retrieval_memory_attribution",
+    "agent_memory_lineage_quality",
+    "multi_agent_coordination_quality",
+    "multi_agent_trace_coverage",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM = 0.7
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES = [
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent_room",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS = [
+    "world_contract",
+    "framework_trace",
+    "retrieval_memory",
+    "agent_memory_lineage",
+    "multi_agent",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK = "langgraph"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN = "planner.invoke"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL = "framework_trace_status"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION = "approve_refund"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID = "doc_refund_2026"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID = "doc_refund_2025"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS = [
+    "read",
+    "write",
+    "recall",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES = [
+    "planner",
+    "retriever",
+    "critic",
+]
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE = "critic"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND = (
+    "agent-learning.optimization.orchestration-stack-proof.v1"
+)
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL = (
+    "l3_native_orchestration_stack_verified"
+)
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
+    "agent_learning.optimize.build_target_optimization_manifest"
+)
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
+
+V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
+    "framework_trace_spans"
+)
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -4177,6 +4285,25 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=memory_target_optimizer,
     )
+    orchestration_target_optimizer = _release_orchestration_target_optimizer_status(
+        root
+    )
+    _append_release_check(
+        checks,
+        check_id="orchestration_target_optimizer_readiness",
+        passed=(
+            not orchestration_target_optimizer["missing_files"]
+            and not orchestration_target_optimizer["execution_errors"]
+            and not orchestration_target_optimizer["manifest_errors"]
+            and not orchestration_target_optimizer["optimization_errors"]
+            and not orchestration_target_optimizer["metric_errors"]
+            and not orchestration_target_optimizer["runtime_errors"]
+            and not orchestration_target_optimizer["proof_errors"]
+            and not orchestration_target_optimizer["security_errors"]
+        ),
+        milestone="M3",
+        evidence=orchestration_target_optimizer,
+    )
     optimizer_governance = _release_optimizer_governance_status(root)
     _append_release_check(
         checks,
@@ -5142,6 +5269,72 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_memory_target_optimizer_surface": (
             V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
+        ),
+        "required_orchestration_target_optimizer_files": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES
+        ),
+        "required_orchestration_target_optimizer_search_paths": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_orchestration_target_optimizer_search_paths": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_orchestration_target_optimizer_layers": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_orchestration_target_optimizer_metrics": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_orchestration_target_optimizer_source_grounding_minimum": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+        ),
+        "required_orchestration_target_optimizer_environment_types": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_orchestration_target_optimizer_state_keys": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+        ),
+        "required_orchestration_target_optimizer_framework": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+        ),
+        "required_orchestration_target_optimizer_span": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+        ),
+        "required_orchestration_target_optimizer_tool": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
+        ),
+        "required_orchestration_target_optimizer_transition": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
+        ),
+        "required_orchestration_target_optimizer_doc_id": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+        ),
+        "forbidden_orchestration_target_optimizer_doc_id": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
+        ),
+        "required_orchestration_target_optimizer_operations": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+        ),
+        "required_orchestration_target_optimizer_roles": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
+        ),
+        "required_orchestration_target_optimizer_reconciliation_source": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
+        ),
+        "required_orchestration_target_optimizer_proof_kind": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND
+        ),
+        "required_orchestration_target_optimizer_proof_assurance_level": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_orchestration_target_optimizer_source": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE
+        ),
+        "required_orchestration_target_optimizer_task_kind": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_orchestration_target_optimizer_surface": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -10435,6 +10628,1093 @@ def _release_memory_target_optimizer_status(root: Path) -> dict[str, Any]:
         "required_source": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE,
         "required_task_kind": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
         "required_surface": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "proof_errors": proof_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_orchestration_target_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = "release-check-orchestration-target-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def forbidden_paths(paths: Iterable[str]) -> list[str]:
+        findings: list[str] = []
+        for path in paths:
+            for forbidden in V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS:
+                if path == forbidden or path.startswith(f"{forbidden}."):
+                    findings.append(path)
+                    break
+        return sorted(findings)
+
+    def span_names(spans: Any) -> list[str]:
+        return sorted(
+            {
+                str(_as_mapping(span).get("name") or "")
+                for span in _as_list(spans)
+                if _as_mapping(span).get("name")
+            }
+        )
+
+    def span_tool_names(spans: Any) -> list[str]:
+        return sorted(
+            {
+                str(_as_mapping(tool).get("name") or "")
+                for span in _as_list(spans)
+                for tool in _as_list(_as_mapping(span).get("tool_calls"))
+                if _as_mapping(tool).get("name")
+            }
+        )
+
+    def operation_types(operations: Any) -> list[str]:
+        return sorted(
+            {
+                str(_as_mapping(operation).get("operation") or "")
+                for operation in _as_list(operations)
+                if _as_mapping(operation).get("operation")
+            }
+        )
+
+    def environment_types(environments: Any) -> list[str]:
+        return [
+            str(_as_mapping(environment).get("type"))
+            for environment in _as_list(environments)
+            if _as_mapping(environment).get("type")
+        ]
+
+    def without_framework_spans(environments: Any) -> list[dict[str, Any]]:
+        copied = copy.deepcopy(_as_list(environments))
+        for environment in copied:
+            env = _as_mapping(environment)
+            if env.get("type") == "framework_trace":
+                data = _as_mapping(env.get("data"))
+                data["spans"] = []
+                env["data"] = data
+                environment.clear()
+                environment.update(env)
+        return copied
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_ORCHESTRATION_TARGET_OPTIMIZATION_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_orchestration_target_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_orchestration_target_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = release_secret
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-orchestration-target-optimizer-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-orchestration-target.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_config = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_config.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        search_paths = sorted(str(path) for path in search_space)
+        forbidden_search_paths = forbidden_paths(search_paths)
+        span_candidates = _as_list(
+            search_space.get(
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS[0]
+            )
+        )
+        candidate_span_names = [span_names(candidate) for candidate in span_candidates]
+        candidate_tool_names = [
+            span_tool_names(candidate) for candidate in span_candidates
+        ]
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            _as_mapping(environment)
+            for environment in _as_list(simulation.get("environments"))
+        ]
+        env_types = environment_types(environments)
+        world_env = _as_mapping(environments[0]) if environments else {}
+        world_data = _as_mapping(world_env.get("data"))
+        framework_env = _as_mapping(environments[1]) if len(environments) > 1 else {}
+        framework_data = _as_mapping(framework_env.get("data"))
+        retrieval_env = _as_mapping(environments[2]) if len(environments) > 2 else {}
+        retrieval_data = _as_mapping(retrieval_env.get("data"))
+        retrieval_docs = [
+            _as_mapping(doc)
+            for doc in _as_list(retrieval_data.get("documents"))
+            if isinstance(doc, Mapping)
+        ]
+        retrieval_doc = retrieval_docs[0] if retrieval_docs else {}
+        lineage_env = _as_mapping(environments[3]) if len(environments) > 3 else {}
+        lineage_data = _as_mapping(lineage_env.get("data"))
+        room_env = _as_mapping(environments[4]) if len(environments) > 4 else {}
+        room_data = _as_mapping(room_env.get("data"))
+        agent = _as_mapping(manifest.get("agent"))
+        target_base_agent = _as_mapping(
+            _as_mapping(target.get("base_config")).get("agent")
+        )
+        evaluation_config = _as_mapping(
+            _as_mapping(manifest.get("evaluation")).get("agent_report")
+        )
+        evaluation_config = _as_mapping(evaluation_config.get("config"))
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_source": target_metadata.get("source"),
+            "target_task_kind": target_metadata.get("task_kind"),
+            "optimized_surface": target_metadata.get("optimized_surface"),
+            "target_layers": list(target.get("layers") or []),
+            "threshold": optimization_config.get("threshold"),
+            "search_paths": search_paths,
+            "forbidden_search_paths_present": forbidden_search_paths,
+            "candidate_count": len(span_candidates),
+            "candidate_span_names": candidate_span_names,
+            "candidate_tool_names": candidate_tool_names,
+            "auto_execute_tools": simulation.get("auto_execute_tools"),
+            "min_turns": simulation.get("min_turns"),
+            "max_turns": simulation.get("max_turns"),
+            "environment_types": env_types,
+            "framework": framework_data.get("framework"),
+            "base_span_names": span_names(framework_data.get("spans")),
+            "base_agent_type": agent.get("type"),
+            "target_base_agent_type": target_base_agent.get("type"),
+            "world_transition_ids": [
+                str(item.get("id"))
+                for item in _as_list(world_data.get("transitions"))
+                if isinstance(item, Mapping) and item.get("id")
+            ],
+            "retrieval_document_id": retrieval_doc.get("id"),
+            "retrieval_document_current": retrieval_doc.get("current"),
+            "memory_operation_types": operation_types(lineage_data.get("operations")),
+            "room_participant_roles": sorted(str(role) for role in _as_mapping(room_data.get("participants"))),
+            "expected_reconciliation_source": _as_mapping(
+                room_data.get("expected_reconciliation")
+            ).get("accepted_source"),
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in [
+                    *V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS,
+                    "source_grounding",
+                ]
+            },
+        }
+
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_ORCHESTRATION_TARGET_OPTIMIZATION_KEY"],
+            ),
+            "optimization.threshold": (optimization_config.get("threshold"), 0.98),
+            "optimization.target.metadata.source": (
+                target_metadata.get("source"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+            ),
+            "optimization.target.metadata.task_kind": (
+                target_metadata.get("task_kind"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+            ),
+            "optimization.target.metadata.optimized_surface": (
+                target_metadata.get("optimized_surface"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS,
+            ),
+            "optimization.target.search_space": (
+                search_paths,
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "optimization.target.forbidden_search_paths_present": (
+                forbidden_search_paths,
+                [],
+            ),
+            "simulation.auto_execute_tools": (
+                simulation.get("auto_execute_tools"),
+                True,
+            ),
+            "simulation.min_turns": (simulation.get("min_turns"), 3),
+            "simulation.max_turns": (simulation.get("max_turns"), 3),
+            "framework_trace.framework": (
+                framework_data.get("framework"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+            ),
+            "framework_trace.spans.empty": (
+                span_names(framework_data.get("spans")),
+                [],
+            ),
+            "retrieval_memory.documents.0.id": (
+                retrieval_doc.get("id"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+            ),
+            "retrieval_memory.documents.0.current": (
+                retrieval_doc.get("current"),
+                True,
+            ),
+            "agent.type": (agent.get("type"), "scripted"),
+            "optimization.target.base_config.agent.type": (
+                target_base_agent.get("type"),
+                "scripted",
+            ),
+            "multi_agent_room.expected_reconciliation.accepted_source": (
+                _as_mapping(room_data.get("expected_reconciliation")).get(
+                    "accepted_source"
+                ),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_environment_types = missing_values(
+            env_types,
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments.type",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=env_types,
+            )
+        if len(span_candidates) != 2:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.spans",
+                expected=2,
+                observed=len(span_candidates),
+            )
+        if [] not in candidate_span_names:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.spans.weak",
+                expected=[],
+                observed=candidate_span_names,
+            )
+        if not any(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN in names
+            for names in candidate_span_names
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.spans.strong",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN,
+                observed=candidate_span_names,
+            )
+        if not any(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL in names
+            for names in candidate_tool_names
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.spans.strong.tool_calls",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL,
+                observed=candidate_tool_names,
+            )
+        missing_world_transitions = missing_values(
+            evidence["manifest"]["world_transition_ids"],
+            [V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION],
+        )
+        if missing_world_transitions:
+            append_error(
+                manifest_errors,
+                field="world_contract.transitions.id",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION,
+                observed=evidence["manifest"]["world_transition_ids"],
+            )
+        missing_memory_operations = missing_values(
+            operation_types(lineage_data.get("operations")),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_memory_operations:
+            append_error(
+                manifest_errors,
+                field="agent_memory_lineage.operations",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=operation_types(lineage_data.get("operations")),
+            )
+        missing_roles = missing_values(
+            _as_mapping(room_data.get("participants")),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_roles:
+            append_error(
+                manifest_errors,
+                field="multi_agent_room.participants",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=sorted(str(role) for role in _as_mapping(room_data.get("participants"))),
+            )
+        weighted_metrics = [
+            metric
+            for metric in V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+            if metric
+            not in {
+                "orchestration_flow_quality",
+                "orchestration_trace_coverage",
+            }
+        ]
+        for metric in [*weighted_metrics, "source_grounding"]:
+            if _float_or_zero(metric_weights.get(metric)) <= 0.0:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.metric_weights.{metric}",
+                    expected=">0",
+                    observed=metric_weights.get(metric),
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        best_history = max(
+            histories,
+            key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            default={},
+        )
+        best_history = _as_mapping(best_history)
+        selected_metrics = _as_mapping(best_history.get("metrics"))
+        selected_patch = _as_mapping(best_history.get("patch"))
+        selected_patch_paths = sorted(str(path) for path in selected_patch)
+        forbidden_patch_paths = forbidden_paths(selected_patch_paths)
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        manifest_agent = _as_mapping(manifest.get("agent"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(best_simulation.get("environments"))
+        ]
+        best_environment_types = environment_types(best_environments)
+        manifest_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(
+                _as_mapping(manifest.get("simulation")).get("environments")
+            )
+        ]
+        framework_env = (
+            _as_mapping(best_environments[1]) if len(best_environments) > 1 else {}
+        )
+        framework_data = _as_mapping(framework_env.get("data"))
+        fixed_environment_fields_unchanged = without_framework_spans(
+            best_environments
+        ) == without_framework_spans(manifest_environments)
+        report = _as_mapping(best_history.get("report"))
+        result_rows = _as_list(report.get("results"))
+        result_row = _as_mapping(result_rows[0]) if result_rows else {}
+        metadata = _as_mapping(result_row.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        world_state = _as_mapping(environment_state.get("world_contract"))
+        world_summary = _as_mapping(world_state.get("summary"))
+        framework_state = _as_mapping(environment_state.get("framework_trace"))
+        adapter_conformance = _as_mapping(
+            framework_state.get("adapter_conformance")
+        )
+        retrieval_state = _as_mapping(environment_state.get("retrieval_memory"))
+        lineage_state = _as_mapping(environment_state.get("agent_memory_lineage"))
+        lineage_summary = _as_mapping(lineage_state.get("summary"))
+        multi_agent_state = _as_mapping(environment_state.get("multi_agent"))
+        citations = [
+            citation
+            for citation in _as_list(retrieval_state.get("citations"))
+            if isinstance(citation, Mapping)
+        ]
+        citation_doc_ids = [
+            str(doc_id)
+            for citation in citations
+            for doc_id in _as_list(citation.get("doc_ids"))
+            if str(doc_id)
+        ]
+        retrieval_docs = [
+            _as_mapping(doc)
+            for doc in _as_list(retrieval_state.get("documents"))
+            if isinstance(doc, Mapping)
+        ]
+        retrieval_doc_ids = [
+            str(doc.get("id") or "") for doc in retrieval_docs if doc.get("id")
+        ]
+        proof = _as_mapping(result.get("orchestration_stack_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        proof_metrics = _as_mapping(proof_evidence.get("selected_metrics"))
+        proof_framework_conformance = _as_mapping(
+            proof_evidence.get("framework_adapter_conformance")
+        )
+        proof_failed_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("failed_check_ids"))
+        ]
+        proof_warning_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("warning_check_ids"))
+        ]
+        summary_metrics = _as_mapping(summary.get("metric_averages"))
+        tool_calls = [
+            _as_mapping(tool_call)
+            for tool_call in _as_list(result_row.get("tool_calls"))
+            if isinstance(tool_call, Mapping)
+        ]
+        tool_call_names = sorted(
+            {
+                str(tool_call.get("name") or "")
+                for tool_call in tool_calls
+                if tool_call.get("name")
+            }
+        )
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        release_secret_absent = release_secret not in serialized
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "selected_patch_paths": selected_patch_paths,
+            "forbidden_patch_paths_present": forbidden_patch_paths,
+            "best_history_score": best_history.get("score"),
+            "agent_unchanged": best_agent == manifest_agent,
+            "fixed_environment_fields_unchanged": (
+                fixed_environment_fields_unchanged
+            ),
+            "selected_environment_types": best_environment_types,
+            "selected_span_names": span_names(framework_data.get("spans")),
+            "selected_span_tool_names": span_tool_names(framework_data.get("spans")),
+            "optimizer_governance_status": summary.get(
+                "optimizer_governance_status"
+            ),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["metrics"] = {
+            "summary_metric_averages": {
+                metric: summary_metrics.get(metric)
+                for metric in [
+                    *V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS,
+                    "source_grounding",
+                ]
+            },
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+            "source_grounding": selected_metrics.get("source_grounding"),
+        }
+        evidence["runtime"] = {
+            "state_keys": sorted(str(key) for key in environment_state),
+            "world_terminal_status": world_summary.get("terminal_status"),
+            "world_completed_required_transition_count": world_summary.get(
+                "completed_required_transition_count"
+            ),
+            "world_violation_count": world_summary.get("violation_count"),
+            "framework": framework_state.get("framework"),
+            "framework_span_names": span_names(framework_state.get("spans")),
+            "framework_adapter_conformance_passed": adapter_conformance.get("passed"),
+            "framework_adapter_conformance_score": adapter_conformance.get("score"),
+            "tool_call_names": tool_call_names,
+            "retrieval_document_ids": retrieval_doc_ids,
+            "retrieval_citation_doc_ids": sorted(set(citation_doc_ids)),
+            "memory_operation_types": operation_types(lineage_state.get("operations")),
+            "memory_blocking_gap_count": lineage_summary.get("blocking_gap_count"),
+            "memory_policy_violation_count": lineage_summary.get(
+                "policy_violation_count"
+            ),
+            "memory_open_poisoning_count": lineage_summary.get(
+                "open_poisoning_count"
+            ),
+            "participant_roles": sorted(
+                str(role) for role in _as_list(multi_agent_state.get("participants"))
+            ),
+            "review_count": len(_as_list(multi_agent_state.get("reviews"))),
+            "reconciliation_count": len(
+                _as_list(multi_agent_state.get("reconciliations"))
+            ),
+            "reconciliation_sources": sorted(
+                {
+                    str(_as_mapping(item).get("accepted_source") or "")
+                    for item in _as_list(multi_agent_state.get("reconciliations"))
+                    if _as_mapping(item).get("accepted_source")
+                }
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "failed_check_ids": proof_failed_check_ids,
+            "warning_check_ids": proof_warning_check_ids,
+            "environment_types": list(proof_evidence.get("environment_types") or []),
+            "selected_environment_types": list(
+                proof_evidence.get("selected_environment_types") or []
+            ),
+            "present_layers": list(proof_evidence.get("present_layers") or []),
+            "framework_conformance_passed": proof_framework_conformance.get(
+                "passed"
+            ),
+            "framework_conformance_score": proof_framework_conformance.get("score"),
+            "retrieval_current_doc_ids": list(
+                proof_evidence.get("retrieval_current_doc_ids") or []
+            ),
+            "retrieval_cited_doc_ids": list(
+                proof_evidence.get("retrieval_cited_doc_ids") or []
+            ),
+            "memory_operation_types": list(
+                _as_mapping(
+                    proof_evidence.get("agent_memory_lineage_summary")
+                ).get("operation_types")
+                or []
+            ),
+            "multi_agent_participants": list(
+                proof_evidence.get("multi_agent_participants") or []
+            ),
+            "multi_agent_counts": dict(
+                _as_mapping(proof_evidence.get("multi_agent_counts"))
+            ),
+            "selected_metrics": {
+                metric: proof_metrics.get(metric)
+                for metric in [
+                    *V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS,
+                    "source_grounding",
+                ]
+            },
+        }
+        evidence["security"] = {
+            "serialized_secret_absent": release_secret_absent,
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+            "best_history.patch": (
+                selected_patch_paths,
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "best_history.forbidden_patch_paths_present": (
+                forbidden_patch_paths,
+                [],
+            ),
+            "optimization.best_config.agent_unchanged": (
+                best_agent == manifest_agent,
+                True,
+            ),
+            "optimization.best_config.fixed_environment_fields_unchanged": (
+                fixed_environment_fields_unchanged,
+                True,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field, observed in {
+            "summary.optimization_score": summary.get("optimization_score"),
+            "summary.evaluation_score": summary.get("evaluation_score"),
+            "best_history.score": best_history.get("score"),
+        }.items():
+            if _float_or_zero(observed) < 0.98:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=0.98",
+                    observed=observed,
+                )
+        for field, observed in {
+            "summary.total_evaluations": summary.get("total_evaluations"),
+            "summary.total_iterations": summary.get("total_iterations"),
+            "summary.candidate_lineage_count": summary.get(
+                "candidate_lineage_count"
+            ),
+        }.items():
+            if _int_or_zero(observed) < 2:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=2",
+                    observed=observed,
+                )
+        if (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+            not in span_names(framework_data.get("spans"))
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.framework_trace.spans",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN,
+                observed=span_names(framework_data.get("spans")),
+            )
+        if (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
+            not in span_tool_names(framework_data.get("spans"))
+        ):
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.framework_trace.spans.tool_calls",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL,
+                observed=span_tool_names(framework_data.get("spans")),
+            )
+        missing_environment_types = missing_values(
+            best_environment_types,
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.simulation.environments",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=best_environment_types,
+            )
+        for metric in V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            observed = selected_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"best_history.metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        if _float_or_zero(selected_metrics.get("source_grounding")) < (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+        ):
+            append_error(
+                metric_errors,
+                field="best_history.metrics.source_grounding",
+                expected=(
+                    f">="
+                    f"{V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM}"
+                ),
+                observed=selected_metrics.get("source_grounding"),
+            )
+
+        runtime_expectations = {
+            "world_contract.summary.terminal_status": (
+                world_summary.get("terminal_status"),
+                "success",
+            ),
+            "world_contract.summary.violation_count": (
+                world_summary.get("violation_count"),
+                0,
+            ),
+            "framework_trace.framework": (
+                framework_state.get("framework"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+            ),
+            "framework_trace.adapter_conformance.passed": (
+                adapter_conformance.get("passed"),
+                True,
+            ),
+            "agent_memory_lineage.summary.blocking_gap_count": (
+                lineage_summary.get("blocking_gap_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.policy_violation_count": (
+                lineage_summary.get("policy_violation_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.open_poisoning_count": (
+                lineage_summary.get("open_poisoning_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_state_keys = missing_values(
+            environment_state,
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+        )
+        if missing_state_keys:
+            append_error(
+                runtime_errors,
+                field="report.results.0.metadata.environment_state",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+                observed=sorted(str(key) for key in environment_state),
+            )
+        if _int_or_zero(
+            world_summary.get("completed_required_transition_count")
+        ) < 1:
+            append_error(
+                runtime_errors,
+                field="world_contract.summary.completed_required_transition_count",
+                expected=">=1",
+                observed=world_summary.get("completed_required_transition_count"),
+            )
+        if _float_or_zero(adapter_conformance.get("score")) < 1.0:
+            append_error(
+                runtime_errors,
+                field="framework_trace.adapter_conformance.score",
+                expected=1.0,
+                observed=adapter_conformance.get("score"),
+            )
+        if (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+            not in span_names(framework_state.get("spans"))
+        ):
+            append_error(
+                runtime_errors,
+                field="framework_trace.spans",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN,
+                observed=span_names(framework_state.get("spans")),
+            )
+        if V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL not in tool_call_names:
+            append_error(
+                runtime_errors,
+                field="report.results.0.tool_calls.name",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL,
+                observed=tool_call_names,
+            )
+        if V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID not in citation_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.citations.doc_ids",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+                observed=sorted(set(citation_doc_ids)),
+            )
+        if V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID in retrieval_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.documents.id",
+                expected=f"not {V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID}",
+                observed=retrieval_doc_ids,
+            )
+        missing_runtime_operations = missing_values(
+            operation_types(lineage_state.get("operations")),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_runtime_operations:
+            append_error(
+                runtime_errors,
+                field="agent_memory_lineage.operations",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=operation_types(lineage_state.get("operations")),
+            )
+        missing_runtime_roles = missing_values(
+            multi_agent_state.get("participants"),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_runtime_roles:
+            append_error(
+                runtime_errors,
+                field="multi_agent.participants",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=multi_agent_state.get("participants") or [],
+            )
+        if V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE not in {
+            str(_as_mapping(item).get("accepted_source") or "")
+            for item in _as_list(multi_agent_state.get("reconciliations"))
+        }:
+            append_error(
+                runtime_errors,
+                field="multi_agent.reconciliations.accepted_source",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE,
+                observed=evidence["runtime"]["reconciliation_sources"],
+            )
+
+        proof_expectations = {
+            "orchestration_stack_proof.kind": (
+                proof.get("kind"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND,
+            ),
+            "orchestration_stack_proof.status": (proof.get("status"), "passed"),
+            "orchestration_stack_proof.passed": (proof.get("passed"), True),
+            "orchestration_stack_proof.assurance_level": (
+                proof.get("assurance_level"),
+                V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL,
+            ),
+            "orchestration_stack_proof.requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "orchestration_stack_proof.failed_check_ids": (
+                proof_failed_check_ids,
+                [],
+            ),
+            "orchestration_stack_proof.warning_check_ids": (
+                proof_warning_check_ids,
+                [],
+            ),
+            "orchestration_stack_proof.framework_conformance_passed": (
+                proof_framework_conformance.get("passed"),
+                True,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_proof_env_types = missing_values(
+            proof_evidence.get("environment_types"),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_proof_env_types:
+            append_error(
+                proof_errors,
+                field="orchestration_stack_proof.evidence.environment_types",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=proof_evidence.get("environment_types") or [],
+            )
+        if _float_or_zero(proof_framework_conformance.get("score")) < 1.0:
+            append_error(
+                proof_errors,
+                field="orchestration_stack_proof.evidence.framework_conformance.score",
+                expected=1.0,
+                observed=proof_framework_conformance.get("score"),
+            )
+        if (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+            not in _as_list(proof_evidence.get("retrieval_current_doc_ids"))
+        ):
+            append_error(
+                proof_errors,
+                field="orchestration_stack_proof.evidence.retrieval_current_doc_ids",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+                observed=proof_evidence.get("retrieval_current_doc_ids") or [],
+            )
+        if (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+            not in _as_list(proof_evidence.get("retrieval_cited_doc_ids"))
+        ):
+            append_error(
+                proof_errors,
+                field="orchestration_stack_proof.evidence.retrieval_cited_doc_ids",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+                observed=proof_evidence.get("retrieval_cited_doc_ids") or [],
+            )
+        missing_proof_ops = missing_values(
+            _as_mapping(proof_evidence.get("agent_memory_lineage_summary")).get(
+                "operation_types"
+            ),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_proof_ops:
+            append_error(
+                proof_errors,
+                field="orchestration_stack_proof.evidence.operation_types",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=_as_mapping(
+                    proof_evidence.get("agent_memory_lineage_summary")
+                ).get("operation_types")
+                or [],
+            )
+        missing_proof_roles = missing_values(
+            proof_evidence.get("multi_agent_participants"),
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_proof_roles:
+            append_error(
+                proof_errors,
+                field="orchestration_stack_proof.evidence.multi_agent_participants",
+                expected=V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=proof_evidence.get("multi_agent_participants") or [],
+            )
+        for metric in V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            observed = proof_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    proof_errors,
+                    field=f"orchestration_stack_proof.evidence.selected_metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        if _float_or_zero(proof_metrics.get("source_grounding")) < (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+        ):
+            append_error(
+                proof_errors,
+                field=(
+                    "orchestration_stack_proof.evidence."
+                    "selected_metrics.source_grounding"
+                ),
+                expected=(
+                    f">="
+                    f"{V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM}"
+                ),
+                observed=proof_metrics.get("source_grounding"),
+            )
+        if not release_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES),
+        "required_search_paths": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_search_paths": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_layers": list(V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS),
+        "required_metrics": list(V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS),
+        "source_grounding_minimum": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+        ),
+        "required_environment_types": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_state_keys": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+        ),
+        "required_framework": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK,
+        "required_span": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN,
+        "required_tool": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL,
+        "required_transition": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
+        ),
+        "required_doc_id": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+        "forbidden_doc_id": V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID,
+        "required_operations": list(
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+        ),
+        "required_roles": list(V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES),
+        "selected_reconciliation_source": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
+        ),
+        "required_proof_kind": V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND,
+        "required_proof_assurance_level": (
+            V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_source": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+        "required_task_kind": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+        "required_surface": V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE,
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "manifest_errors": manifest_errors,
@@ -36307,6 +37587,28 @@ __all__ = [
     "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS",
     "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE",
     "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL",
+    "V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",

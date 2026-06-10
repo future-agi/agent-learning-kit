@@ -4052,6 +4052,153 @@ def test_sdk_memory_target_optimization_example_runs(
     assert proof["warning_check_ids"] == []
 
 
+def test_sdk_orchestration_target_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_ORCHESTRATION_TARGET_OPTIMIZATION_KEY",
+        "real-local-sdk-orchestration-target-key",
+    )
+    example_path = (
+        PROJECT_ROOT / "examples" / "sdk_orchestration_target_optimization.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sdk_orchestration_target_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def span_names(spans):
+        return sorted(
+            str(span["name"]) for span in spans if span.get("name")
+        )
+
+    def span_tool_names(spans):
+        return sorted(
+            str(tool["name"])
+            for span in spans
+            for tool in span.get("tool_calls", [])
+            if tool.get("name")
+        )
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ORCHESTRATION_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
+    target = manifest["optimization"]["target"]
+    assert target["metadata"]["source"] == (
+        "agent_learning.optimize.build_target_optimization_manifest"
+    )
+    assert target["metadata"]["task_kind"] == "generic_target"
+    assert target["metadata"]["optimized_surface"] == "framework_trace_spans"
+    assert target["layers"] == [
+        "orchestration",
+        "framework",
+        "world",
+        "retrieval",
+        "memory",
+        "multi_agent",
+        "evaluator",
+    ]
+    search_space = target["search_space"]
+    assert set(search_space) == {"simulation.environments.1.data.spans"}
+    assert "agent" not in search_space
+    environments = manifest["simulation"]["environments"]
+    assert [environment["type"] for environment in environments] == [
+        "world_contract",
+        "framework_trace",
+        "retrieval_memory",
+        "agent_memory_lineage",
+        "multi_agent_room",
+    ]
+    assert environments[1]["data"]["framework"] == "langgraph"
+    assert environments[1]["data"]["spans"] == []
+    assert span_names(search_space[module.TARGET_PATH][0]) == []
+    assert span_names(search_space[module.TARGET_PATH][1]) == ["planner.invoke"]
+    assert span_tool_names(search_space[module.TARGET_PATH][1]) == [
+        "framework_trace_status"
+    ]
+
+    output_path = tmp_path / "sdk-orchestration-target-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["orchestration_stack_proof_status"] == "passed"
+    assert result["summary"]["orchestration_stack_proof_assurance_level"] == (
+        "l3_native_orchestration_stack_verified"
+    )
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {module.TARGET_PATH}
+    assert "agent" not in best_history["patch"]
+    assert span_names(best_history["patch"][module.TARGET_PATH]) == [
+        "planner.invoke"
+    ]
+    assert span_tool_names(best_history["patch"][module.TARGET_PATH]) == [
+        "framework_trace_status"
+    ]
+    for metric in [
+        "orchestration_flow_quality",
+        "orchestration_trace_coverage",
+        "world_contract_quality",
+        "framework_trace_coverage",
+        "retrieval_context_quality",
+        "retrieval_memory_attribution",
+        "agent_memory_lineage_quality",
+        "multi_agent_coordination_quality",
+        "multi_agent_trace_coverage",
+        "tool_selection_accuracy",
+        "task_completion",
+    ]:
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+    assert best_history["metrics"]["source_grounding"] >= 0.7
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert sorted(state) == [
+        "agent_memory_lineage",
+        "framework_trace",
+        "multi_agent",
+        "retrieval_memory",
+        "world_contract",
+    ]
+    assert state["world_contract"]["summary"]["terminal_status"] == "success"
+    assert state["framework_trace"]["framework"] == "langgraph"
+    assert state["framework_trace"]["adapter_conformance"]["passed"] is True
+    assert state["framework_trace"]["adapter_conformance"]["score"] == (
+        pytest.approx(1.0)
+    )
+    assert span_names(state["framework_trace"]["spans"]) == ["planner.invoke"]
+    assert [document["id"] for document in state["retrieval_memory"]["documents"]] == [
+        "doc_refund_2026"
+    ]
+    assert state["agent_memory_lineage"]["summary"]["operation_types"] == [
+        "read",
+        "recall",
+        "write",
+    ]
+    assert sorted(state["multi_agent"]["participants"]) == [
+        "critic",
+        "planner",
+        "retriever",
+    ]
+    assert state["multi_agent"]["reconciliations"][0]["accepted_source"] == "critic"
+    proof = result["orchestration_stack_proof"]
+    assert proof["kind"] == "agent-learning.optimization.orchestration-stack-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_orchestration_stack_verified"
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+
+
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     from agent_learning import optimize
 
@@ -16011,6 +16158,75 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_memory_target_optimizer_surface"] == (
         trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
     )
+    assert payload["required_orchestration_target_optimizer_files"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES
+    )
+    assert payload["required_orchestration_target_optimizer_search_paths"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["forbidden_orchestration_target_optimizer_search_paths"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert payload["required_orchestration_target_optimizer_layers"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_orchestration_target_optimizer_metrics"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert (
+        payload["required_orchestration_target_optimizer_source_grounding_minimum"]
+        == trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+    )
+    assert payload["required_orchestration_target_optimizer_environment_types"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_orchestration_target_optimizer_state_keys"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_orchestration_target_optimizer_framework"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert payload["required_orchestration_target_optimizer_span"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+    )
+    assert payload["required_orchestration_target_optimizer_tool"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
+    )
+    assert payload["required_orchestration_target_optimizer_transition"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
+    )
+    assert payload["required_orchestration_target_optimizer_doc_id"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    )
+    assert payload["forbidden_orchestration_target_optimizer_doc_id"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
+    )
+    assert payload["required_orchestration_target_optimizer_operations"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert payload["required_orchestration_target_optimizer_roles"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert (
+        payload["required_orchestration_target_optimizer_reconciliation_source"]
+        == trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
+    )
+    assert payload["required_orchestration_target_optimizer_proof_kind"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert (
+        payload["required_orchestration_target_optimizer_proof_assurance_level"]
+        == trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_orchestration_target_optimizer_source"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert payload["required_orchestration_target_optimizer_task_kind"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert payload["required_orchestration_target_optimizer_surface"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -16867,6 +17083,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_adapter_target_optimizer_readiness",
         "multi_agent_target_optimizer_readiness",
         "memory_target_optimizer_readiness",
+        "orchestration_target_optimizer_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -17943,6 +18160,297 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert memory_target_proof["open_poisoning_count"] == 0
     memory_target_security = memory_target_evidence["security"]
     assert memory_target_security["serialized_secret_absent"] is True
+
+    orchestration_target = checks["orchestration_target_optimizer_readiness"][
+        "evidence"
+    ]
+    assert orchestration_target["required_files"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES
+    )
+    assert orchestration_target["required_search_paths"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert orchestration_target["forbidden_search_paths"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert orchestration_target["required_layers"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert orchestration_target["required_metrics"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert orchestration_target["source_grounding_minimum"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+    )
+    assert orchestration_target["required_environment_types"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert orchestration_target["required_state_keys"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert orchestration_target["required_framework"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert orchestration_target["required_span"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+    )
+    assert orchestration_target["required_tool"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
+    )
+    assert orchestration_target["required_transition"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
+    )
+    assert orchestration_target["required_doc_id"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    )
+    assert orchestration_target["forbidden_doc_id"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
+    )
+    assert orchestration_target["required_operations"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert orchestration_target["required_roles"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert orchestration_target["selected_reconciliation_source"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
+    )
+    assert orchestration_target["required_proof_kind"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert orchestration_target["required_proof_assurance_level"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert orchestration_target["required_source"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert orchestration_target["required_task_kind"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert orchestration_target["required_surface"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert orchestration_target["missing_files"] == []
+    assert orchestration_target["execution_errors"] == []
+    assert orchestration_target["manifest_errors"] == []
+    assert orchestration_target["optimization_errors"] == []
+    assert orchestration_target["metric_errors"] == []
+    assert orchestration_target["runtime_errors"] == []
+    assert orchestration_target["proof_errors"] == []
+    assert orchestration_target["security_errors"] == []
+    orchestration_target_evidence = orchestration_target["evidence"]
+    orchestration_target_manifest = orchestration_target_evidence["manifest"]
+    assert orchestration_target_manifest["version"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert orchestration_target_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_ORCHESTRATION_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert orchestration_target_manifest["target_source"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert orchestration_target_manifest["target_task_kind"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert orchestration_target_manifest["optimized_surface"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert orchestration_target_manifest["target_layers"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert orchestration_target_manifest["threshold"] == pytest.approx(0.98)
+    assert orchestration_target_manifest["search_paths"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert orchestration_target_manifest["forbidden_search_paths_present"] == []
+    assert orchestration_target_manifest["candidate_count"] == 2
+    assert [] in orchestration_target_manifest["candidate_span_names"]
+    assert [trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN] in (
+        orchestration_target_manifest["candidate_span_names"]
+    )
+    assert [trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL] in (
+        orchestration_target_manifest["candidate_tool_names"]
+    )
+    assert orchestration_target_manifest["auto_execute_tools"] is True
+    assert orchestration_target_manifest["min_turns"] == 3
+    assert orchestration_target_manifest["max_turns"] == 3
+    assert orchestration_target_manifest["environment_types"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert orchestration_target_manifest["framework"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert orchestration_target_manifest["base_span_names"] == []
+    assert orchestration_target_manifest["base_agent_type"] == "scripted"
+    assert orchestration_target_manifest["target_base_agent_type"] == "scripted"
+    assert orchestration_target_manifest["world_transition_ids"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
+    ]
+    assert orchestration_target_manifest["retrieval_document_id"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    )
+    assert orchestration_target_manifest["retrieval_document_current"] is True
+    assert sorted(orchestration_target_manifest["memory_operation_types"]) == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert orchestration_target_manifest["room_participant_roles"] == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert orchestration_target_manifest["expected_reconciliation_source"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
+    )
+    assert set(orchestration_target_manifest["metric_weights"]) == {
+        *trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS,
+        "source_grounding",
+    }
+    orchestration_target_optimization = orchestration_target_evidence[
+        "optimization"
+    ]
+    assert orchestration_target_optimization["kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert orchestration_target_optimization["schema_version"] == (
+        "agent-learning.cli.v1"
+    )
+    assert orchestration_target_optimization["status"] == "passed"
+    assert orchestration_target_optimization["output_roundtrip"] is True
+    assert orchestration_target_optimization["optimization_passed"] is True
+    assert orchestration_target_optimization["evaluation_passed"] is True
+    assert orchestration_target_optimization["optimization_score"] >= 0.98
+    assert orchestration_target_optimization["evaluation_score"] >= 0.98
+    assert orchestration_target_optimization["total_evaluations"] >= 2
+    assert orchestration_target_optimization["total_iterations"] >= 2
+    assert orchestration_target_optimization["candidate_lineage_count"] >= 2
+    assert orchestration_target_optimization["selected_patch_paths"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert orchestration_target_optimization["forbidden_patch_paths_present"] == []
+    assert orchestration_target_optimization["agent_unchanged"] is True
+    assert (
+        orchestration_target_optimization["fixed_environment_fields_unchanged"]
+        is True
+    )
+    assert orchestration_target_optimization["selected_environment_types"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert orchestration_target_optimization["selected_span_names"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+    ]
+    assert orchestration_target_optimization["selected_span_tool_names"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
+    ]
+    assert orchestration_target_optimization["best_history_score"] >= 0.98
+    assert (
+        orchestration_target_optimization["optimizer_governance_status"]
+        == "passed"
+    )
+    assert (
+        orchestration_target_optimization[
+            "optimizer_governance_failed_check_count"
+        ]
+        == 0
+    )
+    orchestration_target_metrics = orchestration_target_evidence["metrics"]
+    assert orchestration_target_metrics["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+    }
+    assert orchestration_target_metrics["source_grounding"] >= (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
+    )
+    orchestration_target_runtime = orchestration_target_evidence["runtime"]
+    assert sorted(orchestration_target_runtime["state_keys"]) == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert orchestration_target_runtime["world_terminal_status"] == "success"
+    assert (
+        orchestration_target_runtime["world_completed_required_transition_count"]
+        >= 1
+    )
+    assert orchestration_target_runtime["world_violation_count"] == 0
+    assert orchestration_target_runtime["framework"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
+    )
+    assert orchestration_target_runtime["framework_span_names"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
+    ]
+    assert (
+        orchestration_target_runtime["framework_adapter_conformance_passed"]
+        is True
+    )
+    assert orchestration_target_runtime["framework_adapter_conformance_score"] == (
+        pytest.approx(1.0)
+    )
+    assert (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
+        in orchestration_target_runtime["tool_call_names"]
+    )
+    assert orchestration_target_runtime["retrieval_document_ids"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert orchestration_target_runtime["retrieval_citation_doc_ids"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert sorted(orchestration_target_runtime["memory_operation_types"]) == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert orchestration_target_runtime["memory_blocking_gap_count"] == 0
+    assert orchestration_target_runtime["memory_policy_violation_count"] == 0
+    assert orchestration_target_runtime["memory_open_poisoning_count"] == 0
+    assert orchestration_target_runtime["participant_roles"] == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert orchestration_target_runtime["review_count"] >= 1
+    assert orchestration_target_runtime["reconciliation_count"] >= 1
+    assert orchestration_target_runtime["reconciliation_sources"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
+    ]
+    orchestration_target_proof = orchestration_target_evidence["proof"]
+    assert orchestration_target_proof["kind"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert orchestration_target_proof["status"] == "passed"
+    assert orchestration_target_proof["passed"] is True
+    assert orchestration_target_proof["assurance_level"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert orchestration_target_proof["requires_external_service"] is False
+    assert orchestration_target_proof["failed_check_ids"] == []
+    assert orchestration_target_proof["warning_check_ids"] == []
+    assert orchestration_target_proof["environment_types"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert orchestration_target_proof["selected_environment_types"] == (
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert orchestration_target_proof["framework_conformance_passed"] is True
+    assert orchestration_target_proof["framework_conformance_score"] == (
+        pytest.approx(1.0)
+    )
+    assert orchestration_target_proof["retrieval_current_doc_ids"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert orchestration_target_proof["retrieval_cited_doc_ids"] == [
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert sorted(orchestration_target_proof["memory_operation_types"]) == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert sorted(orchestration_target_proof["multi_agent_participants"]) == sorted(
+        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert orchestration_target_proof["multi_agent_counts"]["reviews"] >= 1
+    assert orchestration_target_proof["multi_agent_counts"]["reconciliations"] >= 1
+    assert orchestration_target_proof["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
+    } | {
+        "source_grounding": pytest.approx(
+            orchestration_target_metrics["source_grounding"]
+        )
+    }
+    orchestration_target_security = orchestration_target_evidence["security"]
+    assert orchestration_target_security["serialized_secret_absent"] is True
 
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
@@ -23551,6 +24059,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert "multi_agent_target_optimizer_readiness" in milestones["M3"]["check_ids"]
     assert "memory_target_optimizer_readiness" in milestones["M3"]["check_ids"]
+    assert (
+        "orchestration_target_optimizer_readiness"
+        in milestones["M3"]["check_ids"]
+    )
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]
