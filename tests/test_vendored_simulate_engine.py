@@ -581,18 +581,83 @@ def test_framework_adapter_probe_runs_custom_framework_runtime() -> None:
     assert result["status"] == "passed"
     assert result["summary"]["case_count"] == 1
     assert result["summary"]["runtime_trace_count"] == 1
+    assert result["summary"]["callable_signature_present"] is True
+    assert result["summary"]["observed_io_contract_count"] == 1
+    assert result["summary"]["call_contract_count"] == 1
+    assert result["summary"]["signature_bound_count"] == 1
     assert result["summary"]["tool_call_count"] == 1
     assert result["contract"]["framework"] == "custom_refund_orchestrator"
     assert result["contract"]["method"] == "execute_task"
     assert result["contract"]["input_mode"] == "dict"
     assert result["contract"]["local_executable_fixture"] is True
+    assert result["contract"]["callable_signature"]["kind"] == (
+        "agent-learning.framework-adapter-callable-signature.v1"
+    )
     case = result["cases"][0]
     assert case["status"] == "passed"
     assert case["runtime_trace"]["summary"]["methods"] == ["execute_task"]
     assert case["runtime_trace"]["summary"]["input_modes"] == ["dict"]
+    assert case["runtime_trace"]["summary"]["call_contract_count"] == 1
+    invocation = case["runtime_trace"]["invocations"][0]
+    assert invocation["call_contract"]["kind"] == (
+        "agent-learning.framework-adapter-call-contract.v1"
+    )
+    assert invocation["call_contract"]["signature_bound"] is True
+    assert case["observed_io_contract"]["kind"] == (
+        "agent-learning.framework-adapter-observed-io-contract.v1"
+    )
+    assert case["observed_io_contract"]["summary"]["signature_bound"] is True
     assert case["runtime_trace"]["metadata"]["framework_adapter_contract"] == (
         result["contract"]
     )
+
+
+def test_framework_adapter_probe_proves_keyword_only_signature_io_contract() -> None:
+    class KeywordOnlyRefundOrchestrator:
+        async def execute_task(self, *, payload: dict):
+            assert payload["metadata"]["framework"] == "keyword_only_refund"
+            return {"content": "Keyword-only adapter approved refund."}
+
+    result = simulate.run_framework_adapter_probe(
+        "keyword_only_refund",
+        KeywordOnlyRefundOrchestrator(),
+        method="execute_task",
+        input_mode="dict",
+        cases=[
+            {
+                "id": "keyword-only-refund",
+                "input": "Approve the refund through keyword payload.",
+                "expected_contains": ["approved refund"],
+            }
+        ],
+    )
+
+    assert result["status"] == "passed"
+    assert result["summary"]["input_keys"] == ["payload"]
+    assert result["summary"]["call_styles"] == ["keyword"]
+    assert result["summary"]["input_types"] == ["dict"]
+    assert result["summary"]["output_types"] == ["AgentResponse"]
+    signature = result["contract"]["callable_signature"]
+    assert signature["keyword_only_parameters"] == ["payload"]
+    assert signature["preferred_input_key"] == "payload"
+
+    case = result["cases"][0]
+    invocation = case["runtime_trace"]["invocations"][0]
+    assert invocation["call_style"] == "keyword"
+    assert invocation["input_key"] == "payload"
+    assert invocation["call_contract"]["input_key"] == "payload"
+    assert invocation["call_contract"]["signature"]["selected_input_key"] == "payload"
+    assert invocation["call_contract"]["observed_io"]["input"]["type"] == "dict"
+    assert invocation["call_contract"]["observed_io"]["output"]["type"] == (
+        "AgentResponse"
+    )
+    assert case["observed_io_contract"]["summary"]["signature_bound"] is True
+    check_ids = {check["id"] for check in case["checks"] if check["passed"]}
+    assert {
+        "framework_adapter_callable_signature_present",
+        "framework_adapter_observed_io_contract_present",
+        "framework_adapter_observed_io_matches_signature",
+    } <= check_ids
 
 
 def test_framework_adapter_discovery_ranks_custom_methods_and_rejects_external_target() -> None:

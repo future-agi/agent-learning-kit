@@ -19384,6 +19384,9 @@ def score_framework_adapter_probe_result(
     case_count = max(_as_int(summary.get("case_count")), 1)
     passed_cases = _as_int(summary.get("passed_case_count"))
     runtime_traces = _as_int(summary.get("runtime_trace_count"))
+    observed_io_contracts = _as_int(summary.get("observed_io_contract_count"))
+    call_contracts = _as_int(summary.get("call_contract_count"))
+    signature_bound = _as_int(summary.get("signature_bound_count"))
     tool_calls = _as_int(summary.get("tool_call_count"))
     finding_count = len(_plain_list(result.get("findings")))
     case_pass_rate = passed_cases / case_count
@@ -19394,14 +19397,21 @@ def score_framework_adapter_probe_result(
         and contract.get("local_executable_fixture") is True
         and contract.get("trace_runtime") is True
     ) else 0.0
+    io_contract_quality = 1.0 if (
+        summary.get("callable_signature_present") is True
+        and observed_io_contracts >= case_count
+        and call_contracts >= case_count
+        and signature_bound >= case_count
+    ) else 0.0
     tool_evidence = 1.0 if not require_tool_evidence or tool_calls > 0 else 0.0
     finding_quality = 1.0 if finding_count == 0 else 0.0
     score = round(
         (
-            case_pass_rate * 0.4
+            case_pass_rate * 0.35
             + runtime_trace_coverage * 0.2
-            + local_contract_quality * 0.2
-            + tool_evidence * 0.1
+            + local_contract_quality * 0.15
+            + io_contract_quality * 0.15
+            + tool_evidence * 0.05
             + finding_quality * 0.1
         ),
         6,
@@ -19422,6 +19432,7 @@ def score_framework_adapter_probe_result(
                 6,
             ),
             "framework_adapter_probe_local_contract_quality": local_contract_quality,
+            "framework_adapter_probe_io_contract_quality": io_contract_quality,
             "framework_adapter_probe_tool_evidence": tool_evidence,
             "framework_adapter_probe_finding_quality": finding_quality,
             "framework_adapter_probe_score": score,
@@ -19430,6 +19441,9 @@ def score_framework_adapter_probe_result(
             "case_count": case_count,
             "passed_case_count": passed_cases,
             "runtime_trace_count": runtime_traces,
+            "observed_io_contract_count": observed_io_contracts,
+            "call_contract_count": call_contracts,
+            "signature_bound_count": signature_bound,
             "tool_call_count": tool_calls,
             "finding_count": finding_count,
             "require_tool_evidence": bool(require_tool_evidence),
@@ -19894,6 +19908,21 @@ def _framework_adapter_probe_proof(
     selected_patch = _plain_mapping(selected_history.get("patch"))
     governance = _plain_mapping(payload.get("optimization_governance"))
     contract = _plain_mapping(selected_report.get("contract"))
+    callable_signature = _plain_mapping(contract.get("callable_signature"))
+    selected_cases = _plain_list(selected_report.get("cases"))
+    observed_io_contracts = [
+        copy.deepcopy(_plain_mapping(case.get("observed_io_contract")))
+        for case in selected_cases
+        if _plain_mapping(case.get("observed_io_contract"))
+    ]
+    call_contracts = [
+        copy.deepcopy(_plain_mapping(invocation.get("call_contract")))
+        for case in selected_cases
+        for invocation in _plain_list(
+            _plain_mapping(case.get("runtime_trace")).get("invocations")
+        )
+        if _plain_mapping(invocation.get("call_contract"))
+    ]
     discovery = _plain_mapping(
         payload.get("framework_adapter_discovery")
         or optimization.get("framework_adapter_discovery")
@@ -19903,6 +19932,11 @@ def _framework_adapter_probe_proof(
     threshold = _as_float(summary.get("threshold")) or 0.9
     selected_score = _as_float(selected_history.get("score"))
     runtime_trace_count = _as_int(selected_report_summary.get("runtime_trace_count"))
+    observed_io_contract_count = _as_int(
+        selected_report_summary.get("observed_io_contract_count")
+    )
+    call_contract_count = _as_int(selected_report_summary.get("call_contract_count"))
+    signature_bound_count = _as_int(selected_report_summary.get("signature_bound_count"))
     case_count = max(_as_int(selected_report_summary.get("case_count")), 1)
     checks = [
         _proof_check(
@@ -19939,6 +19973,27 @@ def _framework_adapter_probe_proof(
             },
         ),
         _proof_check(
+            "framework_adapter_probe_signature_io_contract_closed",
+            passed=callable_signature.get("kind")
+            == "agent-learning.framework-adapter-callable-signature.v1"
+            and callable_signature.get("inspectable") is True
+            and observed_io_contract_count >= case_count
+            and call_contract_count >= case_count
+            and signature_bound_count >= case_count,
+            required=True,
+            reason=(
+                "selected probe carries deterministic callable signature and "
+                "observed input/output contract evidence"
+            ),
+            evidence={
+                "callable_signature": copy.deepcopy(callable_signature),
+                "observed_io_contract_count": observed_io_contract_count,
+                "call_contract_count": call_contract_count,
+                "signature_bound_count": signature_bound_count,
+                "case_count": case_count,
+            },
+        ),
+        _proof_check(
             "framework_adapter_probe_metric_evidence_closed",
             passed=_as_float(selected_metrics.get("framework_adapter_probe_score"))
             >= threshold
@@ -19951,9 +20006,16 @@ def _framework_adapter_probe_proof(
             and _as_float(
                 selected_metrics.get("framework_adapter_probe_local_contract_quality")
             )
+            >= 1.0
+            and _as_float(
+                selected_metrics.get("framework_adapter_probe_io_contract_quality")
+            )
             >= 1.0,
             required=True,
-            reason="selected probe closes score, runtime-trace, and local-contract metrics",
+            reason=(
+                "selected probe closes score, runtime-trace, local-contract, "
+                "and signature/I-O contract metrics"
+            ),
             evidence={"selected_metrics": copy.deepcopy(selected_metrics)},
         ),
         _proof_check(
@@ -20051,6 +20113,9 @@ def _framework_adapter_probe_proof(
             "selected_report_summary": copy.deepcopy(selected_report_summary),
             "selected_metrics": copy.deepcopy(selected_metrics),
             "framework_adapter_contract": copy.deepcopy(contract),
+            "framework_adapter_callable_signature": copy.deepcopy(callable_signature),
+            "framework_adapter_observed_io_contracts": observed_io_contracts,
+            "framework_adapter_call_contracts": call_contracts,
             "framework_adapter_discovery": copy.deepcopy(discovery),
         },
         "check_count": len(checks),

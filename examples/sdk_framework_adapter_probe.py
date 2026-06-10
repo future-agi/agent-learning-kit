@@ -9,7 +9,7 @@ from agent_learning import simulate
 class LocalRefundOrchestrator:
     """Tiny local stand-in for any framework object with a callable method."""
 
-    async def execute_task(self, payload):
+    async def execute_task(self, *, payload):
         return {
             "content": "Adapter probe approved refund with runtime evidence.",
             "tool_calls": [

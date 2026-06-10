@@ -603,8 +603,11 @@ assert discovery["adapter_candidates"][0] == {
 ```
 Before writing a full manifest, use `simulate.run_framework_adapter_probe()` to
 point at any local framework object or callable and prove the adapter method,
-input shape, output content, tool calls, events, runtime trace, and local-first
-contract evidence:
+callable signature, observed input/output shape, output content, tool calls,
+events, runtime trace, and local-first contract evidence. The probe records the
+actual call style and input key, so keyword-only adapter methods such as
+`async def execute_task(*, payload)` can be certified without reshaping the
+framework object:
 
 ```python
 from agent_learning import simulate
@@ -627,6 +630,8 @@ result = simulate.run_framework_adapter_probe(
     ],
 )
 assert result["status"] == "passed"
+assert result["summary"]["observed_io_contract_count"] == 1
+assert result["summary"]["signature_bound_count"] == 1
 ```
 
 When several adapter shapes are plausible, run the same probe through
@@ -688,12 +693,13 @@ target-to-evaluated-run flow.
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
 probe optimization, auto-discovery optimization, explicit promotion,
 auto-discovery promotion, one-call promotion, and one-call run cookbooks. It
-requires `execute_task(dict)` selection, passing probe proofs, discovery
-metadata where expected, promoted manifest proof metadata, and evaluated
-framework runtime, adapter-contract, framework-trace, and tool metrics. Probe
-optimization artifacts also render a `framework_adapter_probe` report/action
-card with exportable proof, selected probe report, contract, and replay-lock
-artifacts.
+requires `execute_task(dict)` selection, callable-signature evidence, observed
+I/O contracts, passing probe proofs, discovery metadata where expected,
+promoted manifest proof metadata, and evaluated framework runtime,
+adapter-contract, framework-trace, and tool metrics. Probe optimization
+artifacts also render a `framework_adapter_probe` report/action card with
+exportable proof, selected probe report, contract, callable signature, observed
+I/O contract, and replay-lock artifacts.
 
 If you want the SDK to execute the promoted manifest immediately, call async
 `optimize.run_framework_adapter_from_local_adapter(...)`; it returns the normal

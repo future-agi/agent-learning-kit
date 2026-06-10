@@ -1462,11 +1462,21 @@ def test_sdk_framework_adapter_probe_example_runs(tmp_path):
     assert result["kind"] == "agent-learning.framework-adapter-probe.v1"
     assert result["status"] == "passed"
     assert result["summary"]["runtime_trace_count"] == 1
+    assert result["summary"]["call_contract_count"] == 1
+    assert result["summary"]["observed_io_contract_count"] == 1
+    assert result["summary"]["signature_bound_count"] == 1
+    assert result["summary"]["input_keys"] == ["payload"]
     assert result["summary"]["tool_call_count"] == 1
     assert result["contract"]["framework"] == "custom_refund_orchestrator"
+    assert result["contract"]["callable_signature"]["keyword_only_parameters"] == [
+        "payload"
+    ]
     assert result["cases"][0]["runtime_trace"]["metadata"][
         "framework_adapter_contract"
     ] == result["contract"]
+    assert result["cases"][0]["runtime_trace"]["invocations"][0]["call_contract"][
+        "signature_bound"
+    ] is True
 
 
 def test_sdk_framework_adapter_discovery_example_runs(tmp_path):
@@ -1548,9 +1558,20 @@ def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
     assert adapter_card["requires_external_service"] is False
     assert adapter_card["proof_status"] == "passed"
     assert adapter_card["runtime_trace_count"] == 1
+    assert adapter_card["call_contract_count"] == 1
+    assert adapter_card["observed_io_contract_count"] == 1
+    assert adapter_card["signature_bound_count"] == 1
+    assert adapter_card["callable_signature_inspectable"] is True
     assert adapter_card["tool_call_count"] == 1
     assert adapter_card["artifacts"]["proof"] == result["framework_adapter_probe_proof"]
+    assert adapter_card["artifacts"]["callable_signature"]["kind"] == (
+        "agent-learning.framework-adapter-callable-signature.v1"
+    )
+    assert adapter_card["artifacts"]["observed_io_contract"]["summary"][
+        "signature_bound_count"
+    ] == 1
     assert "## Framework Adapter Probe" in report_markdown
+    assert "Observed I/O contracts" in report_markdown
 
     catalog = actions.action_catalog(result, source_path=output_path)
     framework_actions = {
@@ -1563,6 +1584,8 @@ def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
         "export_framework_adapter_probe_proof",
         "export_framework_adapter_probe_selected_probe_report",
         "export_framework_adapter_probe_contract",
+        "export_framework_adapter_probe_callable_signature",
+        "export_framework_adapter_probe_observed_io_contract",
         "export_framework_adapter_probe_replay_lock",
     } <= set(framework_actions)
     assert framework_actions["export_framework_adapter_probe_proof"][
@@ -1585,6 +1608,20 @@ def test_sdk_framework_adapter_probe_optimization_example_runs(tmp_path):
     )
     exported_proof = json.loads(proof_export_path.read_text(encoding="utf-8"))
     assert exported_proof == result["framework_adapter_probe_proof"]
+
+    signature_export_path = tmp_path / "framework-adapter-probe-signature.json"
+    signature_export_run = actions.run_action(
+        result,
+        "export_framework_adapter_probe_callable_signature",
+        source_path=output_path,
+        cwd=tmp_path,
+        artifact_output_path=signature_export_path,
+    )
+    assert signature_export_run["status"] == "passed"
+    exported_signature = json.loads(
+        signature_export_path.read_text(encoding="utf-8")
+    )
+    assert exported_signature == adapter_card["artifacts"]["callable_signature"]
 
 
 def test_sdk_framework_adapter_auto_discovery_optimization_example_runs(tmp_path):

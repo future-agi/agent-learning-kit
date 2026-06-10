@@ -1240,6 +1240,25 @@ def test_optimize_framework_adapter_probe_selects_working_adapter():
     assert history_by_method["execute_task"]["metrics"][
         "framework_adapter_probe_local_contract_quality"
     ] == pytest.approx(1.0)
+    assert history_by_method["execute_task"]["metrics"][
+        "framework_adapter_probe_io_contract_quality"
+    ] == pytest.approx(1.0)
+    assert history_by_method["execute_task"]["report"]["summary"][
+        "observed_io_contract_count"
+    ] == 1
+    proof_checks = {
+        check["id"]: check for check in result["framework_adapter_probe_proof"]["checks"]
+    }
+    assert proof_checks[
+        "framework_adapter_probe_signature_io_contract_closed"
+    ]["passed"] is True
+    proof_evidence = result["framework_adapter_probe_proof"]["evidence"]
+    assert proof_evidence["framework_adapter_callable_signature"]["kind"] == (
+        "agent-learning.framework-adapter-callable-signature.v1"
+    )
+    assert proof_evidence["framework_adapter_observed_io_contracts"][0][
+        "summary"
+    ]["signature_bound"] is True
 
 
 def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
@@ -1310,6 +1329,9 @@ def test_optimize_framework_adapter_probe_discovers_candidates_when_omitted():
     }
     assert proof_checks["framework_adapter_probe_discovery_closed"]["passed"] is True
     assert proof_checks["framework_adapter_probe_discovery_closed"]["required"] is True
+    assert proof_checks[
+        "framework_adapter_probe_signature_io_contract_closed"
+    ]["passed"] is True
 
 
 def test_streaming_framework_adapter_discovery_promotes_streaming_manifest(
@@ -22982,6 +23004,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert raw_probe["result_status"] == "passed"
     assert raw_probe["output_roundtrip"] is True
     assert raw_probe["runtime_trace_count"] == 1
+    assert raw_probe["call_contract_count"] == 1
+    assert raw_probe["observed_io_contract_count"] == 1
+    assert raw_probe["signature_bound_count"] == 1
+    assert raw_probe["callable_signature_present"] is True
     assert raw_probe["tool_call_count"] == 1
     assert raw_probe["contract"] == {
         "framework": "custom_refund_orchestrator",
@@ -22989,6 +23015,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "input_mode": "dict",
         "trace_runtime": True,
         "requires_external_service": False,
+        "callable_signature_kind": (
+            "agent-learning.framework-adapter-callable-signature.v1"
+        ),
+        "callable_signature_inspectable": True,
     }
 
     discovery_probe = adapter_probes["discovery"]
@@ -23007,6 +23037,14 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert probe_optimization["discovery_used"] is False
     assert probe_optimization["probe_proof_status"] == "passed"
     assert probe_optimization["probe_proof_failed_check_ids"] == []
+    assert (
+        "framework_adapter_probe_signature_io_contract_closed"
+        in probe_optimization["probe_proof_check_ids"]
+    )
+    assert probe_optimization["call_contract_count"] == 1
+    assert probe_optimization["observed_io_contract_count"] == 1
+    assert probe_optimization["signature_bound_count"] == 1
+    assert probe_optimization["callable_signature_present"] is True
     assert probe_optimization["optimization_score"] == pytest.approx(1.0)
     assert probe_optimization["evaluation_score"] == pytest.approx(1.0)
     assert probe_optimization["best_adapter"] == {
@@ -23028,6 +23066,10 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert probe_report["method"] == "execute_task"
     assert probe_report["input_mode"] == "dict"
     assert probe_report["proof_status"] == "passed"
+    assert probe_report["call_contract_count"] == 1
+    assert probe_report["observed_io_contract_count"] == 1
+    assert probe_report["signature_bound_count"] == 1
+    assert probe_report["callable_signature_inspectable"] is True
     assert set(probe_report["action_ids"]) >= set(
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
     )
@@ -23053,6 +23095,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert auto_discovery["discovery_candidate_count"] >= 1
     assert auto_discovery["probe_proof_status"] == "passed"
     assert auto_discovery["probe_proof_failed_check_ids"] == []
+    assert auto_discovery["observed_io_contract_count"] == 1
+    assert auto_discovery["call_contract_count"] == 1
+    assert auto_discovery["signature_bound_count"] == 1
     assert auto_discovery["best_adapter"]["method"] == "execute_task"
     assert auto_discovery["best_adapter"]["input_mode"] == "dict"
     assert auto_discovery["report"]["card_status"] == "verified"

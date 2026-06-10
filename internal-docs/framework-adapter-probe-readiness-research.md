@@ -10,8 +10,9 @@ selected adapter into a normal `agent-learning.run.v1` manifest.
 ## Local Contract
 
 - `simulate.run_framework_adapter_probe()` proves one explicit adapter shape
-  against expected output, tool calls, events, runtime trace, and local adapter
-  contract evidence.
+  against expected output, tool calls, events, runtime trace, deterministic
+  callable signature evidence, observed input/output contract evidence, and
+  local adapter contract evidence.
 - `simulate.discover_framework_adapter()` ranks local method/input candidates
   without calling HTTP or hosted framework endpoints.
 - `optimize.optimize_framework_adapter_probe()` searches explicit or
@@ -27,14 +28,16 @@ selected adapter into a normal `agent-learning.run.v1` manifest.
 `agent-learn release-check` runs the representative probe, discovery,
 optimization, auto-discovery, promotion, and one-call cookbooks as
 `framework_adapter_probe_readiness`. The gate requires `execute_task(dict)` to
-be selected, discovery to be used where expected, probe proofs to pass, promoted
-manifests to carry proof/discovery metadata, and evaluated runs to close
-framework runtime, adapter-contract, framework-trace, and tool-selection
-metrics.
+be selected, callable signatures to be inspectable, observed I/O contracts and
+call contracts to cover the selected probe cases, discovery to be used where
+expected, probe proofs to pass, promoted manifests to carry proof/discovery
+metadata, and evaluated runs to close framework runtime, adapter-contract,
+framework-trace, and tool-selection metrics.
 
 The optimization surfaces also render a first-class `framework_adapter_probe`
 report/action card. Release-check verifies that the card is local-only,
 contains the selected adapter method/input mode, exposes the native probe proof,
-and can export that proof through `action-run`. This keeps BYO-framework
-adapter optimization visible to Future AGI UI/report surfaces instead of
-leaving the proof buried inside optimizer history.
+callable signature, and observed I/O contract, and can export those artifacts
+through report actions. This keeps BYO-framework adapter optimization visible
+to Future AGI UI/report surfaces instead of leaving the proof buried inside
+optimizer history.

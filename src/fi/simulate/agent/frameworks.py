@@ -552,6 +552,13 @@ async def probe_framework_adapter(
         trace_runtime=trace_runtime,
         metadata=selected_metadata,
     )
+    callable_signature = _adapter_callable_signature(
+        agent,
+        method=method,
+        method_name=str(contract.get("method") or method_name or ""),
+    )
+    if callable_signature:
+        contract["callable_signature"] = callable_signature
     selected_metadata["framework_adapter_contract"] = contract
     wrapper = wrap_framework(
         key,
@@ -1067,6 +1074,118 @@ def _adapter_candidate_input_key(
     return None
 
 
+def _adapter_callable_signature(
+    agent: Any,
+    *,
+    method: str | Callable[..., Any] | None,
+    method_name: str | None,
+) -> dict[str, Any]:
+    callable_method = method if callable(method) else None
+    resolved_method = str(method_name or "").strip()
+    if callable_method is None:
+        if resolved_method == "auto":
+            resolved_method = ""
+        callable_method = _adapter_resolve_callable_attr_path(agent, resolved_method)
+    if callable_method is None and callable(agent):
+        callable_method = agent
+    if callable_method is None:
+        return {}
+
+    try:
+        signature = inspect.signature(callable_method)
+    except (TypeError, ValueError):
+        return {}
+
+    params = list(signature.parameters.values())
+    parameter_rows = [
+        {
+            "name": param.name,
+            "kind": str(param.kind).rsplit(".", 1)[-1].lower(),
+            "required": param.default is inspect.Parameter.empty
+            and param.kind
+            not in {
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            },
+            "has_default": param.default is not inspect.Parameter.empty,
+            "annotation": _adapter_annotation_name(param.annotation),
+        }
+        for param in params
+    ]
+    selected_method = (
+        str(method)
+        if isinstance(method, str) and str(method)
+        else resolved_method
+        or getattr(callable_method, "__name__", None)
+        or "callable"
+    )
+    method_leaf = _adapter_method_leaf(selected_method)
+    preferred_input_key = _adapter_candidate_input_key(
+        agent,
+        selected_method if isinstance(method, str) else method_leaf,
+        "auto",
+    )
+    return {
+        "kind": "agent-learning.framework-adapter-callable-signature.v1",
+        "inspectable": True,
+        "method": selected_method,
+        "method_leaf": method_leaf,
+        "callable_type": _adapter_agent_type(callable_method),
+        "parameters": parameter_rows,
+        "parameter_names": [row["name"] for row in parameter_rows],
+        "required_parameters": [
+            row["name"] for row in parameter_rows if row["required"]
+        ],
+        "required_parameter_count": sum(1 for row in parameter_rows if row["required"]),
+        "accepts_positional": _params_accept_positional(params),
+        "accepts_var_positional": any(
+            param.kind == inspect.Parameter.VAR_POSITIONAL for param in params
+        ),
+        "accepts_var_keyword": any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params
+        ),
+        "keyword_only_parameters": [
+            param.name
+            for param in params
+            if param.kind == inspect.Parameter.KEYWORD_ONLY
+        ],
+        "positional_parameters": [
+            param.name
+            for param in params
+            if param.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }
+        ],
+        "preferred_input_key": preferred_input_key,
+        "is_async": inspect.iscoroutinefunction(callable_method),
+        "is_generator": inspect.isgeneratorfunction(callable_method),
+        "is_async_generator": inspect.isasyncgenfunction(callable_method),
+        "return_annotation": _adapter_annotation_name(signature.return_annotation),
+    }
+
+
+def _adapter_annotation_name(annotation: Any) -> str | None:
+    if annotation is inspect.Signature.empty or annotation is inspect.Parameter.empty:
+        return None
+    if isinstance(annotation, type):
+        return annotation.__name__
+    return str(annotation)
+
+
+def _params_accept_positional(params: Sequence[inspect.Parameter]) -> bool:
+    return any(
+        param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        }
+        for param in params
+    )
+
+
 def _adapter_discovery_score(
     method_name: str | None,
     input_mode: InputMode,
@@ -1358,10 +1477,18 @@ async def _run_probe_case(
     )
     response_payload = _probe_response_payload(response)
     runtime_trace = dict((response.state or {}).get("framework_runtime") or {})
+    observed_io_contract = _probe_observed_io_contract(
+        framework,
+        case_id=case_id,
+        runtime_trace=runtime_trace,
+        response_payload=response_payload,
+        contract=contract,
+    )
     checks = _probe_case_checks(
         case,
         response_payload,
         runtime_trace=runtime_trace,
+        observed_io_contract=observed_io_contract,
         trace_runtime=trace_runtime,
         contract=contract,
     )
@@ -1390,6 +1517,7 @@ async def _run_probe_case(
         },
         "response": response_payload,
         "runtime_trace": runtime_trace,
+        "observed_io_contract": observed_io_contract,
         "checks": checks,
         "findings": findings,
     }
@@ -1446,6 +1574,7 @@ def _probe_case_checks(
     response: Mapping[str, Any],
     *,
     runtime_trace: Mapping[str, Any],
+    observed_io_contract: Mapping[str, Any],
     trace_runtime: bool,
     contract: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
@@ -1501,6 +1630,8 @@ def _probe_case_checks(
             dict(runtime_trace.get("metadata") or {}).get("framework_adapter_contract")
             or {}
         )
+        signature = dict(contract.get("callable_signature") or {})
+        io_summary = dict(observed_io_contract.get("summary") or {})
         checks.extend(
             [
                 _probe_check(
@@ -1524,6 +1655,33 @@ def _probe_case_checks(
                     "runtime trace should record at least one invocation",
                     expected=">=1",
                     observed=runtime_summary.get("invocation_count"),
+                ),
+                _probe_check(
+                    "framework_adapter_callable_signature_present",
+                    signature.get("kind")
+                    == "agent-learning.framework-adapter-callable-signature.v1",
+                    "probe contract should carry deterministic callable signature evidence",
+                    expected="agent-learning.framework-adapter-callable-signature.v1",
+                    observed=signature.get("kind"),
+                ),
+                _probe_check(
+                    "framework_adapter_observed_io_contract_present",
+                    observed_io_contract.get("kind")
+                    == "agent-learning.framework-adapter-observed-io-contract.v1"
+                    and int(io_summary.get("invocation_count") or 0) >= 1,
+                    "probe case should carry observed input/output contract evidence",
+                    expected="agent-learning.framework-adapter-observed-io-contract.v1",
+                    observed={
+                        "kind": observed_io_contract.get("kind"),
+                        "invocation_count": io_summary.get("invocation_count"),
+                    },
+                ),
+                _probe_check(
+                    "framework_adapter_observed_io_matches_signature",
+                    io_summary.get("signature_bound") is True,
+                    "observed adapter invocation should bind to the callable signature",
+                    expected=True,
+                    observed=io_summary.get("signature_bound"),
                 ),
             ]
         )
@@ -1564,6 +1722,166 @@ def _probe_strings(value: Any) -> list[str]:
     if isinstance(value, Sequence):
         return [str(item) for item in value if str(item)]
     return [str(value)]
+
+
+def _unique_probe_strings(values: Sequence[Any]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        text = str(value or "")
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
+
+
+def _probe_observed_io_contract(
+    framework: str,
+    *,
+    case_id: str,
+    runtime_trace: Mapping[str, Any],
+    response_payload: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    invocations = [
+        dict(invocation)
+        for invocation in list(runtime_trace.get("invocations") or [])
+        if isinstance(invocation, Mapping)
+    ]
+    signature = (
+        dict(contract.get("callable_signature") or {})
+        if isinstance(contract.get("callable_signature"), Mapping)
+        else {}
+    )
+    observed_invocations: list[dict[str, Any]] = []
+    for index, invocation in enumerate(invocations, start=1):
+        input_shape = dict(invocation.get("input") or {})
+        output_shape = dict(invocation.get("output") or {})
+        observed_invocations.append(
+            {
+                "id": str(invocation.get("id") or f"{case_id}_invocation_{index}"),
+                "framework": str(invocation.get("framework") or framework),
+                "method": str(invocation.get("method") or ""),
+                "input_mode": str(invocation.get("input_mode") or ""),
+                "call_style": str(invocation.get("call_style") or ""),
+                "input_key": invocation.get("input_key"),
+                "input_kwargs_keys": _unique_probe_strings(
+                    list(invocation.get("input_kwargs_keys") or [])
+                ),
+                "input_shape": input_shape,
+                "output_shape": output_shape,
+                "duration_ms": int(invocation.get("duration_ms") or 0),
+                "signals": _unique_probe_strings(list(invocation.get("signals") or [])),
+            }
+        )
+    signature_bound = bool(signature) and bool(observed_invocations) and all(
+        _probe_invocation_matches_signature(invocation, signature)
+        for invocation in observed_invocations
+    )
+    input_keys = _unique_probe_strings(
+        invocation.get("input_key")
+        for invocation in observed_invocations
+        if invocation.get("input_key") not in (None, "", [], {})
+    )
+    output_shapes = [dict(item.get("output_shape") or {}) for item in observed_invocations]
+    return {
+        "kind": "agent-learning.framework-adapter-observed-io-contract.v1",
+        "framework": framework,
+        "case_id": case_id,
+        "method": contract.get("method"),
+        "input_mode": contract.get("input_mode"),
+        "signature_method": signature.get("method"),
+        "signature_bound": signature_bound,
+        "invocations": observed_invocations,
+        "summary": {
+            "invocation_count": len(observed_invocations),
+            "methods": _unique_probe_strings(
+                invocation.get("method") for invocation in observed_invocations
+            ),
+            "input_modes": _unique_probe_strings(
+                invocation.get("input_mode") for invocation in observed_invocations
+            ),
+            "call_styles": _unique_probe_strings(
+                invocation.get("call_style") for invocation in observed_invocations
+            ),
+            "input_keys": input_keys,
+            "input_kwargs_keys": _unique_probe_strings(
+                key
+                for invocation in observed_invocations
+                for key in list(invocation.get("input_kwargs_keys") or [])
+            ),
+            "input_types": _unique_probe_strings(
+                dict(invocation.get("input_shape") or {}).get("type")
+                for invocation in observed_invocations
+            ),
+            "output_types": _unique_probe_strings(
+                output.get("type") for output in output_shapes
+            ),
+            "output_state_keys": _unique_probe_strings(
+                key for output in output_shapes for key in list(output.get("state_keys") or [])
+            ),
+            "output_metadata_keys": _unique_probe_strings(
+                key
+                for output in output_shapes
+                for key in list(output.get("metadata_keys") or [])
+            ),
+            "output_tool_names": _unique_probe_strings(
+                key for output in output_shapes for key in list(output.get("tool_names") or [])
+            ),
+            "output_event_types": _unique_probe_strings(
+                key for output in output_shapes for key in list(output.get("event_types") or [])
+            ),
+            "output_artifact_types": _unique_probe_strings(
+                key
+                for output in output_shapes
+                for key in list(output.get("artifact_types") or [])
+            ),
+            "content_observed": bool(response_payload.get("content")),
+            "signature_bound": signature_bound,
+        },
+    }
+
+
+def _probe_invocation_matches_signature(
+    invocation: Mapping[str, Any],
+    signature: Mapping[str, Any],
+) -> bool:
+    if not signature:
+        return False
+    method = str(invocation.get("method") or "")
+    signature_method = str(signature.get("method") or "")
+    signature_leaf = str(signature.get("method_leaf") or "")
+    method_matches = method in {signature_method, signature_leaf, "callable"} or (
+        signature_method in {"", "auto"} and bool(method)
+    )
+    if not method_matches:
+        return False
+
+    call_style = str(invocation.get("call_style") or "")
+    input_key = invocation.get("input_key")
+    parameter_names = set(str(name) for name in list(signature.get("parameter_names") or []))
+    input_kwargs_keys = set(
+        str(key) for key in list(invocation.get("input_kwargs_keys") or []) if str(key)
+    )
+    required_parameters = set(
+        str(name) for name in list(signature.get("required_parameters") or []) if str(name)
+    )
+    accepts_var_keyword = bool(signature.get("accepts_var_keyword"))
+
+    if call_style in {"keyword", "positional_with_kwargs"} and input_key:
+        return (
+            str(input_key) in parameter_names
+            or accepts_var_keyword
+            or str(input_key) == str(signature.get("preferred_input_key") or "")
+        )
+    if call_style == "expanded_kwargs":
+        return accepts_var_keyword
+    if call_style in {"positional", "positional_with_kwargs"}:
+        return bool(signature.get("accepts_positional"))
+    if call_style == "none":
+        return required_parameters <= input_kwargs_keys
+    return False
 
 
 def _probe_response_payload(response: AgentResponse) -> dict[str, Any]:
@@ -2558,6 +2876,31 @@ def _probe_summary(
     streaming_trace_count = sum(
         1 for case in cases if dict(case.get("response") or {}).get("streaming")
     )
+    observed_io_contracts = [
+        dict(case.get("observed_io_contract") or {})
+        for case in cases
+        if isinstance(case.get("observed_io_contract"), Mapping)
+    ]
+    observed_io_contract_count = sum(
+        1
+        for item in observed_io_contracts
+        if item.get("kind")
+        == "agent-learning.framework-adapter-observed-io-contract.v1"
+        and int(dict(item.get("summary") or {}).get("invocation_count") or 0) >= 1
+    )
+    signature_bound_count = sum(
+        1
+        for item in observed_io_contracts
+        if dict(item.get("summary") or {}).get("signature_bound") is True
+    )
+    call_contract_count = sum(
+        1
+        for case in cases
+        for invocation in dict(case.get("runtime_trace") or {}).get("invocations", [])
+        if isinstance(invocation, Mapping)
+        and dict(invocation.get("call_contract") or {}).get("kind")
+        == "agent-learning.framework-adapter-call-contract.v1"
+    )
     input_keys = sorted(
         {
             str(invocation.get("input_key"))
@@ -2586,17 +2929,33 @@ def _probe_summary(
             if key not in (None, "", [], {})
         }
     )
+    input_types = _unique_probe_strings(
+        input_type
+        for item in observed_io_contracts
+        for input_type in list(dict(item.get("summary") or {}).get("input_types") or [])
+    )
+    output_types = _unique_probe_strings(
+        output_type
+        for item in observed_io_contracts
+        for output_type in list(dict(item.get("summary") or {}).get("output_types") or [])
+    )
     return {
         "case_count": len(cases),
         "passed_case_count": passed,
         "failed_case_count": failed,
         "runtime_trace_count": runtime_trace_count,
         "streaming_trace_count": streaming_trace_count,
+        "call_contract_count": call_contract_count,
+        "callable_signature_present": bool(contract.get("callable_signature")),
+        "observed_io_contract_count": observed_io_contract_count,
+        "signature_bound_count": signature_bound_count,
         "tool_call_count": response_tool_count,
         "framework": contract.get("framework"),
         "method": contract.get("method"),
         "input_mode": contract.get("input_mode"),
         "input_keys": input_keys,
+        "input_types": input_types,
+        "output_types": output_types,
         "call_styles": call_styles,
         "input_kwargs_keys": input_kwargs_keys,
         "local_executable_fixture": bool(contract.get("local_executable_fixture")),

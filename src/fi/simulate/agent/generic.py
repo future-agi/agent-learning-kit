@@ -203,6 +203,7 @@ class GenericAgentWrapper(AgentWrapper):
             return response
         trace = _framework_runtime_trace(
             framework=str(self.metadata.get("framework") or "generic"),
+            method=method,
             method_name=method_name,
             input_mode=runtime_input_mode,
             payload=payload,
@@ -7592,6 +7593,7 @@ def _streaming_trace_from_chunks(chunks: List[Any], metadata: Dict[str, Any]) ->
 def _framework_runtime_trace(
     *,
     framework: str,
+    method: Callable[..., Any],
     method_name: str | None,
     input_mode: str,
     payload: Any,
@@ -7605,6 +7607,28 @@ def _framework_runtime_trace(
     runtime_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     response_dict = _response_summary(response)
+    input_shape = _shape_summary(payload)
+    callable_signature = _framework_callable_signature(
+        method,
+        method_name=method_name,
+        selected_input_key=input_key,
+    )
+    call_contract = {
+        "kind": "agent-learning.framework-adapter-call-contract.v1",
+        "method": method_name or "callable",
+        "method_leaf": _method_leaf(method_name),
+        "input_mode": "none" if payload is _NO_PAYLOAD else input_mode,
+        "call_style": call_style,
+        "input_key": input_key,
+        "input_kwargs_keys": input_kwargs_keys,
+        "signature": callable_signature,
+        "observed_io": {
+            "input": input_shape,
+            "output": response_dict,
+        },
+    }
+    signature_bound = _call_contract_signature_bound(call_contract)
+    call_contract["signature_bound"] = signature_bound
     signals = {"framework", "runtime", "method", "input", "output", "latency"}
     if streamed or response_dict.get("streaming"):
         signals.add("streaming")
@@ -7626,11 +7650,12 @@ def _framework_runtime_trace(
         "framework": framework or "generic",
         "method": method_name or "callable",
         "input_mode": "none" if payload is _NO_PAYLOAD else input_mode,
-        "input": _shape_summary(payload),
+        "input": input_shape,
         "output": response_dict,
         "duration_ms": max(0, int(duration_ms)),
         "call_style": call_style,
         "signals": sorted(signals),
+        "call_contract": call_contract,
     }
     if input_key:
         invocation["input_key"] = input_key
@@ -7645,6 +7670,9 @@ def _framework_runtime_trace(
         "input_keys": [input_key] if input_key else [],
         "input_kwargs_keys": input_kwargs_keys,
         "output_types": [response_dict["type"]],
+        "call_contract_count": 1,
+        "signature_inspectable": bool(callable_signature.get("inspectable")),
+        "signature_bound": signature_bound,
         "tool_call_count": response_dict.get("tool_call_count", 0),
         "artifact_count": response_dict.get("artifact_count", 0),
         "event_count": response_dict.get("event_count", 0),
@@ -7667,6 +7695,127 @@ def _framework_runtime_trace(
             **dict(runtime_metadata),
         },
     }
+
+
+def _framework_callable_signature(
+    method: Callable[..., Any],
+    *,
+    method_name: str | None,
+    selected_input_key: str | None,
+) -> Dict[str, Any]:
+    selected_method = method_name or getattr(method, "__name__", None) or "callable"
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return {
+            "kind": "agent-learning.framework-adapter-callable-signature.v1",
+            "inspectable": False,
+            "method": selected_method,
+            "method_leaf": _method_leaf(selected_method),
+            "parameters": [],
+            "parameter_names": [],
+            "required_parameters": [],
+            "selected_input_key": selected_input_key,
+            "selection_source": "explicit" if selected_input_key else "unavailable",
+        }
+
+    params = list(signature.parameters.values())
+    parameter_rows = [
+        {
+            "name": param.name,
+            "kind": str(param.kind).rsplit(".", 1)[-1].lower(),
+            "required": param.default is inspect.Parameter.empty
+            and param.kind
+            not in {
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            },
+            "has_default": param.default is not inspect.Parameter.empty,
+            "annotation": _signature_annotation_name(param.annotation),
+        }
+        for param in params
+    ]
+    inferred_key = _signature_input_key(method, method_name=method_name)
+    return {
+        "kind": "agent-learning.framework-adapter-callable-signature.v1",
+        "inspectable": True,
+        "method": selected_method,
+        "method_leaf": _method_leaf(selected_method),
+        "parameters": parameter_rows,
+        "parameter_names": [row["name"] for row in parameter_rows],
+        "required_parameters": [
+            row["name"] for row in parameter_rows if row["required"]
+        ],
+        "required_parameter_count": sum(1 for row in parameter_rows if row["required"]),
+        "accepts_positional": _params_accept_positional(params),
+        "accepts_var_positional": any(
+            param.kind == inspect.Parameter.VAR_POSITIONAL for param in params
+        ),
+        "accepts_var_keyword": any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params
+        ),
+        "keyword_only_parameters": [
+            param.name
+            for param in params
+            if param.kind == inspect.Parameter.KEYWORD_ONLY
+        ],
+        "positional_parameters": [
+            param.name
+            for param in params
+            if param.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }
+        ],
+        "inferred_input_key": inferred_key,
+        "selected_input_key": selected_input_key,
+        "selection_source": (
+            "signature_preference"
+            if selected_input_key and selected_input_key == inferred_key
+            else "explicit"
+            if selected_input_key
+            else "positional_or_none"
+        ),
+        "is_async": inspect.iscoroutinefunction(method),
+        "is_generator": inspect.isgeneratorfunction(method),
+        "is_async_generator": inspect.isasyncgenfunction(method),
+        "return_annotation": _signature_annotation_name(signature.return_annotation),
+    }
+
+
+def _signature_annotation_name(annotation: Any) -> str | None:
+    if annotation is inspect.Signature.empty or annotation is inspect.Parameter.empty:
+        return None
+    if isinstance(annotation, type):
+        return annotation.__name__
+    return str(annotation)
+
+
+def _call_contract_signature_bound(contract: Mapping[str, Any]) -> bool:
+    signature = dict(contract.get("signature") or {})
+    if not signature.get("inspectable"):
+        return False
+    call_style = str(contract.get("call_style") or "")
+    input_key = contract.get("input_key")
+    parameter_names = set(str(name) for name in list(signature.get("parameter_names") or []))
+    required_parameters = set(
+        str(name) for name in list(signature.get("required_parameters") or []) if str(name)
+    )
+    input_kwargs_keys = set(
+        str(key) for key in list(contract.get("input_kwargs_keys") or []) if str(key)
+    )
+    accepts_var_keyword = bool(signature.get("accepts_var_keyword"))
+
+    if call_style in {"keyword", "positional_with_kwargs"} and input_key:
+        return str(input_key) in parameter_names or accepts_var_keyword
+    if call_style == "expanded_kwargs":
+        return accepts_var_keyword
+    if call_style in {"positional", "positional_with_kwargs"}:
+        return bool(signature.get("accepts_positional"))
+    if call_style == "none":
+        return required_parameters <= input_kwargs_keys
+    return False
 
 
 def _attach_framework_runtime_trace(

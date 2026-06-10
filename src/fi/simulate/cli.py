@@ -3633,6 +3633,52 @@ def _framework_adapter_probe_card(
         if isinstance(selected_report.get("contract"), Mapping)
         else {}
     )
+    proof_evidence = (
+        proof.get("evidence")
+        if isinstance(proof.get("evidence"), Mapping)
+        else {}
+    )
+    callable_signature = (
+        contract.get("callable_signature")
+        if isinstance(contract.get("callable_signature"), Mapping)
+        else proof_evidence.get("framework_adapter_callable_signature")
+    )
+    callable_signature = (
+        copy.deepcopy(dict(callable_signature))
+        if isinstance(callable_signature, Mapping)
+        else {}
+    )
+    observed_io_contracts = (
+        proof_evidence.get("framework_adapter_observed_io_contracts")
+        if isinstance(proof_evidence.get("framework_adapter_observed_io_contracts"), list)
+        else [
+            case.get("observed_io_contract")
+            for case in _coerce_list(selected_report.get("cases"))
+            if isinstance(case, Mapping)
+            and isinstance(case.get("observed_io_contract"), Mapping)
+        ]
+    )
+    observed_io_contract = {
+        "kind": "agent-learning.framework-adapter-observed-io-contract-set.v1",
+        "contracts": [
+            copy.deepcopy(dict(item))
+            for item in _coerce_list(observed_io_contracts)
+            if isinstance(item, Mapping)
+        ],
+        "summary": {
+            "contract_count": selected_report_summary.get(
+                "observed_io_contract_count"
+            ),
+            "call_contract_count": selected_report_summary.get("call_contract_count"),
+            "signature_bound_count": selected_report_summary.get(
+                "signature_bound_count"
+            ),
+            "input_types": _unique_strings(selected_report_summary.get("input_types")),
+            "output_types": _unique_strings(selected_report_summary.get("output_types")),
+            "input_keys": _unique_strings(selected_report_summary.get("input_keys")),
+            "call_styles": _unique_strings(selected_report_summary.get("call_styles")),
+        },
+    }
     discovery = (
         result.get("framework_adapter_discovery")
         if isinstance(result.get("framework_adapter_discovery"), Mapping)
@@ -3684,6 +3730,7 @@ def _framework_adapter_probe_card(
             "framework_adapter_probe_score": summary.get("threshold", 0.9),
             "framework_adapter_probe_runtime_trace_coverage": 1.0,
             "framework_adapter_probe_local_contract_quality": 1.0,
+            "framework_adapter_probe_io_contract_quality": 1.0,
         },
     }
     artifacts: Dict[str, Any] = {
@@ -3692,6 +3739,10 @@ def _framework_adapter_probe_card(
         "contract": copy.deepcopy(dict(contract)),
         "replay_lock": replay_lock,
     }
+    if callable_signature:
+        artifacts["callable_signature"] = callable_signature
+    if observed_io_contract["contracts"]:
+        artifacts["observed_io_contract"] = observed_io_contract
     if discovery:
         artifacts["discovery"] = discovery
 
@@ -3733,6 +3784,15 @@ def _framework_adapter_probe_card(
         "selected_patch_paths": _unique_strings(selected_history.get("search_paths")),
         "selected_metrics": selected_metrics,
         "runtime_trace_count": selected_report_summary.get("runtime_trace_count"),
+        "call_contract_count": selected_report_summary.get("call_contract_count"),
+        "observed_io_contract_count": selected_report_summary.get(
+            "observed_io_contract_count"
+        ),
+        "signature_bound_count": selected_report_summary.get("signature_bound_count"),
+        "call_styles": _unique_strings(selected_report_summary.get("call_styles")),
+        "input_types": _unique_strings(selected_report_summary.get("input_types")),
+        "output_types": _unique_strings(selected_report_summary.get("output_types")),
+        "callable_signature_inspectable": callable_signature.get("inspectable"),
         "tool_call_count": selected_report_summary.get("tool_call_count"),
         "case_count": selected_report_summary.get("case_count"),
         "passed_case_count": selected_report_summary.get("passed_case_count"),
@@ -3877,6 +3937,16 @@ def _framework_adapter_probe_actions(
             "contract",
             "Export Framework Adapter Probe Contract",
             "framework-adapter-probe-contract.json",
+        ),
+        (
+            "callable_signature",
+            "Export Framework Adapter Probe Callable Signature",
+            "framework-adapter-probe-callable-signature.json",
+        ),
+        (
+            "observed_io_contract",
+            "Export Framework Adapter Probe Observed I/O Contract",
+            "framework-adapter-probe-observed-io-contract.json",
         ),
         (
             "discovery",
@@ -11628,6 +11698,19 @@ def _framework_adapter_probe_markdown(
                 ("Evaluation score", card.get("evaluation_score")),
                 ("Selected score", card.get("selected_score")),
                 ("Runtime traces", card.get("runtime_trace_count")),
+                ("Call contracts", card.get("call_contract_count")),
+                (
+                    "Observed I/O contracts",
+                    card.get("observed_io_contract_count"),
+                ),
+                ("Signature bound", card.get("signature_bound_count")),
+                (
+                    "Signature inspectable",
+                    card.get("callable_signature_inspectable"),
+                ),
+                ("Call styles", _join_values(card.get("call_styles"))),
+                ("Input types", _join_values(card.get("input_types"))),
+                ("Output types", _join_values(card.get("output_types"))),
                 ("Tool calls", card.get("tool_call_count")),
                 ("Cases", card.get("case_count")),
                 ("Passed cases", card.get("passed_case_count")),

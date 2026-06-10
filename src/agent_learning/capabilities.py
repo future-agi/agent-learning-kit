@@ -87,6 +87,7 @@ DEFAULT_METRICS = [
     "framework_capability_coverage",
     "framework_capability_quality",
     "framework_adapter_probe_finding_quality",
+    "framework_adapter_probe_io_contract_quality",
     "framework_adapter_probe_local_contract_quality",
     "framework_adapter_probe_pass_rate",
     "framework_adapter_probe_runtime_trace_coverage",

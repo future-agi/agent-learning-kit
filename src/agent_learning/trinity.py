@@ -3338,7 +3338,11 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_method": "execute_task",
         "expected_input_mode": "dict",
         "min_runtime_trace_count": 1,
+        "min_call_contract_count": 1,
+        "min_observed_io_contract_count": 1,
+        "min_signature_bound_count": 1,
         "min_tool_call_count": 1,
+        "require_callable_signature": True,
     },
     {
         "surface": "discovery",
@@ -3357,6 +3361,8 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_candidate_source": "explicit",
         "require_probe_proof": True,
         "require_report_actions": True,
+        "require_callable_signature": True,
+        "require_observed_io_contract": True,
         "require_discovery": False,
         "min_optimization_score": 1.0,
         "min_evaluation_score": 1.0,
@@ -3370,6 +3376,8 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_candidate_source": "discovery",
         "require_probe_proof": True,
         "require_report_actions": True,
+        "require_callable_signature": True,
+        "require_observed_io_contract": True,
         "require_discovery": True,
         "min_optimization_score": 1.0,
         "min_evaluation_score": 1.0,
@@ -3449,6 +3457,8 @@ V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS = [
     "export_framework_adapter_probe_proof",
     "export_framework_adapter_probe_selected_probe_report",
     "export_framework_adapter_probe_contract",
+    "export_framework_adapter_probe_callable_signature",
+    "export_framework_adapter_probe_observed_io_contract",
     "export_framework_adapter_probe_replay_lock",
 ]
 
@@ -33151,6 +33161,27 @@ def _framework_adapter_probe_record(
     proof = _as_mapping(result.get("framework_adapter_probe_proof")) or _as_mapping(
         optimization.get("framework_adapter_probe_proof")
     )
+    optimization_history = [
+        item
+        for item in _as_list(optimization.get("history"))
+        if isinstance(item, Mapping)
+    ]
+    selected_history = {}
+    selected_candidate_id = optimization.get("best_candidate_id")
+    for item in optimization_history:
+        if selected_candidate_id and item.get("candidate_id") == selected_candidate_id:
+            selected_history = _as_mapping(item)
+            break
+    if not selected_history and optimization_history:
+        selected_history = _as_mapping(
+            max(
+                optimization_history,
+                key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            )
+        )
+    selected_probe_report = _as_mapping(selected_history.get("report"))
+    selected_probe_summary = _as_mapping(selected_probe_report.get("summary"))
+    selected_probe_contract = _as_mapping(selected_probe_report.get("contract"))
     discovery = _as_mapping(result.get("framework_adapter_discovery")) or _as_mapping(
         optimization.get("framework_adapter_discovery")
     )
@@ -33161,7 +33192,11 @@ def _framework_adapter_probe_record(
         if isinstance(item, Mapping)
     ]
     top_candidate = _as_mapping(adapter_candidates[0]) if adapter_candidates else {}
-    contract_payload = _as_mapping(result.get("contract"))
+    contract_payload = _as_mapping(result.get("contract")) or selected_probe_contract
+    proof_evidence = _as_mapping(proof.get("evidence"))
+    callable_signature = _as_mapping(
+        contract_payload.get("callable_signature")
+    ) or _as_mapping(proof_evidence.get("framework_adapter_callable_signature"))
     manifest_agent = _as_mapping(manifest.get("agent"))
     manifest_metadata = _as_mapping(manifest.get("metadata"))
     manifest_agent_metadata = _as_mapping(manifest_agent.get("metadata"))
@@ -33201,6 +33236,26 @@ def _framework_adapter_probe_record(
         "result_status": result.get("status"),
         "output_roundtrip": result == saved,
         "runtime_trace_count": summary.get("runtime_trace_count"),
+        "call_contract_count": (
+            summary.get("call_contract_count")
+            if summary.get("call_contract_count") is not None
+            else selected_probe_summary.get("call_contract_count")
+        ),
+        "observed_io_contract_count": (
+            summary.get("observed_io_contract_count")
+            if summary.get("observed_io_contract_count") is not None
+            else selected_probe_summary.get("observed_io_contract_count")
+        ),
+        "signature_bound_count": (
+            summary.get("signature_bound_count")
+            if summary.get("signature_bound_count") is not None
+            else selected_probe_summary.get("signature_bound_count")
+        ),
+        "callable_signature_present": (
+            summary.get("callable_signature_present")
+            if summary.get("callable_signature_present") is not None
+            else selected_probe_summary.get("callable_signature_present")
+        ),
         "tool_call_count": summary.get("tool_call_count"),
         "top_method": summary.get("top_method") or top_candidate.get("method"),
         "top_input_mode": (
@@ -33225,6 +33280,11 @@ def _framework_adapter_probe_record(
         ),
         "probe_proof_status": proof.get("status"),
         "probe_proof_failed_check_ids": list(proof.get("failed_check_ids") or []),
+        "probe_proof_check_ids": [
+            _as_mapping(check).get("id")
+            for check in _as_list(proof.get("checks"))
+            if _as_mapping(check).get("id")
+        ],
         "probe_proof_passed": summary.get("framework_adapter_probe_proof_passed"),
         "optimization_score": summary.get("optimization_score"),
         "evaluation_score": summary.get("evaluation_score"),
@@ -33241,6 +33301,10 @@ def _framework_adapter_probe_record(
             "trace_runtime": contract_payload.get("trace_runtime"),
             "requires_external_service": contract_payload.get(
                 "requires_external_service"
+            ),
+            "callable_signature_kind": callable_signature.get("kind"),
+            "callable_signature_inspectable": callable_signature.get(
+                "inspectable"
             ),
         },
         "manifest_present": bool(manifest),
@@ -33287,6 +33351,14 @@ def _framework_adapter_probe_record(
             "method": report_card.get("method"),
             "input_mode": report_card.get("input_mode"),
             "proof_status": report_card.get("proof_status"),
+            "call_contract_count": report_card.get("call_contract_count"),
+            "observed_io_contract_count": report_card.get(
+                "observed_io_contract_count"
+            ),
+            "signature_bound_count": report_card.get("signature_bound_count"),
+            "callable_signature_inspectable": report_card.get(
+                "callable_signature_inspectable"
+            ),
             "action_ids": report_action_ids,
         },
         "actions": {
@@ -33372,6 +33444,9 @@ def _append_framework_adapter_probe_errors(
 
     for summary_field, contract_field in (
         ("runtime_trace_count", "min_runtime_trace_count"),
+        ("call_contract_count", "min_call_contract_count"),
+        ("observed_io_contract_count", "min_observed_io_contract_count"),
+        ("signature_bound_count", "min_signature_bound_count"),
         ("tool_call_count", "min_tool_call_count"),
         ("candidate_count", "min_candidate_count"),
     ):
@@ -33387,6 +33462,70 @@ def _append_framework_adapter_probe_errors(
                     "field": f"summary.{summary_field}",
                     "expected": f">={minimum}",
                     "observed": observed,
+                }
+            )
+
+    if contract.get("require_callable_signature"):
+        record_contract = _as_mapping(record.get("contract"))
+        if (
+            record.get("callable_signature_present") is not True
+            and record_contract.get("callable_signature_kind")
+            != "agent-learning.framework-adapter-callable-signature.v1"
+        ) or record_contract.get("callable_signature_inspectable") is not True:
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "framework_adapter_callable_signature",
+                    "expected": {
+                        "kind": "agent-learning.framework-adapter-callable-signature.v1",
+                        "inspectable": True,
+                    },
+                    "observed": {
+                        "present": record.get("callable_signature_present"),
+                        "kind": record_contract.get("callable_signature_kind"),
+                        "inspectable": record_contract.get(
+                            "callable_signature_inspectable"
+                        ),
+                    },
+                }
+            )
+
+    if contract.get("require_observed_io_contract"):
+        if (
+            _float_or_zero(record.get("observed_io_contract_count")) < 1.0
+            or _float_or_zero(record.get("call_contract_count")) < 1.0
+            or _float_or_zero(record.get("signature_bound_count")) < 1.0
+        ):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "framework_adapter_observed_io_contract",
+                    "expected": {
+                        "observed_io_contract_count": ">=1",
+                        "call_contract_count": ">=1",
+                        "signature_bound_count": ">=1",
+                    },
+                    "observed": {
+                        "observed_io_contract_count": record.get(
+                            "observed_io_contract_count"
+                        ),
+                        "call_contract_count": record.get("call_contract_count"),
+                        "signature_bound_count": record.get("signature_bound_count"),
+                    },
+                }
+            )
+        if "framework_adapter_probe_signature_io_contract_closed" not in _as_list(
+            record.get("probe_proof_check_ids")
+        ):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "framework_adapter_probe_proof.checks",
+                    "expected": "framework_adapter_probe_signature_io_contract_closed",
+                    "observed": record.get("probe_proof_check_ids") or [],
                 }
             )
 
@@ -33493,6 +33632,10 @@ def _append_framework_adapter_probe_errors(
                 report_record.get("proof_status"),
                 "passed",
             ),
+            "report.framework_adapter_probe.callable_signature_inspectable": (
+                report_record.get("callable_signature_inspectable"),
+                True,
+            ),
         }
         for field, (observed, expected) in report_expectations.items():
             if expected is None:
@@ -33505,6 +33648,22 @@ def _append_framework_adapter_probe_errors(
                         "field": field,
                         "expected": expected,
                         "observed": observed,
+                    }
+                )
+        for field in (
+            "call_contract_count",
+            "observed_io_contract_count",
+            "signature_bound_count",
+        ):
+            observed = _float_or_zero(report_record.get(field))
+            if observed < 1.0:
+                action_errors.append(
+                    {
+                        "surface": surface,
+                        "path": path,
+                        "field": f"report.framework_adapter_probe.{field}",
+                        "expected": ">=1",
+                        "observed": report_record.get(field),
                     }
                 )
         missing_report_actions = sorted(
