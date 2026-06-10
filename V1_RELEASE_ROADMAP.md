@@ -53,7 +53,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M3 | Native AgentOptimizer evidence scoring | `native_optimizer_evidence_components`, `generic_target_optimizer_readiness`, `framework_adapter_target_optimizer_readiness`, `multi_agent_target_optimizer_readiness`, `memory_target_optimizer_readiness`, `orchestration_target_optimizer_readiness`, `optimizer_governance_readiness`, `optimizer_portfolio_readiness`, `world_hooks_readiness` |
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
-| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `environment_replay_optimizer_readiness`, `framework_environment_replay_adapter_readiness`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
+| M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `multi_framework_runtime_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `environment_replay_optimizer_readiness`, `framework_environment_replay_adapter_readiness`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
 | M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
@@ -362,6 +362,15 @@ Current checkpoint:
   voice/streaming trace simulation, plus a static environment replay
   compatibility manifest that accepts OpenEnv/Gymnasium-shaped runtime state,
   events, artifacts, coverage, and quality gates.
+- Multi-framework runtime readiness is now an executable M6 release-check gate
+  through `multi_framework_runtime_readiness`:
+  `examples/sdk_multi_framework_simulation.py` must run locally across
+  LangChain, LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI,
+  Pipecat, LiveKit, and a custom orchestrator, require `framework_runtime` plus
+  `framework_trace` evidence, validate LiveKit/Pipecat voice modality,
+  LangChain/LangGraph `ainvoke`, no external service dependency, and no secret
+  leakage. Agent Learning remains the primary runtime and release bar;
+  OpenEnv/Gymnasium are compatibility inputs only.
 - Agent integration readiness is now an executable release-check gate:
   `examples/sdk_agent_integration_optimization.py` and
   `examples/sdk_agent_integration_simulation.py` must run locally, prove the

@@ -1438,6 +1438,83 @@ V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS = ["in_process"]
 
 V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES = ["agent-learning-fixture"]
 
+V1_MULTI_FRAMEWORK_RUNTIME_FILES = [
+    "examples/sdk_multi_framework_simulation.py",
+    "examples/framework_shims.py",
+    "examples/multi_framework_simulation_suite.json",
+]
+
+V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS = [
+    "langchain",
+    "langgraph",
+    "llamaindex",
+    "openai_agents",
+    "autogen",
+    "crewai",
+    "pydantic_ai",
+    "pipecat",
+    "livekit",
+    "custom_refund_orchestrator",
+]
+
+V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV = (
+    "AGENT_LEARNING_SDK_MULTI_FRAMEWORK_EXAMPLE_KEY"
+)
+
+V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS = {"run": 10}
+
+V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS = [
+    "framework_runtime",
+    "framework_trace",
+]
+
+V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES = [
+    "framework_trace",
+]
+
+V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND = "agent-learning.run.v1"
+
+V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL = "framework_trace_status"
+
+V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS = {
+    "autogen": ["run"],
+    "crewai": ["kickoff"],
+    "custom_refund_orchestrator": ["execute_task"],
+    "langchain": ["ainvoke"],
+    "langgraph": ["ainvoke"],
+    "livekit": ["respond"],
+    "llamaindex": ["achat"],
+    "openai_agents": ["run"],
+    "pipecat": ["process"],
+    "pydantic_ai": ["run"],
+}
+
+V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES = {
+    "autogen": ["text"],
+    "crewai": ["dict"],
+    "custom_refund_orchestrator": ["dict"],
+    "langchain": ["dict"],
+    "langgraph": ["dict"],
+    "livekit": ["text"],
+    "llamaindex": ["text"],
+    "openai_agents": ["text"],
+    "pipecat": ["dict"],
+    "pydantic_ai": ["text"],
+}
+
+V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES = {
+    "autogen": ["text"],
+    "crewai": ["text"],
+    "custom_refund_orchestrator": ["text"],
+    "langchain": ["text"],
+    "langgraph": ["text"],
+    "livekit": ["voice"],
+    "llamaindex": ["text"],
+    "openai_agents": ["text"],
+    "pipecat": ["voice"],
+    "pydantic_ai": ["text"],
+}
+
 V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES = [
     "examples/sdk_framework_adapter_matrix_optimization.py",
     "internal-docs/framework-adapter-matrix-optimization-readiness-research.md",
@@ -4559,6 +4636,21 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M6",
         evidence=framework_provider_contract,
     )
+    multi_framework_runtime = _release_multi_framework_runtime_status(root)
+    _append_release_check(
+        checks,
+        check_id="multi_framework_runtime_readiness",
+        passed=(
+            not multi_framework_runtime["missing_files"]
+            and not multi_framework_runtime["execution_errors"]
+            and not multi_framework_runtime["suite_errors"]
+            and not multi_framework_runtime["coverage_errors"]
+            and not multi_framework_runtime["child_errors"]
+            and not multi_framework_runtime["security_errors"]
+        ),
+        milestone="M6",
+        evidence=multi_framework_runtime,
+    )
     workspace_import_certification = _release_workspace_import_certification_status(
         root
     )
@@ -5591,6 +5683,39 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_provider_manifest_contracts": copy.deepcopy(
             V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
+        ),
+        "required_multi_framework_runtime_files": list(
+            V1_MULTI_FRAMEWORK_RUNTIME_FILES
+        ),
+        "required_multi_framework_runtime_frameworks": list(
+            V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+        ),
+        "required_multi_framework_runtime_env": (
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV
+        ),
+        "required_multi_framework_runtime_commands": dict(
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS
+        ),
+        "required_multi_framework_runtime_state_keys": list(
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS
+        ),
+        "required_multi_framework_runtime_environment_types": list(
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_multi_framework_runtime_result_kind": (
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
+        ),
+        "required_multi_framework_runtime_tool": (
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL
+        ),
+        "expected_multi_framework_runtime_methods": copy.deepcopy(
+            V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS
+        ),
+        "expected_multi_framework_runtime_input_modes": copy.deepcopy(
+            V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES
+        ),
+        "expected_multi_framework_runtime_modalities": copy.deepcopy(
+            V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES
         ),
         "required_framework_adapter_matrix_optimization_files": list(
             V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES
@@ -20589,6 +20714,717 @@ def _release_framework_provider_contract_status(root: Path) -> dict[str, Any]:
         "manifest_errors": manifest_errors,
         "external_value_findings": external_value_findings,
         "errors": errors,
+    }
+
+
+def _release_multi_framework_runtime_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_MULTI_FRAMEWORK_RUNTIME_FILES)
+    execution_errors: list[dict[str, Any]] = []
+    suite_errors: list[dict[str, Any]] = []
+    coverage_errors: list[dict[str, Any]] = []
+    child_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    static_suite: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = "release-check-multi-framework-runtime-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+        framework: str | None = None,
+    ) -> None:
+        error = {
+            "field": field,
+            "expected": expected,
+            "observed": observed,
+        }
+        if framework:
+            error["framework"] = framework
+        bucket.append(error)
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def mapping_of_lists(value: Any) -> dict[str, list[str]]:
+        return {
+            str(key): sorted(str(item) for item in _as_list(items))
+            for key, items in _as_mapping(value).items()
+        }
+
+    def first_result_row(child_result: Mapping[str, Any]) -> dict[str, Any]:
+        report = _as_mapping(child_result.get("report"))
+        rows = _as_list(report.get("results"))
+        return _as_mapping(rows[0]) if rows else {}
+
+    def framework_from_child(child: Mapping[str, Any]) -> str:
+        child_result = _as_mapping(child.get("result"))
+        row = first_result_row(child_result)
+        state = _as_mapping(_as_mapping(row.get("metadata")).get("environment_state"))
+        runtime = _as_mapping(state.get("framework_runtime"))
+        trace = _as_mapping(state.get("framework_trace"))
+        return str(
+            runtime.get("framework")
+            or trace.get("framework")
+            or _as_mapping(child.get("evidence")).get("framework")
+            or ""
+        )
+
+    if not missing_files:
+        static_suite_path = root / "examples/multi_framework_simulation_suite.json"
+        try:
+            static_suite = json.loads(static_suite_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(static_suite_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_multi_framework_simulation.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_multi_framework_runtime",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            os.environ[example_env] = release_secret
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-multi-framework-runtime-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-multi-framework-runtime.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if static_suite:
+        required_capabilities = _as_mapping(static_suite.get("required_capabilities"))
+        evidence["static_suite"] = {
+            "version": static_suite.get("version"),
+            "name": static_suite.get("name"),
+            "required_env": list(static_suite.get("required_env") or []),
+            "job_count": len(_as_list(static_suite.get("jobs"))),
+            "required_frameworks": list(required_capabilities.get("frameworks") or []),
+            "required_environment_state_keys": list(
+                required_capabilities.get("environment_state_keys") or []
+            ),
+            "required_environment_types": list(
+                required_capabilities.get("environment_types") or []
+            ),
+            "required_result_kinds": list(
+                required_capabilities.get("result_kinds") or []
+            ),
+            "required_commands": list(required_capabilities.get("commands") or []),
+        }
+        static_expectations = {
+            "static_suite.version": (
+                static_suite.get("version"),
+                "agent-learning.suite.v1",
+            ),
+            "static_suite.jobs": (
+                len(_as_list(static_suite.get("jobs"))),
+                len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+            ),
+        }
+        for field, (observed, expected) in static_expectations.items():
+            if observed != expected:
+                append_error(
+                    suite_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_static_frameworks = missing_values(
+            required_capabilities.get("frameworks"),
+            V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS,
+        )
+        if missing_static_frameworks:
+            append_error(
+                suite_errors,
+                field="static_suite.required_capabilities.frameworks",
+                expected=V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS,
+                observed=required_capabilities.get("frameworks") or [],
+            )
+        missing_static_env_types = missing_values(
+            required_capabilities.get("environment_types"),
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_static_env_types:
+            append_error(
+                suite_errors,
+                field="static_suite.required_capabilities.environment_types",
+                expected=V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES,
+                observed=required_capabilities.get("environment_types") or [],
+            )
+        if (
+            "framework_runtime"
+            not in _as_list(required_capabilities.get("environment_state_keys"))
+        ):
+            append_error(
+                suite_errors,
+                field="static_suite.required_capabilities.environment_state_keys",
+                expected="framework_runtime",
+                observed=required_capabilities.get("environment_state_keys") or [],
+            )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        coverage = _as_mapping(result.get("framework_coverage")) or _as_mapping(
+            summary.get("framework_coverage")
+        )
+        evidence_admission = _as_mapping(result.get("evidence_admission")) or _as_mapping(
+            summary.get("evidence_admission")
+        )
+        children = [
+            _as_mapping(child)
+            for child in _as_list(result.get("children"))
+            if isinstance(child, Mapping)
+        ]
+        coverage_rows = [
+            _as_mapping(row)
+            for row in _as_list(coverage.get("rows"))
+            if isinstance(row, Mapping)
+        ]
+        coverage_rows_by_framework = {
+            str(row.get("framework") or ""): row
+            for row in coverage_rows
+            if row.get("framework")
+        }
+        child_summaries: dict[str, dict[str, Any]] = {}
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        release_secret_absent = release_secret not in serialized
+
+        evidence["suite"] = {
+            "kind": result.get("kind"),
+            "version": result.get("version"),
+            "status": result.get("status"),
+            "exit_code": result.get("exit_code"),
+            "output_roundtrip": result == saved,
+            "score": summary.get("score"),
+            "commands": dict(_as_mapping(summary.get("commands"))),
+            "job_count": summary.get("job_count"),
+            "executed_count": summary.get("executed_count"),
+            "passed_count": summary.get("passed_count"),
+            "failed_count": summary.get("failed_count"),
+            "child_count": len(children),
+            "capability_gate_passed": summary.get("capability_gate_passed"),
+            "evidence_gate_passed": summary.get("evidence_gate_passed"),
+            "missing_required_capabilities": dict(
+                _as_mapping(summary.get("missing_required_capabilities"))
+            ),
+            "admitted_evidence_count": summary.get("admitted_evidence_count"),
+            "admitted_frozen_evidence_count": summary.get(
+                "admitted_frozen_evidence_count"
+            ),
+            "non_admitted_evidence_count": summary.get(
+                "non_admitted_evidence_count"
+            ),
+            "rejected_evidence_count": summary.get("rejected_evidence_count"),
+            "framework_coverage_passed": summary.get("framework_coverage_passed"),
+            "observed_framework_count": summary.get("observed_framework_count"),
+            "required_framework_count": summary.get("required_framework_count"),
+            "missing_framework_count": summary.get("missing_framework_count"),
+            "adapter_conformance_failed_count": summary.get(
+                "adapter_conformance_failed_count"
+            ),
+        }
+        evidence["coverage"] = {
+            "kind": coverage.get("kind"),
+            "required_frameworks": list(coverage.get("required_frameworks") or []),
+            "observed_frameworks": list(coverage.get("observed_frameworks") or []),
+            "required_count": coverage.get("required_count"),
+            "observed_count": coverage.get("observed_count"),
+            "missing_count": coverage.get("missing_count"),
+            "missing_required_frameworks": list(
+                coverage.get("missing_required_frameworks") or []
+            ),
+            "adapter_conformance_failed_count": coverage.get(
+                "adapter_conformance_failed_count"
+            ),
+            "adapter_conformance_failed_child_ids": list(
+                coverage.get("adapter_conformance_failed_child_ids") or []
+            ),
+            "methods_by_framework": mapping_of_lists(
+                coverage.get("methods_by_framework")
+            ),
+            "input_modes_by_framework": mapping_of_lists(
+                coverage.get("input_modes_by_framework")
+            ),
+            "modalities_by_framework": mapping_of_lists(
+                coverage.get("modalities_by_framework")
+            ),
+        }
+        evidence["evidence_admission"] = {
+            "kind": evidence_admission.get("kind"),
+            "admitted_count": evidence_admission.get("admitted_count"),
+            "admitted_frozen_count": evidence_admission.get(
+                "admitted_frozen_count"
+            ),
+            "non_admitted_count": evidence_admission.get("non_admitted_count"),
+            "rejected_count": evidence_admission.get("rejected_count"),
+            "unfrozen_count": evidence_admission.get("unfrozen_count"),
+            "admitted_row_ids": list(evidence_admission.get("admitted_row_ids") or []),
+        }
+
+        suite_expectations = {
+            "kind": (result.get("kind"), "agent-learning.suite.v1"),
+            "status": (result.get("status"), "passed"),
+            "exit_code": (result.get("exit_code"), 0),
+            "output_roundtrip": (result == saved, True),
+            "summary.commands": (
+                dict(_as_mapping(summary.get("commands"))),
+                V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS,
+            ),
+            "summary.job_count": (
+                summary.get("job_count"),
+                len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+            ),
+            "children": (len(children), len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS)),
+            "summary.executed_count": (
+                summary.get("executed_count"),
+                len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+            ),
+            "summary.passed_count": (
+                summary.get("passed_count"),
+                len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+            ),
+            "summary.failed_count": (summary.get("failed_count"), 0),
+            "summary.capability_gate_passed": (
+                summary.get("capability_gate_passed"),
+                True,
+            ),
+            "summary.evidence_gate_passed": (
+                summary.get("evidence_gate_passed"),
+                True,
+            ),
+            "summary.missing_required_capabilities": (
+                dict(_as_mapping(summary.get("missing_required_capabilities"))),
+                {},
+            ),
+            "summary.non_admitted_evidence_count": (
+                summary.get("non_admitted_evidence_count"),
+                0,
+            ),
+            "summary.rejected_evidence_count": (
+                summary.get("rejected_evidence_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in suite_expectations.items():
+            if observed != expected:
+                append_error(
+                    suite_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if _float_or_zero(summary.get("score")) < 1.0:
+            append_error(
+                suite_errors,
+                field="summary.score",
+                expected=1.0,
+                observed=summary.get("score"),
+            )
+        if _int_or_zero(summary.get("admitted_evidence_count")) < len(
+            V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+        ):
+            append_error(
+                suite_errors,
+                field="summary.admitted_evidence_count",
+                expected=len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+                observed=summary.get("admitted_evidence_count"),
+            )
+        if _int_or_zero(summary.get("admitted_frozen_evidence_count")) < len(
+            V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+        ):
+            append_error(
+                suite_errors,
+                field="summary.admitted_frozen_evidence_count",
+                expected=len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+                observed=summary.get("admitted_frozen_evidence_count"),
+            )
+
+        coverage_expectations = {
+            "framework_coverage.kind": (
+                coverage.get("kind"),
+                "agent-learning.suite.framework-coverage.v1",
+            ),
+            "framework_coverage.required_count": (
+                coverage.get("required_count"),
+                len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+            ),
+            "framework_coverage.observed_count": (
+                coverage.get("observed_count"),
+                len(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+            ),
+            "framework_coverage.missing_count": (coverage.get("missing_count"), 0),
+            "framework_coverage.missing_required_frameworks": (
+                list(coverage.get("missing_required_frameworks") or []),
+                [],
+            ),
+            "framework_coverage.adapter_conformance_failed_count": (
+                coverage.get("adapter_conformance_failed_count"),
+                0,
+            ),
+            "framework_coverage.adapter_conformance_failed_child_ids": (
+                list(coverage.get("adapter_conformance_failed_child_ids") or []),
+                [],
+            ),
+        }
+        for field, (observed, expected) in coverage_expectations.items():
+            if observed != expected:
+                append_error(
+                    coverage_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_coverage_frameworks = missing_values(
+            coverage.get("observed_frameworks"),
+            V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS,
+        )
+        if missing_coverage_frameworks:
+            append_error(
+                coverage_errors,
+                field="framework_coverage.observed_frameworks",
+                expected=V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS,
+                observed=coverage.get("observed_frameworks") or [],
+            )
+        for framework in V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS:
+            row = coverage_rows_by_framework.get(framework, {})
+            if not row:
+                append_error(
+                    coverage_errors,
+                    field="framework_coverage.rows.framework",
+                    expected=framework,
+                    observed=sorted(coverage_rows_by_framework),
+                    framework=framework,
+                )
+                continue
+            row_expectations = {
+                "result_kind": (
+                    row.get("result_kind"),
+                    V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND,
+                ),
+                "command": (row.get("command"), "run"),
+                "adapter_conformance_passed": (
+                    row.get("adapter_conformance_passed"),
+                    True,
+                ),
+                "methods": (
+                    sorted(str(item) for item in _as_list(row.get("methods"))),
+                    V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS[framework],
+                ),
+                "input_modes": (
+                    sorted(str(item) for item in _as_list(row.get("input_modes"))),
+                    V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES[framework],
+                ),
+                "modality": (
+                    [str(row.get("modality") or "")],
+                    V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES[framework],
+                ),
+            }
+            for field, (observed, expected) in row_expectations.items():
+                if observed != expected:
+                    append_error(
+                        coverage_errors,
+                        field=f"framework_coverage.rows.{field}",
+                        expected=expected,
+                        observed=observed,
+                        framework=framework,
+                    )
+            if _int_or_zero(row.get("trace_span_count")) < 1:
+                append_error(
+                    coverage_errors,
+                    field="framework_coverage.rows.trace_span_count",
+                    expected=">=1",
+                    observed=row.get("trace_span_count"),
+                    framework=framework,
+                )
+            if _int_or_zero(row.get("tool_call_count")) < 1:
+                append_error(
+                    coverage_errors,
+                    field="framework_coverage.rows.tool_call_count",
+                    expected=">=1",
+                    observed=row.get("tool_call_count"),
+                    framework=framework,
+                )
+
+        for child in children:
+            framework = framework_from_child(child)
+            child_result = _as_mapping(child.get("result"))
+            row = first_result_row(child_result)
+            metadata = _as_mapping(row.get("metadata"))
+            state = _as_mapping(metadata.get("environment_state"))
+            runtime = _as_mapping(state.get("framework_runtime"))
+            runtime_summary = _as_mapping(runtime.get("summary"))
+            trace = _as_mapping(state.get("framework_trace"))
+            adapter_conformance = _as_mapping(trace.get("adapter_conformance"))
+            spans = _as_list(trace.get("spans"))
+            tool_calls = [
+                _as_mapping(tool)
+                for tool in _as_list(row.get("tool_calls"))
+                if isinstance(tool, Mapping)
+            ]
+            tool_call_names = sorted(
+                {
+                    str(tool.get("name") or "")
+                    for tool in tool_calls
+                    if tool.get("name")
+                }
+            )
+            child_summaries[framework or str(child.get("id") or "")] = {
+                "id": child.get("id"),
+                "command": child.get("command"),
+                "kind": child.get("kind"),
+                "status": child.get("status"),
+                "result_kind": child_result.get("kind"),
+                "result_status": child_result.get("status"),
+                "state_keys": sorted(str(key) for key in state),
+                "framework_runtime_framework": runtime.get("framework"),
+                "framework_trace_framework": trace.get("framework"),
+                "runtime_methods": list(runtime_summary.get("methods") or []),
+                "runtime_input_modes": list(
+                    runtime_summary.get("input_modes") or []
+                ),
+                "runtime_invocation_count": runtime_summary.get("invocation_count"),
+                "runtime_error_count": runtime_summary.get("error_count"),
+                "runtime_tool_call_count": runtime_summary.get("tool_call_count"),
+                "adapter_conformance_passed": adapter_conformance.get("passed"),
+                "adapter_conformance_score": adapter_conformance.get("score"),
+                "trace_span_count": len(spans),
+                "tool_call_names": tool_call_names,
+                "modality": metadata.get("modality"),
+            }
+            child_expectations = {
+                "command": (child.get("command"), "run"),
+                "kind": (
+                    child.get("kind"),
+                    V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND,
+                ),
+                "status": (child.get("status"), "passed"),
+                "result.kind": (
+                    child_result.get("kind"),
+                    V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND,
+                ),
+                "result.status": (child_result.get("status"), "passed"),
+                "framework_runtime.framework": (runtime.get("framework"), framework),
+                "framework_trace.framework": (trace.get("framework"), framework),
+                "framework_trace.adapter_conformance.passed": (
+                    adapter_conformance.get("passed"),
+                    True,
+                ),
+            }
+            for field, (observed, expected) in child_expectations.items():
+                if observed != expected:
+                    append_error(
+                        child_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                        framework=framework,
+                    )
+            missing_state_keys = missing_values(
+                state,
+                V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS,
+            )
+            if missing_state_keys:
+                append_error(
+                    child_errors,
+                    field="report.results.0.metadata.environment_state",
+                    expected=V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS,
+                    observed=sorted(str(key) for key in state),
+                    framework=framework,
+                )
+            if framework in V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS:
+                missing_methods = missing_values(
+                    runtime_summary.get("methods"),
+                    V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS[framework],
+                )
+                if missing_methods:
+                    append_error(
+                        child_errors,
+                        field="framework_runtime.summary.methods",
+                        expected=V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS[
+                            framework
+                        ],
+                        observed=runtime_summary.get("methods") or [],
+                        framework=framework,
+                    )
+                missing_input_modes = missing_values(
+                    runtime_summary.get("input_modes"),
+                    V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES[framework],
+                )
+                if missing_input_modes:
+                    append_error(
+                        child_errors,
+                        field="framework_runtime.summary.input_modes",
+                        expected=V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES[
+                            framework
+                        ],
+                        observed=runtime_summary.get("input_modes") or [],
+                        framework=framework,
+                    )
+                if str(metadata.get("modality") or "text") not in (
+                    V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES[framework]
+                ):
+                    append_error(
+                        child_errors,
+                        field="report.results.0.metadata.modality",
+                        expected=V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES[
+                            framework
+                        ],
+                        observed=metadata.get("modality"),
+                        framework=framework,
+                    )
+            if _int_or_zero(runtime_summary.get("invocation_count")) < 1:
+                append_error(
+                    child_errors,
+                    field="framework_runtime.summary.invocation_count",
+                    expected=">=1",
+                    observed=runtime_summary.get("invocation_count"),
+                    framework=framework,
+                )
+            if _int_or_zero(runtime_summary.get("error_count")) != 0:
+                append_error(
+                    child_errors,
+                    field="framework_runtime.summary.error_count",
+                    expected=0,
+                    observed=runtime_summary.get("error_count"),
+                    framework=framework,
+                )
+            if _int_or_zero(runtime_summary.get("tool_call_count")) < 1:
+                append_error(
+                    child_errors,
+                    field="framework_runtime.summary.tool_call_count",
+                    expected=">=1",
+                    observed=runtime_summary.get("tool_call_count"),
+                    framework=framework,
+                )
+            if _float_or_zero(adapter_conformance.get("score")) < 1.0:
+                append_error(
+                    child_errors,
+                    field="framework_trace.adapter_conformance.score",
+                    expected=1.0,
+                    observed=adapter_conformance.get("score"),
+                    framework=framework,
+                )
+            if not spans:
+                append_error(
+                    child_errors,
+                    field="framework_trace.spans",
+                    expected=">=1",
+                    observed=0,
+                    framework=framework,
+                )
+            if V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL not in tool_call_names:
+                append_error(
+                    child_errors,
+                    field="report.results.0.tool_calls.name",
+                    expected=V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL,
+                    observed=tool_call_names,
+                    framework=framework,
+                )
+
+        missing_child_frameworks = missing_values(
+            child_summaries,
+            V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS,
+        )
+        if missing_child_frameworks:
+            append_error(
+                child_errors,
+                field="children.frameworks",
+                expected=V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS,
+                observed=sorted(child_summaries),
+            )
+        evidence["children"] = child_summaries
+        evidence["security"] = {"serialized_secret_absent": release_secret_absent}
+        if not release_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_MULTI_FRAMEWORK_RUNTIME_FILES),
+        "required_frameworks": list(V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS),
+        "required_env": V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV,
+        "required_commands": dict(V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS),
+        "required_state_keys": list(V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS),
+        "required_environment_types": list(
+            V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_result_kind": V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND,
+        "required_tool": V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL,
+        "expected_methods": copy.deepcopy(
+            V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS
+        ),
+        "expected_input_modes": copy.deepcopy(
+            V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES
+        ),
+        "expected_modalities": copy.deepcopy(
+            V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES
+        ),
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "suite_errors": suite_errors,
+        "coverage_errors": coverage_errors,
+        "child_errors": child_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
     }
 
 
@@ -37435,6 +38271,17 @@ __all__ = [
     "V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES",
     "V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS",
+    "V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES",
+    "V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS",
+    "V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES",
+    "V1_MULTI_FRAMEWORK_RUNTIME_FILES",
+    "V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS",
+    "V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS",
+    "V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV",
+    "V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND",
+    "V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS",
+    "V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL",
     "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES",
     "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS",
     "V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL",

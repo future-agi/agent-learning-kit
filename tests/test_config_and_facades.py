@@ -16438,6 +16438,39 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
+    assert payload["required_multi_framework_runtime_files"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FILES
+    )
+    assert payload["required_multi_framework_runtime_frameworks"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+    )
+    assert payload["required_multi_framework_runtime_env"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV
+    )
+    assert payload["required_multi_framework_runtime_commands"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS
+    )
+    assert payload["required_multi_framework_runtime_state_keys"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_multi_framework_runtime_environment_types"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_multi_framework_runtime_result_kind"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
+    )
+    assert payload["required_multi_framework_runtime_tool"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL
+    )
+    assert payload["expected_multi_framework_runtime_methods"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS
+    )
+    assert payload["expected_multi_framework_runtime_input_modes"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES
+    )
+    assert payload["expected_multi_framework_runtime_modalities"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES
+    )
     assert payload["required_framework_adapter_matrix_optimization_files"] == (
         trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES
     )
@@ -17100,6 +17133,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "agent_control_plane_readiness",
         "framework_provider_examples_present",
         "framework_provider_contract_readiness",
+        "multi_framework_runtime_readiness",
         "agent_integration_readiness",
         "external_agent_adapter_readiness",
         "environment_replay_optimizer_readiness",
@@ -19704,6 +19738,179 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_manifest["agent_type"] == "scripted"
     assert realtime_manifest["frameworks"] == ["livekit"]
     assert realtime_manifest["missing_environment_types"] == []
+    multi_framework_runtime = checks[
+        "multi_framework_runtime_readiness"
+    ]["evidence"]
+    assert multi_framework_runtime["required_files"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FILES
+    )
+    assert multi_framework_runtime["required_frameworks"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+    )
+    assert multi_framework_runtime["required_env"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV
+    )
+    assert multi_framework_runtime["required_commands"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS
+    )
+    assert multi_framework_runtime["required_state_keys"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS
+    )
+    assert multi_framework_runtime["required_environment_types"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert multi_framework_runtime["required_result_kind"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
+    )
+    assert multi_framework_runtime["required_tool"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL
+    )
+    assert multi_framework_runtime["expected_methods"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS
+    )
+    assert multi_framework_runtime["expected_input_modes"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES
+    )
+    assert multi_framework_runtime["expected_modalities"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES
+    )
+    assert multi_framework_runtime["missing_files"] == []
+    assert multi_framework_runtime["execution_errors"] == []
+    assert multi_framework_runtime["suite_errors"] == []
+    assert multi_framework_runtime["coverage_errors"] == []
+    assert multi_framework_runtime["child_errors"] == []
+    assert multi_framework_runtime["security_errors"] == []
+
+    expected_runtime_count = len(trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS)
+    runtime_evidence = multi_framework_runtime["evidence"]
+    assert set(runtime_evidence) == {
+        "children",
+        "coverage",
+        "evidence_admission",
+        "security",
+        "static_suite",
+        "suite",
+    }
+    static_suite = runtime_evidence["static_suite"]
+    assert static_suite["version"] == "agent-learning.suite.v1"
+    assert static_suite["job_count"] == expected_runtime_count
+    assert set(static_suite["required_frameworks"]) == set(
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+    )
+    assert set(static_suite["required_environment_types"]) >= set(
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert "framework_runtime" in static_suite[
+        "required_environment_state_keys"
+    ]
+    assert set(static_suite["required_commands"]) == set(
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS
+    )
+
+    runtime_suite = runtime_evidence["suite"]
+    assert runtime_suite["kind"] == "agent-learning.suite.v1"
+    assert runtime_suite["version"] == "agent-learning.suite.v1"
+    assert runtime_suite["status"] == "passed"
+    assert runtime_suite["exit_code"] == 0
+    assert runtime_suite["output_roundtrip"] is True
+    assert runtime_suite["score"] == pytest.approx(1.0)
+    assert runtime_suite["commands"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS
+    )
+    assert runtime_suite["job_count"] == expected_runtime_count
+    assert runtime_suite["executed_count"] == expected_runtime_count
+    assert runtime_suite["passed_count"] == expected_runtime_count
+    assert runtime_suite["failed_count"] == 0
+    assert runtime_suite["child_count"] == expected_runtime_count
+    assert runtime_suite["capability_gate_passed"] is True
+    assert runtime_suite["evidence_gate_passed"] is True
+    assert runtime_suite["missing_required_capabilities"] == {}
+    assert runtime_suite["admitted_evidence_count"] == expected_runtime_count
+    assert runtime_suite["admitted_frozen_evidence_count"] == (
+        expected_runtime_count
+    )
+    assert runtime_suite["non_admitted_evidence_count"] == 0
+    assert runtime_suite["rejected_evidence_count"] == 0
+    assert runtime_suite["framework_coverage_passed"] is True
+    assert runtime_suite["observed_framework_count"] == expected_runtime_count
+    assert runtime_suite["required_framework_count"] == expected_runtime_count
+    assert runtime_suite["missing_framework_count"] == 0
+    assert runtime_suite["adapter_conformance_failed_count"] == 0
+
+    coverage = runtime_evidence["coverage"]
+    assert coverage["kind"] == "agent-learning.suite.framework-coverage.v1"
+    assert set(coverage["required_frameworks"]) == set(
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+    )
+    assert set(coverage["observed_frameworks"]) == set(
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
+    )
+    assert coverage["required_count"] == expected_runtime_count
+    assert coverage["observed_count"] == expected_runtime_count
+    assert coverage["missing_count"] == 0
+    assert coverage["missing_required_frameworks"] == []
+    assert coverage["adapter_conformance_failed_count"] == 0
+    assert coverage["adapter_conformance_failed_child_ids"] == []
+    assert coverage["methods_by_framework"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS
+    )
+    assert coverage["input_modes_by_framework"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES
+    )
+    assert coverage["modalities_by_framework"] == (
+        trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES
+    )
+    assert coverage["modalities_by_framework"]["livekit"] == ["voice"]
+    assert coverage["modalities_by_framework"]["pipecat"] == ["voice"]
+    assert coverage["methods_by_framework"]["langchain"] == ["ainvoke"]
+    assert coverage["methods_by_framework"]["langgraph"] == ["ainvoke"]
+
+    evidence_admission = runtime_evidence["evidence_admission"]
+    assert evidence_admission["kind"] == (
+        "agent-learning.suite.evidence-admission.v1"
+    )
+    assert evidence_admission["admitted_count"] == expected_runtime_count
+    assert evidence_admission["admitted_frozen_count"] == expected_runtime_count
+    assert evidence_admission["non_admitted_count"] == 0
+    assert evidence_admission["rejected_count"] == 0
+    assert evidence_admission["unfrozen_count"] == 0
+    assert len(evidence_admission["admitted_row_ids"]) == expected_runtime_count
+
+    children = runtime_evidence["children"]
+    assert set(children) == set(trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS)
+    for framework, child in children.items():
+        assert child["command"] == "run"
+        assert child["kind"] == trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
+        assert child["status"] == "passed"
+        assert child["result_kind"] == (
+            trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
+        )
+        assert child["result_status"] == "passed"
+        assert child["state_keys"] == (
+            trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS
+        )
+        assert child["framework_runtime_framework"] == framework
+        assert child["framework_trace_framework"] == framework
+        assert sorted(child["runtime_methods"]) == (
+            trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS[framework]
+        )
+        assert sorted(child["runtime_input_modes"]) == (
+            trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_INPUT_MODES[framework]
+        )
+        assert child["modality"] in (
+            trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES[framework]
+        )
+        assert child["runtime_invocation_count"] >= 1
+        assert child["runtime_error_count"] == 0
+        assert child["runtime_tool_call_count"] >= 1
+        assert child["adapter_conformance_passed"] is True
+        assert child["adapter_conformance_score"] == pytest.approx(1.0)
+        assert child["trace_span_count"] >= 1
+        assert trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL in child[
+            "tool_call_names"
+        ]
+    assert runtime_evidence["security"]["serialized_secret_absent"] is True
+
     matrix_optimization = checks[
         "framework_adapter_matrix_optimization_readiness"
     ]["evidence"]
@@ -24070,6 +24277,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "workspace_import_certification_readiness"
         in milestones["M6"]["check_ids"]
     )
+    assert "multi_framework_runtime_readiness" in milestones["M6"]["check_ids"]
     assert all(milestone["status"] == "passed" for milestone in payload["milestones"])
     assert payload["findings"] == []
     assert {

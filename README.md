@@ -86,6 +86,13 @@ A2A, requires local fixture targets with no external service dependency, and
 validates representative text, voice, CUA, realtime, browser/CUA, memory,
 workflow, orchestration, lifecycle, protocol, and environment replay framework
 manifests.
+The Agent Learning-owned M6 runtime gate is executable as
+`multi_framework_runtime_readiness`: it runs
+`examples/sdk_multi_framework_simulation.py` locally across LangChain,
+LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI, Pipecat,
+LiveKit, and a custom orchestrator, requiring `framework_runtime` plus
+`framework_trace` evidence, LiveKit/Pipecat voice modality, LangChain/LangGraph
+`ainvoke`, no external service dependency, and no secret leakage.
 It also runs framework optimizer readiness for custom adapters, social-memory
 synthesis, world/framework/memory stacks, multi-agent framework handoffs,
 framework certification, and framework import repair. Workspace import
@@ -533,12 +540,19 @@ result = suite.run_suite(manifest, suite_path="examples/sdk_trinity_suite.json")
 
 The `multi_framework_simulation_suite.json` example runs local LangChain,
 LangGraph, LlamaIndex, OpenAI Agents, AutoGen, CrewAI, PydanticAI, Pipecat,
-LiveKit-style, and custom proprietary agents through the same manifest
-framework adapter path, proving text, voice, retrieval, handoff, groupchat,
-crew, typed-output, and custom framework shims can be simulated without adding
-framework-specific runtime dependencies. Unknown framework names are accepted as
-custom adapters when the manifest supplies the target method/input mode, as
-shown in `framework_custom_manifest.json`.
+LiveKit, and custom orchestrator runtimes through the same Agent Learning
+manifest framework adapter path, proving text, voice, retrieval, handoff,
+groupchat, crew, typed-output, and custom framework shims can be simulated
+without adding framework-specific runtime dependencies. M6 release-check
+promotes that cookbook with `multi_framework_runtime_readiness`: it executes
+`examples/sdk_multi_framework_simulation.py` locally across all 10 runtime
+children, requires `framework_runtime` plus `framework_trace` evidence,
+validates LiveKit/Pipecat voice modality, LangChain/LangGraph `ainvoke`, no
+external service dependency, and no secret leakage. Unknown framework names are
+accepted as custom adapters when the manifest supplies the target method/input
+mode, as shown in `framework_custom_manifest.json`. OpenEnv and Gymnasium remain
+compatibility input shapes only; Agent Learning is the primary runtime and
+release bar.
 
 SDK users can build the same framework simulations without hand-writing run
 manifests:
