@@ -472,14 +472,16 @@ Current checkpoint:
   `chat.completions.create(messages=...)` nested-method promotion and LiveKit
   `run_session(dict)` session promotion plus provider-response promotion with
   required provider kwargs and normalized `provider_response` state plus Browser
-  Use `execute_task(dict)` CUA trace promotion plus LangGraph
+  Use `execute_task(dict)` CUA trace promotion plus AutoGen-style
+  `run(task=...)` message-history promotion and OpenAI Agents-style
+  `execute_task(dict)` handoff-transcript promotion plus LangGraph
   `execute_task(dict)` workflow and orchestration trace promotions plus MCP
   `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
   protocol-trace promotion,
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
-  adapter-contract, trace, workflow, orchestration, protocol, agent
+  adapter-contract, trace, transcript, workflow, orchestration, protocol, agent
   control-plane, and tool metrics.
   The same gate now renders the
   `framework_adapter_probe` report/action card and exports the native probe
@@ -490,7 +492,12 @@ Current checkpoint:
   provider-response, message-history, and handoff-transcript cookbooks must run
   locally, preserve the selected manifest/runtime contract, normalize state,
   events, artifacts, and transcript evidence, and close the relevant runtime,
-  adapter-contract, streaming, transcript, and tool metrics.
+  adapter-contract, streaming, transcript, and tool metrics. The message-history
+  and handoff-transcript cookbooks are also promoted under
+  `framework_adapter_probe_readiness` as `message_history_promotion` and
+  `handoff_transcript_promotion`, so transcript state/events, coordination
+  state, discovery/proof metadata, and transcript metric floors count toward the
+  native adapter 10x axis.
 - Protocol adapter readiness is now an executable release-check gate:
   `examples/sdk_framework_adapter_mcp_tool_session.py` and
   `examples/sdk_framework_adapter_a2a_protocol_trace.py` must run locally,
@@ -603,9 +610,9 @@ Current checkpoint:
   certification, red-team suite coverage, and regression replay. Workspace
   import certification, local HTTP framework transport, local WebSocket
   framework transport, framework matrix optimization, native adapter probe
-  promotion including workflow/orchestration/lifecycle stateful adapter
-  promotions and MCP/A2A protocol-native adapter promotions, and authenticated
-  hooks are counted as native proof-backed axes;
+  promotion including transcript, workflow/orchestration/lifecycle stateful
+  adapter promotions and MCP/A2A protocol-native adapter promotions, and
+  authenticated hooks are counted as native proof-backed axes;
   OpenEnv/Gymnasium-shaped traces are compatibility inputs inside that bar.
 
 Acceptance gates:
@@ -648,8 +655,9 @@ Next implementation focus:
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat
   `process(dict)` plus OpenAI-compatible
   `chat.completions.create(messages=...)` plus LiveKit `run_session(dict)`
-  plus provider-response, Browser/CUA trace, workflow trace, and orchestration
-  trace promotion evidence, and release-checked agent-opt bundle search.
+  plus provider-response, Browser/CUA trace, message-history,
+  handoff-transcript, workflow trace, orchestration trace, and lifecycle trace
+  promotion evidence, and release-checked agent-opt bundle search.
   OpenEnv-specific fixtures are
   compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove

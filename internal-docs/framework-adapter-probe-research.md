@@ -137,7 +137,8 @@ Keep framework support local-first:
   events, and `message_history` state. Promotion should derive
   `framework_transcript_quality` checks for observed speakers, turn count, tool
   sequence, termination, output text, and message-history state from the selected
-  proof.
+  proof. Verified message-history adapters also participate in native adapter
+  promotion and `environment_10x_robustness`.
 - Preserve framework coordination semantics from transcripts. Messages carrying
   `handoff_to`, `recipient`, review, or reconciliation fields should normalize
   into `framework_handoff`, `framework_review`, and
@@ -145,6 +146,8 @@ Keep framework support local-first:
   multi-agent framework handoffs can be scored without a separate parser.
   Generated transcript gates should also check handoff source/target/task specs,
   participant coverage, review counts, reconciliation counts, and termination.
+  Verified handoff transcript adapters also participate in native adapter
+  promotion and `environment_10x_robustness`.
 - `agent-learn release-check` now includes `framework_adapter_io_readiness` for
   these advanced IO contracts. The gate executes the streaming, typed-output,
   keyword-input, side-kwargs, nested-method, provider-response, message-history,

@@ -2658,6 +2658,8 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "livekit_run_session_promotion",
     "provider_response_promotion",
     "browser_cua_trace_promotion",
+    "message_history_promotion",
+    "handoff_transcript_promotion",
     "workflow_trace_promotion",
     "orchestration_trace_promotion",
     "lifecycle_trace_promotion",
@@ -3506,6 +3508,8 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_livekit_run_session_promotion.py",
     "examples/sdk_framework_adapter_provider_response.py",
     "examples/sdk_framework_adapter_browser_cua_trace.py",
+    "examples/sdk_framework_adapter_message_history.py",
+    "examples/sdk_framework_adapter_handoff_transcript.py",
     "examples/sdk_framework_adapter_workflow_trace.py",
     "examples/sdk_framework_adapter_orchestration_trace.py",
     "examples/sdk_framework_adapter_lifecycle_trace.py",
@@ -3789,6 +3793,155 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
             "framework_adapter_observed_io_quality": 1.0,
             "framework_runtime_contract": 1.0,
             "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "message_history_promotion",
+        "path": "examples/sdk_framework_adapter_message_history.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "autogen",
+        "expected_method": "run",
+        "expected_input_mode": "text",
+        "expected_input_key": "task",
+        "expected_call_style": "keyword",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "required_state_keys": [
+            "framework_runtime",
+            "framework_trace",
+            "message_history",
+        ],
+        "required_runtime_state_keys": ["message_history"],
+        "required_events": [
+            "TextMessage",
+            "ToolCallExecutionEvent",
+            "ToolCallRequestEvent",
+            "framework_runtime",
+            "framework_span",
+            "framework_trace",
+            "tool_calls",
+            "tool_response",
+        ],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "state_summary_minimums": {
+            "message_history": {
+                "message_count": 4,
+                "tool_call_count": 1,
+                "tool_response_count": 1,
+            },
+        },
+        "state_summary_equals": {
+            "message_history": {
+                "stop_reason": "completed",
+            },
+        },
+        "state_summary_contains": {
+            "message_history": {
+                "sources": ["planner", "reviewer", "tool"],
+                "tool_names": ["framework_trace_status"],
+                "types": [
+                    "TextMessage",
+                    "ToolCallExecutionEvent",
+                    "ToolCallRequestEvent",
+                ],
+            },
+        },
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "framework_transcript_quality": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "handoff_transcript_promotion",
+        "path": "examples/sdk_framework_adapter_handoff_transcript.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "openai_agents",
+        "expected_method": "execute_task",
+        "expected_input_mode": "dict",
+        "expected_call_style": "positional",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "required_state_keys": [
+            "framework_handoffs",
+            "framework_runtime",
+            "framework_trace",
+            "message_history",
+        ],
+        "required_runtime_state_keys": [
+            "framework_handoffs",
+            "message_history",
+        ],
+        "required_events": [
+            "final_answer",
+            "framework_handoff",
+            "framework_reconciliation",
+            "framework_review",
+            "framework_runtime",
+            "framework_span",
+            "framework_trace",
+            "handoff",
+            "reconciliation",
+            "review",
+        ],
+        "required_artifact_kinds": [
+            "framework_runtime",
+            "framework_trace",
+        ],
+        "state_summary_minimums": {
+            "framework_handoffs": {
+                "handoff_count": 2,
+                "reconciliation_count": 1,
+                "review_count": 1,
+            },
+            "message_history": {
+                "handoff_count": 2,
+                "message_count": 5,
+            },
+        },
+        "state_summary_equals": {
+            "framework_handoffs": {
+                "reconciliations.0.accepted_source": "retrieval_agent",
+                "reviews.0.status": "passed",
+            },
+            "message_history": {
+                "stop_reason": "completed",
+            },
+        },
+        "state_summary_contains": {
+            "framework_handoffs": {
+                "participants": [
+                    "critic_agent",
+                    "retrieval_agent",
+                    "triage_agent",
+                ],
+            },
+            "message_history": {
+                "types": [
+                    "final_answer",
+                    "handoff",
+                    "reconciliation",
+                    "review",
+                ],
+            },
+        },
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "framework_transcript_quality": 1.0,
             "tool_selection_accuracy": 1.0,
         },
     },
@@ -34678,7 +34831,10 @@ def _framework_adapter_probe_record(
 
 
 def _framework_adapter_probe_state_summary(value: Any) -> dict[str, Any]:
-    summary = _as_mapping(_as_mapping(value).get("summary"))
+    state = _as_mapping(value)
+    summary = _as_mapping(state.get("summary"))
+    if not summary:
+        summary = state
     if not summary:
         return {}
     volatile_fields = {

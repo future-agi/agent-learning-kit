@@ -22743,6 +22743,14 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         is True
     )
     assert (
+        adapter_axis_evidence["surface_checks"]["message_history_promotion"]
+        is True
+    )
+    assert (
+        adapter_axis_evidence["surface_checks"]["handoff_transcript_promotion"]
+        is True
+    )
+    assert (
         adapter_axis_evidence["surface_checks"]["workflow_trace_promotion"]
         is True
     )
@@ -23895,6 +23903,176 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    message_history_promotion = adapter_probes["message_history_promotion"]
+    assert message_history_promotion["result_kind"] == "agent-learning.run.v1"
+    assert message_history_promotion["result_status"] == "passed"
+    assert message_history_promotion["output_roundtrip"] is True
+    assert message_history_promotion["manifest_present"] is True
+    assert message_history_promotion["manifest_agent"] == {
+        "framework": "autogen",
+        "method": "run",
+        "input_mode": "text",
+        "trace_runtime": True,
+        "input_key": "task",
+    }
+    assert message_history_promotion["selected_probe_summary"][
+        "call_styles"
+    ] == ["keyword"]
+    assert message_history_promotion["probe_proof_status"] == "passed"
+    assert message_history_promotion["probe_proof_failed_check_ids"] == []
+    assert message_history_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert message_history_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert message_history_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert message_history_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert message_history_promotion["manifest_metadata"][
+        "framework_adapter_discovery_status"
+    ] == "passed"
+    assert {
+        "framework_runtime",
+        "framework_trace",
+        "message_history",
+    } <= set(message_history_promotion["state_keys"])
+    assert message_history_promotion["runtime_required_state_keys"] == [
+        "message_history"
+    ]
+    assert {
+        "TextMessage",
+        "ToolCallExecutionEvent",
+        "ToolCallRequestEvent",
+        "framework_runtime",
+        "framework_span",
+        "framework_trace",
+        "tool_calls",
+        "tool_response",
+    } <= set(message_history_promotion["event_types"])
+    assert {
+        "framework_runtime",
+        "framework_trace",
+    } <= set(message_history_promotion["artifact_kinds"])
+    message_history_summary = message_history_promotion["state_summaries"][
+        "message_history"
+    ]
+    assert message_history_summary["message_count"] == 4
+    assert message_history_summary["tool_call_count"] == 1
+    assert message_history_summary["tool_response_count"] == 1
+    assert message_history_summary["stop_reason"] == "completed"
+    assert message_history_summary["tool_names"] == ["framework_trace_status"]
+    assert {"planner", "reviewer", "tool"} <= set(
+        message_history_summary["sources"]
+    )
+    assert {
+        "TextMessage",
+        "ToolCallExecutionEvent",
+        "ToolCallRequestEvent",
+    } <= set(message_history_summary["types"])
+    assert message_history_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "framework_transcript_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
+    handoff_transcript_promotion = adapter_probes["handoff_transcript_promotion"]
+    assert handoff_transcript_promotion["result_kind"] == "agent-learning.run.v1"
+    assert handoff_transcript_promotion["result_status"] == "passed"
+    assert handoff_transcript_promotion["output_roundtrip"] is True
+    assert handoff_transcript_promotion["manifest_present"] is True
+    assert handoff_transcript_promotion["manifest_agent"] == {
+        "framework": "openai_agents",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "trace_runtime": True,
+    }
+    assert handoff_transcript_promotion["selected_probe_summary"][
+        "call_styles"
+    ] == ["positional"]
+    assert handoff_transcript_promotion["probe_proof_status"] == "passed"
+    assert handoff_transcript_promotion["probe_proof_failed_check_ids"] == []
+    assert handoff_transcript_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert handoff_transcript_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert handoff_transcript_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert handoff_transcript_promotion["manifest_metadata"][
+        "framework_adapter_discovery_used"
+    ] is True
+    assert handoff_transcript_promotion["manifest_metadata"][
+        "framework_adapter_discovery_status"
+    ] == "passed"
+    assert {
+        "framework_handoffs",
+        "framework_runtime",
+        "framework_trace",
+        "message_history",
+    } <= set(handoff_transcript_promotion["state_keys"])
+    assert handoff_transcript_promotion["runtime_required_state_keys"] == [
+        "framework_handoffs",
+        "message_history",
+    ]
+    assert {
+        "final_answer",
+        "framework_handoff",
+        "framework_reconciliation",
+        "framework_review",
+        "framework_runtime",
+        "framework_span",
+        "framework_trace",
+        "handoff",
+        "reconciliation",
+        "review",
+    } <= set(handoff_transcript_promotion["event_types"])
+    assert {
+        "framework_runtime",
+        "framework_trace",
+    } <= set(handoff_transcript_promotion["artifact_kinds"])
+    handoff_summary = handoff_transcript_promotion["state_summaries"][
+        "framework_handoffs"
+    ]
+    assert handoff_summary["handoff_count"] == 2
+    assert handoff_summary["review_count"] == 1
+    assert handoff_summary["reconciliation_count"] == 1
+    assert {"critic_agent", "retrieval_agent", "triage_agent"} <= set(
+        handoff_summary["participants"]
+    )
+    assert handoff_summary["reviews"][0]["status"] == "passed"
+    assert handoff_summary["reconciliations"][0]["accepted_source"] == (
+        "retrieval_agent"
+    )
+    handoff_history_summary = handoff_transcript_promotion["state_summaries"][
+        "message_history"
+    ]
+    assert handoff_history_summary["handoff_count"] == 2
+    assert handoff_history_summary["message_count"] == 5
+    assert handoff_history_summary["stop_reason"] == "completed"
+    assert {
+        "final_answer",
+        "handoff",
+        "reconciliation",
+        "review",
+    } <= set(handoff_history_summary["types"])
+    assert handoff_transcript_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "framework_transcript_quality": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     workflow_trace_promotion = adapter_probes["workflow_trace_promotion"]
     assert workflow_trace_promotion["result_kind"] == "agent-learning.run.v1"
     assert workflow_trace_promotion["result_status"] == "passed"
@@ -24311,6 +24489,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "nested_method_promotion",
         "livekit_run_session_promotion",
         "browser_cua_trace_promotion",
+        "message_history_promotion",
+        "handoff_transcript_promotion",
         "workflow_trace_promotion",
         "orchestration_trace_promotion",
         "lifecycle_trace_promotion",

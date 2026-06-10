@@ -7,9 +7,9 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `0130b61 Promote agent control-plane adapter`.
+  `76406a2 Promote lifecycle adapter trace`.
 - Current handoff slice:
-  Lifecycle framework adapter promotion.
+  Message-history and handoff-transcript adapter promotion.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -40,10 +40,12 @@ What is done:
   Browser Use `execute_task(dict)` CUA trace promotion, LangGraph-style
   `execute_task(dict)` workflow trace promotion, and LangGraph-style
   `execute_task(dict)` orchestration trace promotion, plus LiveKit-style
-  `execute_task(dict)` lifecycle trace promotion, plus MCP `execute_task(dict)`
-  tool-session promotion and A2A `send_message(dict)` protocol-trace promotion,
-  plus Agent Learning Kit `execute_task(dict)` agent trust-boundary/control-plane
-  promotion.
+  `execute_task(dict)` lifecycle trace promotion, plus AutoGen-style
+  `run(task=...)` message-history promotion and OpenAI Agents-style
+  `execute_task(dict)` handoff-transcript promotion, plus MCP
+  `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
+  protocol-trace promotion, plus Agent Learning Kit `execute_task(dict)` agent
+  trust-boundary/control-plane promotion.
 
 What is not done:
 
@@ -54,7 +56,66 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest Lifecycle Adapter Promotion Slice
+## Latest Transcript Adapter Promotion Slice
+
+This handoff slice promotes the existing message-history and handoff-transcript
+framework adapter cookbooks through the generic framework adapter probe gate and
+the environment 10x native adapter axis.
+
+Implemented behavior:
+
+- Reuses `examples/sdk_framework_adapter_message_history.py`, a local-only
+  AutoGen-style cookbook that discovers and promotes
+  `LocalAutoGenTeam.run(task=...)` as `framework=autogen`, `input_mode=text`,
+  `input_key=task`, keyword call style.
+- Reuses `examples/sdk_framework_adapter_handoff_transcript.py`, a local-only
+  OpenAI Agents-style cookbook that discovers and promotes
+  `LocalHandoffTeam.execute_task` as `framework=openai_agents`,
+  `input_mode=dict`, positional call style.
+- `message_history_promotion` requires discovery/proof metadata,
+  `message_history` state, transcript/tool events, framework runtime/trace
+  artifacts, transcript summary gates for messages/tool calls/tool responses,
+  planner/reviewer/tool sources, and `framework_transcript_quality == 1.0`.
+- `handoff_transcript_promotion` requires discovery/proof metadata,
+  `message_history` and `framework_handoffs` state, handoff/review/
+  reconciliation events, runtime/trace artifacts, participants, passed review,
+  accepted reconciliation, and `framework_transcript_quality == 1.0`.
+- `_framework_adapter_probe_state_summary()` now falls back to deterministic
+  direct state maps when a state object has no nested `summary`, which lets the
+  existing generic `state_summary_*` validator enforce transcript and handoff
+  state without bespoke transcript validator code.
+- `environment_10x_robustness` now counts `message_history_promotion` and
+  `handoff_transcript_promotion` through the native adapter promotion axis.
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `framework_transcript_quality == 1.0`
+- `tool_selection_accuracy == 1.0`
+
+Current slice verification:
+
+- `uv run python -m py_compile src/agent_learning/trinity.py tests/test_config_and_facades.py`
+  passed.
+- `uv run ruff check src/agent_learning/trinity.py tests/test_config_and_facades.py`
+  passed.
+- Focused message-history and handoff-transcript cookbook/behavior tests passed:
+  `4 passed, 5 warnings in 11.14s`.
+- `uv run pytest tests/test_config_and_facades.py::test_agent_learn_release_check_reports_v1_milestones -q`
+  passed: `1 passed, 8 warnings in 406.94s (0:06:46)`.
+- Selected release-proof passed for `release_check` and `git_diff_check`, writing
+  `/tmp/agent-learning-transcript-promotion-release-proof.json`. Its
+  `summary.ready` is `false` because non-selected checks are intentionally
+  skipped.
+- `uv run ruff check .` passed.
+- `git diff --check` passed.
+- `uv run pytest -q` passed: `302 passed, 10 warnings in 916.37s (0:15:16)`.
+
+## Previous Lifecycle Adapter Promotion Slice
 
 This handoff slice promotes the existing LiveKit-style lifecycle trace cookbook
 through the generic framework adapter probe gate and the environment 10x native
@@ -659,6 +720,8 @@ The release-check adapter-probe gate now runs:
 - provider-response `chat.completions.create(messages=..., model=...)`
   promotion
 - Browser Use `execute_task(dict)` CUA trace promotion
+- AutoGen-style `run(task=...)` message-history promotion
+- OpenAI Agents-style `execute_task(dict)` handoff-transcript promotion
 - LangGraph-style `execute_task(dict)` workflow trace promotion
 - LangGraph-style `execute_task(dict)` orchestration trace promotion
 - MCP `execute_task(dict)` tool-session promotion
@@ -675,8 +738,9 @@ contract.
 The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
 session promoted adapter contracts plus provider-response, Browser/CUA trace,
-workflow trace, orchestration trace, lifecycle trace, MCP tool-session, and A2A
-protocol-trace promotion plus Agent Learning Kit control-plane promotion.
+message-history, handoff-transcript, workflow trace, orchestration trace,
+lifecycle trace, MCP tool-session, and A2A protocol-trace promotion plus Agent
+Learning Kit control-plane promotion.
 
 Implemented behavior:
 
@@ -686,6 +750,7 @@ Implemented behavior:
   `langchain_invoke_promotion`, `pipecat_process_promotion`,
   `nested_method_promotion`, `livekit_run_session_promotion`, and
   `provider_response_promotion`, `browser_cua_trace_promotion`,
+  `message_history_promotion`, `handoff_transcript_promotion`,
   `workflow_trace_promotion`, `orchestration_trace_promotion`,
   `lifecycle_trace_promotion`, `mcp_tool_session_promotion`,
   `a2a_protocol_trace_promotion`, and `agent_control_plane_promotion`.

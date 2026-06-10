@@ -703,6 +703,8 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_livekit_run_session_promotion.py` and
 `examples/sdk_framework_adapter_provider_response.py` and
 `examples/sdk_framework_adapter_browser_cua_trace.py` and
+`examples/sdk_framework_adapter_message_history.py` and
+`examples/sdk_framework_adapter_handoff_transcript.py` and
 `examples/sdk_framework_adapter_workflow_trace.py` and
 `examples/sdk_framework_adapter_orchestration_trace.py` and
 `examples/sdk_framework_adapter_lifecycle_trace.py` and
@@ -719,9 +721,11 @@ workflow promotion with checkpoints/interrupt/replay evidence, and
 LangGraph-style orchestration promotion with supervisor/delegate trace
 evidence, plus LiveKit-style lifecycle promotion with retry/recovery,
 checkpoint, cancellation/resume, cleanup, and state-persistence evidence, plus
-MCP `execute_task(dict)` tool-session promotion and A2A `send_message(dict)`
-protocol-trace promotion, plus Agent Learning Kit `execute_task(dict)`
-trust-boundary/control-plane promotion.
+AutoGen-style message-history promotion with transcript/tool-call evidence and
+OpenAI Agents-style handoff-transcript promotion with review/reconciliation
+evidence, plus MCP `execute_task(dict)` tool-session promotion and A2A
+`send_message(dict)` protocol-trace promotion, plus Agent Learning Kit
+`execute_task(dict)` trust-boundary/control-plane promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -732,9 +736,9 @@ promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
 `run_session(dict)` session promotion plus provider-response promotion and
 Browser/CUA trace promotion plus LangGraph workflow and orchestration trace
-promotions plus lifecycle trace promotion plus MCP tool-session and A2A
-protocol-trace promotions plus Agent Learning Kit control-plane promotion. It
-requires
+promotions plus lifecycle trace promotion plus message-history and
+handoff-transcript promotions plus MCP tool-session and A2A protocol-trace
+promotions plus Agent Learning Kit control-plane promotion. It requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
 promotion, LiveKit session promotion, and provider-response promotion with
@@ -748,7 +752,12 @@ recovery, trace artifacts, and orchestration coverage/flow-quality metrics,
 plus LiveKit `execute_task(dict)` with `framework_lifecycle_trace` state,
 lifecycle phase/trace events, trace artifacts, retry/recovery, streaming,
 checkpoint, cancellation/resume, cleanup, state persistence, and lifecycle
-coverage/quality metrics, plus MCP `execute_task(dict)` with
+coverage/quality metrics, plus AutoGen `run(task=...)` with `message_history`
+state, transcript events, tool-call/tool-response evidence, and transcript
+quality metrics, plus OpenAI Agents `execute_task(dict)` with
+`message_history` and `framework_handoffs` state, handoff/review/reconciliation
+events, participant evidence, and transcript quality metrics, plus MCP
+`execute_task(dict)` with
 `mcp_tool_session` state, protocol events, tool schemas/resources/results, and
 MCP coverage/quality metrics, and A2A `send_message(dict)` with
 `a2a_protocol_trace` state, protocol events, artifacts, terminal task state, and
@@ -838,6 +847,12 @@ framework transcripts can be optimized and scored without hand-written
 post-processing. Promoted adapters now generate `framework_transcript_quality`
 gates for observed speakers, turn count, tool sequence, termination, output, and
 message-history state. See `examples/sdk_framework_adapter_message_history.py`.
+The same cookbook is release-gated as `message_history_promotion` in
+`framework_adapter_probe_readiness`: discovery must select `run(task=...)` for
+the local AutoGen-style agent, preserve probe metadata in the promoted manifest,
+emit `message_history` state plus transcript/tool events, and close the normal
+adapter metric floors plus `framework_transcript_quality`. It also counts under
+native adapter promotion in `environment_10x_robustness`.
 
 Framework handoff transcripts get a compact coordination view. Messages with
 `handoff_to`/`recipient`, review fields, or reconciliation fields also emit
@@ -847,6 +862,13 @@ reconciliations. The generated transcript gate checks handoff source/target/task
 contracts, review and reconciliation counts, participant coverage, and
 termination in the same report artifact. See
 `examples/sdk_framework_adapter_handoff_transcript.py`.
+The same cookbook is release-gated as `handoff_transcript_promotion` in
+`framework_adapter_probe_readiness`: discovery must select
+`execute_task(dict)` for the local OpenAI Agents-style team, preserve probe
+metadata in the promoted manifest, emit `message_history` and
+`framework_handoffs` state, preserve handoff/review/reconciliation events, and
+close the normal adapter metric floors plus `framework_transcript_quality`. It
+also counts under native adapter promotion in `environment_10x_robustness`.
 
 `agent-learn release-check` now gates these advanced IO surfaces as
 `framework_adapter_io_readiness`. The gate runs the streaming, typed-output,
@@ -2202,8 +2224,9 @@ hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
 native adapter probe promotion including provider-response, Browser/CUA trace,
-workflow trace, orchestration trace, lifecycle trace, MCP tool-session, and A2A
-protocol-trace promotion, and authenticated hooks are counted as native
+message-history, handoff-transcript, workflow trace, orchestration trace,
+lifecycle trace, MCP tool-session, and A2A protocol-trace promotion, and
+authenticated hooks are counted as native
 proof-backed axes; OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:
