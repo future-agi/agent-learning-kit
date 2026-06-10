@@ -33,6 +33,11 @@ paths out of the search space, select only
 workflow graph quality, tool selection, artifact coverage, and task completion
 metrics.
 
+The release gate also renders the result through `agent-learn report`, requires
+the `workflow_target_profile_matrix` card, verifies the generated action catalog,
+and runs the profile export action. This keeps the matrix visible to Future AGI
+UI/report surfaces instead of leaving it as a raw optimizer artifact.
+
 ## Evidence Bar
 
 The selected runtime trace for every profile must include graph topology, route

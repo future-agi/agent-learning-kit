@@ -2631,6 +2631,14 @@ def _report_result(
     world_hooks = _world_hooks_card(source, source_path=source_path)
     if world_hooks is not None:
         report_payload["world_hooks"] = world_hooks
+    workflow_target_profile_matrix = _workflow_target_profile_matrix_card(
+        source,
+        source_path=source_path,
+    )
+    if workflow_target_profile_matrix is not None:
+        report_payload["workflow_target_profile_matrix"] = (
+            workflow_target_profile_matrix
+        )
     workspace_import = _workspace_import_certification_card(
         source,
         source_path=source_path,
@@ -3296,6 +3304,270 @@ def _world_hooks_actions(
                 "default_filename": "world-hooks-replay.lock.json",
             }
         )
+    return actions
+
+
+def _workflow_target_profile_matrix_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> Optional[Dict[str, Any]]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    existing = (
+        report.get("workflow_target_profile_matrix")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if isinstance(existing, Mapping):
+        card = copy.deepcopy(dict(existing))
+        card["source_path"] = str(source_path)
+        if "actions" not in card:
+            card["actions"] = _workflow_target_profile_matrix_actions(
+                result=result,
+                source_path=source_path,
+                card=card,
+            )
+        return card
+
+    if result.get("kind") != "agent-learning.workflow-target-profile-matrix.v1":
+        return None
+    profiles = [
+        copy.deepcopy(dict(profile))
+        for profile in _coerce_list(result.get("profiles"))
+        if isinstance(profile, Mapping)
+    ]
+    if not profiles:
+        return None
+
+    summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
+    target_path = str(result.get("target_path") or "")
+    frameworks = _unique_strings(result.get("frameworks"))
+    failed_profiles = _unique_strings(summary.get("failed_profiles"))
+    passed_profiles = [
+        str(profile.get("framework"))
+        for profile in profiles
+        if profile.get("status") == "passed"
+        and profile.get("workflow_framework") == profile.get("framework")
+        and target_path in _coerce_list(profile.get("selected_patch_paths"))
+    ]
+    weak_profiles = sorted(set(frameworks) - set(passed_profiles))
+    metric_names = _workflow_target_profile_matrix_metric_names(profiles)
+    metric_averages = _workflow_target_profile_matrix_metric_averages(
+        profiles,
+        metric_names,
+    )
+    count_totals = _workflow_target_profile_matrix_count_totals(profiles)
+    status = (
+        "verified"
+        if result.get("status") == "passed" and not failed_profiles and not weak_profiles
+        else "needs_attention"
+    )
+    replay_lock = {
+        "source_path": str(source_path),
+        "local_only": True,
+        "requires_external_service": False,
+        "target_path": target_path,
+        "frameworks": frameworks,
+        "metric_thresholds": {metric: 1.0 for metric in metric_names},
+        "score_threshold": 0.98,
+        "failed_profiles": failed_profiles,
+        "weak_profiles": weak_profiles,
+    }
+    artifacts = {
+        "summary": copy.deepcopy(dict(summary)),
+        "profiles": copy.deepcopy(profiles),
+        "metric_averages": metric_averages,
+        "count_totals": count_totals,
+        "replay_lock": replay_lock,
+    }
+    card: Dict[str, Any] = {
+        "kind": "workflow_target_profile_matrix_evidence",
+        "taxonomy": "workflow_graph_router_checkpoint_replay_profile_matrix",
+        "source_kind": result.get("kind"),
+        "source_path": str(source_path),
+        "status": status,
+        "local_only": True,
+        "requires_external_service": False,
+        "target_path": target_path,
+        "frameworks": frameworks,
+        "profile_count": summary.get("profile_count", len(profiles)),
+        "passed_profile_count": summary.get(
+            "passed_profile_count",
+            len(passed_profiles),
+        ),
+        "failed_profiles": failed_profiles,
+        "weak_profiles": weak_profiles,
+        "all_patch_paths": _unique_strings(summary.get("all_patch_paths")),
+        "metrics": metric_averages,
+        "count_totals": count_totals,
+        "profiles": _workflow_target_profile_matrix_profile_rows(profiles),
+        "artifacts": artifacts,
+    }
+    card["actions"] = _workflow_target_profile_matrix_actions(
+        result=result,
+        source_path=source_path,
+        card=card,
+    )
+    return card
+
+
+def _workflow_target_profile_matrix_metric_names(
+    profiles: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    names: set[str] = set()
+    for profile in profiles:
+        metrics = profile.get("selected_metrics")
+        if isinstance(metrics, Mapping):
+            names.update(str(key) for key in metrics if key)
+    return sorted(names)
+
+
+def _workflow_target_profile_matrix_metric_averages(
+    profiles: Sequence[Mapping[str, Any]],
+    metric_names: Sequence[str],
+) -> Dict[str, float]:
+    averages: Dict[str, float] = {}
+    for metric in metric_names:
+        values = []
+        for profile in profiles:
+            metrics = profile.get("selected_metrics")
+            if not isinstance(metrics, Mapping):
+                continue
+            value = _float_or_none(metrics.get(metric))
+            if value is not None:
+                values.append(value)
+        if values:
+            averages[str(metric)] = round(sum(values) / len(values), 6)
+    return averages
+
+
+def _workflow_target_profile_matrix_count_totals(
+    profiles: Sequence[Mapping[str, Any]],
+) -> Dict[str, int]:
+    totals: Dict[str, int] = {}
+    for profile in profiles:
+        counts = profile.get("counts")
+        if not isinstance(counts, Mapping):
+            continue
+        for key, value in counts.items():
+            numeric = _float_or_none(value)
+            if numeric is None:
+                continue
+            totals[str(key)] = totals.get(str(key), 0) + int(numeric)
+    return totals
+
+
+def _workflow_target_profile_matrix_profile_rows(
+    profiles: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for profile in profiles:
+        counts = (
+            profile.get("counts") if isinstance(profile.get("counts"), Mapping) else {}
+        )
+        rows.append(
+            {
+                "framework": profile.get("framework"),
+                "status": profile.get("status"),
+                "workflow_framework": profile.get("workflow_framework"),
+                "optimization_score": profile.get("optimization_score"),
+                "evaluation_score": profile.get("evaluation_score"),
+                "best_score": profile.get("best_score"),
+                "selected_patch_paths": _unique_strings(
+                    profile.get("selected_patch_paths")
+                ),
+                "node_count": counts.get("node_count"),
+                "edge_count": counts.get("edge_count"),
+                "step_count": counts.get("step_count"),
+                "checkpoint_count": counts.get("checkpoint_count"),
+                "route_decision_count": counts.get("route_decision_count"),
+                "interrupt_count": counts.get("interrupt_count"),
+                "replay_count": counts.get("replay_count"),
+                "write_count": counts.get("write_count"),
+                "tool_names": _unique_strings(profile.get("tool_names")),
+                "tool_call_names": _unique_strings(profile.get("tool_call_names")),
+                "final_state_keys": _unique_strings(profile.get("final_state_keys")),
+                "entry_nodes": _unique_strings(profile.get("entry_nodes")),
+                "terminal_nodes": _unique_strings(profile.get("terminal_nodes")),
+                "has_replay": profile.get("has_replay"),
+                "has_interrupts": profile.get("has_interrupts"),
+                "has_routes": profile.get("has_routes"),
+            }
+        )
+    return rows
+
+
+def _workflow_target_profile_matrix_actions(
+    *,
+    result: Mapping[str, Any],
+    source_path: Path,
+    card: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    actions = [
+        _cli_action(
+            "report_workflow_target_profile_matrix",
+            "Report Workflow Target Profile Matrix",
+            [
+                "agent-learn",
+                "report",
+                str(source_path),
+                "--output",
+                "artifacts/workflow-target-profile-matrix-report.json",
+                "--markdown",
+                "artifacts/workflow-target-profile-matrix-report.md",
+            ],
+        )
+    ]
+    artifacts = card.get("artifacts") if isinstance(card.get("artifacts"), Mapping) else {}
+    if isinstance(artifacts.get("summary"), Mapping):
+        actions.append(
+            {
+                "id": "export_workflow_target_profile_matrix_summary",
+                "label": "Export Workflow Target Profile Matrix Summary",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.workflow_target_profile_matrix.artifacts.summary"
+                ),
+                "default_filename": "workflow-target-profile-matrix-summary.json",
+            }
+        )
+    if _coerce_list(artifacts.get("profiles")):
+        actions.append(
+            {
+                "id": "export_workflow_target_profile_matrix_profiles",
+                "label": "Export Workflow Target Profile Matrix Profiles",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.workflow_target_profile_matrix.artifacts.profiles"
+                ),
+                "default_filename": "workflow-target-profile-matrix-profiles.json",
+            }
+        )
+    if isinstance(artifacts.get("replay_lock"), Mapping):
+        actions.append(
+            {
+                "id": "export_workflow_target_profile_matrix_replay_lock",
+                "label": "Export Workflow Target Profile Matrix Replay Lock",
+                "kind": "download",
+                "artifact_ref": (
+                    "report.workflow_target_profile_matrix.artifacts.replay_lock"
+                ),
+                "default_filename": (
+                    "workflow-target-profile-matrix-replay.lock.json"
+                ),
+            }
+        )
+    for action in actions:
+        action["readiness_status"] = card.get("status")
+        action["target_layers"] = [
+            "graph",
+            "router",
+            "orchestration",
+            "harness",
+            "evaluator",
+        ]
+        if result.get("target_path"):
+            action["target_path"] = result.get("target_path")
     return actions
 
 
@@ -6297,6 +6569,8 @@ def _markdown_sections(result: Mapping[str, Any], *, source_path: Path) -> List[
         sections.append("optimization_replay")
     if _has_world_hooks_card(result, source_path=source_path):
         sections.append("world_hooks")
+    if _has_workflow_target_profile_matrix_card(result, source_path=source_path):
+        sections.append("workflow_target_profile_matrix")
     if _has_workspace_import_certification_card(result, source_path=source_path):
         sections.append("workspace_import_certification")
     if _has_attack_evolution_card(result, source_path=source_path):
@@ -6365,6 +6639,10 @@ def _result_markdown(
         lines.extend(_optimization_replay_markdown(result))
     if "world_hooks" in sections:
         lines.extend(_world_hooks_markdown(result, source_path=source_path))
+    if "workflow_target_profile_matrix" in sections:
+        lines.extend(
+            _workflow_target_profile_matrix_markdown(result, source_path=source_path)
+        )
     if "workspace_import_certification" in sections:
         lines.extend(
             _workspace_import_certification_markdown(
@@ -10466,6 +10744,20 @@ def _has_world_hooks_card(
     return _world_hooks_card(result, source_path=source_path) is not None
 
 
+def _has_workflow_target_profile_matrix_card(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> bool:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    if isinstance(report.get("workflow_target_profile_matrix"), Mapping):
+        return True
+    return _workflow_target_profile_matrix_card(
+        result,
+        source_path=source_path,
+    ) is not None
+
+
 def _has_workspace_import_certification_card(
     result: Mapping[str, Any],
     *,
@@ -10771,6 +11063,131 @@ def _harness_diagnosis_markdown(
                 "",
                 *_markdown_table(
                     ["Action", "Label", "Target layers", "Command"],
+                    action_rows,
+                ),
+                "",
+            ]
+        )
+    return lines
+
+
+def _workflow_target_profile_matrix_markdown(
+    result: Mapping[str, Any],
+    *,
+    source_path: Path,
+) -> List[str]:
+    report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+    card = (
+        report.get("workflow_target_profile_matrix")
+        if isinstance(report, Mapping)
+        else None
+    )
+    if not isinstance(card, Mapping):
+        card = _workflow_target_profile_matrix_card(result, source_path=source_path)
+    if not isinstance(card, Mapping):
+        return []
+
+    profile_rows = [
+        [
+            item.get("framework"),
+            item.get("status"),
+            item.get("workflow_framework"),
+            item.get("optimization_score"),
+            item.get("evaluation_score"),
+            item.get("best_score"),
+            _join_values(item.get("selected_patch_paths")),
+        ]
+        for item in _coerce_list(card.get("profiles"))
+        if isinstance(item, Mapping)
+    ]
+    count_rows = [
+        [name, value]
+        for name, value in sorted(
+            dict(card.get("count_totals") or {}).items()
+        )
+    ]
+    metric_rows = [
+        [name, value]
+        for name, value in sorted(dict(card.get("metrics") or {}).items())
+    ]
+    action_rows = [
+        [
+            item.get("id"),
+            item.get("label"),
+            item.get("kind"),
+            item.get("command") or item.get("artifact_ref"),
+        ]
+        for item in _coerce_list(card.get("actions"))
+        if isinstance(item, Mapping)
+    ]
+    lines = [
+        "## Workflow Target Profile Matrix",
+        "",
+        *_key_value_table(
+            [
+                ("Taxonomy", card.get("taxonomy")),
+                ("Status", card.get("status")),
+                ("Target path", card.get("target_path")),
+                ("Frameworks", _join_values(card.get("frameworks"))),
+                ("Profiles", card.get("profile_count")),
+                ("Passed profiles", card.get("passed_profile_count")),
+                ("Failed profiles", _join_values(card.get("failed_profiles"))),
+                ("Weak profiles", _join_values(card.get("weak_profiles"))),
+                ("Patch paths", _join_values(card.get("all_patch_paths"))),
+                ("Local only", card.get("local_only")),
+                (
+                    "Requires external service",
+                    card.get("requires_external_service"),
+                ),
+            ]
+        ),
+        "",
+    ]
+    if profile_rows:
+        lines.extend(
+            [
+                "### Workflow Profiles",
+                "",
+                *_markdown_table(
+                    [
+                        "Framework",
+                        "Status",
+                        "Runtime framework",
+                        "Optimization",
+                        "Evaluation",
+                        "Best",
+                        "Patch paths",
+                    ],
+                    profile_rows,
+                ),
+                "",
+            ]
+        )
+    if metric_rows:
+        lines.extend(
+            [
+                "### Workflow Profile Metrics",
+                "",
+                *_markdown_table(["Metric", "Average"], metric_rows),
+                "",
+            ]
+        )
+    if count_rows:
+        lines.extend(
+            [
+                "### Workflow Profile Counts",
+                "",
+                *_markdown_table(["Count", "Total"], count_rows),
+                "",
+            ]
+        )
+    if action_rows:
+        lines.extend(
+            [
+                "### Workflow Profile Actions",
+                "",
+                *_markdown_table(
+                    ["Action", "Label", "Kind", "Command or artifact"],
                     action_rows,
                 ),
                 "",

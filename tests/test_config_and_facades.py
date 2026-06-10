@@ -4473,6 +4473,138 @@ def test_sdk_workflow_target_profile_matrix_example_runs(monkeypatch, tmp_path):
         for metric in module.REQUIRED_METRICS:
             assert profile["selected_metrics"][metric] == pytest.approx(1.0)
 
+    report_path = tmp_path / "sdk-workflow-target-profile-matrix-report.json"
+    report_markdown_path = tmp_path / "sdk-workflow-target-profile-matrix-report.md"
+    assert (
+        main(
+            [
+                "report",
+                str(output_path),
+                "--output",
+                str(report_path),
+                "--markdown",
+                str(report_markdown_path),
+            ]
+        )
+        == 0
+    )
+    report_serialized = report_path.read_text(encoding="utf-8")
+    report_markdown = report_markdown_path.read_text(encoding="utf-8")
+    assert "real-local-sdk-workflow-target-profile-matrix-key" not in (
+        report_serialized + report_markdown
+    )
+    report = json.loads(report_serialized)
+    assert report["kind"] == "agent-learning.report.v1"
+    assert report["status"] == "passed"
+    assert "workflow_target_profile_matrix" in report["summary"]["sections"]
+    workflow_card = report["report"]["workflow_target_profile_matrix"]
+    assert workflow_card["kind"] == "workflow_target_profile_matrix_evidence"
+    assert workflow_card["status"] == "verified"
+    assert workflow_card["local_only"] is True
+    assert workflow_card["requires_external_service"] is False
+    assert workflow_card["target_path"] == module.TARGET_PATH
+    assert workflow_card["frameworks"] == module.PROFILE_FRAMEWORKS
+    assert workflow_card["profile_count"] == 3
+    assert workflow_card["passed_profile_count"] == 3
+    assert workflow_card["failed_profiles"] == []
+    assert workflow_card["all_patch_paths"] == [module.TARGET_PATH]
+    assert workflow_card["artifacts"]["replay_lock"]["local_only"] is True
+    assert (
+        workflow_card["artifacts"]["replay_lock"]["requires_external_service"]
+        is False
+    )
+    for metric in module.REQUIRED_METRICS:
+        assert workflow_card["metrics"][metric] == pytest.approx(1.0)
+        assert workflow_card["artifacts"]["replay_lock"]["metric_thresholds"][
+            metric
+        ] == pytest.approx(1.0)
+    card_profiles = {
+        profile["framework"]: profile for profile in workflow_card["profiles"]
+    }
+    assert set(card_profiles) == set(module.PROFILE_FRAMEWORKS)
+    for framework, profile in card_profiles.items():
+        assert profile["status"] == "passed"
+        assert profile["workflow_framework"] == framework
+        assert profile["selected_patch_paths"] == [module.TARGET_PATH]
+        assert profile["node_count"] == module.REQUIRED_COUNTS["node_count"]
+        assert profile["edge_count"] == module.REQUIRED_COUNTS["edge_count"]
+        assert profile["step_count"] == module.REQUIRED_COUNTS["step_count"]
+        assert profile["checkpoint_count"] == (
+            module.REQUIRED_COUNTS["checkpoint_count"]
+        )
+        assert profile["route_decision_count"] == (
+            module.REQUIRED_COUNTS["route_decision_count"]
+        )
+        assert profile["interrupt_count"] == module.REQUIRED_COUNTS["interrupt_count"]
+        assert profile["replay_count"] == module.REQUIRED_COUNTS["replay_count"]
+        assert profile["write_count"] == module.REQUIRED_COUNTS["write_count"]
+        assert profile["tool_names"] == ["policy_lookup"]
+        assert profile["tool_call_names"] == ["workflow_trace_status"]
+        assert profile["final_state_keys"] == [
+            "approval",
+            "decision",
+            "policy_result",
+        ]
+        assert profile["entry_nodes"] == ["intake"]
+        assert profile["terminal_nodes"] == ["finalize"]
+        assert profile["has_replay"] is True
+        assert profile["has_interrupts"] is True
+        assert profile["has_routes"] is True
+    assert "## Workflow Target Profile Matrix" in report_markdown
+
+    catalog = actions.action_catalog(result, source_path=output_path)
+    assert catalog["kind"] == "agent-learning.actions.v1"
+    assert catalog["status"] == "passed"
+    workflow_actions = {
+        action["id"]: action
+        for action in catalog["actions"]
+        if action.get("source_card_path") == "workflow_target_profile_matrix"
+    }
+    assert {
+        "report_workflow_target_profile_matrix",
+        "export_workflow_target_profile_matrix_summary",
+        "export_workflow_target_profile_matrix_profiles",
+        "export_workflow_target_profile_matrix_replay_lock",
+    } <= set(workflow_actions)
+    assert workflow_actions["export_workflow_target_profile_matrix_profiles"][
+        "kind"
+    ] == "download"
+    assert workflow_actions["export_workflow_target_profile_matrix_profiles"][
+        "artifact_ref"
+    ] == "report.workflow_target_profile_matrix.artifacts.profiles"
+
+    export_path = tmp_path / "workflow-target-profile-matrix-profiles.json"
+    export_run = actions.run_action(
+        result,
+        "export_workflow_target_profile_matrix_profiles",
+        source_path=output_path,
+        cwd=tmp_path,
+        artifact_output_path=export_path,
+    )
+    assert export_run["kind"] == "agent-learning.action-run.v1"
+    assert export_run["status"] == "passed"
+    assert export_run["summary"]["source_card_path"] == (
+        "workflow_target_profile_matrix"
+    )
+    assert export_run["artifact_ref"] == (
+        "report.workflow_target_profile_matrix.artifacts.profiles"
+    )
+    exported_profiles_serialized = export_path.read_text(encoding="utf-8")
+    assert "real-local-sdk-workflow-target-profile-matrix-key" not in (
+        exported_profiles_serialized
+    )
+    exported_profiles = {
+        profile["framework"]: profile
+        for profile in json.loads(exported_profiles_serialized)
+    }
+    assert set(exported_profiles) == set(module.PROFILE_FRAMEWORKS)
+    for framework, profile in exported_profiles.items():
+        assert profile["workflow_framework"] == framework
+        assert profile["selected_patch_paths"] == [module.TARGET_PATH]
+        assert profile["counts"] == module.REQUIRED_COUNTS
+        for metric in module.REQUIRED_METRICS:
+            assert profile["selected_metrics"][metric] == pytest.approx(1.0)
+
 
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     from agent_learning import optimize
@@ -16583,6 +16715,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_workflow_target_profile_matrix_score_minimum"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
     )
+    assert payload["required_workflow_target_profile_matrix_actions"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -19123,12 +19258,17 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_profile_matrix["required_score_minimum"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
     )
+    assert workflow_profile_matrix["required_actions"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
+    )
     assert workflow_profile_matrix["missing_files"] == []
     assert workflow_profile_matrix["execution_errors"] == []
     assert workflow_profile_matrix["manifest_errors"] == []
     assert workflow_profile_matrix["optimization_errors"] == []
     assert workflow_profile_matrix["metric_errors"] == []
     assert workflow_profile_matrix["runtime_errors"] == []
+    assert workflow_profile_matrix["report_errors"] == []
+    assert workflow_profile_matrix["action_errors"] == []
     assert workflow_profile_matrix["security_errors"] == []
     workflow_profile_evidence = workflow_profile_matrix["evidence"]
     workflow_profile_manifest = workflow_profile_evidence["manifest"]
@@ -19229,6 +19369,60 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         assert profile["has_replay"] is True
         assert profile["has_interrupts"] is True
         assert profile["has_routes"] is True
+    workflow_profile_report = workflow_profile_evidence["report"]
+    assert workflow_profile_report["kind"] == "agent-learning.report.v1"
+    assert workflow_profile_report["status"] == "passed"
+    assert "workflow_target_profile_matrix" in workflow_profile_report["sections"]
+    assert workflow_profile_report["markdown_has_heading"] is True
+    assert workflow_profile_report["card_kind"] == (
+        "workflow_target_profile_matrix_evidence"
+    )
+    assert workflow_profile_report["card_status"] == "verified"
+    assert workflow_profile_report["local_only"] is True
+    assert workflow_profile_report["requires_external_service"] is False
+    assert workflow_profile_report["target_path"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS[0]
+    )
+    assert workflow_profile_report["frameworks"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert workflow_profile_report["profile_count"] == len(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert workflow_profile_report["passed_profile_count"] == len(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert workflow_profile_report["failed_profiles"] == []
+    assert workflow_profile_report["all_patch_paths"] == (
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
+    )
+    assert set(workflow_profile_report["profile_frameworks"]) == set(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert set(workflow_profile_report["action_ids"]) >= set(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
+    )
+    workflow_profile_actions = workflow_profile_evidence["actions"]
+    assert workflow_profile_actions["kind"] == "agent-learning.actions.v1"
+    assert workflow_profile_actions["status"] == "passed"
+    assert set(workflow_profile_actions["action_ids"]) >= set(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
+    )
+    assert "workflow_target_profile_matrix" in (
+        workflow_profile_actions["source_card_paths"]
+    )
+    export_profiles = workflow_profile_actions["export_profiles"]
+    assert export_profiles["kind"] == "agent-learning.action-run.v1"
+    assert export_profiles["status"] == "passed"
+    assert export_profiles["artifact_ref"] == (
+        "report.workflow_target_profile_matrix.artifacts.profiles"
+    )
+    assert export_profiles["profile_count"] == len(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
+    assert set(export_profiles["frameworks"]) == set(
+        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+    )
     workflow_profile_security = workflow_profile_evidence["security"]
     assert workflow_profile_security["serialized_secret_absent"] is True
 

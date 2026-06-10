@@ -972,6 +972,13 @@ V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS = {
 
 V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM = 0.98
 
+V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS = [
+    "report_workflow_target_profile_matrix",
+    "export_workflow_target_profile_matrix_summary",
+    "export_workflow_target_profile_matrix_profiles",
+    "export_workflow_target_profile_matrix_replay_lock",
+]
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -4544,6 +4551,8 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             and not workflow_target_profile_matrix["optimization_errors"]
             and not workflow_target_profile_matrix["metric_errors"]
             and not workflow_target_profile_matrix["runtime_errors"]
+            and not workflow_target_profile_matrix["report_errors"]
+            and not workflow_target_profile_matrix["action_errors"]
             and not workflow_target_profile_matrix["security_errors"]
         ),
         milestone="M3",
@@ -5676,6 +5685,9 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_workflow_target_profile_matrix_score_minimum": (
             V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
+        ),
+        "required_workflow_target_profile_matrix_actions": list(
+            V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -12824,11 +12836,17 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
     optimization_errors: list[dict[str, Any]] = []
     metric_errors: list[dict[str, Any]] = []
     runtime_errors: list[dict[str, Any]] = []
+    report_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
     security_errors: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {}
     manifests: dict[str, Any] = {}
     result: dict[str, Any] = {}
     saved: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+    catalog: dict[str, Any] = {}
+    export_run: dict[str, Any] = {}
+    exported_profiles: list[Any] = []
     output_text = ""
     release_secret = (
         "agent-learning-release-local-"
@@ -12859,7 +12877,9 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
         )
 
     if not missing_files:
+        from . import actions as agent_actions
         from . import config as agent_config
+        from . import simulate as agent_simulate
 
         previous_config = agent_config.current_config()
         example_path = root / "examples/sdk_workflow_target_profile_matrix.py"
@@ -12887,6 +12907,25 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                 )
                 output_text = output_path.read_text(encoding="utf-8")
                 saved = json.loads(output_text)
+                report = agent_simulate.render_report(
+                    result,
+                    source_path=output_path,
+                )
+                catalog = agent_actions.action_catalog(
+                    result,
+                    source_path=output_path,
+                )
+                export_path = Path(tmpdir) / "workflow-target-profile-matrix.json"
+                export_run = agent_actions.run_action(
+                    result,
+                    "export_workflow_target_profile_matrix_profiles",
+                    source_path=output_path,
+                    cwd=Path(tmpdir),
+                    artifact_output_path=export_path,
+                )
+                exported_profiles = json.loads(
+                    export_path.read_text(encoding="utf-8")
+                )
         except Exception as exc:
             execution_errors.append(
                 {
@@ -12897,6 +12936,10 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
             manifests = {}
             result = {}
             saved = {}
+            report = {}
+            catalog = {}
+            export_run = {}
+            exported_profiles = []
         finally:
             agent_config._CONFIG = previous_config
 
@@ -13189,9 +13232,230 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
                         observed=profile.get(field),
                         profile=framework,
                     )
+        if report:
+            report_body = _as_mapping(report.get("report"))
+            report_summary = _as_mapping(report.get("summary"))
+            card = _as_mapping(report_body.get("workflow_target_profile_matrix"))
+            action_ids = sorted(
+                str(_as_mapping(action).get("id"))
+                for action in _as_list(card.get("actions"))
+                if _as_mapping(action).get("id")
+            )
+            card_profiles = [
+                _as_mapping(profile)
+                for profile in _as_list(card.get("profiles"))
+                if isinstance(profile, Mapping)
+            ]
+            card_profile_frameworks = [
+                str(profile.get("framework"))
+                for profile in card_profiles
+                if profile.get("framework")
+            ]
+            evidence["report"] = {
+                "kind": report.get("kind"),
+                "status": report.get("status"),
+                "sections": list(report_summary.get("sections") or []),
+                "markdown_has_heading": (
+                    "## Workflow Target Profile Matrix"
+                    in str(report_body.get("markdown") or "")
+                ),
+                "card_kind": card.get("kind"),
+                "card_status": card.get("status"),
+                "local_only": card.get("local_only"),
+                "requires_external_service": card.get(
+                    "requires_external_service"
+                ),
+                "target_path": card.get("target_path"),
+                "frameworks": list(card.get("frameworks") or []),
+                "profile_count": card.get("profile_count"),
+                "passed_profile_count": card.get("passed_profile_count"),
+                "failed_profiles": list(card.get("failed_profiles") or []),
+                "all_patch_paths": list(card.get("all_patch_paths") or []),
+                "profile_frameworks": card_profile_frameworks,
+                "action_ids": action_ids,
+            }
+            report_expectations = {
+                "report.kind": (report.get("kind"), "agent-learning.report.v1"),
+                "report.status": (report.get("status"), "passed"),
+                "report.sections.workflow_target_profile_matrix": (
+                    "workflow_target_profile_matrix"
+                    in _as_list(report_summary.get("sections")),
+                    True,
+                ),
+                "report.markdown.workflow_target_profile_matrix": (
+                    evidence["report"]["markdown_has_heading"],
+                    True,
+                ),
+                "report.workflow_target_profile_matrix.kind": (
+                    card.get("kind"),
+                    "workflow_target_profile_matrix_evidence",
+                ),
+                "report.workflow_target_profile_matrix.status": (
+                    card.get("status"),
+                    "verified",
+                ),
+                "report.workflow_target_profile_matrix.local_only": (
+                    card.get("local_only"),
+                    True,
+                ),
+                "report.workflow_target_profile_matrix.requires_external_service": (
+                    card.get("requires_external_service"),
+                    False,
+                ),
+                "report.workflow_target_profile_matrix.target_path": (
+                    card.get("target_path"),
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS[0],
+                ),
+                "report.workflow_target_profile_matrix.frameworks": (
+                    list(card.get("frameworks") or []),
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+                ),
+                "report.workflow_target_profile_matrix.profile_count": (
+                    card.get("profile_count"),
+                    len(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+                ),
+                "report.workflow_target_profile_matrix.passed_profile_count": (
+                    card.get("passed_profile_count"),
+                    len(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+                ),
+                "report.workflow_target_profile_matrix.failed_profiles": (
+                    list(card.get("failed_profiles") or []),
+                    [],
+                ),
+                "report.workflow_target_profile_matrix.all_patch_paths": (
+                    list(card.get("all_patch_paths") or []),
+                    V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS,
+                ),
+            }
+            for field, (observed, expected) in report_expectations.items():
+                if observed != expected:
+                    append_error(
+                        report_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            if sorted(card_profile_frameworks) != sorted(
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+            ):
+                append_error(
+                    report_errors,
+                    field="report.workflow_target_profile_matrix.profiles.framework",
+                    expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+                    observed=card_profile_frameworks,
+                )
+            missing_report_actions = sorted(
+                set(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS)
+                - set(action_ids)
+            )
+            if missing_report_actions:
+                append_error(
+                    report_errors,
+                    field="report.workflow_target_profile_matrix.actions",
+                    expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS,
+                    observed=action_ids,
+                )
+        if catalog:
+            workflow_actions = [
+                _as_mapping(action)
+                for action in _as_list(catalog.get("actions"))
+                if _as_mapping(action).get("source_card_path")
+                == "workflow_target_profile_matrix"
+            ]
+            action_ids = sorted(
+                str(action.get("id"))
+                for action in workflow_actions
+                if action.get("id")
+            )
+            exported_frameworks = [
+                str(_as_mapping(profile).get("framework"))
+                for profile in _as_list(exported_profiles)
+                if _as_mapping(profile).get("framework")
+            ]
+            evidence["actions"] = {
+                "kind": catalog.get("kind"),
+                "status": catalog.get("status"),
+                "action_ids": action_ids,
+                "source_card_paths": list(
+                    _as_mapping(catalog.get("summary")).get(
+                        "source_card_paths"
+                    )
+                    or []
+                ),
+                "export_profiles": {
+                    "kind": export_run.get("kind"),
+                    "status": export_run.get("status"),
+                    "artifact_ref": export_run.get("artifact_ref"),
+                    "profile_count": len(exported_profiles),
+                    "frameworks": exported_frameworks,
+                },
+            }
+            action_expectations = {
+                "actions.kind": (
+                    catalog.get("kind"),
+                    "agent-learning.actions.v1",
+                ),
+                "actions.status": (catalog.get("status"), "passed"),
+                "actions.export_workflow_target_profile_matrix_profiles.kind": (
+                    export_run.get("kind"),
+                    "agent-learning.action-run.v1",
+                ),
+                "actions.export_workflow_target_profile_matrix_profiles.status": (
+                    export_run.get("status"),
+                    "passed",
+                ),
+                "actions.export_workflow_target_profile_matrix_profiles.artifact_ref": (
+                    export_run.get("artifact_ref"),
+                    "report.workflow_target_profile_matrix.artifacts.profiles",
+                ),
+                "exported_profiles.count": (
+                    len(exported_profiles),
+                    len(V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS),
+                ),
+            }
+            for field, (observed, expected) in action_expectations.items():
+                if observed != expected:
+                    append_error(
+                        action_errors,
+                        field=field,
+                        expected=expected,
+                        observed=observed,
+                    )
+            missing_catalog_actions = sorted(
+                set(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS)
+                - set(action_ids)
+            )
+            if missing_catalog_actions:
+                append_error(
+                    action_errors,
+                    field="actions.catalog.workflow_target_profile_matrix",
+                    expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS,
+                    observed=action_ids,
+                )
+            if sorted(exported_frameworks) != sorted(
+                V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
+            ):
+                append_error(
+                    action_errors,
+                    field="exported_profiles.framework",
+                    expected=V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS,
+                    observed=exported_frameworks,
+                )
         serialized = json.dumps(result, sort_keys=True, default=str)
+        serialized_report = json.dumps(
+            {
+                "report": report,
+                "catalog": catalog,
+                "export_run": export_run,
+                "exported_profiles": exported_profiles,
+            },
+            sort_keys=True,
+            default=str,
+        )
         serialized_secret_absent = (
-            release_secret not in output_text and release_secret not in serialized
+            release_secret not in output_text
+            and release_secret not in serialized
+            and release_secret not in serialized_report
         )
         evidence["security"] = {
             "serialized_secret_absent": serialized_secret_absent,
@@ -13215,12 +13479,15 @@ def _release_workflow_target_profile_matrix_status(root: Path) -> dict[str, Any]
         "required_metrics": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS),
         "required_counts": dict(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS),
         "required_score_minimum": V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM,
+        "required_actions": list(V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS),
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "manifest_errors": manifest_errors,
         "optimization_errors": optimization_errors,
         "metric_errors": metric_errors,
         "runtime_errors": runtime_errors,
+        "report_errors": report_errors,
+        "action_errors": action_errors,
         "security_errors": security_errors,
         "evidence": evidence,
     }
@@ -39852,6 +40119,7 @@ __all__ = [
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS",
+    "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS",
     "V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS",

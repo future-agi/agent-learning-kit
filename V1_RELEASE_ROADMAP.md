@@ -213,7 +213,9 @@ Current checkpoint:
   select the strong trace for every profile, close workflow trace
   coverage/graph quality/tool/artifact/task metrics, and keep the Agent
   Learning workflow target contract primary while treating outside framework
-  shapes as compatibility inputs.
+  shapes as compatibility inputs. The same gate now renders the
+  `workflow_target_profile_matrix` report/action card, verifies catalog actions,
+  and exports profile evidence through `action-run`.
 - Optimizer governance readiness is now an executable release-check gate:
   `examples/sdk_optimizer_governance_optimization.py` must run local search over
   weak and governed optimizer-society traces, select the governed
@@ -610,12 +612,12 @@ Next implementation focus:
   world/framework/memory stacks, multi-agent framework handoffs, framework
   certification, and framework import repair before V1 claims prompt-agnostic
   optimization.
-- Promote workflow profile-matrix outputs into report/action artifacts before
-  broad workflow-native claims, then broaden local profiles only when the
-  LangGraph/CrewAI/LlamaIndex matrix stays green. Keep proving local selection
-  over graph topology, route decisions, checkpoints, replay, interrupts, and
-  recovery while `ai-evaluation` scores workflow trace coverage/graph quality and
-  `simulate-sdk` supplies deterministic workflow trace simulation.
+- Broaden workflow profile-matrix coverage only when the
+  LangGraph/CrewAI/LlamaIndex report/action matrix stays green. Keep proving
+  local selection over graph topology, route decisions, checkpoints, replay,
+  interrupts, and recovery while `ai-evaluation` scores workflow trace
+  coverage/graph quality and `simulate-sdk` supplies deterministic workflow
+  trace simulation.
 - Keep the adapter-probe gate as the BYO-framework entry bar: unknown local
   framework objects should be discoverable, optimizable, promotable, and
   evaluable without external services before adding live framework-specific
