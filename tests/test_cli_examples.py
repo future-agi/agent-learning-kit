@@ -1949,6 +1949,79 @@ def test_sdk_framework_adapter_pipecat_process_promotion_example_runs(tmp_path):
     assert manifest["evaluation"]["enabled"] is True
 
 
+def test_sdk_framework_adapter_nested_method_promotion_example_runs(tmp_path):
+    example_path = EXAMPLES / "sdk_framework_adapter_nested_method_promotion.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_framework_adapter_nested_method_promotion",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output_path = tmp_path / "sdk-framework-adapter-nested-method-promotion.json"
+    result = module.run(output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        output_path.with_suffix(".manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert saved == result
+    assert result["kind"] == "agent-learning.run.v1"
+    assert result["status"] == "passed"
+    assert result["summary"]["metric_averages"]["framework_runtime_contract"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_call_contract_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"][
+        "framework_adapter_observed_io_quality"
+    ] == pytest.approx(1.0)
+    assert result["summary"]["metric_averages"]["framework_trace_coverage"] == (
+        pytest.approx(1.0)
+    )
+    assert result["summary"]["metric_averages"]["tool_selection_accuracy"] == (
+        pytest.approx(1.0)
+    )
+    assert manifest["agent"]["framework"] == "openai"
+    assert manifest["agent"]["method"] == "chat.completions.create"
+    assert manifest["agent"]["input_mode"] == "messages"
+    assert manifest["agent"]["input_key"] == "messages"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    assert manifest["agent"]["metadata"]["framework_adapter_discovery_used"] is True
+    assert (
+        manifest["agent"]["metadata"]["framework_adapter_discovery"]["status"]
+        == "passed"
+    )
+    proof = manifest["agent"]["metadata"]["framework_adapter_probe_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+    assert proof["method"] == "chat.completions.create"
+    assert proof["input_mode"] == "messages"
+    assert proof["input_key"] == "messages"
+    contract = manifest["agent"]["metadata"]["framework_adapter_probe_contract"]
+    assert contract["input_key"] == "messages"
+    signature = contract["callable_signature"]
+    assert signature["inspectable"] is True
+    assert signature["keyword_only_parameters"] == ["messages"]
+    assert manifest["evaluation"]["enabled"] is True
+
+    state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime = state["framework_runtime"]
+    assert runtime["summary"]["methods"] == ["chat.completions.create"]
+    assert runtime["summary"]["input_modes"] == ["messages"]
+    assert runtime["summary"]["input_keys"] == ["messages"]
+    assert runtime["summary"]["call_styles"] == ["keyword"]
+    assert state["nested_client"]["method_path"] == "chat.completions.create"
+    assert state["nested_client"]["input_key"] == "messages"
+
+
 def test_sdk_framework_adapter_one_call_run_example_runs(tmp_path):
     example_path = EXAMPLES / "sdk_framework_adapter_one_call_run.py"
     spec = importlib.util.spec_from_file_location(

@@ -1562,6 +1562,7 @@ V1_FRAMEWORK_PROVIDER_EXAMPLES = [
     "examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py",
     "examples/sdk_framework_adapter_langchain_invoke_promotion.py",
     "examples/sdk_framework_adapter_pipecat_process_promotion.py",
+    "examples/sdk_framework_adapter_nested_method_promotion.py",
     "examples/sdk_multi_framework_simulation.py",
     "examples/sdk_framework_certification_optimization.py",
     "examples/sdk_framework_certification_simulation.py",
@@ -2499,6 +2500,7 @@ V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_SURFACES = [
     "langgraph_ainvoke_promotion",
     "langchain_invoke_promotion",
     "pipecat_process_promotion",
+    "nested_method_promotion",
 ]
 
 V1_ENVIRONMENT_10X_NATIVE_ADAPTER_PROMOTION_METRICS = [
@@ -3337,6 +3339,7 @@ V1_FRAMEWORK_ADAPTER_PROBE_FILES = [
     "examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py",
     "examples/sdk_framework_adapter_langchain_invoke_promotion.py",
     "examples/sdk_framework_adapter_pipecat_process_promotion.py",
+    "examples/sdk_framework_adapter_nested_method_promotion.py",
     "internal-docs/framework-adapter-probe-readiness-research.md",
 ]
 
@@ -3514,6 +3517,27 @@ V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS = [
         "expected_framework": "pipecat",
         "expected_method": "process",
         "expected_input_mode": "dict",
+        "require_manifest": True,
+        "require_promoted_metadata": True,
+        "require_discovery": True,
+        "min_metrics": {
+            "framework_adapter_call_contract_quality": 1.0,
+            "framework_adapter_contract_quality": 1.0,
+            "framework_adapter_observed_io_quality": 1.0,
+            "framework_runtime_contract": 1.0,
+            "framework_trace_coverage": 1.0,
+            "tool_selection_accuracy": 1.0,
+        },
+    },
+    {
+        "surface": "nested_method_promotion",
+        "path": "examples/sdk_framework_adapter_nested_method_promotion.py",
+        "kind": "agent-learning.run.v1",
+        "expected_framework": "openai",
+        "expected_method": "chat.completions.create",
+        "expected_input_mode": "messages",
+        "expected_input_key": "messages",
+        "expected_call_style": "keyword",
         "require_manifest": True,
         "require_promoted_metadata": True,
         "require_discovery": True,
@@ -30990,6 +31014,7 @@ def _release_environment_10x_robustness_status(
         manifest_agent = _as_mapping(record.get("manifest_agent"))
         metric_averages = _as_mapping(record.get("metric_averages"))
         metric_floors = _as_mapping(expected_contract.get("min_metrics"))
+        selected_probe_summary = _as_mapping(record.get("selected_probe_summary"))
         discovery_ok = True
         if expected_contract.get("require_discovery") is True:
             discovery_ok = (
@@ -30997,6 +31022,24 @@ def _release_environment_10x_robustness_status(
                 and manifest_metadata.get("framework_adapter_discovery_status")
                 == "passed"
             )
+        input_key_ok = (
+            expected_contract.get("expected_input_key") is None
+            or manifest_agent.get("input_key")
+            == expected_contract.get("expected_input_key")
+        )
+        input_kwargs_ok = (
+            expected_contract.get("expected_input_kwargs") is None
+            or dict(_as_mapping(manifest_agent.get("input_kwargs")))
+            == dict(_as_mapping(expected_contract.get("expected_input_kwargs")))
+        )
+        call_style_ok = (
+            expected_contract.get("expected_call_style") is None
+            or str(expected_contract.get("expected_call_style"))
+            in [
+                str(item)
+                for item in _as_list(selected_probe_summary.get("call_styles"))
+            ]
+        )
         adapter_probe_promotion_checks[surface] = (
             bool(record)
             and record.get("result_kind") == "agent-learning.run.v1"
@@ -31009,6 +31052,9 @@ def _release_environment_10x_robustness_status(
             and manifest_agent.get("input_mode") == expected_contract.get(
                 "expected_input_mode"
             )
+            and input_key_ok
+            and input_kwargs_ok
+            and call_style_ok
             and manifest_agent.get("trace_runtime") is True
             and manifest_metadata.get("promoted_from_framework_adapter_probe")
             is True
@@ -33260,9 +33306,16 @@ def _framework_adapter_probe_record(
     optimization = _as_mapping(result.get("optimization"))
     best_config = _as_mapping(optimization.get("best_config"))
     best_adapter = _as_mapping(best_config.get("adapter"))
+    manifest_agent = _as_mapping(manifest.get("agent"))
+    manifest_metadata = _as_mapping(manifest.get("metadata"))
+    manifest_agent_metadata = _as_mapping(manifest_agent.get("metadata"))
+    manifest_probe_proof = _as_mapping(
+        manifest_agent_metadata.get("framework_adapter_probe_proof")
+    )
     proof = _as_mapping(result.get("framework_adapter_probe_proof")) or _as_mapping(
         optimization.get("framework_adapter_probe_proof")
-    )
+    ) or manifest_probe_proof
+    proof_evidence = _as_mapping(proof.get("evidence"))
     optimization_history = [
         item
         for item in _as_list(optimization.get("history"))
@@ -33282,10 +33335,22 @@ def _framework_adapter_probe_record(
             )
         )
     selected_probe_report = _as_mapping(selected_history.get("report"))
-    selected_probe_summary = _as_mapping(selected_probe_report.get("summary"))
-    selected_probe_contract = _as_mapping(selected_probe_report.get("contract"))
+    selected_probe_summary = (
+        _as_mapping(selected_probe_report.get("summary"))
+        or _as_mapping(manifest_agent_metadata.get("framework_adapter_probe_report_summary"))
+        or _as_mapping(proof_evidence.get("selected_report_summary"))
+    )
+    selected_probe_contract = (
+        _as_mapping(selected_probe_report.get("contract"))
+        or _as_mapping(manifest_agent_metadata.get("framework_adapter_probe_contract"))
+        or _as_mapping(proof_evidence.get("framework_adapter_contract"))
+    )
     discovery = _as_mapping(result.get("framework_adapter_discovery")) or _as_mapping(
         optimization.get("framework_adapter_discovery")
+    ) or _as_mapping(
+        manifest_agent_metadata.get("framework_adapter_discovery")
+    ) or _as_mapping(
+        proof_evidence.get("framework_adapter_discovery")
     )
     discovery_summary = _as_mapping(discovery.get("summary"))
     adapter_candidates = [
@@ -33295,13 +33360,9 @@ def _framework_adapter_probe_record(
     ]
     top_candidate = _as_mapping(adapter_candidates[0]) if adapter_candidates else {}
     contract_payload = _as_mapping(result.get("contract")) or selected_probe_contract
-    proof_evidence = _as_mapping(proof.get("evidence"))
     callable_signature = _as_mapping(
         contract_payload.get("callable_signature")
     ) or _as_mapping(proof_evidence.get("framework_adapter_callable_signature"))
-    manifest_agent = _as_mapping(manifest.get("agent"))
-    manifest_metadata = _as_mapping(manifest.get("metadata"))
-    manifest_agent_metadata = _as_mapping(manifest_agent.get("metadata"))
     metric_averages = _as_mapping(summary.get("metric_averages"))
     expected_metrics = _as_mapping(contract.get("min_metrics"))
     manifest_discovery_used = manifest_metadata.get("framework_adapter_discovery_used")
@@ -33395,6 +33456,23 @@ def _framework_adapter_probe_record(
             "input_mode": best_adapter.get("input_mode"),
             "trace_runtime": best_adapter.get("trace_runtime"),
             "allow_external_target": best_adapter.get("allow_external_target"),
+            **(
+                {"input_key": best_adapter.get("input_key")}
+                if best_adapter.get("input_key") is not None
+                else {}
+            ),
+            **(
+                {"input_kwargs": best_adapter.get("input_kwargs")}
+                if best_adapter.get("input_kwargs") is not None
+                else {}
+            ),
+        },
+        "selected_probe_summary": {
+            "call_styles": list(selected_probe_summary.get("call_styles") or []),
+            "input_keys": list(selected_probe_summary.get("input_keys") or []),
+            "input_kwargs_keys": list(
+                selected_probe_summary.get("input_kwargs_keys") or []
+            ),
         },
         "contract": {
             "framework": contract_payload.get("framework"),
@@ -33408,6 +33486,20 @@ def _framework_adapter_probe_record(
             "callable_signature_inspectable": callable_signature.get(
                 "inspectable"
             ),
+            **(
+                {"input_key": contract_payload.get("input_key")}
+                if contract_payload.get("input_key") is not None
+                else {}
+            ),
+            **(
+                {
+                    "input_kwargs_keys": list(
+                        contract_payload.get("input_kwargs_keys") or []
+                    )
+                }
+                if contract_payload.get("input_kwargs_keys")
+                else {}
+            ),
         },
         "manifest_present": bool(manifest),
         "manifest_agent": {
@@ -33415,6 +33507,16 @@ def _framework_adapter_probe_record(
             "method": manifest_agent.get("method"),
             "input_mode": manifest_agent.get("input_mode"),
             "trace_runtime": manifest_agent.get("trace_runtime"),
+            **(
+                {"input_key": manifest_agent.get("input_key")}
+                if manifest_agent.get("input_key") is not None
+                else {}
+            ),
+            **(
+                {"input_kwargs": manifest_agent.get("input_kwargs")}
+                if manifest_agent.get("input_kwargs") is not None
+                else {}
+            ),
         },
         "manifest_metadata": {
             "promoted_from_framework_adapter_probe": manifest_metadata.get(
@@ -33528,7 +33630,7 @@ def _append_framework_adapter_probe_errors(
             }
         )
 
-    for field in ("method", "input_mode", "framework"):
+    for field in ("method", "input_mode", "framework", "input_key"):
         expected = contract.get(f"expected_{field}")
         if expected is None:
             continue
@@ -33541,6 +33643,36 @@ def _append_framework_adapter_probe_errors(
                     "field": field,
                     "expected": expected,
                     "observed": observed,
+                }
+            )
+
+    expected_input_kwargs = contract.get("expected_input_kwargs")
+    if expected_input_kwargs is not None:
+        observed = _framework_adapter_probe_observed_field(record, "input_kwargs") or {}
+        if dict(_as_mapping(observed)) != dict(_as_mapping(expected_input_kwargs)):
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "input_kwargs",
+                    "expected": expected_input_kwargs,
+                    "observed": observed,
+                }
+            )
+
+    expected_call_style = contract.get("expected_call_style")
+    if expected_call_style is not None:
+        observed_call_styles = _as_list(
+            _as_mapping(record.get("selected_probe_summary")).get("call_styles")
+        )
+        if str(expected_call_style) not in [str(item) for item in observed_call_styles]:
+            contract_errors.append(
+                {
+                    "surface": surface,
+                    "path": path,
+                    "field": "selected_probe_summary.call_styles",
+                    "expected": expected_call_style,
+                    "observed": observed_call_styles,
                 }
             )
 

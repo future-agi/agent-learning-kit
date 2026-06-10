@@ -463,7 +463,8 @@ Current checkpoint:
   explicit promotion, auto-discovery promotion, one-call promotion, and one-call
   run SDK cookbooks must run locally, prove custom `execute_task(dict)` plus
   LangGraph-style `ainvoke(dict)`, LangChain-style `invoke(dict)`, and
-  Pipecat-style `process(dict)` promotion,
+  Pipecat-style `process(dict)` plus OpenAI-compatible
+  `chat.completions.create(messages=...)` nested-method promotion,
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
@@ -614,8 +615,9 @@ Next implementation focus:
 - Keep backing that target with Agent Learning run/eval/optimization artifacts,
   local environment replay gates, framework adapter cookbooks, non-custom
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat
-  `process(dict)` promotion evidence, and release-checked agent-opt bundle
-  search. OpenEnv-specific fixtures are
+  `process(dict)` plus OpenAI-compatible
+  `chat.completions.create(messages=...)` promotion evidence, and
+  release-checked agent-opt bundle search. OpenEnv-specific fixtures are
   compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove
   best-candidate selection across custom adapters, social-memory synthesis,

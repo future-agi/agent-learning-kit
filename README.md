@@ -113,8 +113,9 @@ optimizer, adapter, protocol, browser/CUA, realtime, memory, multi-agent,
 workflow-hook, retrieval-hook, red-team, orchestration, and regression proof
 outputs and requires at least ten independent axes to pass, including native
 adapter promotion for custom `execute_task(dict)`, LangGraph `ainvoke(dict)`,
-LangChain `invoke(dict)`, and Pipecat `process(dict)` surfaces. OpenEnv and
-Gymnasium are compatibility inputs, not the product center. Regression artifact
+LangChain `invoke(dict)`, Pipecat `process(dict)`, and OpenAI-compatible
+`chat.completions.create(messages=...)` surfaces. OpenEnv and Gymnasium are
+compatibility inputs, not the product center. Regression artifact
 readiness runs the local baseline, compare, report, promote-to-regression, and
 replay lifecycle so optimized or red-team evidence can become replayable CI
 artifacts. Optimizer governance readiness executes local governed
@@ -692,18 +693,22 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_one_call_promotion.py` and
 `examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py` and
 `examples/sdk_framework_adapter_langchain_invoke_promotion.py` and
-`examples/sdk_framework_adapter_pipecat_process_promotion.py` for local
+`examples/sdk_framework_adapter_pipecat_process_promotion.py` and
+`examples/sdk_framework_adapter_nested_method_promotion.py` for local
 target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)`,
-LangChain-style `invoke(dict)`, and Pipecat-style `process(dict)` promotion.
+LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`, and
+OpenAI-compatible `chat.completions.create(messages=...)` promotion.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
 probe optimization, auto-discovery optimization, explicit promotion,
 auto-discovery promotion, one-call promotion, one-call run, LangGraph
 `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat `process(dict)`
-promotion cookbooks. It requires custom `execute_task(dict)` coverage plus
-LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat
-`process(dict)` promotion, callable-signature evidence, observed I/O
+promotion cookbooks, plus OpenAI-compatible
+`chat.completions.create(messages=...)` nested-method promotion. It requires
+custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
+LangChain `invoke(dict)`, Pipecat `process(dict)`, and nested provider-method
+promotion, callable-signature evidence, observed I/O
 contracts, passing probe proofs, discovery metadata where expected, promoted
 manifest proof metadata, and evaluated framework runtime, adapter call-contract,
 observed-I/O, adapter-contract, framework-trace, and tool metrics. Probe
@@ -752,7 +757,11 @@ resolution can promote paths such as OpenAI-compatible
 `messages.create(messages=...)`; the promoted manifest records the dotted
 `agent.method`, `agent.input_mode`, and `agent.input_key`, and the runtime trace
 keeps the full method path for eval gates. See
-`examples/sdk_framework_adapter_nested_method.py`.
+`examples/sdk_framework_adapter_nested_method.py`. The release-gated promotion
+version is `examples/sdk_framework_adapter_nested_method_promotion.py`, which
+requires discovery to choose `chat.completions.create`, preserve
+`agent.input_key=messages`, prove keyword-call evidence, and close the normal
+promoted-run metric floors.
 
 Provider-style response objects are normalized too. OpenAI-compatible
 `choices[].message.tool_calls`, finish reasons, usage blocks, and Anthropic-style

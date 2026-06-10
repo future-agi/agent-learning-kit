@@ -22439,12 +22439,23 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         assert promotion["result_status"] == "passed"
         assert promotion["output_roundtrip"] is True
         assert promotion["manifest_present"] is True
-        assert promotion["manifest_agent"] == {
+        expected_manifest_agent = {
             "framework": contract["expected_framework"],
             "method": contract["expected_method"],
             "input_mode": contract["expected_input_mode"],
             "trace_runtime": True,
         }
+        if contract.get("expected_input_key") is not None:
+            expected_manifest_agent["input_key"] = contract["expected_input_key"]
+        if contract.get("expected_input_kwargs") is not None:
+            expected_manifest_agent["input_kwargs"] = contract[
+                "expected_input_kwargs"
+            ]
+        assert promotion["manifest_agent"] == expected_manifest_agent
+        if contract.get("expected_call_style") is not None:
+            assert contract["expected_call_style"] in promotion[
+                "selected_probe_summary"
+            ]["call_styles"]
         assert promotion["manifest_metadata"][
             "promoted_from_framework_adapter_probe"
         ] is True
@@ -23392,6 +23403,41 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_trace_coverage": pytest.approx(1.0),
         "tool_selection_accuracy": pytest.approx(1.0),
     }
+    nested_method_promotion = adapter_probes["nested_method_promotion"]
+    assert nested_method_promotion["result_kind"] == "agent-learning.run.v1"
+    assert nested_method_promotion["result_status"] == "passed"
+    assert nested_method_promotion["manifest_present"] is True
+    assert nested_method_promotion["manifest_agent"] == {
+        "framework": "openai",
+        "method": "chat.completions.create",
+        "input_mode": "messages",
+        "trace_runtime": True,
+        "input_key": "messages",
+    }
+    assert nested_method_promotion["manifest_agent"].get("input_kwargs") is None
+    assert nested_method_promotion["selected_probe_summary"]["call_styles"] == [
+        "keyword"
+    ]
+    assert nested_method_promotion["selected_probe_summary"]["input_keys"] == [
+        "messages"
+    ]
+    assert nested_method_promotion["manifest_metadata"][
+        "promoted_from_framework_adapter_probe"
+    ] is True
+    assert nested_method_promotion["manifest_metadata"][
+        "probe_proof_status"
+    ] == "passed"
+    assert nested_method_promotion["manifest_metadata"][
+        "adapter_candidate_source"
+    ] == "discovery"
+    assert nested_method_promotion["metric_averages"] == {
+        "framework_adapter_call_contract_quality": pytest.approx(1.0),
+        "framework_adapter_contract_quality": pytest.approx(1.0),
+        "framework_adapter_observed_io_quality": pytest.approx(1.0),
+        "framework_runtime_contract": pytest.approx(1.0),
+        "framework_trace_coverage": pytest.approx(1.0),
+        "tool_selection_accuracy": pytest.approx(1.0),
+    }
     assert adapter_probes["probe_promotion"]["manifest_metadata"][
         "framework_adapter_discovery_used"
     ] in (None, False)
@@ -23402,6 +23448,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "langgraph_ainvoke_promotion",
         "langchain_invoke_promotion",
         "pipecat_process_promotion",
+        "nested_method_promotion",
     ):
         promoted = adapter_probes[surface]
         assert promoted["manifest_metadata"]["framework_adapter_discovery_used"] is True
