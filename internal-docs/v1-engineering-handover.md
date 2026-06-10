@@ -7,16 +7,16 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `6d28ad8 Gate trace adapter promotions`.
+  `6ae97a6 Gate OpenEnv compatibility boundary`.
 - Current handoff slice:
-  OpenEnv/Gymnasium compatibility boundary release-check gate.
+  Release-proof handover packaging and dry-run command plan.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
   optimization, evaluation, report/action, multi-agent, memory, workflow, and
   robustness axes. OpenEnv/Gymnasium remain compatibility input shapes only.
-- The current package manifests do not list OpenEnv or Gymnasium as runtime
-  dependencies.
+- The current package manifests do not list OpenEnv, legacy Gym, or Gymnasium as
+  runtime dependencies.
 - The recurring unrelated local file is `uv.lock`. Do not stage, delete, or
   overwrite it unless the owner decides to adopt it.
 
@@ -45,12 +45,42 @@ What is not done:
 
 - Do not call v1 complete yet.
 - The next owner still needs more arbitrary-framework promotion surfaces, more
-  provider-shaped adapters, broader frontend/product proof surfaces, release
-  proof packaging, and final release discipline.
+  provider-shaped adapters, broader frontend/product proof surfaces, full release
+  proof hardening, and final release discipline.
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest OpenEnv Compatibility Boundary Slice
+## Latest Release-Proof Handover Packaging Slice
+
+This handoff slice makes release-proof packaging executable and
+machine-readable.
+
+Implemented behavior:
+
+- `agent-learn release-proof --dry-run` emits planned command evidence for every
+  selected proof check, including `command`, `cwd`, `planned=true`,
+  `exit_code=null`, and zero output byte counts.
+- `agent-learning.release-proof.v1` carries a `handover` block with:
+  - required handover docs,
+  - required doc phrases,
+  - product surfaces,
+  - completion invariants,
+  - the first-release command plan.
+- `agent-learn release-check` gates the same contract as
+  `release_handover_packaging` under M7.
+- Dry-run output remains a plan only: `status="planned"` and `ready=false`.
+
+First handover preflight:
+
+```bash
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --dry-run \
+  --output /tmp/agent-learning-release-proof-plan.json \
+  --quiet
+```
+
+## Previous OpenEnv Compatibility Boundary Slice
 
 This handoff slice makes the OpenEnv/Gymnasium boundary executable instead of
 only documented.
@@ -242,13 +272,18 @@ git status --short --branch
 git log --oneline -8
 uv run ruff check .
 git diff --check
+uv run python -m agent_learning.cli release-proof \
+  --project-root . \
+  --dry-run \
+  --output /tmp/agent-learning-release-proof-plan.json \
+  --quiet
 uv run python -m agent_learning.cli release-check --project-root . --quiet
 uv run pytest -q
 uv run python -m agent_learning.cli release-proof \
   --project-root . \
   --only release_check \
   --only git_diff_check \
-  --output /tmp/agent-learning-browser-cua-trace-release-proof.json \
+  --output /tmp/agent-learning-release-proof-selected.json \
   --quiet
 ```
 
@@ -473,7 +508,8 @@ Implemented behavior:
 
 ## Verification Ledger
 
-Latest full-suite verification before this trace handoff slice:
+Historical verification ledger for prior adapter-promotion slices; do not treat
+these results as current proof for the release-proof handover slice:
 
 ```bash
 uv run pytest -q
@@ -661,7 +697,7 @@ Result:
   `298 passed, 6 warnings in 1533.12s (0:25:33)`
 - selected release-proof:
   `status=passed`, selected checks `release_check` and `git_diff_check` passed,
-  wrote `/tmp/agent-learning-provider-response-release-proof.json`
+  wrote the then-current provider-response selected proof artifact
 
 Browser/CUA trace handoff verification passed:
 
@@ -688,7 +724,7 @@ uv run python -m agent_learning.cli release-proof \
   --project-root . \
   --only release_check \
   --only git_diff_check \
-  --output /tmp/agent-learning-browser-cua-trace-release-proof.json \
+  --output /tmp/agent-learning-release-proof-selected.json \
   --quiet
 ```
 
@@ -708,7 +744,7 @@ Result:
   `298 passed, 6 warnings in 1567.07s (0:26:07)`
 - selected release-proof:
   `status=passed`, selected checks `release_check` and `git_diff_check` passed,
-  wrote `/tmp/agent-learning-browser-cua-trace-release-proof.json`
+  wrote the then-current Browser/CUA selected proof artifact
 
 ## Key Files
 
@@ -836,17 +872,17 @@ Rules:
 
 Suggested next packets:
 
-1. Release proof packaging.
-   - Goal: make the final v1 handoff artifact easy for engineering/product to
-     consume without rerunning every long gate first.
-   - Files: release-proof CLI output, README release instructions, and
-     `internal-docs/v1-engineering-handover.md`.
-   - Constraint: do not call v1 complete until the full suite and release proof
-     pass on the final tree.
-2. Additional local framework control-plane promotion.
+1. Additional local framework control-plane promotion.
    - Goal: promote another local framework-shaped adapter through the BYO probe
      path only if it adds a new runtime contract, not another wrapper variant.
    - Constraint: keep it local-only and map claims to release-check metrics.
+2. Full release proof hardening.
+   - Goal: run and preserve the full `agent-learn release-proof --project-root .`
+     artifact on the final tree, including Python build and TypeScript
+     build/test evidence.
+   - Constraint: do not call v1 complete until the artifact has
+     `summary.ready=true` and the working tree is clean except owner-approved
+     generated files.
 
 ## Release Discipline
 
@@ -867,14 +903,12 @@ Commit locally with a message that names the proof surface. For this slice:
 
 ```bash
 git add src/agent_learning/trinity.py \
+  src/agent_learning/cli.py \
   tests/test_config_and_facades.py \
   README.md \
   V1_RELEASE_ROADMAP.md \
-  internal-docs/environment-10x-robustness-research.md \
-  internal-docs/openenv-compatibility-boundary-research.md \
-  internal-docs/openenv-environment-adapter-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Gate OpenEnv compatibility boundary"
+git commit -m "Package release handover proof plan"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

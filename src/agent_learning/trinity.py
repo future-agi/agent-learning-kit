@@ -134,6 +134,112 @@ V1_RELEASE_PROOF_REQUIRED_CHECKS = [
     "git_diff_check",
 ]
 
+V1_RELEASE_HANDOVER_REQUIRED_FILES = [
+    "README.md",
+    "V1_RELEASE_ROADMAP.md",
+    "internal-docs/v1-engineering-handover.md",
+]
+
+V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES = {
+    "README.md": [
+        "For the heavier release cut, run `agent-learn release-proof --project-root .`.",
+        "It emits `agent-learning.release-proof.v1`",
+    ],
+    "V1_RELEASE_ROADMAP.md": [
+        "`agent-learn release-proof` emits one release-cut artifact",
+        "`agent-learning.release-proof.v1` and `ready=true`",
+    ],
+    "internal-docs/v1-engineering-handover.md": [
+        "release-proof packaging executable",
+        "Do not mark v1 complete until current evidence proves all of these:",
+    ],
+}
+
+V1_RELEASE_HANDOVER_COMMANDS = [
+    {
+        "id": "status",
+        "command": "git status --short --branch",
+        "proof_check_id": None,
+    },
+    {
+        "id": "ruff",
+        "command": "uv run ruff check .",
+        "proof_check_id": "ruff",
+    },
+    {
+        "id": "git_diff_check",
+        "command": "git diff --check",
+        "proof_check_id": "git_diff_check",
+    },
+    {
+        "id": "release_check",
+        "command": (
+            "uv run python -m agent_learning.cli release-check "
+            "--project-root . --quiet"
+        ),
+        "proof_check_id": "release_check",
+    },
+    {
+        "id": "pytest",
+        "command": "uv run pytest -q",
+        "proof_check_id": "pytest",
+    },
+    {
+        "id": "build",
+        "command": "uv run python -m build",
+        "proof_check_id": "build",
+    },
+    {
+        "id": "typescript_build",
+        "command": (
+            "pnpm --dir typescript --filter @future-agi/agent-learning-kit build"
+        ),
+        "proof_check_id": "typescript_build",
+    },
+    {
+        "id": "typescript_test",
+        "command": (
+            "pnpm --dir typescript --filter @future-agi/agent-learning-kit "
+            "test -- --runInBand --silent"
+        ),
+        "proof_check_id": "typescript_test",
+    },
+    {
+        "id": "release_proof",
+        "command": (
+            "uv run python -m agent_learning.cli release-proof "
+            "--project-root . --output /tmp/agent-learning-release-proof.json "
+            "--quiet"
+        ),
+        "proof_check_id": None,
+    },
+]
+
+V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS = [
+    "/tmp/agent-learning-release-proof-plan.json",
+    "/tmp/agent-learning-release-proof-selected.json",
+    "/tmp/agent-learning-release-proof.json",
+]
+
+V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS = [
+    "/tmp/agent-learning-browser-cua-trace-release-proof.json",
+    "/tmp/agent-learning-provider-response-release-proof.json",
+]
+
+V1_RELEASE_HANDOVER_PRODUCT_SURFACES = [
+    "agent-opt",
+    "simulate-sdk",
+    "ai-evaluation",
+]
+
+V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS = [
+    "agent-opt optimizes prompts, worlds, framework adapters, workflow hooks, retrieval hooks, memory layers, multi-agent interactions, red-team scenarios, and regression candidates.",
+    "simulate-sdk simulates local adapters for major framework shapes without importing those frameworks or requiring hosted services.",
+    "ai-evaluation evaluates arbitrary task outcomes plus runtime contracts, trace quality, memory/retrieval quality, and robustness.",
+    "agent-learn release-check and agent-learn release-proof pass from a clean checkout before v1 is called complete.",
+    "OpenEnv/Gymnasium remain compatibility input shapes, not product ownership.",
+]
+
 V1_UI_ACTION_REPORT_ARTIFACTS = [
     {
         "path": "examples/fixtures/task_artifacts/refund_task_run.json",
@@ -5583,6 +5689,18 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             "console_scripts": pyproject.get("scripts", {}),
         },
     )
+    release_handover_packaging = _release_handover_packaging_status(root)
+    _append_release_check(
+        checks,
+        check_id="release_handover_packaging",
+        passed=(
+            not release_handover_packaging["missing_files"]
+            and not release_handover_packaging["doc_errors"]
+            and not release_handover_packaging["command_errors"]
+        ),
+        milestone="M7",
+        evidence=release_handover_packaging,
+    )
 
     milestones = _release_milestones(checks)
     findings = [
@@ -6180,6 +6298,27 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
             V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
         ),
         "required_release_proof_checks": list(V1_RELEASE_PROOF_REQUIRED_CHECKS),
+        "required_release_handover_files": list(
+            V1_RELEASE_HANDOVER_REQUIRED_FILES
+        ),
+        "required_release_handover_doc_phrases": copy.deepcopy(
+            V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES
+        ),
+        "required_release_handover_commands": copy.deepcopy(
+            V1_RELEASE_HANDOVER_COMMANDS
+        ),
+        "required_release_handover_product_surfaces": list(
+            V1_RELEASE_HANDOVER_PRODUCT_SURFACES
+        ),
+        "required_release_handover_completion_invariants": list(
+            V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS
+        ),
+        "required_release_handover_allowed_proof_outputs": list(
+            V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS
+        ),
+        "forbidden_release_handover_proof_outputs": list(
+            V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS
+        ),
         "required_optimizer_governance_files": list(
             V1_OPTIMIZER_GOVERNANCE_FILES
         ),
@@ -6814,6 +6953,126 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
     }
 
 
+def _release_handover_packaging_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(root, V1_RELEASE_HANDOVER_REQUIRED_FILES)
+    doc_errors: list[dict[str, Any]] = []
+    doc_phrase_hits: dict[str, list[str]] = {}
+    for relative_path, phrases in V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES.items():
+        path = root / relative_path
+        text = (
+            path.read_text(encoding="utf-8", errors="ignore")
+            if path.exists()
+            else ""
+        )
+        hits: list[str] = []
+        for phrase in phrases:
+            if phrase in text:
+                hits.append(phrase)
+            else:
+                doc_errors.append(
+                    {
+                        "path": relative_path,
+                        "missing_phrase": phrase,
+                    }
+                )
+        doc_phrase_hits[relative_path] = hits
+
+    handover_text = ""
+    handover_path = root / "internal-docs/v1-engineering-handover.md"
+    if handover_path.exists():
+        handover_text = handover_path.read_text(encoding="utf-8", errors="ignore")
+
+    command_plan = copy.deepcopy(V1_RELEASE_HANDOVER_COMMANDS)
+    proof_command_ids = [
+        str(command["proof_check_id"])
+        for command in command_plan
+        if command.get("proof_check_id")
+    ]
+    proof_command_set = set(proof_command_ids)
+    required_proof_set = set(V1_RELEASE_PROOF_REQUIRED_CHECKS)
+    command_errors: list[dict[str, Any]] = []
+    missing_proof_commands = [
+        check_id
+        for check_id in V1_RELEASE_PROOF_REQUIRED_CHECKS
+        if check_id not in proof_command_set
+    ]
+    for check_id in missing_proof_commands:
+        command_errors.append(
+            {
+                "field": "command_plan.proof_check_id",
+                "missing": check_id,
+                "reason": "required release-proof check is not in handover plan",
+            }
+        )
+    unknown_proof_commands = [
+        check_id
+        for check_id in proof_command_ids
+        if check_id not in required_proof_set
+    ]
+    for check_id in unknown_proof_commands:
+        command_errors.append(
+            {
+                "field": "command_plan.proof_check_id",
+                "unknown": check_id,
+                "reason": "handover plan references an unknown proof check",
+            }
+        )
+    command_ids = {str(command.get("id")) for command in command_plan}
+    if "release_proof" not in command_ids:
+        command_errors.append(
+            {
+                "field": "command_plan.id",
+                "missing": "release_proof",
+                "reason": "handover plan must include the final release-proof command",
+            }
+        )
+    for output_path in V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS:
+        if output_path not in handover_text:
+            command_errors.append(
+                {
+                    "field": "handover_doc.proof_outputs",
+                    "missing": output_path,
+                    "reason": "handover doc must show the current proof output path",
+                }
+            )
+    for output_path in V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS:
+        if output_path in handover_text:
+            command_errors.append(
+                {
+                    "field": "handover_doc.proof_outputs",
+                    "forbidden": output_path,
+                    "reason": "handover doc still references stale slice proof output",
+                }
+            )
+
+    status = (
+        "passed"
+        if not missing_files and not doc_errors and not command_errors
+        else "failed"
+    )
+    return {
+        "kind": "agent-learning.release-handover.v1",
+        "status": status,
+        "handover_doc": "internal-docs/v1-engineering-handover.md",
+        "release_proof_output": "/tmp/agent-learning-release-proof.json",
+        "required_files": list(V1_RELEASE_HANDOVER_REQUIRED_FILES),
+        "missing_files": missing_files,
+        "required_doc_phrases": copy.deepcopy(
+            V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES
+        ),
+        "doc_phrase_hits": doc_phrase_hits,
+        "doc_errors": doc_errors,
+        "command_plan": command_plan,
+        "required_proof_check_ids": list(V1_RELEASE_PROOF_REQUIRED_CHECKS),
+        "proof_command_ids": proof_command_ids,
+        "allowed_proof_outputs": list(V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS),
+        "forbidden_proof_outputs": list(V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS),
+        "command_errors": command_errors,
+        "product_surfaces": list(V1_RELEASE_HANDOVER_PRODUCT_SURFACES),
+        "completion_invariants": list(V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS),
+    }
+
+
 def release_proof_status(
     project_root: str | Path | None = None,
     *,
@@ -6848,6 +7107,7 @@ def release_proof_status(
         str(key): dict(value)
         for key, value in dict(command_results or {}).items()
     }
+    handover = _release_handover_packaging_status(root)
     checks: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
 
@@ -6873,7 +7133,10 @@ def release_proof_status(
             }
         else:
             exit_code = raw.get("exit_code")
-            status = "passed" if exit_code == 0 else "failed"
+            if dry_run and raw.get("planned") is True and exit_code is None:
+                status = "pending"
+            else:
+                status = "passed" if exit_code == 0 else "failed"
             evidence = dict(raw)
         check = {
             "id": check_id,
@@ -6957,6 +7220,7 @@ def release_proof_status(
         "required_check_ids": required_checks,
         "selected_check_ids": selected_required,
         "unknown_selected_check_ids": unknown_selected,
+        "handover": handover,
         "checks": checks,
         "findings": findings,
     }
@@ -41071,6 +41335,13 @@ __all__ = [
     "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES",
     "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES",
     "V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS",
+    "V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS",
+    "V1_RELEASE_HANDOVER_COMMANDS",
+    "V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS",
+    "V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS",
+    "V1_RELEASE_HANDOVER_PRODUCT_SURFACES",
+    "V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES",
+    "V1_RELEASE_HANDOVER_REQUIRED_FILES",
     "V1_RELEASE_PROOF_REQUIRED_CHECKS",
     "V1_TYPESCRIPT_SDK_REQUIRED_FILES",
     "V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS",

@@ -17823,6 +17823,27 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_release_proof_checks"] == (
         trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
     )
+    assert payload["required_release_handover_files"] == (
+        trinity.V1_RELEASE_HANDOVER_REQUIRED_FILES
+    )
+    assert payload["required_release_handover_doc_phrases"] == (
+        trinity.V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES
+    )
+    assert payload["required_release_handover_commands"] == (
+        trinity.V1_RELEASE_HANDOVER_COMMANDS
+    )
+    assert payload["required_release_handover_product_surfaces"] == (
+        trinity.V1_RELEASE_HANDOVER_PRODUCT_SURFACES
+    )
+    assert payload["required_release_handover_completion_invariants"] == (
+        trinity.V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS
+    )
+    assert payload["required_release_handover_allowed_proof_outputs"] == (
+        trinity.V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS
+    )
+    assert payload["forbidden_release_handover_proof_outputs"] == (
+        trinity.V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS
+    )
     assert payload["required_evidence_components"] == (
         trinity.V1_REQUIRED_EVIDENCE_COMPONENTS
     )
@@ -17966,6 +17987,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "trinity_stack_probe_readiness",
         "environment_10x_robustness",
         "package_metadata",
+        "release_handover_packaging",
     }
     assert all(check["status"] == "passed" for check in checks.values())
     typescript_boundary = checks["typescript_sdk_consolidation_boundary"]["evidence"]
@@ -18001,6 +18023,33 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES.items()
     ):
         assert openenv_boundary["doc_phrase_hits"][relative_path] == phrases
+    handover_packaging = checks["release_handover_packaging"]["evidence"]
+    assert handover_packaging["kind"] == "agent-learning.release-handover.v1"
+    assert handover_packaging["status"] == "passed"
+    assert handover_packaging["missing_files"] == []
+    assert handover_packaging["doc_errors"] == []
+    assert handover_packaging["command_errors"] == []
+    assert handover_packaging["required_proof_check_ids"] == (
+        trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
+    )
+    assert handover_packaging["allowed_proof_outputs"] == (
+        trinity.V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS
+    )
+    assert handover_packaging["forbidden_proof_outputs"] == (
+        trinity.V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS
+    )
+    assert set(handover_packaging["proof_command_ids"]) == set(
+        trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
+    )
+    assert handover_packaging["product_surfaces"] == (
+        trinity.V1_RELEASE_HANDOVER_PRODUCT_SURFACES
+    )
+    assert handover_packaging["completion_invariants"] == (
+        trinity.V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS
+    )
+    assert {
+        command["id"] for command in handover_packaging["command_plan"]
+    } >= {"status", "release_check", "pytest", "release_proof"}
     assert checks["release_docs_present"]["evidence"]["missing"] == []
     assert checks["v1_examples_present"]["evidence"]["missing"] == []
     assert checks["local_sim_eval_examples_present"]["evidence"]["missing"] == []
@@ -26045,10 +26094,16 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
     assert payload["summary"]["passed_check_count"] == 2
     assert payload["summary"]["failed_check_count"] == 0
     assert payload["summary"]["skipped_check_count"] == 5
+    assert payload["handover"]["kind"] == "agent-learning.release-handover.v1"
+    assert payload["handover"]["status"] == "passed"
+    assert payload["handover"]["command_errors"] == []
+    assert payload["handover"]["missing_files"] == []
+    assert payload["handover"]["doc_errors"] == []
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == set(trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS)
     assert checks["release_check"]["status"] == "passed"
     assert checks["release_check"]["exit_code"] == 0
+    assert checks["release_check"]["evidence"].get("planned") is not True
     assert checks["release_check"]["evidence"]["command"][:3] == [
         sys.executable,
         "-m",
@@ -26056,6 +26111,7 @@ def test_agent_learn_release_proof_runs_selected_local_checks(tmp_path, capsys):
     ]
     assert checks["git_diff_check"]["status"] == "passed"
     assert checks["git_diff_check"]["exit_code"] == 0
+    assert checks["git_diff_check"]["evidence"].get("planned") is not True
     assert checks["git_diff_check"]["evidence"]["command"] == [
         "git",
         "diff",
@@ -26098,6 +26154,54 @@ def test_agent_learn_release_proof_dry_run_emits_plan(tmp_path, capsys):
     assert payload["summary"]["failed_check_count"] == 0
     assert payload["summary"]["unknown_selected_check_count"] == 0
     assert {check["status"] for check in payload["checks"]} == {"pending"}
+    assert payload["handover"]["status"] == "passed"
+    assert payload["handover"]["command_errors"] == []
+    expected_commands = {
+        "release_check": [
+            sys.executable,
+            "-m",
+            "agent_learning.cli",
+            "release-check",
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--quiet",
+        ],
+        "ruff": [sys.executable, "-m", "ruff", "check", "."],
+        "pytest": [sys.executable, "-m", "pytest", "-q"],
+        "build": [sys.executable, "-m", "build"],
+        "typescript_build": [
+            "pnpm",
+            "--dir",
+            str(PROJECT_ROOT / "typescript"),
+            "--filter",
+            "@future-agi/agent-learning-kit",
+            "build",
+        ],
+        "typescript_test": [
+            "pnpm",
+            "--dir",
+            str(PROJECT_ROOT / "typescript"),
+            "--filter",
+            "@future-agi/agent-learning-kit",
+            "test",
+            "--",
+            "--runInBand",
+            "--silent",
+        ],
+        "git_diff_check": ["git", "diff", "--check"],
+    }
+    checks = {check["id"]: check for check in payload["checks"]}
+    assert set(checks) == set(expected_commands)
+    for check_id, expected_command in expected_commands.items():
+        evidence = checks[check_id]["evidence"]
+        assert evidence["planned"] is True
+        assert evidence["reason"] == "dry run command plan"
+        assert evidence["cwd"] == str(PROJECT_ROOT)
+        assert evidence["command"] == expected_command
+        assert evidence["exit_code"] is None
+        assert evidence["timed_out"] is False
+        assert evidence["stdout_bytes"] == 0
+        assert evidence["stderr_bytes"] == 0
     assert {
         finding["type"] for finding in payload["findings"]
     } == {"v1_release_proof_check_pending"}

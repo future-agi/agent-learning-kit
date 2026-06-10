@@ -153,8 +153,10 @@ For the heavier release cut, run `agent-learn release-proof --project-root .`.
 It emits `agent-learning.release-proof.v1` with command evidence for the full
 local proof stack: release-check, full-repo ruff, pytest, Python package build,
 TypeScript package build/test, and `git diff --check`. Use `--only <check>` for
-a partial proof during development or `--dry-run` to print the exact plan
-without executing commands.
+a partial proof during development or `--dry-run` to emit the exact command
+plan, cwd, and `planned=true` evidence without executing commands. Every
+release-proof artifact also carries a `handover` block with the required docs,
+completion invariants, and first-release command plan engineering should use.
 
 Python code can verify the same boundary without shelling out:
 

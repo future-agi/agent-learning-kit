@@ -3231,7 +3231,13 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     )
     selected = list(parsed.only or trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS)
     command_results: dict[str, dict[str, Any]] = {}
-    if not parsed.dry_run:
+    if parsed.dry_run:
+        for check_id in selected:
+            command_results[check_id] = _planned_release_proof_command(
+                check_id,
+                project_root=root,
+            )
+    else:
         for check_id in selected:
             command_results[check_id] = _run_release_proof_command(
                 check_id,
@@ -3256,6 +3262,26 @@ def _release_proof(args: Sequence[str] = ()) -> int:
     if not parsed.quiet:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return int(payload.get("exit_code", 0))
+
+
+def _planned_release_proof_command(
+    check_id: str,
+    *,
+    project_root: Path,
+) -> dict[str, Any]:
+    return {
+        "command": _release_proof_command_args(check_id, project_root=project_root),
+        "cwd": str(project_root),
+        "exit_code": None,
+        "duration_seconds": 0.0,
+        "timed_out": False,
+        "planned": True,
+        "reason": "dry run command plan",
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "stdout_bytes": 0,
+        "stderr_bytes": 0,
+    }
 
 
 def _run_release_proof_command(

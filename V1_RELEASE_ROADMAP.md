@@ -54,7 +54,7 @@ evidence in `agent-learning.release-proof.v1`.
 | M4 | Research-backed red-team core | `redteam_core_examples_present`, `redteam_research_coverage`, `redteam_corpus_execution_readiness`, `redteam_readiness_certification`, `redteam_society_causal_readiness`, `redteam_attack_evolution_readiness` |
 | M5 | Future AGI UI/action/report artifacts | `schema_kind_contract`, `ui_action_report_readiness`, `regression_artifact_readiness`, `harness_diagnosis_readiness`, `agent_control_plane_readiness` |
 | M6 | Framework/provider simulation surface, including the Agent Learning environment robustness bar | `framework_provider_examples_present`, `framework_provider_contract_readiness`, `multi_framework_runtime_readiness`, `agent_integration_readiness`, `external_agent_adapter_readiness`, `environment_replay_optimizer_readiness`, `framework_environment_replay_adapter_readiness`, `openenv_compatibility_boundary`, `framework_trace_export_readiness`, `framework_http_transport_readiness`, `framework_websocket_transport_readiness`, `framework_adapter_matrix_optimization_readiness`, `framework_optimizer_readiness`, `multi_agent_room_probe_readiness`, `framework_adapter_probe_readiness`, `framework_adapter_io_readiness`, `protocol_adapter_readiness`, `browser_realtime_adapter_readiness`, `browser_cua_probe_readiness`, `realtime_stack_probe_readiness`, `memory_layer_probe_readiness`, `stateful_framework_adapter_readiness`, `workflow_hook_readiness`, `retrieval_hook_readiness`, `framework_adapter_trinity_suite_readiness`, `orchestration_stack_probe_readiness`, `trinity_stack_probe_readiness`, `environment_10x_robustness` |
-| M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `agent-learn release-proof` |
+| M7 | Packaging and release proof | `release_docs_present`, `package_metadata`, `release_handover_packaging`, `agent-learn release-proof` |
 
 ### M0: SDK Consolidation Boundary
 
@@ -709,6 +709,12 @@ Current checkpoint:
 - `agent-learn release-proof` emits one release-cut artifact with command,
   duration, exit-code, timeout, and output-tail evidence for each required local
   proof check.
+- `agent-learn release-proof --dry-run` emits the exact command plan, cwd, and
+  `planned=true` evidence for each proof check without executing commands.
+- The release-proof artifact carries a machine-readable `handover` block with
+  required docs, completion invariants, product surfaces, and the first-release
+  command plan; `agent-learn release-check` gates this as
+  `release_handover_packaging`.
 - The release proof includes `typescript_build` and `typescript_test` for
   `@future-agi/agent-learning-kit`.
 
