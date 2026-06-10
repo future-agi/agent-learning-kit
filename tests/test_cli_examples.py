@@ -2970,7 +2970,28 @@ def test_sdk_framework_adapter_workflow_trace_example_runs(tmp_path):
     assert result["kind"] == "agent-learning.run.v1"
     assert result["status"] == "passed"
     manifest = result["framework_adapter_workflow_trace_manifest"]
+    assert manifest["agent"]["framework"] == "langgraph"
     assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["metadata"]["promoted_from_framework_adapter_probe"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_used"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_status"] == "passed"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    proof = manifest["agent"]["metadata"]["framework_adapter_probe_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+    assert proof["framework"] == "langgraph"
+    assert proof["method"] == "execute_task"
+    assert proof["input_mode"] == "dict"
+    selected_summary = manifest["agent"]["metadata"][
+        "framework_adapter_probe_report_summary"
+    ]
+    assert selected_summary["call_styles"] == ["positional"]
+    assert selected_summary["framework"] == "langgraph"
+    assert selected_summary["method"] == "execute_task"
+    assert selected_summary["input_mode"] == "dict"
+    assert selected_summary["tool_call_count"] == 1
     runtime_contract = manifest["evaluation"]["agent_report"]["config"][
         "framework_runtime_contract"
     ]
@@ -3043,6 +3064,22 @@ def test_sdk_framework_adapter_workflow_trace_example_runs(tmp_path):
     metric_averages = result["summary"]["metric_averages"]
     assert metric_averages["workflow_trace_coverage"] == pytest.approx(1.0)
     assert metric_averages["workflow_graph_quality"] == pytest.approx(1.0)
+    assert metric_averages["framework_adapter_call_contract_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert metric_averages["framework_adapter_contract_quality"] == pytest.approx(1.0)
+    assert metric_averages["framework_adapter_observed_io_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert metric_averages["framework_runtime_contract"] == pytest.approx(1.0)
+    assert metric_averages["framework_trace_coverage"] == pytest.approx(1.0)
+    assert metric_averages["tool_selection_accuracy"] == pytest.approx(1.0)
+    runtime_summary = state["framework_runtime"]["summary"]
+    assert runtime_summary["framework"] == "langgraph"
+    assert runtime_summary["methods"] == ["execute_task"]
+    assert runtime_summary["input_modes"] == ["dict"]
+    assert runtime_summary["call_styles"] == ["positional"]
+    assert runtime_summary["tool_call_count"] == 1
     output = state["framework_runtime"]["invocations"][0]["output"]
     assert output["tool_names"] == ["policy_lookup"]
     assert {"trace"} <= set(output["artifact_types"])
@@ -3215,7 +3252,28 @@ def test_sdk_framework_adapter_orchestration_trace_example_runs(tmp_path):
     assert result["kind"] == "agent-learning.run.v1"
     assert result["status"] == "passed"
     manifest = result["framework_adapter_orchestration_trace_manifest"]
+    assert manifest["agent"]["framework"] == "langgraph"
     assert manifest["agent"]["method"] == "execute_task"
+    assert manifest["agent"]["input_mode"] == "dict"
+    assert manifest["agent"]["trace_runtime"] is True
+    assert manifest["metadata"]["promoted_from_framework_adapter_probe"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_used"] is True
+    assert manifest["metadata"]["framework_adapter_discovery_status"] == "passed"
+    assert manifest["agent"]["metadata"]["adapter_candidate_source"] == "discovery"
+    proof = manifest["agent"]["metadata"]["framework_adapter_probe_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+    assert proof["framework"] == "langgraph"
+    assert proof["method"] == "execute_task"
+    assert proof["input_mode"] == "dict"
+    selected_summary = manifest["agent"]["metadata"][
+        "framework_adapter_probe_report_summary"
+    ]
+    assert selected_summary["call_styles"] == ["positional"]
+    assert selected_summary["framework"] == "langgraph"
+    assert selected_summary["method"] == "execute_task"
+    assert selected_summary["input_mode"] == "dict"
+    assert selected_summary["tool_call_count"] == 2
     config = manifest["evaluation"]["agent_report"]["config"]
     runtime_contract = config["framework_runtime_contract"]
     assert runtime_contract["required_state_keys"] == ["orchestration_trace"]
@@ -3249,7 +3307,24 @@ def test_sdk_framework_adapter_orchestration_trace_example_runs(tmp_path):
     assert result["summary"]["metric_averages"]["orchestration_flow_quality"] == (
         pytest.approx(1.0)
     )
+    metric_averages = result["summary"]["metric_averages"]
+    assert metric_averages["framework_adapter_call_contract_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert metric_averages["framework_adapter_contract_quality"] == pytest.approx(1.0)
+    assert metric_averages["framework_adapter_observed_io_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert metric_averages["framework_runtime_contract"] == pytest.approx(1.0)
+    assert metric_averages["framework_trace_coverage"] == pytest.approx(1.0)
+    assert metric_averages["tool_selection_accuracy"] == pytest.approx(1.0)
     state = result["report"]["results"][0]["metadata"]["environment_state"]
+    runtime_summary = state["framework_runtime"]["summary"]
+    assert runtime_summary["framework"] == "langgraph"
+    assert runtime_summary["methods"] == ["execute_task"]
+    assert runtime_summary["input_modes"] == ["dict"]
+    assert runtime_summary["call_styles"] == ["positional"]
+    assert runtime_summary["tool_call_count"] == 2
     trace = state["orchestration_trace"]
     summary = trace["summary"]
     assert summary["node_count"] == 4

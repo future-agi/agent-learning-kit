@@ -65,5 +65,9 @@ communication, aggregation, retry recovery, latency, cost, tool, and stop
 signals, and the promoted run requires the resulting trace state, events,
 artifact, tool evidence, and orchestration coverage/quality metrics.
 `agent-learn release-check` now runs this cookbook as
-`stateful_framework_adapter_readiness` and additionally requires the framework
-runtime contract to close at 1.0 for the orchestration signal.
+`stateful_framework_adapter_readiness` and as
+`orchestration_trace_promotion` under `framework_adapter_probe_readiness`. The
+promotion gate requires discovery/proof metadata in the promoted manifest and
+closes the normal adapter metric floors plus `orchestration_trace_coverage` and
+`orchestration_flow_quality`; the stateful gate additionally requires the
+framework runtime contract to close at 1.0 for the orchestration signal.

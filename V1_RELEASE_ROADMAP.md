@@ -467,12 +467,13 @@ Current checkpoint:
   `chat.completions.create(messages=...)` nested-method promotion and LiveKit
   `run_session(dict)` session promotion plus provider-response promotion with
   required provider kwargs and normalized `provider_response` state plus Browser
-  Use `execute_task(dict)` CUA trace promotion,
+  Use `execute_task(dict)` CUA trace promotion plus LangGraph
+  `execute_task(dict)` workflow and orchestration trace promotions,
   pass native probe proofs, prove deterministic callable signature plus
   observed I/O contracts, preserve proof/discovery metadata in promoted
   manifests, and close framework runtime, adapter call-contract, observed-I/O,
-  adapter-contract, trace, and tool
-  metrics. The same gate now renders the
+  adapter-contract, trace, workflow, orchestration, and tool metrics. The same
+  gate now renders the
   `framework_adapter_probe` report/action card and exports the native probe
   proof, callable signature, observed I/O contract, selected probe report,
   contract, and replay lock through report/action artifacts.
@@ -520,7 +521,12 @@ Current checkpoint:
   quality, retrieval, and recovery metrics. The workflow-trace slice must also
   expose a Future AGI-visible `stateful_framework_adapter` report/action card,
   promote a local-only regression, and replay that promoted run with workflow
-  coverage, graph-quality, and framework runtime-contract metrics closed.
+  coverage, graph-quality, and framework runtime-contract metrics closed. The
+  workflow and orchestration trace cookbooks are also promoted under
+  `framework_adapter_probe_readiness` as `workflow_trace_promotion` and
+  `orchestration_trace_promotion`, so their adapter discovery/proof metadata
+  and workflow/orchestration metric floors count toward the native adapter 10x
+  axis.
 - Workflow hook readiness is now an executable release-check gate:
   `examples/sdk_workflow_hook_optimization.py` must run a local authenticated
   HTTP workflow hook, select the verified authenticated hook over mocked/missing
@@ -620,8 +626,9 @@ Next implementation focus:
   LangGraph `ainvoke(dict)`, LangChain `invoke(dict)`, and Pipecat
   `process(dict)` plus OpenAI-compatible
   `chat.completions.create(messages=...)` plus LiveKit `run_session(dict)`
-  plus provider-response and Browser/CUA trace promotion evidence, and
-  release-checked agent-opt bundle search. OpenEnv-specific fixtures are
+  plus provider-response, Browser/CUA trace, workflow trace, and orchestration
+  trace promotion evidence, and release-checked agent-opt bundle search.
+  OpenEnv-specific fixtures are
   compatibility coverage only.
 - Keep the framework optimizer gate ahead of new claims: agent-opt should prove
   best-candidate selection across custom adapters, social-memory synthesis,

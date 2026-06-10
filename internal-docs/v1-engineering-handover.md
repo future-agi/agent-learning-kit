@@ -7,9 +7,10 @@ Hand this document to the next engineering owner as the starting point.
 - Date: 2026-06-10.
 - Branch observed: `main`.
 - Baseline before the current handoff slice:
-  `af218fa Gate provider response adapter promotion`.
+  `8d7154e Gate Browser CUA adapter promotion`.
 - Current handoff slice:
-  Browser Use `execute_task(dict)` CUA trace BYO framework adapter promotion.
+  LangGraph-style `execute_task(dict)` workflow and orchestration trace BYO
+  framework adapter promotions.
 - Full v1 is not done.
 - Current evidence does not justify a broad "better than OpenEnv" claim.
   Agent Learning is broader than OpenEnv on the release-checked local adapter,
@@ -37,7 +38,9 @@ What is done:
   `process(dict)`, OpenAI-compatible
   `chat.completions.create(messages=...)`, LiveKit `run_session(dict)`, and
   provider-response `chat.completions.create(messages=..., model=...)`, plus
-  Browser Use `execute_task(dict)` CUA trace promotion.
+  Browser Use `execute_task(dict)` CUA trace promotion, LangGraph-style
+  `execute_task(dict)` workflow trace promotion, and LangGraph-style
+  `execute_task(dict)` orchestration trace promotion.
 
 What is not done:
 
@@ -48,7 +51,46 @@ What is not done:
 - Do not claim universal superiority over OpenEnv. Say Agent Learning is
   broader on the currently release-checked local evidence.
 
-## Latest Browser/CUA Trace Slice
+## Latest Workflow/Orchestration Trace Slice
+
+This handoff slice promotes the existing local workflow and orchestration trace
+framework-adapter cookbooks into the adapter-probe release gate and environment
+10x native adapter axis.
+
+Implemented behavior:
+
+- Reuses `examples/sdk_framework_adapter_workflow_trace.py` and
+  `examples/sdk_framework_adapter_orchestration_trace.py`.
+- Both cookbooks use local LangGraph-style `execute_task(dict)` agents selected
+  through adapter discovery, then promoted into normal `agent-learning.run.v1`
+  manifests with probe proof and discovery metadata preserved.
+- `workflow_trace_promotion` requires graph topology, checkpoints, route
+  decisions, interrupts, replay, tool evidence, trace artifacts, and closed
+  workflow coverage/graph-quality metrics.
+- `orchestration_trace_promotion` requires supervisor/delegate/handoff
+  evidence, communication, retry recovery, aggregation/stop state, tool
+  evidence, trace artifacts, and closed orchestration coverage/flow-quality
+  metrics.
+- `agent-learn release-check` includes both surfaces under
+  `framework_adapter_probe_readiness`.
+- `environment_10x_robustness` counts both promotions through the generic
+  per-surface contract path and checks positional call style plus trace-specific
+  metric floors.
+
+Expected promoted-run metric floors:
+
+- `framework_adapter_call_contract_quality == 1.0`
+- `framework_adapter_contract_quality == 1.0`
+- `framework_adapter_observed_io_quality == 1.0`
+- `framework_runtime_contract == 1.0`
+- `framework_trace_coverage == 1.0`
+- `tool_selection_accuracy == 1.0`
+- `workflow_trace_coverage == 1.0`
+- `workflow_graph_quality == 1.0`
+- `orchestration_trace_coverage == 1.0`
+- `orchestration_flow_quality == 1.0`
+
+## Previous Browser/CUA Trace Slice
 
 This handoff slice promotes the existing local Browser/CUA framework-adapter
 cookbook into the adapter-probe release gate and environment 10x native adapter
@@ -372,17 +414,19 @@ The release-check adapter-probe gate now runs:
 - provider-response `chat.completions.create(messages=..., model=...)`
   promotion
 - Browser Use `execute_task(dict)` CUA trace promotion
+- LangGraph-style `execute_task(dict)` workflow trace promotion
+- LangGraph-style `execute_task(dict)` orchestration trace promotion
 
 Every promoted run must preserve proof/discovery metadata and close framework
 runtime, adapter call-contract, observed-I/O, adapter-contract, framework-trace,
-and tool-selection metrics.
+tool-selection, and any trace-specific metrics required by its contract.
 
 ## Latest Environment 10x Slice
 
 The native adapter promotion axis in `environment_10x_robustness` now counts
 custom, LangGraph, LangChain, Pipecat, nested provider-method, and LiveKit
-session promoted adapter contracts plus provider-response and Browser/CUA trace
-promotion.
+session promoted adapter contracts plus provider-response, Browser/CUA trace,
+workflow trace, and orchestration trace promotion.
 
 Implemented behavior:
 
@@ -391,7 +435,8 @@ Implemented behavior:
   `one_call_run`, `langgraph_ainvoke_promotion`,
   `langchain_invoke_promotion`, `pipecat_process_promotion`,
   `nested_method_promotion`, `livekit_run_session_promotion`, and
-  `provider_response_promotion`, and `browser_cua_trace_promotion`.
+  `provider_response_promotion`, `browser_cua_trace_promotion`,
+  `workflow_trace_promotion`, and `orchestration_trace_promotion`.
 - The environment 10x aggregator derives per-surface framework, method, input
   mode, input key, input kwargs, call style, modality, discovery, and metric-floor
   expectations from `V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS`.
@@ -400,7 +445,7 @@ Implemented behavior:
 
 ## Verification Ledger
 
-Latest full-suite verification before this LiveKit handoff slice:
+Latest full-suite verification before this trace handoff slice:
 
 ```bash
 uv run pytest -q
@@ -706,6 +751,8 @@ Cookbooks, docs, and tests:
 - `examples/sdk_framework_adapter_livekit_run_session_promotion.py`
 - `examples/sdk_framework_adapter_provider_response.py`
 - `examples/sdk_framework_adapter_browser_cua_trace.py`
+- `examples/sdk_framework_adapter_workflow_trace.py`
+- `examples/sdk_framework_adapter_orchestration_trace.py`
 - `tests/test_cli_examples.py`
 - `tests/test_config_and_facades.py`
 - `README.md`
@@ -713,6 +760,8 @@ Cookbooks, docs, and tests:
 - `internal-docs/framework-adapter-probe-research.md`
 - `internal-docs/framework-adapter-probe-readiness-research.md`
 - `internal-docs/environment-10x-robustness-research.md`
+- `internal-docs/workflow-graph-probe-research.md`
+- `internal-docs/orchestration-trace-adapter-research.md`
 
 ## Deterministic Adapter-Probe Workflow
 
@@ -765,11 +814,13 @@ Suggested next packets:
      `README.md`, `V1_RELEASE_ROADMAP.md`, `internal-docs/*openenv*`.
    - Output: dependency check, wording audit, and any accidental positioning
      drift.
-2. Additional orchestration-framework promotion.
-   - Goal: promote another local framework-shaped adapter through the BYO probe
-     path, preferably workflow/orchestration-heavy rather than another provider
-     wrapper.
-   - Constraint: keep it local-only and map claims to release-check metrics.
+2. Release proof packaging.
+   - Goal: make the final v1 handoff artifact easy for engineering/product to
+     consume without rerunning every long gate first.
+   - Files: release-proof CLI output, README release instructions, and
+     `internal-docs/v1-engineering-handover.md`.
+   - Constraint: do not call v1 complete until the full suite and release proof
+     pass on the final tree.
 
 ## Release Discipline
 
@@ -794,12 +845,13 @@ git add src/agent_learning/trinity.py \
   tests/test_config_and_facades.py \
   README.md \
   V1_RELEASE_ROADMAP.md \
-  internal-docs/browser-cua-probe-research.md \
   internal-docs/framework-adapter-probe-research.md \
   internal-docs/framework-adapter-probe-readiness-research.md \
   internal-docs/environment-10x-robustness-research.md \
+  internal-docs/workflow-graph-probe-research.md \
+  internal-docs/orchestration-trace-adapter-research.md \
   internal-docs/v1-engineering-handover.md
-git commit -m "Gate Browser CUA adapter promotion"
+git commit -m "Gate trace adapter promotions"
 ```
 
 Do not stage unrelated `uv.lock` unless the owner decides to adopt it.

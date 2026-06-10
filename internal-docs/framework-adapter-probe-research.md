@@ -191,12 +191,16 @@ Keep framework support local-first:
   and ordinary tool calls so LangGraph, CrewAI Flow, LlamaIndex Workflow, and
   similar orchestrators can be optimized through the same adapter path, with
   selected-output-derived workflow trace coverage and graph-quality gates.
+  Verified workflow trace adapters also participate in native adapter promotion
+  and `environment_10x_robustness`.
 - Preserve orchestration control semantics. Local framework outputs carrying
   supervisor delegation, agent spawn, handoffs, communication, aggregation, stop
   decisions, retries, recovered errors, latency, cost, final coordination state,
   or step-level tool evidence should normalize into `orchestration_trace` state,
   trace artifacts, `orchestration_*` events, ordinary tool calls/responses, and
-  selected-output-derived orchestration coverage/quality gates.
+  selected-output-derived orchestration coverage/quality gates. Verified
+  orchestration trace adapters also participate in native adapter promotion and
+  `environment_10x_robustness`.
 - Preserve lifecycle reliability semantics. Local framework outputs carrying
   setup, tool registration, sessions, invocation errors, retries, recovery,
   streaming, checkpoints, cancellation, resume, or cleanup evidence should

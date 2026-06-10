@@ -700,13 +700,18 @@ or from the same local `target` string the promoted manifest will run. See
 `examples/sdk_framework_adapter_nested_method_promotion.py` and
 `examples/sdk_framework_adapter_livekit_run_session_promotion.py` and
 `examples/sdk_framework_adapter_provider_response.py` and
-`examples/sdk_framework_adapter_browser_cua_trace.py` for local
+`examples/sdk_framework_adapter_browser_cua_trace.py` and
+`examples/sdk_framework_adapter_workflow_trace.py` and
+`examples/sdk_framework_adapter_orchestration_trace.py` for local
 target-to-evaluated-run flows, including LangGraph-style `ainvoke(dict)`,
 LangChain-style `invoke(dict)`, Pipecat-style `process(dict)`,
 OpenAI-compatible `chat.completions.create(messages=...)`, LiveKit-style
 `run_session(dict)`, and provider-response promotion with
 `input_kwargs={"model": "local-provider-model"}`, plus Browser Use
-`execute_task(dict)` promotion with local CUA trace evidence.
+`execute_task(dict)` promotion with local CUA trace evidence, LangGraph-style
+workflow promotion with checkpoints/interrupt/replay evidence, and
+LangGraph-style orchestration promotion with supervisor/delegate trace
+evidence.
 
 `agent-learn release-check` now gates this BYO adapter path as
 `framework_adapter_probe_readiness`. The gate runs the raw probe, discovery,
@@ -716,14 +721,18 @@ auto-discovery promotion, one-call promotion, one-call run, LangGraph
 promotion cookbooks, plus OpenAI-compatible
 `chat.completions.create(messages=...)` nested-method promotion and LiveKit
 `run_session(dict)` session promotion plus provider-response promotion and
-Browser/CUA trace promotion. It requires
+Browser/CUA trace promotion plus LangGraph workflow and orchestration trace
+promotions. It requires
 custom `execute_task(dict)` coverage plus LangGraph `ainvoke(dict)`,
 LangChain `invoke(dict)`, Pipecat `process(dict)`, nested provider-method
 promotion, LiveKit session promotion, and provider-response promotion with
 required provider kwargs and normalized `provider_response` state, plus Browser
 Use `execute_task(dict)` with `browser_cua` state, browser trace artifacts,
 grounded click evidence, mutation resilience, and prompt-injection-surface
-avoidance,
+avoidance, plus LangGraph `execute_task(dict)` with `workflow_trace` state,
+checkpoint/interrupt/replay evidence, workflow graph metrics, and
+`orchestration_trace` state, supervisor/delegate/handoff evidence, retry
+recovery, trace artifacts, and orchestration coverage/flow-quality metrics,
 callable-signature evidence, observed I/O contracts, passing probe proofs,
 discovery metadata where expected, promoted manifest proof metadata, and
 evaluated framework runtime, adapter call-contract, observed-I/O,
@@ -979,6 +988,13 @@ AGI by rendering a `stateful_framework_adapter` report/action card, exposing
 report/promote/replay/export actions, promoting a local-only regression, and
 replaying the promoted run with workflow coverage, graph-quality, and framework
 runtime-contract metrics closed.
+The same cookbook is release-gated as `workflow_trace_promotion` in
+`framework_adapter_probe_readiness`: discovery must select
+`execute_task(dict)` for the local LangGraph-style agent, preserve probe
+metadata in the promoted manifest, emit `workflow_trace` state plus trace
+artifacts and `workflow_*` events, and close the normal adapter metric floors
+plus workflow coverage and graph-quality metrics. It also counts under native
+adapter promotion in `environment_10x_robustness`.
 
 Orchestration framework exports normalize multi-agent control semantics.
 Supervisor/delegate/handoff traces, CrewAI-style routed coordination records,
@@ -989,6 +1005,13 @@ ordinary tool evidence, and generated orchestration coverage/quality gates. See
 release-check` now runs this cookbook locally and requires supervisor
 delegation, handoff, communication, retry recovery, stop-state evidence, and full
 framework runtime-contract closure.
+The same cookbook is release-gated as `orchestration_trace_promotion` in
+`framework_adapter_probe_readiness`: discovery must select
+`execute_task(dict)` for the local LangGraph-style agent, preserve probe
+metadata in the promoted manifest, emit `orchestration_trace` state plus trace
+artifacts and `orchestration_*` events, and close the normal adapter metric
+floors plus orchestration coverage and flow-quality metrics. It also counts
+under native adapter promotion in `environment_10x_robustness`.
 
 Framework lifecycle exports normalize reliability and recovery semantics.
 LiveKit/Pipecat/LangGraph-style setup, tool registration, sessions, invocation
@@ -2113,11 +2136,13 @@ transport, local WebSocket framework transport, framework matrix optimization,
 local evals, optimizer recovery, native adapter probe promotion, protocol
 routing, browser/CUA, realtime voice, memory lineage, multi-agent coordination,
 world orchestration, workspace import certification, authenticated evaluation,
-workflow, and retrieval hooks, red-team suite coverage, and regression
+workflow, workflow/orchestration trace native adapter promotion, retrieval
+hooks, red-team suite coverage, and regression
 promotion/replay. Workspace import certification, local HTTP framework
 transport, local WebSocket framework transport, framework matrix optimization,
-native adapter probe promotion including provider-response and Browser/CUA trace
-promotion, and authenticated hooks are counted as native proof-backed axes;
+native adapter probe promotion including provider-response, Browser/CUA trace,
+workflow trace, and orchestration trace promotion, and authenticated hooks are
+counted as native proof-backed axes;
 OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 The `sdk_world_model_optimization.py` example is the internal world-model arena:

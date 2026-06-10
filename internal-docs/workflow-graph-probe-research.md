@@ -40,10 +40,12 @@ Keep workflow graph support local-first:
   output contract.
 - `agent-learn release-check` now runs
   `examples/sdk_framework_adapter_workflow_trace.py` as
-  `stateful_framework_adapter_readiness`; the gate requires local
-  `execute_task(dict)` selection, durable graph topology, checkpoints, route
-  decisions, interrupts, replay, tool evidence, artifacts, and passing workflow
-  coverage/quality metrics.
+  `stateful_framework_adapter_readiness` and as `workflow_trace_promotion`
+  under `framework_adapter_probe_readiness`; the gates require local
+  `execute_task(dict)` selection, discovery/proof metadata in the promoted
+  manifest, durable graph topology, checkpoints, route decisions, interrupts,
+  replay, tool evidence, artifacts, and passing workflow coverage/quality
+  metrics.
 
 ## Cookbook Contract
 
