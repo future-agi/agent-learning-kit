@@ -3866,6 +3866,79 @@ def test_sdk_framework_adapter_target_optimization_example_runs(
     assert result["framework_runtime_proof"]["failed_check_ids"] == []
 
 
+def test_sdk_multi_agent_target_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY",
+        "real-local-sdk-multi-agent-target-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_multi_agent_target_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_multi_agent_target_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
+    search_space = manifest["optimization"]["target"]["search_space"]
+    assert set(search_space) == {"simulation.environments.0.data.participants"}
+    assert "agent" not in search_space
+    assert manifest["agent"]["type"] == "scripted"
+    base_participants = manifest["simulation"]["environments"][0]["data"][
+        "participants"
+    ]
+    assert sorted(base_participants) == ["planner", "retriever"]
+
+    output_path = tmp_path / "sdk-multi-agent-target-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["multi_agent_coordination_proof_status"] == "passed"
+    assert result["summary"]["multi_agent_coordination_proof_assurance_level"] == (
+        "l3_native_multi_agent_coordination_verified"
+    )
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {
+        "simulation.environments.0.data.participants"
+    }
+    assert "agent" not in best_history["patch"]
+    assert sorted(best_history["patch"][module.TARGET_PATH]) == [
+        "critic",
+        "planner",
+        "retriever",
+    ]
+    assert best_history["metrics"]["multi_agent_coordination_quality"] == (
+        pytest.approx(1.0)
+    )
+    assert best_history["metrics"]["multi_agent_trace_coverage"] == pytest.approx(1.0)
+    assert best_history["metrics"]["tool_selection_accuracy"] == pytest.approx(1.0)
+    assert best_history["metrics"]["task_completion"] == pytest.approx(1.0)
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"][
+        "multi_agent"
+    ]
+    assert sorted(state["participants"]) == ["critic", "planner", "retriever"]
+    assert state["state"]["case"]["status"] == "resolved"
+    assert state["reconciliations"][0]["accepted_source"] == "critic"
+    proof = result["multi_agent_coordination_proof"]
+    assert proof["status"] == "passed"
+    assert proof["failed_check_ids"] == []
+
+
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     from agent_learning import optimize
 
@@ -15730,6 +15803,55 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         payload["required_framework_adapter_target_optimizer_proof_assurance_level"]
         == trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
     )
+    assert payload["required_multi_agent_target_optimizer_files"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES
+    )
+    assert payload["required_multi_agent_target_optimizer_search_paths"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["forbidden_multi_agent_target_optimizer_search_paths"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert payload["required_multi_agent_target_optimizer_layers"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_multi_agent_target_optimizer_metrics"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert payload["required_multi_agent_target_optimizer_environment_types"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_multi_agent_target_optimizer_state_keys"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_multi_agent_target_optimizer_roles"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert payload["required_multi_agent_target_optimizer_rejected_role"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE
+    )
+    assert payload["required_multi_agent_target_optimizer_reconciliation_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
+    )
+    assert payload["required_multi_agent_target_optimizer_proof_kind"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert (
+        payload["required_multi_agent_target_optimizer_proof_assurance_level"]
+        == trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["allowed_multi_agent_target_optimizer_proof_warnings"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
+    )
+    assert payload["required_multi_agent_target_optimizer_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert payload["required_multi_agent_target_optimizer_task_kind"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert payload["required_multi_agent_target_optimizer_surface"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -16584,6 +16706,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "native_optimizer_evidence_components",
         "generic_target_optimizer_readiness",
         "framework_adapter_target_optimizer_readiness",
+        "multi_agent_target_optimizer_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -17274,6 +17397,202 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     framework_target_security = framework_target_evidence["security"]
     assert framework_target_security["serialized_secret_absent"] is True
     assert framework_target_security["target_local"] is True
+
+    multi_agent_target = checks["multi_agent_target_optimizer_readiness"][
+        "evidence"
+    ]
+    assert multi_agent_target["required_files"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES
+    )
+    assert multi_agent_target["required_search_paths"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert multi_agent_target["forbidden_search_paths"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert multi_agent_target["required_layers"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert multi_agent_target["required_metrics"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert multi_agent_target["required_environment_types"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert multi_agent_target["required_state_keys"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert multi_agent_target["required_roles"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert multi_agent_target["rejected_role"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE
+    )
+    assert multi_agent_target["selected_reconciliation_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
+    )
+    assert multi_agent_target["required_proof_kind"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert multi_agent_target["required_proof_assurance_level"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert multi_agent_target["allowed_proof_warnings"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
+    )
+    assert multi_agent_target["required_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert multi_agent_target["required_task_kind"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert multi_agent_target["required_surface"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert multi_agent_target["missing_files"] == []
+    assert multi_agent_target["execution_errors"] == []
+    assert multi_agent_target["manifest_errors"] == []
+    assert multi_agent_target["optimization_errors"] == []
+    assert multi_agent_target["metric_errors"] == []
+    assert multi_agent_target["runtime_errors"] == []
+    assert multi_agent_target["proof_errors"] == []
+    assert multi_agent_target["security_errors"] == []
+    multi_agent_target_evidence = multi_agent_target["evidence"]
+    multi_agent_target_manifest = multi_agent_target_evidence["manifest"]
+    assert multi_agent_target_manifest["version"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert multi_agent_target_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert multi_agent_target_manifest["target_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert multi_agent_target_manifest["target_task_kind"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert multi_agent_target_manifest["optimized_surface"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert multi_agent_target_manifest["target_layers"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert multi_agent_target_manifest["threshold"] == pytest.approx(0.98)
+    assert multi_agent_target_manifest["search_paths"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert multi_agent_target_manifest["forbidden_search_paths_present"] == []
+    assert multi_agent_target_manifest["candidate_count"] == 2
+    assert ["planner", "retriever"] in multi_agent_target_manifest["candidate_roles"]
+    assert (
+        ["critic", "planner", "retriever"]
+        in multi_agent_target_manifest["candidate_roles"]
+    )
+    assert multi_agent_target_manifest["auto_execute_tools"] is True
+    assert multi_agent_target_manifest["min_turns"] == 3
+    assert multi_agent_target_manifest["max_turns"] == 3
+    assert multi_agent_target_manifest["environment_types"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert multi_agent_target_manifest["base_agent_type"] == "scripted"
+    assert multi_agent_target_manifest["target_base_agent_type"] == "scripted"
+    assert multi_agent_target_manifest["base_participant_roles"] == [
+        "planner",
+        "retriever",
+    ]
+    assert multi_agent_target_manifest["required_roles"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert multi_agent_target_manifest["expected_reconciliation_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
+    )
+    assert set(multi_agent_target_manifest["metric_weights"]) == set(
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    multi_agent_target_optimization = multi_agent_target_evidence["optimization"]
+    assert multi_agent_target_optimization["kind"] == (
+        "agent-learning.optimization.v1"
+    )
+    assert multi_agent_target_optimization["schema_version"] == (
+        "agent-learning.cli.v1"
+    )
+    assert multi_agent_target_optimization["status"] == "passed"
+    assert multi_agent_target_optimization["output_roundtrip"] is True
+    assert multi_agent_target_optimization["optimization_passed"] is True
+    assert multi_agent_target_optimization["evaluation_passed"] is True
+    assert multi_agent_target_optimization["optimization_score"] >= 0.98
+    assert multi_agent_target_optimization["evaluation_score"] >= 0.98
+    assert multi_agent_target_optimization["total_evaluations"] >= 2
+    assert multi_agent_target_optimization["total_iterations"] >= 2
+    assert multi_agent_target_optimization["candidate_lineage_count"] >= 2
+    assert multi_agent_target_optimization["selected_patch_paths"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert multi_agent_target_optimization["forbidden_patch_paths_present"] == []
+    assert multi_agent_target_optimization["agent_unchanged"] is True
+    assert (
+        multi_agent_target_optimization["room_contract_fields_unchanged"] is True
+    )
+    assert multi_agent_target_optimization["selected_environment_types"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert multi_agent_target_optimization["selected_participant_roles"] == sorted(
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert multi_agent_target_optimization["best_history_score"] >= 0.98
+    assert multi_agent_target_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        multi_agent_target_optimization["optimizer_governance_failed_check_count"]
+        == 0
+    )
+    multi_agent_target_metrics = multi_agent_target_evidence["metrics"]
+    assert multi_agent_target_metrics["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+    }
+    multi_agent_target_runtime = multi_agent_target_evidence["runtime"]
+    assert multi_agent_target_runtime["state_keys"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert multi_agent_target_runtime["participant_roles"] == sorted(
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert multi_agent_target_runtime["case_status"] == "resolved"
+    assert multi_agent_target_runtime["handoff_count"] >= 1
+    assert multi_agent_target_runtime["review_count"] >= 1
+    assert multi_agent_target_runtime["reconciliation_count"] >= 1
+    assert multi_agent_target_runtime["reconciliation_accepted_source"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
+    )
+    assert multi_agent_target_runtime["coordination_check_count"] >= 3
+    assert all(multi_agent_target_runtime["coordination_check_matches"])
+    multi_agent_target_proof = multi_agent_target_evidence["proof"]
+    assert multi_agent_target_proof["kind"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert multi_agent_target_proof["status"] == "passed"
+    assert multi_agent_target_proof["passed"] is True
+    assert multi_agent_target_proof["assurance_level"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert multi_agent_target_proof["requires_external_service"] is False
+    assert multi_agent_target_proof["failed_check_ids"] == []
+    assert multi_agent_target_proof["warning_check_ids"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
+    )
+    assert multi_agent_target_proof["unexpected_warning_check_ids"] == []
+    assert multi_agent_target_proof["environment_types"] == (
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert set(multi_agent_target_proof["participants"]) == set(
+        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+    )
+    assert multi_agent_target_proof["handoff_count"] >= 1
+    assert multi_agent_target_proof["review_count"] >= 1
+    assert multi_agent_target_proof["reconciliation_count"] >= 1
+    multi_agent_target_security = multi_agent_target_evidence["security"]
+    assert multi_agent_target_security["serialized_secret_absent"] is True
+
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_FILES
@@ -22879,6 +23198,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "framework_adapter_target_optimizer_readiness"
         in milestones["M3"]["check_ids"]
     )
+    assert "multi_agent_target_optimizer_readiness" in milestones["M3"]["check_ids"]
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]

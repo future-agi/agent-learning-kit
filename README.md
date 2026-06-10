@@ -1096,6 +1096,13 @@ search over exactly `agent.method`; `agent-learn release-check` runs it as
 `framework_adapter_target_optimizer_readiness` and requires the selected
 `execute_task` method to pass framework runtime proof.
 
+For a multi-agent target path, see
+`examples/sdk_multi_agent_target_optimization.py`. It keeps the scripted agent
+and room contract fixed, uses generic `optimize_target` search over exactly
+`simulation.environments.0.data.participants`, and requires the selected
+planner/retriever/critic roster to pass native L3 multi-agent coordination
+proof as `multi_agent_target_optimizer_readiness`.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can
@@ -1510,6 +1517,10 @@ PYTHONPATH=src agent-learn suite examples/task_evidence_suite.json \
 AGENT_LEARNING_SDK_MULTI_AGENT_EXAMPLE_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_optimization.py \
   artifacts/sdk-multi-agent-optimization.json
+
+AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_multi_agent_target_optimization.py \
+  artifacts/sdk-multi-agent-target-optimization.json
 
 AGENT_LEARNING_SDK_MULTI_AGENT_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_multi_agent_simulation.py \

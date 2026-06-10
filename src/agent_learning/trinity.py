@@ -582,6 +582,79 @@ V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL = (
     "l3_native_framework_runtime_verified"
 )
 
+V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES = [
+    "examples/sdk_multi_agent_target_optimization.py",
+    "examples/sdk_multi_agent_optimization.py",
+    "internal-docs/multi-agent-target-optimizer-readiness-research.md",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments.0.data.participants",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS = [
+    "agent",
+    "agent.responses",
+    "agent.prompt",
+    "prompt",
+    "agent.method",
+    "simulation.environments.0.data.transitions",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS = [
+    "multi_agent",
+    "orchestration",
+    "harness",
+    "evaluator",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS = [
+    "multi_agent_trace_coverage",
+    "multi_agent_coordination_quality",
+    "tool_selection_accuracy",
+    "task_completion",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES = [
+    "multi_agent_room",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS = [
+    "multi_agent",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES = [
+    "planner",
+    "retriever",
+    "critic",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE = "critic"
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE = "critic"
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND = (
+    "agent-learning.optimization.multi-agent-coordination-proof.v1"
+)
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL = (
+    "l3_native_multi_agent_coordination_verified"
+)
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS = [
+    "temporal_structural_credit_surface_present",
+]
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
+    "agent_learning.optimize.build_target_optimization_manifest"
+)
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
+
+V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
+    "multi_agent_room_participants"
+)
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -3995,6 +4068,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=framework_adapter_target_optimizer,
     )
+    multi_agent_target_optimizer = _release_multi_agent_target_optimizer_status(root)
+    _append_release_check(
+        checks,
+        check_id="multi_agent_target_optimizer_readiness",
+        passed=(
+            not multi_agent_target_optimizer["missing_files"]
+            and not multi_agent_target_optimizer["execution_errors"]
+            and not multi_agent_target_optimizer["manifest_errors"]
+            and not multi_agent_target_optimizer["optimization_errors"]
+            and not multi_agent_target_optimizer["metric_errors"]
+            and not multi_agent_target_optimizer["runtime_errors"]
+            and not multi_agent_target_optimizer["proof_errors"]
+            and not multi_agent_target_optimizer["security_errors"]
+        ),
+        milestone="M3",
+        evidence=multi_agent_target_optimizer,
+    )
     optimizer_governance = _release_optimizer_governance_status(root)
     _append_release_check(
         checks,
@@ -4867,6 +4957,54 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_framework_adapter_target_optimizer_proof_assurance_level": (
             V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_multi_agent_target_optimizer_files": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES
+        ),
+        "required_multi_agent_target_optimizer_search_paths": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_multi_agent_target_optimizer_search_paths": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_multi_agent_target_optimizer_layers": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_multi_agent_target_optimizer_metrics": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_multi_agent_target_optimizer_environment_types": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_multi_agent_target_optimizer_state_keys": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+        ),
+        "required_multi_agent_target_optimizer_roles": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
+        ),
+        "required_multi_agent_target_optimizer_rejected_role": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE
+        ),
+        "required_multi_agent_target_optimizer_reconciliation_source": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
+        ),
+        "required_multi_agent_target_optimizer_proof_kind": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND
+        ),
+        "required_multi_agent_target_optimizer_proof_assurance_level": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+        ),
+        "allowed_multi_agent_target_optimizer_proof_warnings": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
+        ),
+        "required_multi_agent_target_optimizer_source": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE
+        ),
+        "required_multi_agent_target_optimizer_task_kind": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_multi_agent_target_optimizer_surface": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -8559,6 +8697,803 @@ def _release_framework_adapter_target_optimizer_status(root: Path) -> dict[str, 
         "optimization_errors": optimization_errors,
         "metric_errors": metric_errors,
         "runtime_errors": runtime_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_multi_agent_target_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = "release-check-multi-agent-target-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def forbidden_paths(paths: Iterable[str]) -> list[str]:
+        findings: list[str] = []
+        for path in paths:
+            for forbidden in V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS:
+                if path == forbidden or path.startswith(f"{forbidden}."):
+                    findings.append(path)
+                    break
+        return sorted(findings)
+
+    def without_participants(room: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            str(key): copy.deepcopy(value)
+            for key, value in room.items()
+            if key != "participants"
+        }
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_multi_agent_target_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_multi_agent_target_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = release_secret
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-multi-agent-target-optimizer-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-multi-agent-target.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_config = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_config.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        search_paths = sorted(str(path) for path in search_space)
+        forbidden_search_paths = forbidden_paths(search_paths)
+        participant_candidates = _as_list(
+            search_space.get(
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS[0]
+            )
+        )
+        candidate_roles = [
+            sorted(str(role) for role in _as_mapping(candidate))
+            for candidate in participant_candidates
+        ]
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            _as_mapping(environment)
+            for environment in _as_list(simulation.get("environments"))
+        ]
+        environment_types = [
+            str(environment.get("type"))
+            for environment in environments
+            if environment.get("type")
+        ]
+        room = _as_mapping(environments[0]) if environments else {}
+        room_data = _as_mapping(room.get("data"))
+        base_participants = _as_mapping(room_data.get("participants"))
+        agent = _as_mapping(manifest.get("agent"))
+        target_base_config = _as_mapping(target.get("base_config"))
+        target_base_agent = _as_mapping(target_base_config.get("agent"))
+        evaluation_config = _as_mapping(
+            _as_mapping(manifest.get("evaluation")).get("agent_report")
+        )
+        evaluation_config = _as_mapping(evaluation_config.get("config"))
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+        expected_reconciliation = _as_mapping(
+            evaluation_config.get("expected_multi_agent_reconciliation")
+        )
+
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_source": target_metadata.get("source"),
+            "target_task_kind": target_metadata.get("task_kind"),
+            "optimized_surface": target_metadata.get("optimized_surface"),
+            "target_layers": list(target.get("layers") or []),
+            "threshold": optimization_config.get("threshold"),
+            "search_paths": search_paths,
+            "forbidden_search_paths_present": forbidden_search_paths,
+            "candidate_count": len(participant_candidates),
+            "candidate_roles": candidate_roles,
+            "auto_execute_tools": simulation.get("auto_execute_tools"),
+            "min_turns": simulation.get("min_turns"),
+            "max_turns": simulation.get("max_turns"),
+            "environment_types": environment_types,
+            "base_agent_type": agent.get("type"),
+            "target_base_agent_type": target_base_agent.get("type"),
+            "base_participant_roles": sorted(str(role) for role in base_participants),
+            "required_roles": list(
+                evaluation_config.get("required_multi_agent_roles") or []
+            ),
+            "expected_reconciliation_source": expected_reconciliation.get(
+                "accepted_source"
+            ),
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY"],
+            ),
+            "optimization.threshold": (optimization_config.get("threshold"), 0.98),
+            "optimization.target.metadata.source": (
+                target_metadata.get("source"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+            ),
+            "optimization.target.metadata.task_kind": (
+                target_metadata.get("task_kind"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+            ),
+            "optimization.target.metadata.optimized_surface": (
+                target_metadata.get("optimized_surface"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS,
+            ),
+            "optimization.target.search_space": (
+                search_paths,
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "optimization.target.forbidden_search_paths_present": (
+                forbidden_search_paths,
+                [],
+            ),
+            "simulation.auto_execute_tools": (
+                simulation.get("auto_execute_tools"),
+                True,
+            ),
+            "simulation.min_turns": (simulation.get("min_turns"), 3),
+            "simulation.max_turns": (simulation.get("max_turns"), 3),
+            "agent.type": (agent.get("type"), "scripted"),
+            "optimization.target.base_config.agent.type": (
+                target_base_agent.get("type"),
+                "scripted",
+            ),
+            "base_participants.rejected_role_absent": (
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE not in base_participants,
+                True,
+            ),
+            "expected_multi_agent_reconciliation.accepted_source": (
+                expected_reconciliation.get("accepted_source"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE,
+            ),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_environment_types = missing_values(
+            environment_types,
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments.type",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=environment_types,
+            )
+        if len(participant_candidates) != 2:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.participants",
+                expected=2,
+                observed=len(participant_candidates),
+            )
+        if not any(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE not in roles
+            for roles in candidate_roles
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.participants.weak",
+                expected=f"missing {V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE}",
+                observed=candidate_roles,
+            )
+        if not any(
+            not missing_values(
+                roles,
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+            )
+            for roles in candidate_roles
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.participants.strong",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=candidate_roles,
+            )
+        missing_required_roles = missing_values(
+            evaluation_config.get("required_multi_agent_roles"),
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_required_roles:
+            append_error(
+                manifest_errors,
+                field="evaluation.agent_report.config.required_multi_agent_roles",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=evaluation_config.get("required_multi_agent_roles") or [],
+            )
+        for metric in V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            if _float_or_zero(metric_weights.get(metric)) <= 0.0:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.metric_weights.{metric}",
+                    expected=">0",
+                    observed=metric_weights.get(metric),
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        best_history = max(
+            histories,
+            key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            default={},
+        )
+        best_history = _as_mapping(best_history)
+        selected_metrics = _as_mapping(best_history.get("metrics"))
+        selected_patch = _as_mapping(best_history.get("patch"))
+        selected_patch_paths = sorted(str(path) for path in selected_patch)
+        forbidden_patch_paths = forbidden_paths(selected_patch_paths)
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        manifest_agent = _as_mapping(manifest.get("agent"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(best_simulation.get("environments"))
+        ]
+        best_environment_types = [
+            str(environment.get("type"))
+            for environment in best_environments
+            if environment.get("type")
+        ]
+        best_room = _as_mapping(best_environments[0]) if best_environments else {}
+        best_room_data = _as_mapping(best_room.get("data"))
+        best_participants = _as_mapping(best_room_data.get("participants"))
+        manifest_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(
+                _as_mapping(manifest.get("simulation")).get("environments")
+            )
+        ]
+        manifest_room = _as_mapping(manifest_environments[0]) if manifest_environments else {}
+        manifest_room_data = _as_mapping(manifest_room.get("data"))
+        room_contract_fields_unchanged = (
+            without_participants(best_room_data)
+            == without_participants(manifest_room_data)
+        )
+        report = _as_mapping(best_history.get("report"))
+        result_rows = _as_list(report.get("results"))
+        result_row = _as_mapping(result_rows[0]) if result_rows else {}
+        metadata = _as_mapping(result_row.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        multi_agent_state = _as_mapping(environment_state.get("multi_agent"))
+        raw_participants_state = multi_agent_state.get("participants")
+        if isinstance(raw_participants_state, Mapping):
+            participant_roles = sorted(str(role) for role in raw_participants_state)
+        else:
+            participant_roles = sorted(
+                str(role)
+                for role in _as_list(raw_participants_state)
+                if str(role)
+            )
+        reconciliations = [
+            reconciliation
+            for reconciliation in _as_list(multi_agent_state.get("reconciliations"))
+            if isinstance(reconciliation, Mapping)
+        ]
+        first_reconciliation = (
+            _as_mapping(reconciliations[0]) if reconciliations else {}
+        )
+        coordination_checks = [
+            check
+            for check in _as_list(multi_agent_state.get("coordination_checks"))
+            if isinstance(check, Mapping)
+        ]
+        coordination_check_matches = [
+            bool(_as_mapping(check).get("match"))
+            for check in coordination_checks
+        ]
+        handoffs = [
+            handoff
+            for handoff in _as_list(multi_agent_state.get("handoffs"))
+            if isinstance(handoff, Mapping)
+        ]
+        reviews = [
+            review
+            for review in _as_list(multi_agent_state.get("reviews"))
+            if isinstance(review, Mapping)
+        ]
+        room_state = _as_mapping(multi_agent_state.get("state"))
+        proof = _as_mapping(result.get("multi_agent_coordination_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        proof_failed_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("failed_check_ids"))
+        ]
+        proof_warning_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("warning_check_ids"))
+        ]
+        unexpected_proof_warnings = sorted(
+            set(proof_warning_check_ids)
+            - set(V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS)
+        )
+        summary_metrics = _as_mapping(summary.get("metric_averages"))
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        release_secret_absent = release_secret not in serialized
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "selected_patch_paths": selected_patch_paths,
+            "forbidden_patch_paths_present": forbidden_patch_paths,
+            "best_history_score": best_history.get("score"),
+            "agent_unchanged": best_agent == manifest_agent,
+            "room_contract_fields_unchanged": room_contract_fields_unchanged,
+            "selected_environment_types": best_environment_types,
+            "selected_participant_roles": sorted(str(role) for role in best_participants),
+            "optimizer_governance_status": summary.get(
+                "optimizer_governance_status"
+            ),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["metrics"] = {
+            "summary_metric_averages": {
+                metric: summary_metrics.get(metric)
+                for metric in V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+        evidence["runtime"] = {
+            "state_keys": sorted(str(key) for key in environment_state),
+            "participant_roles": participant_roles,
+            "case_status": _as_mapping(room_state.get("case")).get("status"),
+            "handoff_count": len(handoffs),
+            "review_count": len(reviews),
+            "reconciliation_count": len(reconciliations),
+            "reconciliation_accepted_source": first_reconciliation.get(
+                "accepted_source"
+            ),
+            "coordination_check_count": len(coordination_checks),
+            "coordination_check_matches": coordination_check_matches,
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "failed_check_ids": proof_failed_check_ids,
+            "warning_check_ids": proof_warning_check_ids,
+            "unexpected_warning_check_ids": unexpected_proof_warnings,
+            "environment_types": list(proof_evidence.get("environment_types") or []),
+            "participants": list(proof_evidence.get("participants") or []),
+            "handoff_count": proof_evidence.get("handoff_count"),
+            "review_count": proof_evidence.get("review_count"),
+            "reconciliation_count": proof_evidence.get("reconciliation_count"),
+        }
+        evidence["security"] = {
+            "serialized_secret_absent": release_secret_absent,
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+            "best_history.patch": (
+                selected_patch_paths,
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "best_history.forbidden_patch_paths_present": (
+                forbidden_patch_paths,
+                [],
+            ),
+            "optimization.best_config.agent_unchanged": (
+                best_agent == manifest_agent,
+                True,
+            ),
+            "optimization.best_config.room_contract_fields_unchanged": (
+                room_contract_fields_unchanged,
+                True,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        score_expectations = {
+            "summary.optimization_score": summary.get("optimization_score"),
+            "summary.evaluation_score": summary.get("evaluation_score"),
+            "best_history.score": best_history.get("score"),
+        }
+        for field, observed in score_expectations.items():
+            if _float_or_zero(observed) < 0.98:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=0.98",
+                    observed=observed,
+                )
+        count_expectations = {
+            "summary.total_evaluations": summary.get("total_evaluations"),
+            "summary.total_iterations": summary.get("total_iterations"),
+            "summary.candidate_lineage_count": summary.get(
+                "candidate_lineage_count"
+            ),
+        }
+        for field, observed in count_expectations.items():
+            if _int_or_zero(observed) < 2:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=2",
+                    observed=observed,
+                )
+        missing_selected_roles = missing_values(
+            best_participants,
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_selected_roles:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.multi_agent_room.participants",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=sorted(str(role) for role in best_participants),
+            )
+        missing_environment_types = missing_values(
+            best_environment_types,
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.simulation.environments",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=best_environment_types,
+            )
+        for metric in V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            observed = selected_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"best_history.metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+
+        runtime_expectations = {
+            "multi_agent.reconciliations.accepted_source": (
+                first_reconciliation.get("accepted_source"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE,
+            ),
+            "multi_agent.state.case.status": (
+                _as_mapping(room_state.get("case")).get("status"),
+                "resolved",
+            ),
+            "multi_agent.coordination_checks.all_match": (
+                all(coordination_check_matches),
+                True,
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_state_keys = missing_values(
+            environment_state,
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+        )
+        if missing_state_keys:
+            append_error(
+                runtime_errors,
+                field="report.results.0.metadata.environment_state",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+                observed=sorted(str(key) for key in environment_state),
+            )
+        missing_runtime_roles = missing_values(
+            participant_roles,
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_runtime_roles:
+            append_error(
+                runtime_errors,
+                field="multi_agent.participants",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=participant_roles,
+            )
+        if _int_or_zero(len(handoffs)) < 1:
+            append_error(
+                runtime_errors,
+                field="multi_agent.handoffs",
+                expected=">=1",
+                observed=len(handoffs),
+            )
+        if _int_or_zero(len(reviews)) < 1:
+            append_error(
+                runtime_errors,
+                field="multi_agent.reviews",
+                expected=">=1",
+                observed=len(reviews),
+            )
+        if _int_or_zero(len(reconciliations)) < 1:
+            append_error(
+                runtime_errors,
+                field="multi_agent.reconciliations",
+                expected=">=1",
+                observed=len(reconciliations),
+            )
+        if _int_or_zero(len(coordination_checks)) < 3:
+            append_error(
+                runtime_errors,
+                field="multi_agent.coordination_checks",
+                expected=">=3",
+                observed=len(coordination_checks),
+            )
+        proof_expectations = {
+            "multi_agent_coordination_proof.kind": (
+                proof.get("kind"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND,
+            ),
+            "multi_agent_coordination_proof.status": (
+                proof.get("status"),
+                "passed",
+            ),
+            "multi_agent_coordination_proof.passed": (
+                proof.get("passed"),
+                True,
+            ),
+            "multi_agent_coordination_proof.assurance_level": (
+                proof.get("assurance_level"),
+                V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL,
+            ),
+            "multi_agent_coordination_proof.requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "multi_agent_coordination_proof.failed_check_ids": (
+                proof_failed_check_ids,
+                [],
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        if unexpected_proof_warnings:
+            append_error(
+                proof_errors,
+                field="multi_agent_coordination_proof.unexpected_warning_check_ids",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS,
+                observed=proof_warning_check_ids,
+            )
+        missing_proof_environment_types = missing_values(
+            proof_evidence.get("environment_types"),
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_proof_environment_types:
+            append_error(
+                proof_errors,
+                field="multi_agent_coordination_proof.evidence.environment_types",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=proof_evidence.get("environment_types") or [],
+            )
+        missing_proof_roles = missing_values(
+            proof_evidence.get("participants"),
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+        )
+        if missing_proof_roles:
+            append_error(
+                proof_errors,
+                field="multi_agent_coordination_proof.evidence.participants",
+                expected=V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES,
+                observed=proof_evidence.get("participants") or [],
+            )
+        for field, observed in (
+            (
+                "multi_agent_coordination_proof.evidence.handoff_count",
+                proof_evidence.get("handoff_count"),
+            ),
+            (
+                "multi_agent_coordination_proof.evidence.review_count",
+                proof_evidence.get("review_count"),
+            ),
+            (
+                "multi_agent_coordination_proof.evidence.reconciliation_count",
+                proof_evidence.get("reconciliation_count"),
+            ),
+        ):
+            if _int_or_zero(observed) < 1:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=">=1",
+                    observed=observed,
+                )
+        if not release_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES),
+        "required_search_paths": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_search_paths": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_layers": list(V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS),
+        "required_metrics": list(V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS),
+        "required_environment_types": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_state_keys": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+        ),
+        "required_roles": list(V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES),
+        "rejected_role": V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE,
+        "selected_reconciliation_source": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
+        ),
+        "required_proof_kind": V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND,
+        "required_proof_assurance_level": (
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+        ),
+        "allowed_proof_warnings": list(
+            V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
+        ),
+        "required_source": V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+        "required_task_kind": V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+        "required_surface": V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "proof_errors": proof_errors,
         "security_errors": security_errors,
         "evidence": evidence,
     }
@@ -34393,6 +35328,22 @@ __all__ = [
     "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS",
     "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS",
     "V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
+    "V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
