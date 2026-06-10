@@ -1103,6 +1103,14 @@ and room contract fixed, uses generic `optimize_target` search over exactly
 planner/retriever/critic roster to pass native L3 multi-agent coordination
 proof as `multi_agent_target_optimizer_readiness`.
 
+For a memory-lineage target path, see
+`examples/sdk_memory_target_optimization.py`. It keeps the scripted agent,
+retrieval memory, stores, policies, lineage, observability, and artifacts fixed,
+uses generic `optimize_target` search over exactly
+`simulation.environments.1.data.operations`, and requires the selected
+read/write/recall operations to pass native L3 memory-lineage proof as
+`memory_target_optimizer_readiness`.
+
 For arbitrary task/world optimization, pass complete agent candidates plus the
 world environments and eval config. `optimize_task` is the convenience helper
 for complete agent candidates and task/world defaults; extra search paths can
@@ -1457,6 +1465,10 @@ AGENT_LEARNING_SDK_MEMORY_EXAMPLE_KEY=... \
 AGENT_LEARNING_SDK_MEMORY_SIMULATION_KEY=... \
   PYTHONPATH=src python examples/sdk_memory_simulation.py \
   artifacts/sdk-memory-simulation.json
+
+AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY=... \
+  PYTHONPATH=src python examples/sdk_memory_target_optimization.py \
+  artifacts/sdk-memory-target-optimization.json
 
 PYTHONPATH=src python examples/sdk_orchestration_stack_probe_optimization.py \
   artifacts/sdk-orchestration-stack-probe-optimization.json

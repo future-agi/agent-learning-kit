@@ -3939,6 +3939,119 @@ def test_sdk_multi_agent_target_optimization_example_runs(
     assert proof["failed_check_ids"] == []
 
 
+def test_sdk_memory_target_optimization_example_runs(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY",
+        "real-local-sdk-memory-target-key",
+    )
+    example_path = PROJECT_ROOT / "examples" / "sdk_memory_target_optimization.py"
+    spec = importlib.util.spec_from_file_location(
+        "sdk_memory_target_optimization",
+        example_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def operation_types(operations):
+        return sorted(
+            str(operation["operation"])
+            for operation in operations
+            if operation.get("operation")
+        )
+
+    manifest = module.build_manifest()
+    assert manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert manifest["optimization"]["threshold"] == pytest.approx(0.98)
+    target = manifest["optimization"]["target"]
+    assert target["metadata"]["source"] == (
+        "agent_learning.optimize.build_target_optimization_manifest"
+    )
+    assert target["metadata"]["task_kind"] == "generic_target"
+    assert target["metadata"]["optimized_surface"] == (
+        "agent_memory_lineage_operations"
+    )
+    assert target["layers"] == ["memory", "retrieval", "policy", "evaluator"]
+    search_space = target["search_space"]
+    assert set(search_space) == {"simulation.environments.1.data.operations"}
+    assert "agent" not in search_space
+    environments = manifest["simulation"]["environments"]
+    assert [environment["type"] for environment in environments] == [
+        "retrieval_memory",
+        "agent_memory_lineage",
+    ]
+    assert environments[1]["data"]["operations"] == []
+    assert operation_types(search_space[module.TARGET_PATH][0]) == []
+    assert operation_types(search_space[module.TARGET_PATH][1]) == [
+        "read",
+        "recall",
+        "write",
+    ]
+
+    output_path = tmp_path / "sdk-memory-target-optimization-result.json"
+    result = module.run(output_path)
+
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "passed"
+    assert result["summary"]["optimization_score"] >= 0.98
+    assert result["summary"]["evaluation_score"] == pytest.approx(1.0)
+    assert result["summary"]["memory_lineage_proof_status"] == "passed"
+    assert result["summary"]["memory_lineage_proof_assurance_level"] == (
+        "l3_native_memory_lineage_verified"
+    )
+    best_history = max(
+        result["optimization"]["history"],
+        key=lambda item: item["score"],
+    )
+    assert set(best_history["patch"]) == {module.TARGET_PATH}
+    assert "agent" not in best_history["patch"]
+    assert operation_types(best_history["patch"][module.TARGET_PATH]) == [
+        "read",
+        "recall",
+        "write",
+    ]
+    for metric in [
+        "agent_memory_lineage_coverage",
+        "agent_memory_lineage_quality",
+        "retrieval_memory_attribution",
+        "retrieval_context_quality",
+        "memory_integrity",
+        "tool_selection_accuracy",
+    ]:
+        assert best_history["metrics"][metric] == pytest.approx(1.0)
+    assert best_history["metrics"]["task_completion"] >= 0.9
+    state = best_history["report"]["results"][0]["metadata"]["environment_state"]
+    assert sorted(state) == ["agent_memory_lineage", "retrieval_memory"]
+    retrieval_state = state["retrieval_memory"]
+    assert [document["id"] for document in retrieval_state["documents"]] == [
+        "doc_refund_2026"
+    ]
+    assert {
+        doc_id
+        for citation in retrieval_state["citations"]
+        for doc_id in citation["doc_ids"]
+    } == {"doc_refund_2026"}
+    lineage_summary = state["agent_memory_lineage"]["summary"]
+    assert lineage_summary["operation_types"] == ["read", "recall", "write"]
+    assert lineage_summary["blocking_gap_count"] == 0
+    assert lineage_summary["policy_violation_count"] == 0
+    assert lineage_summary["isolation_violation_count"] == 0
+    assert lineage_summary["open_poisoning_count"] == 0
+    assert lineage_summary["missing_required_evidence"] == []
+    proof = result["memory_lineage_proof"]
+    assert proof["kind"] == "agent-learning.optimization.memory-lineage-proof.v1"
+    assert proof["status"] == "passed"
+    assert proof["assurance_level"] == "l3_native_memory_lineage_verified"
+    assert proof["failed_check_ids"] == []
+    assert proof["warning_check_ids"] == []
+
+
 def test_optimize_facade_builds_and_runs_task_world_manifest(monkeypatch):
     from agent_learning import optimize
 
@@ -15852,6 +15965,52 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_multi_agent_target_optimizer_surface"] == (
         trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
     )
+    assert payload["required_memory_target_optimizer_files"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_FILES
+    )
+    assert payload["required_memory_target_optimizer_search_paths"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert payload["forbidden_memory_target_optimizer_search_paths"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert payload["required_memory_target_optimizer_layers"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert payload["required_memory_target_optimizer_metrics"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert payload["required_memory_target_optimizer_environment_types"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert payload["required_memory_target_optimizer_state_keys"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert payload["required_memory_target_optimizer_operations"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert payload["required_memory_target_optimizer_doc_id"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    )
+    assert payload["forbidden_memory_target_optimizer_doc_id"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
+    )
+    assert payload["required_memory_target_optimizer_proof_kind"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert (
+        payload["required_memory_target_optimizer_proof_assurance_level"]
+        == trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert payload["required_memory_target_optimizer_source"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert payload["required_memory_target_optimizer_task_kind"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert payload["required_memory_target_optimizer_surface"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
     assert payload["required_world_hooks_readiness_files"] == (
         trinity.V1_WORLD_HOOKS_READINESS_FILES
     )
@@ -16707,6 +16866,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         "generic_target_optimizer_readiness",
         "framework_adapter_target_optimizer_readiness",
         "multi_agent_target_optimizer_readiness",
+        "memory_target_optimizer_readiness",
         "optimizer_governance_readiness",
         "optimizer_portfolio_readiness",
         "world_hooks_readiness",
@@ -17592,6 +17752,197 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert multi_agent_target_proof["reconciliation_count"] >= 1
     multi_agent_target_security = multi_agent_target_evidence["security"]
     assert multi_agent_target_security["serialized_secret_absent"] is True
+
+    memory_target = checks["memory_target_optimizer_readiness"]["evidence"]
+    assert memory_target["required_files"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_FILES
+    )
+    assert memory_target["required_search_paths"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert memory_target["forbidden_search_paths"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+    )
+    assert memory_target["required_layers"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert memory_target["required_metrics"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    assert memory_target["required_environment_types"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert memory_target["required_state_keys"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert memory_target["required_operations"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert memory_target["required_doc_id"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    )
+    assert memory_target["forbidden_doc_id"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
+    )
+    assert memory_target["required_proof_kind"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert memory_target["required_proof_assurance_level"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert memory_target["required_source"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert memory_target["required_task_kind"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert memory_target["required_surface"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert memory_target["missing_files"] == []
+    assert memory_target["execution_errors"] == []
+    assert memory_target["manifest_errors"] == []
+    assert memory_target["optimization_errors"] == []
+    assert memory_target["metric_errors"] == []
+    assert memory_target["runtime_errors"] == []
+    assert memory_target["proof_errors"] == []
+    assert memory_target["security_errors"] == []
+    memory_target_evidence = memory_target["evidence"]
+    memory_target_manifest = memory_target_evidence["manifest"]
+    assert memory_target_manifest["version"] == "agent-learning.optimization.v1"
+    assert memory_target_manifest["required_env"] == [
+        "AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY"
+    ]
+    assert memory_target_manifest["target_source"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE
+    )
+    assert memory_target_manifest["target_task_kind"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+    )
+    assert memory_target_manifest["optimized_surface"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
+    )
+    assert memory_target_manifest["target_layers"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS
+    )
+    assert memory_target_manifest["threshold"] == pytest.approx(0.98)
+    assert memory_target_manifest["search_paths"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert memory_target_manifest["forbidden_search_paths_present"] == []
+    assert memory_target_manifest["candidate_count"] == 2
+    assert [] in memory_target_manifest["candidate_operation_types"]
+    assert (
+        sorted(trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS)
+        in memory_target_manifest["candidate_operation_types"]
+    )
+    assert memory_target_manifest["auto_execute_tools"] is True
+    assert memory_target_manifest["min_turns"] == 1
+    assert memory_target_manifest["max_turns"] == 2
+    assert memory_target_manifest["environment_types"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert memory_target_manifest["retrieval_document_id"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    )
+    assert memory_target_manifest["retrieval_document_current"] is True
+    assert memory_target_manifest["base_agent_type"] == "scripted"
+    assert memory_target_manifest["target_base_agent_type"] == "scripted"
+    assert memory_target_manifest["base_operation_types"] == []
+    assert sorted(memory_target_manifest["required_operation_types"]) == sorted(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert set(memory_target_manifest["metric_weights"]) == set(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+    )
+    memory_target_optimization = memory_target_evidence["optimization"]
+    assert memory_target_optimization["kind"] == "agent-learning.optimization.v1"
+    assert memory_target_optimization["schema_version"] == "agent-learning.cli.v1"
+    assert memory_target_optimization["status"] == "passed"
+    assert memory_target_optimization["output_roundtrip"] is True
+    assert memory_target_optimization["optimization_passed"] is True
+    assert memory_target_optimization["evaluation_passed"] is True
+    assert memory_target_optimization["optimization_score"] >= 0.98
+    assert memory_target_optimization["evaluation_score"] >= 0.98
+    assert memory_target_optimization["total_evaluations"] >= 2
+    assert memory_target_optimization["total_iterations"] >= 2
+    assert memory_target_optimization["candidate_lineage_count"] >= 2
+    assert memory_target_optimization["selected_patch_paths"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+    )
+    assert memory_target_optimization["forbidden_patch_paths_present"] == []
+    assert memory_target_optimization["agent_unchanged"] is True
+    assert memory_target_optimization["retrieval_unchanged"] is True
+    assert memory_target_optimization["lineage_fields_unchanged"] is True
+    assert memory_target_optimization["selected_environment_types"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert sorted(memory_target_optimization["selected_operation_types"]) == sorted(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert memory_target_optimization["best_history_score"] >= 0.98
+    assert memory_target_optimization["optimizer_governance_status"] == "passed"
+    assert (
+        memory_target_optimization["optimizer_governance_failed_check_count"]
+        == 0
+    )
+    memory_target_metrics = memory_target_evidence["metrics"]
+    assert memory_target_metrics["selected_metrics"] == {
+        metric: pytest.approx(1.0)
+        for metric in trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+    }
+    assert memory_target_metrics["task_completion"] >= 0.9
+    memory_target_runtime = memory_target_evidence["runtime"]
+    assert sorted(memory_target_runtime["state_keys"]) == sorted(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+    )
+    assert memory_target_runtime["retrieval_document_ids"] == [
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert memory_target_runtime["retrieval_citation_doc_ids"] == [
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert sorted(memory_target_runtime["operation_types"]) == sorted(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert sorted(memory_target_runtime["summary_operation_types"]) == sorted(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert memory_target_runtime["blocking_gap_count"] == 0
+    assert memory_target_runtime["policy_violation_count"] == 0
+    assert memory_target_runtime["isolation_violation_count"] == 0
+    assert memory_target_runtime["open_poisoning_count"] == 0
+    assert memory_target_runtime["missing_required_evidence"] == []
+    memory_target_proof = memory_target_evidence["proof"]
+    assert memory_target_proof["kind"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND
+    )
+    assert memory_target_proof["status"] == "passed"
+    assert memory_target_proof["passed"] is True
+    assert memory_target_proof["assurance_level"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+    )
+    assert memory_target_proof["requires_external_service"] is False
+    assert memory_target_proof["failed_check_ids"] == []
+    assert memory_target_proof["warning_check_ids"] == []
+    assert memory_target_proof["environment_types"] == (
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+    )
+    assert memory_target_proof["retrieval_current_doc_ids"] == [
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert memory_target_proof["retrieval_cited_doc_ids"] == [
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+    ]
+    assert sorted(memory_target_proof["operation_types"]) == sorted(
+        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+    )
+    assert memory_target_proof["blocking_gap_count"] == 0
+    assert memory_target_proof["policy_violation_count"] == 0
+    assert memory_target_proof["isolation_violation_count"] == 0
+    assert memory_target_proof["open_poisoning_count"] == 0
+    memory_target_security = memory_target_evidence["security"]
+    assert memory_target_security["serialized_secret_absent"] is True
 
     evaluation_hook_probe = checks["evaluation_hook_probe_readiness"]["evidence"]
     assert evaluation_hook_probe["required_files"] == (
@@ -23199,6 +23550,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         in milestones["M3"]["check_ids"]
     )
     assert "multi_agent_target_optimizer_readiness" in milestones["M3"]["check_ids"]
+    assert "memory_target_optimizer_readiness" in milestones["M3"]["check_ids"]
     assert "optimizer_portfolio_readiness" in milestones["M3"]["check_ids"]
     assert "redteam_society_causal_readiness" in milestones["M4"]["check_ids"]
     assert "redteam_attack_evolution_readiness" in milestones["M4"]["check_ids"]

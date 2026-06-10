@@ -655,6 +655,81 @@ V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
     "multi_agent_room_participants"
 )
 
+V1_MEMORY_TARGET_OPTIMIZER_FILES = [
+    "examples/sdk_memory_target_optimization.py",
+    "examples/sdk_memory_optimization.py",
+    "internal-docs/memory-target-optimizer-readiness-research.md",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS = [
+    "simulation.environments.1.data.operations",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS = [
+    "agent",
+    "agent.responses",
+    "agent.prompt",
+    "prompt",
+    "agent.method",
+    "simulation.environments.0.data.transitions",
+    "simulation.environments.0.data.participants",
+    "simulation.environments.0.data.documents",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS = [
+    "memory",
+    "retrieval",
+    "policy",
+    "evaluator",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS = [
+    "agent_memory_lineage_coverage",
+    "agent_memory_lineage_quality",
+    "retrieval_memory_attribution",
+    "retrieval_context_quality",
+    "memory_integrity",
+    "tool_selection_accuracy",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES = [
+    "retrieval_memory",
+    "agent_memory_lineage",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS = [
+    "retrieval_memory",
+    "agent_memory_lineage",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS = [
+    "read",
+    "write",
+    "recall",
+]
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID = "doc_refund_2026"
+
+V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID = "doc_refund_2025"
+
+V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND = (
+    "agent-learning.optimization.memory-lineage-proof.v1"
+)
+
+V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL = (
+    "l3_native_memory_lineage_verified"
+)
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE = (
+    "agent_learning.optimize.build_target_optimization_manifest"
+)
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND = "generic_target"
+
+V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE = (
+    "agent_memory_lineage_operations"
+)
+
 V1_WORLD_HOOKS_READINESS_FILES = [
     "examples/sdk_world_hooks_optimization.py",
     "internal-docs/world-hooks-readiness-research.md",
@@ -4085,6 +4160,23 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         milestone="M3",
         evidence=multi_agent_target_optimizer,
     )
+    memory_target_optimizer = _release_memory_target_optimizer_status(root)
+    _append_release_check(
+        checks,
+        check_id="memory_target_optimizer_readiness",
+        passed=(
+            not memory_target_optimizer["missing_files"]
+            and not memory_target_optimizer["execution_errors"]
+            and not memory_target_optimizer["manifest_errors"]
+            and not memory_target_optimizer["optimization_errors"]
+            and not memory_target_optimizer["metric_errors"]
+            and not memory_target_optimizer["runtime_errors"]
+            and not memory_target_optimizer["proof_errors"]
+            and not memory_target_optimizer["security_errors"]
+        ),
+        milestone="M3",
+        evidence=memory_target_optimizer,
+    )
     optimizer_governance = _release_optimizer_governance_status(root)
     _append_release_check(
         checks,
@@ -5005,6 +5097,51 @@ def release_status(project_root: str | Path | None = None) -> dict[str, Any]:
         ),
         "required_multi_agent_target_optimizer_surface": (
             V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
+        ),
+        "required_memory_target_optimizer_files": list(
+            V1_MEMORY_TARGET_OPTIMIZER_FILES
+        ),
+        "required_memory_target_optimizer_search_paths": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_memory_target_optimizer_search_paths": list(
+            V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_memory_target_optimizer_layers": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS
+        ),
+        "required_memory_target_optimizer_metrics": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+        ),
+        "required_memory_target_optimizer_environment_types": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_memory_target_optimizer_state_keys": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
+        ),
+        "required_memory_target_optimizer_operations": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
+        ),
+        "required_memory_target_optimizer_doc_id": (
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+        ),
+        "forbidden_memory_target_optimizer_doc_id": (
+            V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
+        ),
+        "required_memory_target_optimizer_proof_kind": (
+            V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND
+        ),
+        "required_memory_target_optimizer_proof_assurance_level": (
+            V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_memory_target_optimizer_source": (
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE
+        ),
+        "required_memory_target_optimizer_task_kind": (
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
+        ),
+        "required_memory_target_optimizer_surface": (
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
         ),
         "required_world_hooks_readiness_files": list(
             V1_WORLD_HOOKS_READINESS_FILES
@@ -9487,6 +9624,817 @@ def _release_multi_agent_target_optimizer_status(root: Path) -> dict[str, Any]:
         "required_source": V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE,
         "required_task_kind": V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
         "required_surface": V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+        "missing_files": missing_files,
+        "execution_errors": execution_errors,
+        "manifest_errors": manifest_errors,
+        "optimization_errors": optimization_errors,
+        "metric_errors": metric_errors,
+        "runtime_errors": runtime_errors,
+        "proof_errors": proof_errors,
+        "security_errors": security_errors,
+        "evidence": evidence,
+    }
+
+
+def _release_memory_target_optimizer_status(root: Path) -> dict[str, Any]:
+    missing_files = _missing_relative_paths(
+        root,
+        V1_MEMORY_TARGET_OPTIMIZER_FILES,
+    )
+    execution_errors: list[dict[str, Any]] = []
+    manifest_errors: list[dict[str, Any]] = []
+    optimization_errors: list[dict[str, Any]] = []
+    metric_errors: list[dict[str, Any]] = []
+    runtime_errors: list[dict[str, Any]] = []
+    proof_errors: list[dict[str, Any]] = []
+    security_errors: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {}
+    manifest: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+    saved: dict[str, Any] = {}
+    release_secret = "release-check-memory-target-key"
+
+    def append_error(
+        bucket: list[dict[str, Any]],
+        *,
+        field: str,
+        expected: Any,
+        observed: Any,
+    ) -> None:
+        bucket.append(
+            {
+                "field": field,
+                "expected": expected,
+                "observed": observed,
+            }
+        )
+
+    def missing_values(observed: Iterable[Any], required: Iterable[Any]) -> list[str]:
+        observed_items = [] if observed is None else list(observed)
+        return sorted(
+            {str(item) for item in required} - {str(item) for item in observed_items}
+        )
+
+    def forbidden_paths(paths: Iterable[str]) -> list[str]:
+        findings: list[str] = []
+        for path in paths:
+            for forbidden in V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS:
+                if path == forbidden or path.startswith(f"{forbidden}."):
+                    findings.append(path)
+                    break
+        return sorted(findings)
+
+    def without_operations(lineage: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            str(key): copy.deepcopy(value)
+            for key, value in lineage.items()
+            if key != "operations"
+        }
+
+    def operation_types(operations: Any) -> list[str]:
+        return sorted(
+            {
+                str(_as_mapping(operation).get("operation") or "")
+                for operation in _as_list(operations)
+                if _as_mapping(operation).get("operation")
+            }
+        )
+
+    if not missing_files:
+        from . import config as agent_config
+
+        config_env_names = (
+            "AGENT_LEARNING_API_KEY",
+            "FUTURE_AGI_API_KEY",
+            "FI_API_KEY",
+            "AGENT_LEARNING_SECRET_KEY",
+            "FUTURE_AGI_SECRET_KEY",
+            "FI_SECRET_KEY",
+            "AGENT_LEARNING_API_URL",
+            "FUTURE_AGI_API_URL",
+            "AGENT_LEARNING_PROJECT_ID",
+            "FUTURE_AGI_PROJECT_ID",
+            "AGENT_LEARNING_WORKSPACE_ID",
+            "FUTURE_AGI_WORKSPACE_ID",
+        )
+        previous_config_env = {
+            name: os.environ.get(name) for name in config_env_names
+        }
+        previous_config = agent_config.current_config()
+        example_env = "AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY"
+        previous_example_env = os.environ.get(example_env)
+        example_path = root / "examples/sdk_memory_target_optimization.py"
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "agent_learning_release_memory_target_optimizer",
+                example_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to load {example_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            manifest = module.build_manifest()
+            os.environ[example_env] = release_secret
+            with tempfile.TemporaryDirectory(
+                prefix="agent-learning-memory-target-optimizer-"
+            ) as tmpdir:
+                output_path = Path(tmpdir) / "sdk-memory-target.json"
+                result = module.run(output_path)
+                saved = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            execution_errors.append(
+                {
+                    "path": str(example_path.relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+        finally:
+            agent_config._CONFIG = previous_config
+            for name, value in previous_config_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if previous_example_env is None:
+                os.environ.pop(example_env, None)
+            else:
+                os.environ[example_env] = previous_example_env
+
+    if manifest:
+        optimization_config = _as_mapping(manifest.get("optimization"))
+        target = _as_mapping(optimization_config.get("target"))
+        target_metadata = _as_mapping(target.get("metadata"))
+        search_space = _as_mapping(target.get("search_space"))
+        search_paths = sorted(str(path) for path in search_space)
+        forbidden_search_paths = forbidden_paths(search_paths)
+        operation_candidates = _as_list(
+            search_space.get(V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS[0])
+        )
+        candidate_operation_types = [
+            operation_types(candidate) for candidate in operation_candidates
+        ]
+        simulation = _as_mapping(manifest.get("simulation"))
+        environments = [
+            _as_mapping(environment)
+            for environment in _as_list(simulation.get("environments"))
+        ]
+        environment_types = [
+            str(environment.get("type"))
+            for environment in environments
+            if environment.get("type")
+        ]
+        retrieval_env = _as_mapping(environments[0]) if environments else {}
+        retrieval_data = _as_mapping(retrieval_env.get("data"))
+        retrieval_docs = [
+            _as_mapping(doc)
+            for doc in _as_list(retrieval_data.get("documents"))
+            if isinstance(doc, Mapping)
+        ]
+        retrieval_doc = retrieval_docs[0] if retrieval_docs else {}
+        lineage_env = _as_mapping(environments[1]) if len(environments) > 1 else {}
+        lineage_data = _as_mapping(lineage_env.get("data"))
+        agent = _as_mapping(manifest.get("agent"))
+        target_base_agent = _as_mapping(
+            _as_mapping(target.get("base_config")).get("agent")
+        )
+        evaluation_config = _as_mapping(
+            _as_mapping(manifest.get("evaluation")).get("agent_report")
+        )
+        evaluation_config = _as_mapping(evaluation_config.get("config"))
+        lineage_quality = _as_mapping(
+            evaluation_config.get("agent_memory_lineage_quality")
+        )
+        metric_weights = _as_mapping(evaluation_config.get("metric_weights"))
+
+        evidence["manifest"] = {
+            "version": manifest.get("version"),
+            "required_env": list(manifest.get("required_env") or []),
+            "target_source": target_metadata.get("source"),
+            "target_task_kind": target_metadata.get("task_kind"),
+            "optimized_surface": target_metadata.get("optimized_surface"),
+            "target_layers": list(target.get("layers") or []),
+            "threshold": optimization_config.get("threshold"),
+            "search_paths": search_paths,
+            "forbidden_search_paths_present": forbidden_search_paths,
+            "candidate_count": len(operation_candidates),
+            "candidate_operation_types": candidate_operation_types,
+            "auto_execute_tools": simulation.get("auto_execute_tools"),
+            "min_turns": simulation.get("min_turns"),
+            "max_turns": simulation.get("max_turns"),
+            "environment_types": environment_types,
+            "retrieval_document_id": retrieval_doc.get("id"),
+            "retrieval_document_current": retrieval_doc.get("current"),
+            "base_agent_type": agent.get("type"),
+            "target_base_agent_type": target_base_agent.get("type"),
+            "base_operation_types": operation_types(lineage_data.get("operations")),
+            "required_operation_types": list(
+                lineage_quality.get("required_operation_types") or []
+            ),
+            "metric_weights": {
+                metric: metric_weights.get(metric)
+                for metric in V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+        }
+
+        manifest_expectations = {
+            "version": (manifest.get("version"), "agent-learning.optimization.v1"),
+            "required_env": (
+                manifest.get("required_env") or [],
+                ["AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY"],
+            ),
+            "optimization.threshold": (optimization_config.get("threshold"), 0.98),
+            "optimization.target.metadata.source": (
+                target_metadata.get("source"),
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+            ),
+            "optimization.target.metadata.task_kind": (
+                target_metadata.get("task_kind"),
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+            ),
+            "optimization.target.metadata.optimized_surface": (
+                target_metadata.get("optimized_surface"),
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE,
+            ),
+            "optimization.target.layers": (
+                target.get("layers") or [],
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS,
+            ),
+            "optimization.target.search_space": (
+                search_paths,
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "optimization.target.forbidden_search_paths_present": (
+                forbidden_search_paths,
+                [],
+            ),
+            "simulation.auto_execute_tools": (
+                simulation.get("auto_execute_tools"),
+                True,
+            ),
+            "simulation.min_turns": (simulation.get("min_turns"), 1),
+            "simulation.max_turns": (simulation.get("max_turns"), 2),
+            "retrieval_memory.documents.0.id": (
+                retrieval_doc.get("id"),
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+            ),
+            "retrieval_memory.documents.0.current": (
+                retrieval_doc.get("current"),
+                True,
+            ),
+            "agent.type": (agent.get("type"), "scripted"),
+            "optimization.target.base_config.agent.type": (
+                target_base_agent.get("type"),
+                "scripted",
+            ),
+            "base_operations.empty": (operation_types(lineage_data.get("operations")), []),
+        }
+        for field, (observed, expected) in manifest_expectations.items():
+            if observed != expected:
+                append_error(
+                    manifest_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_environment_types = missing_values(
+            environment_types,
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                manifest_errors,
+                field="simulation.environments.type",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=environment_types,
+            )
+        if len(operation_candidates) != 2:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.operations",
+                expected=2,
+                observed=len(operation_candidates),
+            )
+        if [] not in candidate_operation_types:
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.operations.weak",
+                expected=[],
+                observed=candidate_operation_types,
+            )
+        if not any(
+            not missing_values(types, V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS)
+            for types in candidate_operation_types
+        ):
+            append_error(
+                manifest_errors,
+                field="optimization.target.search_space.operations.strong",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=candidate_operation_types,
+            )
+        missing_required_ops = missing_values(
+            lineage_quality.get("required_operation_types"),
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_required_ops:
+            append_error(
+                manifest_errors,
+                field=(
+                    "evaluation.agent_report.config."
+                    "agent_memory_lineage_quality.required_operation_types"
+                ),
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=lineage_quality.get("required_operation_types") or [],
+            )
+        for metric in V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            if _float_or_zero(metric_weights.get(metric)) <= 0.0:
+                append_error(
+                    manifest_errors,
+                    field=f"evaluation.agent_report.config.metric_weights.{metric}",
+                    expected=">0",
+                    observed=metric_weights.get(metric),
+                )
+
+    if result:
+        summary = _as_mapping(result.get("summary"))
+        optimization = _as_mapping(result.get("optimization"))
+        histories = [
+            history
+            for history in _as_list(optimization.get("history"))
+            if isinstance(history, Mapping)
+        ]
+        best_history = max(
+            histories,
+            key=lambda item: _float_or_zero(_as_mapping(item).get("score")),
+            default={},
+        )
+        best_history = _as_mapping(best_history)
+        selected_metrics = _as_mapping(best_history.get("metrics"))
+        selected_patch = _as_mapping(best_history.get("patch"))
+        selected_patch_paths = sorted(str(path) for path in selected_patch)
+        forbidden_patch_paths = forbidden_paths(selected_patch_paths)
+        best_config = _as_mapping(optimization.get("best_config"))
+        best_agent = _as_mapping(best_config.get("agent"))
+        manifest_agent = _as_mapping(manifest.get("agent"))
+        best_simulation = _as_mapping(best_config.get("simulation"))
+        best_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(best_simulation.get("environments"))
+        ]
+        best_environment_types = [
+            str(environment.get("type"))
+            for environment in best_environments
+            if environment.get("type")
+        ]
+        best_retrieval = _as_mapping(best_environments[0]) if best_environments else {}
+        best_lineage = (
+            _as_mapping(best_environments[1]) if len(best_environments) > 1 else {}
+        )
+        best_lineage_data = _as_mapping(best_lineage.get("data"))
+        manifest_environments = [
+            _as_mapping(environment)
+            for environment in _as_list(
+                _as_mapping(manifest.get("simulation")).get("environments")
+            )
+        ]
+        manifest_retrieval = (
+            _as_mapping(manifest_environments[0]) if manifest_environments else {}
+        )
+        manifest_lineage = (
+            _as_mapping(manifest_environments[1])
+            if len(manifest_environments) > 1
+            else {}
+        )
+        retrieval_unchanged = best_retrieval == manifest_retrieval
+        lineage_fields_unchanged = without_operations(best_lineage_data) == (
+            without_operations(_as_mapping(manifest_lineage.get("data")))
+        )
+        report = _as_mapping(best_history.get("report"))
+        result_rows = _as_list(report.get("results"))
+        result_row = _as_mapping(result_rows[0]) if result_rows else {}
+        metadata = _as_mapping(result_row.get("metadata"))
+        environment_state = _as_mapping(metadata.get("environment_state"))
+        retrieval_state = _as_mapping(environment_state.get("retrieval_memory"))
+        lineage_state = _as_mapping(environment_state.get("agent_memory_lineage"))
+        lineage_summary = _as_mapping(lineage_state.get("summary"))
+        citations = [
+            citation
+            for citation in _as_list(retrieval_state.get("citations"))
+            if isinstance(citation, Mapping)
+        ]
+        citation_doc_ids = [
+            str(doc_id)
+            for citation in citations
+            for doc_id in _as_list(citation.get("doc_ids"))
+            if str(doc_id)
+        ]
+        retrieval_docs = [
+            _as_mapping(doc)
+            for doc in _as_list(retrieval_state.get("documents"))
+            if isinstance(doc, Mapping)
+        ]
+        retrieval_doc_ids = [
+            str(doc.get("id") or "") for doc in retrieval_docs if doc.get("id")
+        ]
+        proof = _as_mapping(result.get("memory_lineage_proof"))
+        proof_evidence = _as_mapping(proof.get("evidence"))
+        proof_summary = _as_mapping(proof_evidence.get("agent_memory_lineage_summary"))
+        proof_failed_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("failed_check_ids"))
+        ]
+        proof_warning_check_ids = [
+            str(check_id) for check_id in _as_list(proof.get("warning_check_ids"))
+        ]
+        summary_metrics = _as_mapping(summary.get("metric_averages"))
+        serialized = json.dumps(result, sort_keys=True, default=str)
+        release_secret_absent = release_secret not in serialized
+
+        evidence["optimization"] = {
+            "kind": result.get("kind"),
+            "schema_version": result.get("schema_version"),
+            "status": result.get("status"),
+            "output_roundtrip": result == saved,
+            "optimization_passed": summary.get("optimization_passed"),
+            "evaluation_passed": summary.get("evaluation_passed"),
+            "optimization_score": summary.get("optimization_score"),
+            "evaluation_score": summary.get("evaluation_score"),
+            "total_evaluations": summary.get("total_evaluations"),
+            "total_iterations": summary.get("total_iterations"),
+            "candidate_lineage_count": summary.get("candidate_lineage_count"),
+            "selected_patch_paths": selected_patch_paths,
+            "forbidden_patch_paths_present": forbidden_patch_paths,
+            "best_history_score": best_history.get("score"),
+            "agent_unchanged": best_agent == manifest_agent,
+            "retrieval_unchanged": retrieval_unchanged,
+            "lineage_fields_unchanged": lineage_fields_unchanged,
+            "selected_environment_types": best_environment_types,
+            "selected_operation_types": operation_types(
+                best_lineage_data.get("operations")
+            ),
+            "optimizer_governance_status": summary.get(
+                "optimizer_governance_status"
+            ),
+            "optimizer_governance_failed_check_count": summary.get(
+                "optimizer_governance_failed_check_count"
+            ),
+        }
+        evidence["metrics"] = {
+            "summary_metric_averages": {
+                metric: summary_metrics.get(metric)
+                for metric in V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+            "selected_metrics": {
+                metric: selected_metrics.get(metric)
+                for metric in V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
+            },
+            "task_completion": selected_metrics.get("task_completion"),
+        }
+        evidence["runtime"] = {
+            "state_keys": sorted(str(key) for key in environment_state),
+            "retrieval_document_ids": retrieval_doc_ids,
+            "retrieval_citation_doc_ids": sorted(set(citation_doc_ids)),
+            "operation_types": operation_types(lineage_state.get("operations")),
+            "summary_operation_types": operation_types(
+                [{"operation": item} for item in _as_list(lineage_summary.get("operation_types"))]
+            ),
+            "blocking_gap_count": lineage_summary.get("blocking_gap_count"),
+            "policy_violation_count": lineage_summary.get("policy_violation_count"),
+            "isolation_violation_count": lineage_summary.get(
+                "isolation_violation_count"
+            ),
+            "open_poisoning_count": lineage_summary.get("open_poisoning_count"),
+            "missing_required_evidence": list(
+                lineage_summary.get("missing_required_evidence") or []
+            ),
+        }
+        evidence["proof"] = {
+            "kind": proof.get("kind"),
+            "status": proof.get("status"),
+            "passed": proof.get("passed"),
+            "assurance_level": proof.get("assurance_level"),
+            "requires_external_service": proof.get("requires_external_service"),
+            "failed_check_ids": proof_failed_check_ids,
+            "warning_check_ids": proof_warning_check_ids,
+            "environment_types": list(proof_evidence.get("environment_types") or []),
+            "retrieval_current_doc_ids": list(
+                proof_evidence.get("retrieval_current_doc_ids") or []
+            ),
+            "retrieval_cited_doc_ids": list(
+                proof_evidence.get("retrieval_cited_doc_ids") or []
+            ),
+            "operation_types": list(proof_summary.get("operation_types") or []),
+            "blocking_gap_count": proof_summary.get("blocking_gap_count"),
+            "policy_violation_count": proof_summary.get("policy_violation_count"),
+            "isolation_violation_count": proof_summary.get(
+                "isolation_violation_count"
+            ),
+            "open_poisoning_count": proof_summary.get("open_poisoning_count"),
+        }
+        evidence["security"] = {
+            "serialized_secret_absent": release_secret_absent,
+        }
+
+        optimization_expectations = {
+            "schema_version": (
+                result.get("schema_version"),
+                "agent-learning.cli.v1",
+            ),
+            "kind": (result.get("kind"), "agent-learning.optimization.v1"),
+            "status": (result.get("status"), "passed"),
+            "output_roundtrip": (result == saved, True),
+            "summary.optimization_passed": (
+                summary.get("optimization_passed"),
+                True,
+            ),
+            "summary.evaluation_passed": (
+                summary.get("evaluation_passed"),
+                True,
+            ),
+            "best_history.patch": (
+                selected_patch_paths,
+                V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS,
+            ),
+            "best_history.forbidden_patch_paths_present": (
+                forbidden_patch_paths,
+                [],
+            ),
+            "optimization.best_config.agent_unchanged": (
+                best_agent == manifest_agent,
+                True,
+            ),
+            "optimization.best_config.retrieval_unchanged": (
+                retrieval_unchanged,
+                True,
+            ),
+            "optimization.best_config.lineage_fields_unchanged": (
+                lineage_fields_unchanged,
+                True,
+            ),
+            "summary.optimizer_governance_status": (
+                summary.get("optimizer_governance_status"),
+                "passed",
+            ),
+            "summary.optimizer_governance_failed_check_count": (
+                summary.get("optimizer_governance_failed_check_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in optimization_expectations.items():
+            if observed != expected:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        for field, observed in {
+            "summary.optimization_score": summary.get("optimization_score"),
+            "summary.evaluation_score": summary.get("evaluation_score"),
+            "best_history.score": best_history.get("score"),
+        }.items():
+            if _float_or_zero(observed) < 0.98:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=0.98",
+                    observed=observed,
+                )
+        for field, observed in {
+            "summary.total_evaluations": summary.get("total_evaluations"),
+            "summary.total_iterations": summary.get("total_iterations"),
+            "summary.candidate_lineage_count": summary.get(
+                "candidate_lineage_count"
+            ),
+        }.items():
+            if _int_or_zero(observed) < 2:
+                append_error(
+                    optimization_errors,
+                    field=field,
+                    expected=">=2",
+                    observed=observed,
+                )
+        missing_selected_operations = missing_values(
+            operation_types(best_lineage_data.get("operations")),
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_selected_operations:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.agent_memory_lineage.operations",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=operation_types(best_lineage_data.get("operations")),
+            )
+        missing_environment_types = missing_values(
+            best_environment_types,
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_environment_types:
+            append_error(
+                optimization_errors,
+                field="optimization.best_config.simulation.environments",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=best_environment_types,
+            )
+        for metric in V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS:
+            observed = selected_metrics.get(metric)
+            if _float_or_zero(observed) < 1.0:
+                append_error(
+                    metric_errors,
+                    field=f"best_history.metrics.{metric}",
+                    expected=1.0,
+                    observed=observed,
+                )
+        if _float_or_zero(selected_metrics.get("task_completion")) < 0.9:
+            append_error(
+                metric_errors,
+                field="best_history.metrics.task_completion",
+                expected=">=0.9",
+                observed=selected_metrics.get("task_completion"),
+            )
+
+        runtime_expectations = {
+            "agent_memory_lineage.summary.blocking_gap_count": (
+                lineage_summary.get("blocking_gap_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.policy_violation_count": (
+                lineage_summary.get("policy_violation_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.isolation_violation_count": (
+                lineage_summary.get("isolation_violation_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.open_poisoning_count": (
+                lineage_summary.get("open_poisoning_count"),
+                0,
+            ),
+            "agent_memory_lineage.summary.missing_required_evidence": (
+                list(lineage_summary.get("missing_required_evidence") or []),
+                [],
+            ),
+        }
+        for field, (observed, expected) in runtime_expectations.items():
+            if observed != expected:
+                append_error(
+                    runtime_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_state_keys = missing_values(
+            environment_state,
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+        )
+        if missing_state_keys:
+            append_error(
+                runtime_errors,
+                field="report.results.0.metadata.environment_state",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS,
+                observed=sorted(str(key) for key in environment_state),
+            )
+        if V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID not in citation_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.citations.doc_ids",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+                observed=sorted(set(citation_doc_ids)),
+            )
+        if V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID in retrieval_doc_ids:
+            append_error(
+                runtime_errors,
+                field="retrieval_memory.documents.id",
+                expected=f"not {V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID}",
+                observed=retrieval_doc_ids,
+            )
+        missing_runtime_operations = missing_values(
+            operation_types(lineage_state.get("operations")),
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_runtime_operations:
+            append_error(
+                runtime_errors,
+                field="agent_memory_lineage.operations",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=operation_types(lineage_state.get("operations")),
+            )
+
+        proof_expectations = {
+            "memory_lineage_proof.kind": (
+                proof.get("kind"),
+                V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND,
+            ),
+            "memory_lineage_proof.status": (proof.get("status"), "passed"),
+            "memory_lineage_proof.passed": (proof.get("passed"), True),
+            "memory_lineage_proof.assurance_level": (
+                proof.get("assurance_level"),
+                V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL,
+            ),
+            "memory_lineage_proof.requires_external_service": (
+                proof.get("requires_external_service"),
+                False,
+            ),
+            "memory_lineage_proof.failed_check_ids": (proof_failed_check_ids, []),
+            "memory_lineage_proof.warning_check_ids": (proof_warning_check_ids, []),
+            "memory_lineage_proof.blocking_gap_count": (
+                proof_summary.get("blocking_gap_count"),
+                0,
+            ),
+            "memory_lineage_proof.policy_violation_count": (
+                proof_summary.get("policy_violation_count"),
+                0,
+            ),
+            "memory_lineage_proof.isolation_violation_count": (
+                proof_summary.get("isolation_violation_count"),
+                0,
+            ),
+            "memory_lineage_proof.open_poisoning_count": (
+                proof_summary.get("open_poisoning_count"),
+                0,
+            ),
+        }
+        for field, (observed, expected) in proof_expectations.items():
+            if observed != expected:
+                append_error(
+                    proof_errors,
+                    field=field,
+                    expected=expected,
+                    observed=observed,
+                )
+        missing_proof_env_types = missing_values(
+            proof_evidence.get("environment_types"),
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+        )
+        if missing_proof_env_types:
+            append_error(
+                proof_errors,
+                field="memory_lineage_proof.evidence.environment_types",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES,
+                observed=proof_evidence.get("environment_types") or [],
+            )
+        missing_proof_ops = missing_values(
+            proof_summary.get("operation_types"),
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+        )
+        if missing_proof_ops:
+            append_error(
+                proof_errors,
+                field="memory_lineage_proof.evidence.operation_types",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS,
+                observed=proof_summary.get("operation_types") or [],
+            )
+        if (
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+            not in _as_list(proof_evidence.get("retrieval_current_doc_ids"))
+        ):
+            append_error(
+                proof_errors,
+                field="memory_lineage_proof.evidence.retrieval_current_doc_ids",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+                observed=proof_evidence.get("retrieval_current_doc_ids") or [],
+            )
+        if (
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
+            not in _as_list(proof_evidence.get("retrieval_cited_doc_ids"))
+        ):
+            append_error(
+                proof_errors,
+                field="memory_lineage_proof.evidence.retrieval_cited_doc_ids",
+                expected=V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+                observed=proof_evidence.get("retrieval_cited_doc_ids") or [],
+            )
+        if not release_secret_absent:
+            append_error(
+                security_errors,
+                field="serialized_result",
+                expected="release-check secret absent",
+                observed="release-check secret present",
+            )
+
+    return {
+        "required_files": list(V1_MEMORY_TARGET_OPTIMIZER_FILES),
+        "required_search_paths": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
+        ),
+        "forbidden_search_paths": list(
+            V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
+        ),
+        "required_layers": list(V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS),
+        "required_metrics": list(V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS),
+        "required_environment_types": list(
+            V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
+        ),
+        "required_state_keys": list(V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS),
+        "required_operations": list(V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS),
+        "required_doc_id": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID,
+        "forbidden_doc_id": V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID,
+        "required_proof_kind": V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND,
+        "required_proof_assurance_level": (
+            V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
+        ),
+        "required_source": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE,
+        "required_task_kind": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND,
+        "required_surface": V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE,
         "missing_files": missing_files,
         "execution_errors": execution_errors,
         "manifest_errors": manifest_errors,
@@ -35344,6 +36292,21 @@ __all__ = [
     "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE",
     "V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
     "V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE",
+    "V1_MEMORY_TARGET_OPTIMIZER_FILES",
+    "V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID",
+    "V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS",
+    "V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL",
+    "V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE",
+    "V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS",
     "V1_STATEFUL_FRAMEWORK_ADAPTER_FILES",
     "V1_LOCAL_SIM_EVAL_EXAMPLES",
